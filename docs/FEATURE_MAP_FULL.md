@@ -150,5 +150,7 @@ Tất cả jobs dispatch đơn lẻ (không dùng `Bus::batch` hay `::withChain`
 4. **Không có Broadcasting/Channels**: Không có `routes/channels.php`
 5. **Intervention Image**: Singleton ImageManager với GD/Imagick fallback (log ghi khi fallback)
 6. **Cross-DB pattern**: Core models dùng `UsesCoreDatabaseConnection` trait; SEO models dùng `BelongsToOnDefaultConnection` trait
-7. **Sanctum**: SPA authentication + token-based API
-8. **Dynamic Addon Registration**: Không đăng ký static trong `config/app.php` — đọc từ `services` table runtime
+7. **Misplaced table cleanup**: `php artisan database:cleanup-misplaced-tables` — xem `docs/DATABASE_CLEANUP_MISPLACED_TABLES.md`
+8. **Automation DB (core)**: tables `automation_*` + `business_events` trên `config('database.core_connection')` qua `config/automation.php` (`AUTOMATION_DB_CONNECTION`); migrate data `php artisan automation:migrate-to-core`; base `App\Support\Automation\AutomationModel` / `AutomationConnection`
+8. **Sanctum**: SPA authentication + token-based API
+9. **Dynamic Addon Registration**: Không đăng ký static trong `config/app.php` — đọc từ `services` table runtime

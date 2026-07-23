@@ -622,7 +622,8 @@ export function resolveImageRefIds(row) {
                 wpAttachmentId = 0;
             }
         } else if (seoMediaId <= 0 && wpAttachmentId > 0 && !hasWpUrl) {
-            seoMediaId = wpAttachmentId;
+            // Local file + wp_attachment_id không URL WP: thường ID WP stale, không phải SeoMedia.
+            // Không promote → tránh POST /media/{wpId}/rename (ModelNotFound).
             wpAttachmentId = 0;
         } else if (!hasWpUrl && !(seoMediaId > 0 && wpAttachmentId > 0)) {
             wpAttachmentId = 0;
@@ -1472,6 +1473,54 @@ export function resetSupplementalImagesAfterSlugRename(supplementalRows, blocks,
 /**
  * Sau khi WordPress/local đổi tên xong: map URL mới theo attachment_id / seo_media_id / block_id.
  */
+/**
+ * Map API fix-slug replacements → local rename results cho finalizeBlocksAfterWpRename.
+ *
+ * @param {Array<{media_id?: number, old_url?: string, new_url?: string, old_slug?: string, new_slug?: string}>|null|undefined} replacements
+ * @param {Array<{seo_media_id?: number|null, src?: string, url?: string, new_slug?: string, old_slug?: string, block_id?: string}>} queue
+ * @returns {Array<{seo_media_id: number|null, src: string, new_slug: string, old_slug: string, block_id: string, data: {id: number|null, slug: string, url: string}}>}
+ */
+export function mapArticleSlugFixReplacementsToLocalResults(replacements, queue = []) {
+    const queueList = Array.isArray(queue) ? queue : [];
+    const list = Array.isArray(replacements) ? replacements : [];
+
+    return list.map((rep, index) => {
+        const mediaId = Number(rep?.media_id ?? 0) || null;
+        const oldUrl = String(rep?.old_url ?? '').trim();
+        const newUrl = String(rep?.new_url ?? '').trim();
+        const newSlug = String(rep?.new_slug ?? '').trim();
+        const oldSlug = String(rep?.old_slug ?? '').trim();
+
+        const matched = queueList.find((item) => {
+            const itemId = Number(item?.seo_media_id ?? 0);
+            if (mediaId > 0 && itemId > 0 && itemId === mediaId) {
+                return true;
+            }
+
+            const itemSrc = normalizeSrcKey(String(item?.src ?? item?.url ?? '').trim());
+            const oldKey = normalizeSrcKey(oldUrl);
+
+            return itemSrc !== '' && oldKey !== '' && itemSrc === oldKey;
+        }) ?? queueList[index] ?? null;
+
+        return {
+            seo_media_id: mediaId,
+            src: oldUrl || String(matched?.src ?? matched?.url ?? '').trim(),
+            new_slug: newSlug || String(matched?.new_slug ?? '').trim(),
+            old_slug: oldSlug || String(matched?.old_slug ?? '').trim(),
+            block_id: String(matched?.block_id ?? matched?.blockId ?? '').trim(),
+            data: {
+                id: mediaId,
+                slug: newSlug || String(matched?.new_slug ?? '').trim(),
+                url: newUrl || replaceUrlSlug(
+                    oldUrl || String(matched?.src ?? '').trim(),
+                    newSlug || String(matched?.new_slug ?? '').trim(),
+                ),
+            },
+        };
+    }).filter((row) => String(row?.data?.url ?? '').trim() !== '' || String(row?.new_slug ?? '').trim() !== '');
+}
+
 export function finalizeBlocksAfterWpRename(blocks, wpRenamed = [], localResults = [], _keyword = '') {
     const result = applyRenameResultsToBlocks(blocks, wpRenamed, localResults);
 
@@ -1621,6 +1670,84 @@ export function ensureLocalRenameResultsCoverQueue(queue, results = []) {
     return list;
 }
 
+/**
+ * Key dùng loại ảnh local rename đã fail khỏi queue recovery.
+ */
+export function localSlugRenameFailureKeys(errors = []) {
+    const keys = new Set();
+
+    (Array.isArray(errors) ? errors : []).forEach((entry) => {
+        const item = entry?.item ?? entry;
+        if (!item) {
+            return;
+        }
+
+        const id = Number(item?.seo_media_id ?? 0);
+        if (id > 0) {
+            keys.add(`id:${id}`);
+        }
+
+        const blockId = String(item?.block_id ?? '').trim();
+        if (blockId) {
+            keys.add(`block:${blockId}`);
+        }
+
+        const src = String(item?.src ?? '').trim();
+        if (src) {
+            keys.add(`src:${normalizeSrcKey(src)}`);
+        }
+    });
+
+    return keys;
+}
+
+/**
+ * Bỏ item fail khỏi queue — tránh ensureLocalRenameResultsCoverQueue bịa URL.
+ */
+export function omitFailedLocalSlugRenameQueueItems(queue, errors = []) {
+    const failedKeys = localSlugRenameFailureKeys(errors);
+    if (failedKeys.size === 0) {
+        return Array.isArray(queue) ? [...queue] : [];
+    }
+
+    return (Array.isArray(queue) ? queue : []).filter((item) => {
+        const id = Number(item?.seo_media_id ?? 0);
+        const blockId = String(item?.block_id ?? '').trim();
+        const src = String(item?.src ?? '').trim();
+        const itemKeys = [
+            id > 0 ? `id:${id}` : '',
+            blockId ? `block:${blockId}` : '',
+            src ? `src:${normalizeSrcKey(src)}` : '',
+        ].filter(Boolean);
+
+        return !itemKeys.some((key) => failedKeys.has(key));
+    });
+}
+
+/**
+ * Đổi slug local: ưu tiên rename-by-url khi có /storage/... (ID có thể là WP stale).
+ */
+async function renameLocalSlugViaAdapters(id, src, slug, { renameById, renameByUrl }) {
+    const mediaId = Number(id ?? 0) || 0;
+    const mediaSrc = String(src ?? '').trim();
+    const useUrl =
+        mediaSrc !== ''
+        && (isLocalSeoMediaSrc(mediaSrc) || mediaSrc.includes('/storage/'));
+
+    if (useUrl) {
+        return renameByUrl(mediaSrc, slug, { seoMediaId: mediaId > 0 ? mediaId : null });
+    }
+
+    if (mediaId > 0) {
+        return renameById(mediaId, slug);
+    }
+
+    throw new Error('Thiếu URL /storage hoặc seo_media_id để đổi slug ảnh nội bộ.');
+}
+
+/**
+ * @returns {Promise<Array & { errors?: Array<{ item: object, phase: 1|2, message: string }> }>}
+ */
 export async function executeSeoMediaSlugRenamesTwoPhase(items, { renameById, renameByUrl }) {
     const queue = (Array.isArray(items) ? items : [])
         .map((item) => ({
@@ -1632,49 +1759,65 @@ export async function executeSeoMediaSlugRenamesTwoPhase(items, { renameById, re
         }))
         .filter((item) => item.new_slug !== '' && (item.src !== '' || Number(item.seo_media_id ?? 0) > 0));
 
+    const results = [];
+    results.errors = [];
+
     if (!queue.length) {
-        return [];
+        return results;
     }
 
+    const adapters = { renameById, renameByUrl };
     const tempToken = `seo-ren-${Date.now()}`;
     const interim = new Map();
+
+    const pushError = (item, phase, error) => {
+        results.errors.push({
+            item,
+            phase,
+            message: String(error?.message ?? error ?? 'Unknown error'),
+        });
+    };
 
     for (let index = 0; index < queue.length; index += 1) {
         const item = queue[index];
         const tempSlug = `${tempToken}-${index + 1}`;
         const id = Number(item.seo_media_id ?? 0);
-        const data =
-            id > 0
-                ? await renameById(id, tempSlug)
-                : await renameByUrl(item.src, tempSlug, { seoMediaId: id > 0 ? id : null });
 
-        interim.set(localSlugRenameItemKey(item), {
-            item,
-            data,
-            src: String(data?.url ?? item.src).trim(),
-            id: Number(data?.id ?? id ?? 0) || 0,
-        });
+        try {
+            const data = await renameLocalSlugViaAdapters(id, item.src, tempSlug, adapters);
+            interim.set(localSlugRenameItemKey(item), {
+                item,
+                data,
+                src: String(data?.url ?? item.src).trim(),
+                id: Number(data?.id ?? id ?? 0) || 0,
+            });
+        } catch (error) {
+            // Ảnh thiếu / ID stale: bỏ qua, tiếp tục ảnh khác.
+            pushError(item, 1, error);
+        }
     }
 
-    const results = [];
     for (const item of queue) {
         const state = interim.get(localSlugRenameItemKey(item));
         if (!state) {
             continue;
         }
 
-        const resolvedId = state.id;
-        const data =
-            resolvedId > 0
-                ? await renameById(resolvedId, item.new_slug)
-                : await renameByUrl(state.src, item.new_slug, {
-                      seoMediaId: resolvedId > 0 ? resolvedId : null,
-                  });
+        try {
+            const data = await renameLocalSlugViaAdapters(
+                state.id,
+                state.src,
+                item.new_slug,
+                adapters,
+            );
 
-        results.push({
-            ...item,
-            data,
-        });
+            results.push({
+                ...item,
+                data,
+            });
+        } catch (error) {
+            pushError(item, 2, error);
+        }
     }
 
     return results;

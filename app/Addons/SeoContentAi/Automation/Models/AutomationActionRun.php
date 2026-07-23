@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Automation\Models;
 
-use Illuminate\Database\Eloquent\Model;
+use App\Support\Automation\AutomationModel;
 
 /**
  * Execution log cho Business Action runner.
@@ -26,10 +26,8 @@ use Illuminate\Database\Eloquent\Model;
  * @property array<int, string>|null $warning_json
  * @property array<string, mixed>|null $error_json
  */
-final class AutomationActionRun extends Model
+final class AutomationActionRun extends AutomationModel
 {
-    protected $connection = 'omi_seo_ai';
-
     protected $table = 'automation_action_runs';
 
     protected $guarded = [];

@@ -37,7 +37,7 @@ final class AutomationRuleService
     {
         $this->validateRulePayload($data, $actions);
 
-        return DB::connection('omi_seo_ai')->transaction(function () use ($data, $actions, $actorId): AutomationRule {
+        return \App\Support\Automation\AutomationConnection::db()->transaction(function () use ($data, $actions, $actorId): AutomationRule {
             $rule = AutomationRule::query()->create([
                 'code' => (string) $data['code'],
                 'name' => (string) $data['name'],
@@ -92,7 +92,7 @@ final class AutomationRuleService
             ])->all());
         }
 
-        return DB::connection('omi_seo_ai')->transaction(function () use ($rule, $data, $actions, $actorId): AutomationRule {
+        return \App\Support\Automation\AutomationConnection::db()->transaction(function () use ($rule, $data, $actions, $actorId): AutomationRule {
             $bumpVersion = $this->shouldBumpVersion($rule, $data, $actions);
 
             $fill = [

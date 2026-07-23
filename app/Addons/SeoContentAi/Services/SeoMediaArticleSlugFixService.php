@@ -30,11 +30,16 @@ final class SeoMediaArticleSlugFixService
      *     replacements: list<array<string, mixed>>,
      *     article_updated: bool,
      *     media_updated: bool,
+     *     skipped_count?: int,
+     *     skipped?: list<array<string, mixed>>,
      *     remaining_old_refs?: list<string>
      * }
      */
     public function fixSlugs(SeoArticle $article, array $items): array
     {
+        // Request mới sau save: refresh để rewrite đúng body/meta mới nhất.
+        $article->refresh();
+
         $queue = $this->normalizeItems($items);
         if ($queue === []) {
             return [
@@ -43,12 +48,15 @@ final class SeoMediaArticleSlugFixService
                 'replacements' => [],
                 'article_updated' => false,
                 'media_updated' => false,
+                'skipped_count' => 0,
+                'skipped' => [],
             ];
         }
 
         $replacements = [];
         $urlMap = [];
         $pendingDeletes = [];
+        $skipped = [];
 
         try {
             DB::connection('omi_seo_ai')->transaction(function () use (
@@ -57,6 +65,7 @@ final class SeoMediaArticleSlugFixService
                 &$replacements,
                 &$urlMap,
                 &$pendingDeletes,
+                &$skipped,
             ): void {
                 $tempToken = 'seo-ren-'.Str::lower(Str::random(8));
                 $interim = [];
@@ -64,55 +73,90 @@ final class SeoMediaArticleSlugFixService
                 foreach ($queue as $index => $item) {
                     $media = $this->resolveMedia($article, $item);
                     if (! $media instanceof SeoMedia) {
-                        throw new \RuntimeException('Không tìm thấy media để đổi slug (index '.$index.').');
+                        $skipped[] = [
+                            'index' => $index,
+                            'seo_media_id' => $item['seo_media_id'],
+                            'url' => $item['url'],
+                            'new_slug' => $item['new_slug'],
+                            'reason' => 'not_found',
+                        ];
+                        continue;
                     }
 
-                    $oldUrl = $media->publicUrl();
-                    $oldPath = ltrim(str_replace('\\', '/', (string) $media->path), '/');
-                    $oldSlug = (string) ($media->slug ?? '');
-                    $tempSlug = $tempToken.'-'.($index + 1);
+                    try {
+                        $oldUrl = $media->publicUrl();
+                        $oldPath = ltrim(str_replace('\\', '/', (string) $media->path), '/');
+                        $oldSlug = (string) ($media->slug ?? '');
+                        $tempSlug = $tempToken.'-'.($index + 1);
 
-                    $tempMedia = $this->storage->renameBySlug($media, $tempSlug, copyThenDelete: true);
-                    $interim[] = [
-                        'media' => $tempMedia,
-                        'final_slug' => $item['new_slug'],
-                        'old_url' => $oldUrl,
-                        'old_path' => $oldPath,
-                        'old_slug' => $oldSlug,
-                        'temp_path' => ltrim(str_replace('\\', '/', (string) $tempMedia->path), '/'),
-                    ];
+                        $tempMedia = $this->storage->renameBySlug($media, $tempSlug, copyThenDelete: true);
+                        $interim[] = [
+                            'media' => $tempMedia,
+                            'final_slug' => $item['new_slug'],
+                            'old_url' => $oldUrl,
+                            'old_path' => $oldPath,
+                            'old_slug' => $oldSlug,
+                            'temp_path' => ltrim(str_replace('\\', '/', (string) $tempMedia->path), '/'),
+                            'item' => $item,
+                            'index' => $index,
+                        ];
+                    } catch (Throwable $e) {
+                        $skipped[] = [
+                            'index' => $index,
+                            'seo_media_id' => $item['seo_media_id'],
+                            'url' => $item['url'],
+                            'new_slug' => $item['new_slug'],
+                            'reason' => $e->getMessage() !== '' ? $e->getMessage() : 'rename_phase1_failed',
+                        ];
+                    }
                 }
 
                 foreach ($interim as $state) {
                     /** @var SeoMedia $media */
                     $media = $state['media'];
-                    $beforeFinalPath = ltrim(str_replace('\\', '/', (string) $media->path), '/');
-                    $renamed = $this->storage->renameBySlug($media, $state['final_slug'], copyThenDelete: true);
-                    $newUrl = $renamed->publicUrl();
-                    $newPath = ltrim(str_replace('\\', '/', (string) $renamed->path), '/');
 
-                    $replacements[] = [
-                        'media_id' => (int) $renamed->id,
-                        'old_url' => $state['old_url'],
-                        'new_url' => $newUrl,
-                        'old_path' => $state['old_path'],
-                        'new_path' => $newPath,
-                        'old_slug' => $state['old_slug'],
-                        'new_slug' => (string) $renamed->slug,
-                    ];
+                    try {
+                        $beforeFinalPath = ltrim(str_replace('\\', '/', (string) $media->path), '/');
+                        $renamed = $this->storage->renameBySlug($media, $state['final_slug'], copyThenDelete: true);
+                        $newUrl = $renamed->publicUrl();
+                        $newPath = ltrim(str_replace('\\', '/', (string) $renamed->path), '/');
 
-                    if ($state['old_url'] !== '' && $newUrl !== '') {
-                        $urlMap[$state['old_url']] = $newUrl;
-                    }
-                    if ($state['old_path'] !== '' && $newPath !== '') {
-                        $urlMap['/storage/'.$state['old_path']] = '/storage/'.$newPath;
-                    }
+                        $replacements[] = [
+                            'media_id' => (int) $renamed->id,
+                            'old_url' => $state['old_url'],
+                            'new_url' => $newUrl,
+                            'old_path' => $state['old_path'],
+                            'new_path' => $newPath,
+                            'old_slug' => $state['old_slug'],
+                            'new_slug' => (string) $renamed->slug,
+                        ];
 
-                    foreach ([$state['old_path'], $beforeFinalPath] as $stalePath) {
-                        if ($stalePath !== '' && $stalePath !== $newPath) {
-                            $pendingDeletes[$stalePath] = true;
+                        if ($state['old_url'] !== '' && $newUrl !== '') {
+                            $urlMap[$state['old_url']] = $newUrl;
                         }
+                        if ($state['old_path'] !== '' && $newPath !== '') {
+                            $urlMap['/storage/'.$state['old_path']] = '/storage/'.$newPath;
+                        }
+
+                        foreach ([$state['old_path'], $beforeFinalPath] as $stalePath) {
+                            if ($stalePath !== '' && $stalePath !== $newPath) {
+                                $pendingDeletes[$stalePath] = true;
+                            }
+                        }
+                    } catch (Throwable $e) {
+                        $item = is_array($state['item'] ?? null) ? $state['item'] : [];
+                        $skipped[] = [
+                            'index' => (int) ($state['index'] ?? -1),
+                            'seo_media_id' => $item['seo_media_id'] ?? null,
+                            'url' => $item['url'] ?? $state['old_url'] ?? '',
+                            'new_slug' => $state['final_slug'] ?? ($item['new_slug'] ?? ''),
+                            'reason' => $e->getMessage() !== '' ? $e->getMessage() : 'rename_phase2_failed',
+                        ];
                     }
+                }
+
+                if ($urlMap === []) {
+                    return;
                 }
 
                 $rewrite = $this->urlReplacement->rewriteArticleReferences($article, $urlMap);
@@ -141,6 +185,8 @@ final class SeoMediaArticleSlugFixService
                 'replacements' => [],
                 'article_updated' => false,
                 'media_updated' => false,
+                'skipped_count' => count($skipped),
+                'skipped' => $skipped,
             ];
         }
 
@@ -152,21 +198,33 @@ final class SeoMediaArticleSlugFixService
         }
 
         $fresh = $article->fresh() ?? $article;
-        $remaining = $this->urlReplacement->findRemainingOldRefs((string) ($fresh->body ?? ''), $urlMap);
+        $remaining = $urlMap === []
+            ? []
+            : $this->urlReplacement->findRemainingOldRefs((string) ($fresh->body ?? ''), $urlMap);
+
+        $skippedCount = count($skipped);
+        $message = 'Đã cập nhật slug cho '.count($replacements).' ảnh.';
+        if ($skippedCount > 0) {
+            $message .= ' Bỏ qua '.$skippedCount.' ảnh thiếu/lỗi.';
+        }
 
         Log::info('seo_media_article_slug_fix.completed', [
             'article_id' => (int) $article->id,
             'site_id' => (int) ($article->site_id ?? 0),
             'replacement_count' => count($replacements),
+            'skipped_count' => $skippedCount,
             'remaining_old_refs' => $remaining,
         ]);
 
+        // Tất cả bị skip vẫn success — client tiếp tục, không dừng cả batch.
         return [
             'success' => true,
-            'message' => 'Đã cập nhật slug cho '.count($replacements).' ảnh.',
+            'message' => $message,
             'replacements' => $replacements,
             'article_updated' => $urlMap !== [],
             'media_updated' => $replacements !== [],
+            'skipped_count' => $skippedCount,
+            'skipped' => $skipped,
             'remaining_old_refs' => $remaining,
         ];
     }

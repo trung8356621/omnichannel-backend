@@ -136,7 +136,7 @@ final class ArticleEditorSyncController extends Controller
         } elseif ($dispatchStatus === 'deduplicated') {
             $result['queued'] = true;
             $result['reload'] = false;
-            $result['close_editor'] = false;
+            $result['close_editor'] = true;
             $result['already_queued'] = true;
             $result['notification'] = [
                 'title' => __('seo-content-ai::filament.automation.manual_sync_queued_title'),
@@ -144,15 +144,13 @@ final class ArticleEditorSyncController extends Controller
                 'status' => 'info',
             ];
         } else {
-            $historyUrl = (string) ($result['automation_history_url'] ?? '');
             $result['queued'] = true;
             $result['reload'] = false;
-            $result['close_editor'] = false;
+            $result['close_editor'] = true;
             $result['already_queued'] = false;
             $result['notification'] = [
                 'title' => __('seo-content-ai::filament.automation.manual_sync_queued_title'),
-                'body' => (string) ($result['message'] ?? __('seo-content-ai::filament.automation.manual_sync_queued'))
-                    .($historyUrl !== '' ? ' '.__('seo-content-ai::filament.automation.view_progress').': '.$historyUrl : ''),
+                'body' => (string) ($result['message'] ?? __('seo-content-ai::filament.automation.manual_sync_queued')),
                 'status' => 'success',
             ];
         }

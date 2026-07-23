@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 
+use App\Addons\SeoContentAi\Enums\ArticleReviewActionType;
+use App\Addons\SeoContentAi\Enums\ArticleReviewStatus;
 use App\Addons\SeoContentAi\Exceptions\FaqManualExtractException;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsWorkflows;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
@@ -40,10 +42,12 @@ use App\Addons\SeoContentAi\Services\ArticlePolylangSyncService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
 use App\Addons\SeoContentAi\Services\ArticleQuickPostReviewService;
 use App\Addons\SeoContentAi\Services\ArticleQuickTranslateService;
+use App\Addons\SeoContentAi\Services\ArticleReviewService;
 use App\Addons\SeoContentAi\Services\ArticleScheduleReconcileService;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Services\EditorImageTaskResolverService;
+use App\Addons\SeoContentAi\Services\Exceptions\ArticleReviewException;
 use App\Addons\SeoContentAi\Services\MediaLibraryAccessScope;
 use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
 use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
@@ -52,7 +56,6 @@ use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\SeoArticleRevisionService;
 use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
-use App\Addons\SeoContentAi\Services\SeoProjectApprovalService;
 use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
 use App\Addons\SeoContentAi\Services\SitePolylangService;
 use App\Addons\SeoContentAi\Services\SyncDomainContentService;
@@ -2273,7 +2276,11 @@ class EditArticle extends SeoEditRecord
             }
 
             $faqs = $bundle['faqs'] ?? null;
-            if (is_array($faqs) && ! $this->shouldSkipMalformedFaqsBundleSave($faqs)) {
+            if (
+                is_array($faqs)
+                && ! $this->shouldSkipMalformedFaqsBundleSave($faqs)
+                && ! $this->shouldSkipUnhydratedEmptyFaqsBundleSave($faqs, $bundle)
+            ) {
                 $this->saveArticleFaqsInline($faqs);
             }
 
@@ -2325,6 +2332,26 @@ class EditArticle extends SeoEditRecord
         }
 
         return false;
+    }
+
+    /**
+     * Phase 2 lazy FAQ: faqs:[] + faqs_source none/panel trống → không wipe DB.
+     *
+     * @param  list<mixed>  $faqs
+     * @param  array<string, mixed>  $bundle
+     */
+    private function shouldSkipUnhydratedEmptyFaqsBundleSave(array $faqs, array $bundle): bool
+    {
+        if ($faqs !== []) {
+            return false;
+        }
+
+        $source = strtolower(trim((string) ($bundle['faqs_source'] ?? '')));
+        if ($source === 'editor') {
+            return false;
+        }
+
+        return $this->record->faqs()->exists();
     }
 
     private function beginHeavyArticleAction(string $action): void
@@ -2581,37 +2608,100 @@ class EditArticle extends SeoEditRecord
             ->send();
     }
 
+    /**
+     * @deprecated Giữ cho các call site cũ (nếu còn) — UI hiện dùng {@see self::getArticleReviewBootstrap()}
+     * (available_actions từ ArticleReviewService) để quyết định hiện nút/badge nào.
+     */
     public function canToggleArticleReview(): bool
     {
-        if (SeoAccessControl::canAccessPlannerFeatures()) {
-            return true;
-        }
-
-        if (SeoAccessControl::isContentManager()) {
-            $user = auth()->user();
-            if (! $user instanceof \App\Models\User) {
-                return false;
-            }
-
-            return ArticleResource::articleIsInContentProject($this->record)
-                && ! app(SeoProjectApprovalService::class)->contentManagerHasSubmitted($this->record, $user);
-        }
-
-        return false;
-    }
-
-    public function contentManagerSubmittedForReview(): bool
-    {
-        if (! SeoAccessControl::isContentManager()) {
-            return false;
-        }
-
         $user = auth()->user();
         if (! $user instanceof \App\Models\User) {
             return false;
         }
 
-        return app(SeoProjectApprovalService::class)->contentManagerHasSubmitted($this->record, $user);
+        return app(ArticleReviewService::class)->availableActions($this->record, $user) !== [];
+    }
+
+    /**
+     * @deprecated Trạng thái "đã gửi duyệt" giờ là `review_status !== draft` (article-level),
+     * không còn phụ thuộc project status qua SeoProjectApprovalService.
+     */
+    public function contentManagerSubmittedForReview(): bool
+    {
+        return app(ArticleReviewService::class)->resolveStatus($this->record) !== ArticleReviewStatus::Draft;
+    }
+
+    /**
+     * Bootstrap dữ liệu review cho blade `article-editor-page-actions` (badge + split-button
+     * "Duyệt bài"). Nguồn sự thật duy nhất là {@see ArticleReviewService::toApiPayload()} —
+     * giống hệt payload REST `seo.articles.review-actions.show/store`.
+     *
+     * @return array{review_status: string, badge_label: string, available_actions: array<int, array<string, string>>, latest_review: array<string, mixed>|null}
+     */
+    public function getArticleReviewBootstrap(): array
+    {
+        $user = auth()->user();
+        if (! $user instanceof \App\Models\User) {
+            $status = app(ArticleReviewService::class)->resolveStatus($this->record);
+
+            return [
+                'review_status' => $status->value,
+                'badge_label' => (string) __('seo-content-ai::filament.article_review.badge.'.$status->value),
+                'available_actions' => [],
+                'latest_review' => null,
+            ];
+        }
+
+        $payload = app(ArticleReviewService::class)->toApiPayload($this->record, $user);
+        $status = (string) $payload['data']['review_status'];
+
+        return [
+            'review_status' => $status,
+            'badge_label' => (string) __('seo-content-ai::filament.article_review.badge.'.$status),
+            'available_actions' => $payload['data']['available_actions'],
+            'latest_review' => $payload['data']['latest_review'],
+        ];
+    }
+
+    /**
+     * Livewire fallback cho Article Review action (progressive enhancement — UI chính dùng
+     * fetch() trực tiếp tới `seo.articles.review-actions.store`, xem
+     * `article-editor-page-actions.blade.php`).
+     */
+    public function performArticleReviewAction(string $action, ?string $note = null): void
+    {
+        $user = auth()->user();
+        if (! $user instanceof \App\Models\User) {
+            abort(403);
+        }
+
+        $actionType = ArticleReviewActionType::tryFromString($action);
+        if (! $actionType instanceof ArticleReviewActionType) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_review.errors.invalid_transition'))
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        try {
+            $review = app(ArticleReviewService::class)->performAction($this->record, $user, $actionType, $note);
+        } catch (ArticleReviewException $exception) {
+            Notification::make()
+                ->title($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $this->record->refresh();
+
+        Notification::make()
+            ->title((string) __('seo-content-ai::filament.article_review.success.'.$review->action_type))
+            ->success()
+            ->send();
     }
 
     public function getReviewedAtLabel(): ?string
@@ -2824,59 +2914,22 @@ class EditArticle extends SeoEditRecord
         $this->record->refresh();
     }
 
+    /**
+     * @deprecated UI blade giờ gọi thẳng REST `seo.articles.review-actions.store` (fetch)
+     * hoặc {@see self::performArticleReviewAction()}. Giữ làm alias cho call site cũ.
+     */
     public function toggleArticleReview(): void
     {
-        if (! $this->canToggleArticleReview()) {
-            Notification::make()
-                ->title(__('seo-content-ai::filament.article_list.review_toggle_denied'))
-                ->warning()
-                ->send();
-
-            return;
-        }
-
-        if (SeoAccessControl::isContentManager()) {
-            $this->approveArticle();
-
-            return;
-        }
-
-        if ((bool) $this->record->is_reviewed) {
-            ArticleResource::markArticleUnreviewed($this->record);
-            $this->record->refresh();
-
-            Notification::make()
-                ->title(__('seo-content-ai::filament.article_list.not_reviewed'))
-                ->success()
-                ->send();
-
-            return;
-        }
-
         $this->approveArticle();
     }
 
+    /**
+     * @deprecated Alias — chạy hành động review kế tiếp (submit_review/approve/archive) theo
+     * {@see ArticleReviewService::availableActions()} thay vì phân nhánh role thủ công.
+     */
     public function approveArticle(): void
     {
-        if (SeoAccessControl::isContentManager()) {
-            ArticleResource::submitStaffEditingComplete($this->record);
-            $this->record->refresh();
-
-            return;
-        }
-
-        if ((bool) $this->record->is_reviewed) {
-            return;
-        }
-
-        $deletedCount = ArticleResource::markArticleReviewed($this->record);
-
-        Notification::make()
-            ->title(__('seo-content-ai::filament.article_list.article_reviewed'))
-            ->body(__('seo-content-ai::filament.article_list.deleted_local_images', ['count' => $deletedCount]))
-            ->success()
-            ->send();
-
+        ArticleResource::runApproveArticleAction($this->record);
         $this->record->refresh();
     }
 

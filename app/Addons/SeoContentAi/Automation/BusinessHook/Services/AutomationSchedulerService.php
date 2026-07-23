@@ -132,7 +132,7 @@ final class AutomationSchedulerService
 
     private function claimRule(AutomationRule $rule, Carbon $now): bool
     {
-        return (bool) DB::connection('omi_seo_ai')->transaction(function () use ($rule, $now): bool {
+        return (bool) \App\Support\Automation\AutomationConnection::db()->transaction(function () use ($rule, $now): bool {
             /** @var AutomationRule|null $locked */
             $locked = AutomationRule::query()->whereKey($rule->id)->lockForUpdate()->first();
             if (! $locked instanceof AutomationRule || ! $locked->is_enabled) {

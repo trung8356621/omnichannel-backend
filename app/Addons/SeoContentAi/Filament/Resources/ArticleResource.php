@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
+use App\Addons\SeoContentAi\Enums\ArticleReviewActionType;
+use App\Addons\SeoContentAi\Enums\ArticleReviewStatus;
 use App\Addons\SeoContentAi\Enums\SeoLinkMapType;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 use App\Addons\SeoContentAi\Models\Keyword;
@@ -12,8 +14,10 @@ use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoMediaProcessingHistory;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\ArticleReviewService;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
+use App\Addons\SeoContentAi\Services\Exceptions\ArticleReviewException;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\SeoIssueProjectTaskAssignmentService;
 use App\Addons\SeoContentAi\Services\SeoNotificationService;
@@ -1492,19 +1496,46 @@ class ArticleResource extends SeoPanelResource
         return $deletedCount;
     }
 
+    /**
+     * Entry-point duy nhất cho action "Duyệt bài" trên table/list — quyết định action kế tiếp
+     * (submit_review/approve/archive) qua {@see ArticleReviewService::availableActions()} thay vì
+     * phân nhánh role thủ công (content manager vs planner) như trước.
+     */
     public static function runApproveArticleAction(SeoArticle $record): void
     {
-        if (SeoAccessControl::isContentManager()) {
-            static::submitStaffEditingComplete($record);
+        $user = auth()->user();
+        if (! $user instanceof User) {
+            return;
+        }
+
+        $service = app(ArticleReviewService::class);
+        $actions = $service->availableActions($record, $user);
+        $next = $actions[0] ?? null;
+
+        if ($next === null) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_review.errors.invalid_transition'))
+                ->warning()
+                ->send();
 
             return;
         }
 
-        $deletedCount = static::markArticleReviewed($record);
+        $actionType = ArticleReviewActionType::from($next['type']);
+
+        try {
+            $review = $service->performAction($record, $user, $actionType);
+        } catch (ArticleReviewException $exception) {
+            Notification::make()
+                ->title($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
 
         Notification::make()
-            ->title(__('seo-content-ai::filament.article_list.article_reviewed'))
-            ->body(__('seo-content-ai::filament.article_list.deleted_local_images', ['count' => $deletedCount]))
+            ->title((string) __('seo-content-ai::filament.article_review.success.'.$review->action_type))
             ->success()
             ->send();
     }
@@ -1514,30 +1545,38 @@ class ArticleResource extends SeoPanelResource
         return Tables\Actions\Action::make('approve_article')
             ->icon('heroicon-o-check-badge')
             ->iconButton()
-            ->color(fn (SeoArticle $record): string => (bool) $record->is_reviewed ? 'success' : 'gray')
-            ->tooltip(fn (SeoArticle $record): string => (bool) $record->is_reviewed
-                ? __('seo-content-ai::filament.article_list.already_reviewed')
-                : (SeoAccessControl::isContentManager()
-                    ? __('seo-content-ai::filament.article_list.staff_mark_editing_done')
-                    : __('seo-content-ai::filament.article_list.mark_reviewed')))
+            ->color(fn (SeoArticle $record): string => app(ArticleReviewService::class)->resolveStatus($record) === ArticleReviewStatus::Draft
+                ? 'gray'
+                : 'success')
+            ->tooltip(function (SeoArticle $record): string {
+                $user = auth()->user();
+                $next = $user instanceof User
+                    ? (app(ArticleReviewService::class)->availableActions($record, $user)[0] ?? null)
+                    : null;
+
+                if ($next !== null) {
+                    return (string) $next['quick_label'];
+                }
+
+                $status = app(ArticleReviewService::class)->resolveStatus($record);
+
+                return (string) __('seo-content-ai::filament.article_review.badge.'.$status->value);
+            })
             ->visible(function (SeoArticle $record): bool {
-                if (SeoAccessControl::canAccessPlannerFeatures()) {
-                    return true;
-                }
-
-                if (! SeoAccessControl::isContentManager() || ! static::articleIsInContentProject($record)) {
-                    return false;
-                }
-
                 $user = auth()->user();
 
                 return $user instanceof User
-                    && ! app(SeoProjectApprovalService::class)->contentManagerHasSubmitted($record, $user);
+                    && app(ArticleReviewService::class)->availableActions($record, $user) !== [];
             })
             ->requiresConfirmation()
-            ->modalDescription(fn (SeoArticle $record): string => SeoAccessControl::isContentManager()
-                ? __('seo-content-ai::filament.article_list.staff_mark_editing_done_confirm')
-                : __('seo-content-ai::filament.article_list.review_article_description'))
+            ->modalDescription(function (SeoArticle $record): string {
+                $user = auth()->user();
+                $next = $user instanceof User
+                    ? (app(ArticleReviewService::class)->availableActions($record, $user)[0] ?? null)
+                    : null;
+
+                return $next !== null ? (string) $next['label'] : '';
+            })
             ->action(function (SeoArticle $record, Pages\ListArticles|Pages\ListArticleSyncQueue|null $livewire = null): void {
                 static::runApproveArticleAction($record);
 

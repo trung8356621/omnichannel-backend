@@ -12,17 +12,20 @@ use App\Addons\SeoContentAi\Automation\Enums\ActionRiskLevel;
 use App\Addons\SeoContentAi\Automation\Enums\ActionSelectability;
 use App\Addons\SeoContentAi\Automation\Enums\ActionSideEffect;
 use App\Addons\SeoContentAi\Automation\Support\ActionSupport;
-use App\Addons\SeoContentAi\Services\SeoProjectApprovalService;
+use App\Addons\SeoContentAi\Enums\ArticleReviewActionType;
+use App\Addons\SeoContentAi\Services\ArticleReviewService;
+use App\Addons\SeoContentAi\Services\Exceptions\ArticleReviewException;
 use App\Models\User;
-use Illuminate\Validation\ValidationException;
 
 /**
- * Approve linked content project for article (content manager).
+ * Advance article review workflow (submit_review → approve → archive) — key `article.approve`
+ * giữ nguyên cho automation/BC, nhưng nội bộ chạy qua {@see ArticleReviewService} (article-level
+ * state machine) thay vì SeoProjectApprovalService::approveLinkedProject (project-level, cũ).
  */
 final class ApproveArticleAction implements BusinessAction
 {
     public function __construct(
-        private readonly SeoProjectApprovalService $approvalService,
+        private readonly ArticleReviewService $reviewService,
     ) {}
 
     public static function definition(): ActionDefinition
@@ -69,30 +72,47 @@ final class ApproveArticleAction implements BusinessAction
             return ActionResult::failure('actor_required', 'article.approve requires an authenticated actor.');
         }
 
-        $already = $this->approvalService->contentManagerHasSubmitted($article, $user);
+        $status = $this->reviewService->resolveStatus($article);
+        $available = $this->reviewService->availableActions($article, $user);
+        $next = $available[0] ?? null;
+
+        if ($next === null) {
+            return ActionResult::success(
+                output: [
+                    'article_id' => $articleId,
+                    'project_id' => 0,
+                    'project_name' => '',
+                    'already_approved' => true,
+                    'review_status' => $status->value,
+                ],
+            );
+        }
+
+        $nextAction = ArticleReviewActionType::tryFrom((string) $next['type']);
+        if (! $nextAction instanceof ArticleReviewActionType) {
+            return ActionResult::failure('approval_rejected', 'No valid review action for current status.');
+        }
 
         try {
-            $project = $this->approvalService->approveLinkedProject($article, $user);
-        } catch (ValidationException $exception) {
-            return ActionResult::failure(
-                'approval_rejected',
-                (string) (collect($exception->errors())->flatten()->first() ?? $exception->getMessage()),
-            );
+            $review = $this->reviewService->performAction($article, $user, $nextAction);
+        } catch (ArticleReviewException $exception) {
+            return ActionResult::failure('approval_rejected', $exception->getMessage());
         }
 
         return ActionResult::success(
             output: [
                 'article_id' => $articleId,
-                'project_id' => (int) $project->id,
-                'project_name' => (string) ($project->name ?? ''),
-                'already_approved' => $already,
+                'project_id' => 0,
+                'project_name' => '',
+                'already_approved' => false,
+                'review_status' => (string) $review->to_status,
             ],
-            events: $already ? [] : [
+            events: [
                 ActionSupport::articleEvent('article.approved', $context, $articleId, [
-                    'project_id' => (int) $project->id,
+                    'review_status' => (string) $review->to_status,
                 ]),
             ],
-            changed: $already ? [] : ['project_status'],
+            changed: ['review_status'],
         );
     }
 }

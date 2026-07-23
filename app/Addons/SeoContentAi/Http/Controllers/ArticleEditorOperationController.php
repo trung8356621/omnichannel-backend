@@ -57,6 +57,9 @@ final class ArticleEditorOperationController extends Controller
             'items.*.old_slug' => ['nullable', 'string', 'max:200'],
         ]);
 
+        // Luôn đọc bản article mới nhất (sau save trước Fix slug) — không dùng body stale.
+        $article->refresh();
+
         $result = $this->slugFix->fixSlugs($article, $validated['items']);
         $status = ($result['success'] ?? false) ? 200 : 422;
 

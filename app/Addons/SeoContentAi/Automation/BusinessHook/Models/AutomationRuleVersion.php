@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Automation\BusinessHook\Models;
 
-use Illuminate\Database\Eloquent\Model;
+use App\Support\Automation\AutomationModel;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -17,10 +17,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string $trigger_type
  * @property string|null $event_name
  */
-final class AutomationRuleVersion extends Model
+final class AutomationRuleVersion extends AutomationModel
 {
-    protected $connection = 'omi_seo_ai';
-
     protected $table = 'automation_rule_versions';
 
     protected $guarded = [];

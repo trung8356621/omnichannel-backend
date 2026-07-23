@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Automation\BusinessHook\Models;
 
-use Illuminate\Database\Eloquent\Model;
+use App\Support\Automation\AutomationModel;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
@@ -19,11 +19,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property array<string, mixed>|null $context
  * @property \Illuminate\Support\Carbon $occurred_at
  */
-final class BusinessEvent extends Model
+final class BusinessEvent extends AutomationModel
 {
     public $timestamps = false;
-
-    protected $connection = 'omi_seo_ai';
 
     protected $table = 'business_events';
 

@@ -77,5 +77,7 @@ final class ArticleEditorPhase4ClientUtilitiesTest extends TestCase
         self::assertStringContainsString('ARTICLE_EDITOR_DRAFT_VERSION = 2', $source);
         self::assertStringContainsString('HTML canonical', $source);
         self::assertStringContainsString('export function hashContent', $source);
+        self::assertStringContainsString('export function resolveLocalDraftDecision', $source);
+        self::assertStringContainsString('export function writeSyncedLocalSnapshot', $source);
     }
 }

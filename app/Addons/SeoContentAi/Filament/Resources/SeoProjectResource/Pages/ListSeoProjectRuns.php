@@ -176,30 +176,16 @@ final class ListSeoProjectRuns extends Page
                             ->send();
                     }
                 }),
-            Actions\Action::make('view_archives')
-                ->label(fn (): string => __('seo-content-ai::filament.projects.view_archives', [
-                    'count' => $this->project instanceof SeoProject
-                        ? SeoProjectResource::archivesCountFor($this->project)
-                        : 0,
-                ]))
-                ->icon('heroicon-o-archive-box')
+            Actions\Action::make('back_to_project')
+                ->label(__('seo-content-ai::filament.projects.back_to_project'))
+                ->icon('heroicon-o-arrow-left')
                 ->color('gray')
-                ->visible(fn (): bool => SeoAccessControl::canViewProjectArchives()
-                    && $this->project instanceof SeoProject)
-                ->url(fn (): string => $this->project instanceof SeoProject
-                    ? SeoProjectResource::projectArchivesUrl($this->project)
-                    : '#'),
+                ->url(fn (): string => SeoProjectResource::projectRecordUrl($this->project)),
         ];
 
         if ($this->project instanceof SeoProject) {
-            $actions[] = SeoProjectResource::makeArchiveProjectPageAction($this->project);
+            array_unshift($actions, SeoProjectResource::makeArchiveProjectPageAction($this->project));
         }
-
-        $actions[] = Actions\Action::make('back_to_project')
-            ->label(__('seo-content-ai::filament.projects.back_to_project'))
-            ->icon('heroicon-o-arrow-left')
-            ->color('gray')
-            ->url(fn (): string => SeoProjectResource::projectRecordUrl($this->project));
 
         return $actions;
     }

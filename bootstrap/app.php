@@ -16,6 +16,8 @@ return Application::configure(basePath: dirname(__DIR__))
         // Phase 3C3: luôn discover — không phụ thuộc AddonServiceProvider boot order.
         \App\Addons\SeoContentAi\Console\DiagnoseContentProjectCommand::class,
         \App\Addons\SeoContentAi\Console\RepairContentProjectCommand::class,
+        \App\Console\Commands\CleanupMisplacedTablesCommand::class,
+        \App\Console\Commands\MigrateAutomationToCoreCommand::class,
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->redirectGuestsTo(static function (): string {

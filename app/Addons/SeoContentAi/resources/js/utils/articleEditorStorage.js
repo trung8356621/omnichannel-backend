@@ -13,9 +13,26 @@ const chatKey = (articleId) => `seo_article_chat_${articleId}`;
 const faqKey = (articleId) => `seo_article_faq_${articleId}`;
 const STORAGE_PREFIX = 'seo_article_';
 
-function draftKey(articleId, connectionHash) {
+function draftKey(articleId, connectionHash, siteId = 0) {
+    const hash = String(connectionHash ?? '').trim() || 'default';
+    const site = Math.max(0, Number(siteId) || 0);
+    return `${DRAFT_KEY_PREFIX}${hash}:${site}:${articleId}`;
+}
+
+/** Legacy key without site segment (pre site-scoped drafts). */
+function legacyScopedDraftKey(articleId, connectionHash) {
     const hash = String(connectionHash ?? '').trim() || 'default';
     return `${DRAFT_KEY_PREFIX}${hash}:${articleId}`;
+}
+
+let draftPersistenceEnabled = true;
+
+export function setDraftPersistenceEnabled(enabled) {
+    draftPersistenceEnabled = Boolean(enabled);
+}
+
+export function isDraftPersistenceEnabled() {
+    return draftPersistenceEnabled && !window.__SEO_EDITOR_EXITING__;
 }
 
 function isQuotaExceededError(error) {
@@ -212,6 +229,36 @@ function sha256Hex(input) {
 }
 
 /**
+ * Normalize HTML before draft/server compare — tránh conflict giả do whitespace /
+ * empty vs null / paragraph rỗng / markup tạm UI.
+ * @param {string|null|undefined} html
+ * @returns {string}
+ */
+export function normalizeContentForHash(html) {
+    if (html == null) {
+        return '';
+    }
+
+    let value = String(html).trim();
+    if (value === '' || value === 'null' || value === 'undefined') {
+        return '';
+    }
+
+    try {
+        value = stripEmptyParagraphsFromHtml(value);
+    } catch {
+        // keep trimmed value
+    }
+
+    return value
+        .replace(/\r\n/g, '\n')
+        .replace(/>\s+</g, '><')
+        .replace(/[ \t\f\v]+/g, ' ')
+        .replace(/\n{2,}/g, '\n')
+        .trim();
+}
+
+/**
  * Sync SHA-256 hex of trimmed HTML — mirrors PHP `hash('sha256', trim($body))`.
  * @param {string} html
  * @returns {string}
@@ -222,6 +269,34 @@ export function hashContent(html) {
     } catch {
         return '';
     }
+}
+
+/**
+ * Hash sau normalize — dùng so sánh draft ↔ server (không thay token conflict PHP).
+ * @param {string|null|undefined} html
+ * @returns {string}
+ */
+export function hashNormalizedContent(html) {
+    try {
+        return sha256Hex(normalizeContentForHash(html));
+    } catch {
+        return '';
+    }
+}
+
+/**
+ * @param {string|null|undefined} left
+ * @param {string|null|undefined} right
+ * @returns {boolean}
+ */
+export function contentsMeaningfullyEqual(left, right) {
+    const leftHash = hashNormalizedContent(left);
+    const rightHash = hashNormalizedContent(right);
+    if (leftHash !== '' && rightHash !== '' && leftHash === rightHash) {
+        return true;
+    }
+
+    return normalizeContentForHash(left) === normalizeContentForHash(right);
 }
 
 /* --------------------------------------------------------------------- */
@@ -251,13 +326,17 @@ function migrateLegacyDraft(articleId) {
 /**
  * @param {number|string} articleId
  * @param {string} [connectionHash]
+ * @param {{ siteId?: number|string|null }} [options]
  * @returns {{
  *   schema_version: 2,
  *   article_id: number,
  *   connection_hash: string,
+ *   site_id: number,
+ *   user_id: number|null,
  *   base_updated_at: string|null,
  *   base_content_hash: string|null,
  *   saved_at: string,
+ *   synced?: boolean,
  *   title?: string,
  *   slug?: string,
  *   content: string,
@@ -265,15 +344,23 @@ function migrateLegacyDraft(articleId) {
  *   dirty_fields: string[],
  * }|null}
  */
-export function loadDraft(articleId, connectionHash) {
+export function loadDraft(articleId, connectionHash, options = {}) {
     if (!articleId) return null;
 
-    const key = draftKey(articleId, connectionHash);
+    const siteId = Math.max(0, Number(options?.siteId ?? options?.site_id ?? 0) || 0);
+    const key = draftKey(articleId, connectionHash, siteId);
+    const legacyKey = legacyScopedDraftKey(articleId, connectionHash);
+
     try {
-        const raw = localStorage.getItem(key);
+        const raw = localStorage.getItem(key) ?? localStorage.getItem(legacyKey);
         if (raw) {
             const data = JSON.parse(raw);
             if (data && typeof data === 'object' && Number(data.schema_version) === ARTICLE_EDITOR_DRAFT_VERSION) {
+                const draftSiteId = Math.max(0, Number(data.site_id ?? 0) || 0);
+                if (siteId > 0 && draftSiteId > 0 && draftSiteId !== siteId) {
+                    return null;
+                }
+
                 return data;
             }
         }
@@ -290,9 +377,12 @@ export function loadDraft(articleId, connectionHash) {
         schema_version: ARTICLE_EDITOR_DRAFT_VERSION,
         article_id: Number(articleId),
         connection_hash: String(connectionHash ?? '').trim(),
+        site_id: siteId,
+        user_id: null,
         base_updated_at: null,
         base_content_hash: null,
         saved_at: new Date(migrated.savedAtMs).toISOString(),
+        synced: false,
         content: migrated.content,
         content_hash: hashContent(migrated.content),
         dirty_fields: ['content'],
@@ -301,6 +391,9 @@ export function loadDraft(articleId, connectionHash) {
     try {
         setItemWithPrune(key, JSON.stringify(draft), 'nháp');
         localStorage.removeItem(legacyDraftKey(articleId));
+        if (legacyKey !== key) {
+            localStorage.removeItem(legacyKey);
+        }
     } catch {
         // ignore quota / private mode — migrated draft still returned in-memory
     }
@@ -308,10 +401,13 @@ export function loadDraft(articleId, connectionHash) {
     return draft;
 }
 
-export function clearDraft(articleId, connectionHash) {
+export function clearDraft(articleId, connectionHash, options = {}) {
     if (!articleId) return;
+    const siteId = Math.max(0, Number(options?.siteId ?? options?.site_id ?? 0) || 0);
     try {
-        localStorage.removeItem(draftKey(articleId, connectionHash));
+        localStorage.removeItem(draftKey(articleId, connectionHash, siteId));
+        localStorage.removeItem(legacyScopedDraftKey(articleId, connectionHash));
+        localStorage.removeItem(legacyDraftKey(articleId));
     } catch {
         // ignore quota / private mode
     }
@@ -324,18 +420,24 @@ export function clearDraft(articleId, connectionHash) {
  *   content: string,
  *   title?: string,
  *   slug?: string,
+ *   site_id?: number|null,
+ *   user_id?: number|null,
  *   base_updated_at?: string|null,
  *   base_content_hash?: string|null,
  *   dirty_fields?: string[],
+ *   synced?: boolean,
  * }} payload
  */
 export function saveDraft(articleId, connectionHash, payload) {
     if (!articleId) return;
+    if (!isDraftPersistenceEnabled()) return;
 
-    const key = draftKey(articleId, connectionHash);
+    const siteId = Math.max(0, Number(payload?.site_id ?? 0) || 0);
+    const key = draftKey(articleId, connectionHash, siteId);
     const existing = (() => {
         try {
-            const raw = localStorage.getItem(key);
+            const raw = localStorage.getItem(key)
+                ?? localStorage.getItem(legacyScopedDraftKey(articleId, connectionHash));
             return raw ? JSON.parse(raw) : null;
         } catch {
             return null;
@@ -346,19 +448,45 @@ export function saveDraft(articleId, connectionHash, payload) {
         ? stripEmptyParagraphsFromHtml(payload.content)
         : String(existing?.content ?? '');
     const contentHash = hashContent(content);
+    const normalizedHash = hashNormalizedContent(content);
+    const baseUpdatedAt = payload?.base_updated_at ?? existing?.base_updated_at ?? null;
+    const baseContentHash = payload?.base_content_hash ?? existing?.base_content_hash ?? null;
+    const baseHash = String(baseContentHash ?? '').trim();
+    const contentUnchangedFromExisting = Boolean(
+        existing && contentsMeaningfullyEqual(content, existing.content),
+    );
+    // Khi không truyền dirty_fields: giữ dirty cũ nếu HTML không đổi; tránh autosave tạo conflict giả.
+    let dirtyFields;
+    if (Array.isArray(payload?.dirty_fields)) {
+        dirtyFields = payload.dirty_fields;
+    } else if (contentUnchangedFromExisting) {
+        dirtyFields = Array.isArray(existing?.dirty_fields) ? existing.dirty_fields : [];
+    } else if (baseHash !== '' && (contentHash === baseHash || normalizedHash === baseHash)) {
+        dirtyFields = [];
+    } else {
+        dirtyFields = ['content'];
+    }
+    const synced = payload?.synced != null
+        ? Boolean(payload.synced)
+        : (dirtyFields.length === 0 && (contentUnchangedFromExisting ? Boolean(existing?.synced) : false));
 
     const draft = {
         schema_version: ARTICLE_EDITOR_DRAFT_VERSION,
         article_id: Number(articleId),
         connection_hash: String(connectionHash ?? '').trim(),
-        base_updated_at: payload?.base_updated_at ?? existing?.base_updated_at ?? null,
-        base_content_hash: payload?.base_content_hash ?? existing?.base_content_hash ?? null,
+        site_id: siteId || Math.max(0, Number(existing?.site_id ?? 0) || 0),
+        user_id: payload?.user_id ?? existing?.user_id ?? null,
+        base_updated_at: baseUpdatedAt,
+        base_content_hash: baseContentHash,
         saved_at: new Date().toISOString(),
+        synced,
+        version: payload?.version ?? existing?.version ?? baseContentHash ?? null,
         title: payload?.title ?? existing?.title,
         slug: payload?.slug ?? existing?.slug,
         content,
         content_hash: contentHash,
-        dirty_fields: Array.isArray(payload?.dirty_fields) ? payload.dirty_fields : ['content'],
+        normalized_hash: normalizedHash,
+        dirty_fields: dirtyFields,
     };
 
     try {
@@ -366,45 +494,167 @@ export function saveDraft(articleId, connectionHash, payload) {
             schema_version: ARTICLE_EDITOR_DRAFT_VERSION,
             article_id: Number(articleId),
             connection_hash: draft.connection_hash,
+            site_id: draft.site_id,
             saved_at: draft.saved_at,
             content,
             content_hash: contentHash,
+            normalized_hash: normalizedHash,
             dirty_fields: draft.dirty_fields,
+            synced: draft.synced,
         }));
+        localStorage.removeItem(legacyScopedDraftKey(articleId, connectionHash));
     } catch (e) {
         console.warn('Không lưu được nháp localStorage', e);
     }
 }
 
 /**
- * True nếu nên hỏi người dùng khôi phục nháp (nội dung khác server hiện tại
- * hoặc khác baseline mà nháp được tạo ra từ đó).
+ * Ghi snapshot local khớp server sau save/sync — dirty rỗng, synced=true.
+ *
+ * @param {number|string} articleId
+ * @param {string} connectionHash
+ * @param {{
+ *   content: string,
+ *   site_id?: number|null,
+ *   base_updated_at?: string|null,
+ *   base_content_hash?: string|null,
+ *   version?: string|null,
+ * }} payload
+ */
+export function writeSyncedLocalSnapshot(articleId, connectionHash, payload) {
+    saveDraft(articleId, connectionHash, {
+        ...payload,
+        dirty_fields: [],
+        synced: true,
+        version: payload?.version ?? payload?.base_content_hash ?? null,
+    });
+}
+
+/**
+ * @param {string|null|undefined} iso
+ * @returns {number}
+ */
+function parseTimestampMs(iso) {
+    if (!iso) {
+        return 0;
+    }
+
+    const ms = Date.parse(String(iso));
+
+    return Number.isFinite(ms) ? ms : 0;
+}
+
+/**
+ * Quyết định hydrate: dùng server hay restore local — không hiện modal.
  *
  * @param {ReturnType<typeof loadDraft>} draft
- * @param {{ content_hash?: string, expected_content_hash?: string }} server
+ * @param {{
+ *   content_hash?: string,
+ *   expected_content_hash?: string,
+ *   site_id?: number,
+ *   updated_at?: string|null,
+ *   content?: string|null,
+ *   version?: string|null,
+ * }} server
+ * @returns {'use_server'|'restore_local'}
+ */
+export function resolveLocalDraftDecision(draft, server) {
+    if (!draft || typeof draft !== 'object') {
+        return 'use_server';
+    }
+
+    if (draft.synced === true) {
+        return 'use_server';
+    }
+
+    const dirtyFields = Array.isArray(draft.dirty_fields) ? draft.dirty_fields : [];
+    if (dirtyFields.length === 0) {
+        return 'use_server';
+    }
+
+    const draftContent = String(draft.content ?? '');
+    if (draftContent.trim() === '') {
+        return 'use_server';
+    }
+
+    const draftSiteId = Math.max(0, Number(draft.site_id ?? 0) || 0);
+    const serverSiteId = Math.max(0, Number(server?.site_id ?? 0) || 0);
+    if (draftSiteId > 0 && serverSiteId > 0 && draftSiteId !== serverSiteId) {
+        return 'use_server';
+    }
+
+    const serverContent = server?.content != null ? String(server.content) : '';
+    const draftNormHash = String(draft.normalized_hash ?? '').trim() || hashNormalizedContent(draftContent);
+    const serverNormHash = hashNormalizedContent(serverContent)
+        || String(server?.content_hash ?? '').trim()
+        || String(server?.expected_content_hash ?? '').trim();
+
+    // Case 1 / E: cùng nội dung (kể cả khác whitespace/null) → server + xóa draft.
+    if (
+        contentsMeaningfullyEqual(draftContent, serverContent)
+        || (draftNormHash !== '' && serverNormHash !== '' && draftNormHash === serverNormHash)
+        || (
+            String(draft.content_hash ?? '').trim() !== ''
+            && String(server?.content_hash ?? '').trim() !== ''
+            && String(draft.content_hash).trim() === String(server.content_hash).trim()
+        )
+    ) {
+        return 'use_server';
+    }
+
+    const serverUpdatedMs = parseTimestampMs(server?.updated_at);
+    const localSavedMs = parseTimestampMs(draft.saved_at);
+    const draftBaseHash = String(draft.base_content_hash ?? '').trim();
+    const serverExpectedHash = String(server?.expected_content_hash ?? server?.content_hash ?? '').trim();
+    const serverVersion = String(server?.version ?? serverExpectedHash).trim();
+    const localVersion = String(draft.version ?? draftBaseHash).trim();
+
+    // Case 2: server mới hơn / bằng local (time hoặc version/baseline).
+    if (serverUpdatedMs > 0 && localSavedMs > 0 && serverUpdatedMs >= localSavedMs) {
+        return 'use_server';
+    }
+
+    if (
+        serverVersion !== ''
+        && localVersion !== ''
+        && serverVersion === localVersion
+        && serverUpdatedMs >= localSavedMs
+    ) {
+        return 'use_server';
+    }
+
+    if (
+        serverExpectedHash !== ''
+        && draftBaseHash !== ''
+        && draftBaseHash !== serverExpectedHash
+        && serverUpdatedMs >= localSavedMs
+    ) {
+        // Server đã tiến trước baseline nháp và không cũ hơn local → giữ server.
+        return 'use_server';
+    }
+
+    // Case 3: local mới hơn và nội dung thực sự khác.
+    if (localSavedMs > serverUpdatedMs && dirtyFields.includes('content')) {
+        return 'restore_local';
+    }
+
+    if (dirtyFields.includes('content') && !contentsMeaningfullyEqual(draftContent, serverContent)) {
+        // Không có timestamp tin cậy nhưng còn dirty thật → ưu tiên local (crash trước save).
+        if (serverUpdatedMs === 0 || localSavedMs === 0 || localSavedMs > serverUpdatedMs) {
+            return 'restore_local';
+        }
+    }
+
+    return 'use_server';
+}
+
+/**
+ * @deprecated Dùng resolveLocalDraftDecision — giữ tương thích test/call cũ.
+ * @param {ReturnType<typeof loadDraft>} draft
+ * @param {{ content_hash?: string, expected_content_hash?: string, site_id?: number, updated_at?: string|null, content?: string|null }} server
  */
 export function draftNeedsRestore(draft, server) {
-    if (!draft || typeof draft !== 'object') {
-        return false;
-    }
-
-    const draftContentHash = String(draft.content_hash ?? '').trim();
-    if (draftContentHash === '') {
-        return false;
-    }
-
-    const serverContentHash = String(server?.content_hash ?? '').trim();
-    if (serverContentHash !== '' && draftContentHash === serverContentHash) {
-        return false;
-    }
-
-    const draftBaseHash = String(draft.base_content_hash ?? '').trim();
-    const serverExpectedHash = String(server?.expected_content_hash ?? '').trim();
-    if (serverExpectedHash !== '' && draftBaseHash !== '' && draftBaseHash !== serverExpectedHash) {
-        return true;
-    }
-
-    return serverContentHash !== '' && draftContentHash !== serverContentHash;
+    return resolveLocalDraftDecision(draft, server) === 'restore_local';
 }
 
 export function loadHistory(articleId) {

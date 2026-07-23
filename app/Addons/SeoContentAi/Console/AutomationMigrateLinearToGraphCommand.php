@@ -43,7 +43,7 @@ final class AutomationMigrateLinearToGraphCommand extends Command
                 continue;
             }
 
-            DB::connection('omi_seo_ai')->transaction(function () use ($rule, $graph): void {
+            \App\Support\Automation\AutomationConnection::db()->transaction(function () use ($rule, $graph): void {
                 AutomationRuleNode::query()->where('automation_rule_id', $rule->id)->delete();
                 AutomationRuleEdge::query()->where('automation_rule_id', $rule->id)->delete();
 

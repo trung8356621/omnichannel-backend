@@ -6,29 +6,35 @@ namespace App\Addons\SeoContentAi\Console;
 
 use App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookSchemaGuard;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
-use App\Models\SeoDatabaseConnection;
+use App\Support\Automation\AutomationConnection;
 use Illuminate\Console\Command;
 
 /**
- * Migrate SEO addon via reconciler (tránh FAIL khi bảng cũ đã tồn tại).
+ * Schema automation đã chuyển sang core.
+ * Flag --only-* trỏ migrate core; data copy dùng automation:migrate-to-core.
  */
 final class AutomationMigrateCommand extends Command
 {
     protected $signature = 'automation:migrate
-        {--connection-id= : SEO database connection id (default: first active)}
-        {--only-business-hook : Chỉ chạy migration Business Hook tables}
-        {--only-v2 : Chỉ chạy migration Automation V2 graph/scheduler}
-        {--only-v3 : Chỉ chạy migration Automation V3 versions/ops}';
+        {--connection-id= : SEO database connection id (legacy, ignored for automation schema)}
+        {--only-business-hook : Ensure Business Hook tables on automation connection}
+        {--only-v2 : Ensure Automation V2 tables on automation connection}
+        {--only-v3 : Ensure Automation V3 tables on automation connection}';
 
-    protected $description = 'Run SEO migrations with reconciler, or only Business Hook tables.';
+    protected $description = 'Ensure automation schema on configured automation connection (core).';
 
     public function handle(SeoDatabaseConnectionService $connections): int
     {
-        if ((bool) $this->option('only-v3')) {
-            $this->info('Migrating Automation V3 tables only…');
+        if ((bool) $this->option('only-v3')
+            || (bool) $this->option('only-v2')
+            || (bool) $this->option('only-business-hook')
+        ) {
+            $target = AutomationConnection::target();
+            $this->info("Ensuring automation schema on [{$target}] via core migration…");
+
             $exit = $this->call('migrate', [
-                '--database' => 'omi_seo_ai',
-                '--path' => 'app/Addons/SeoContentAi/database/migrations/2026_07_20_120000_automation_v3_versions_and_ops.php',
+                '--database' => $target,
+                '--path' => 'database/migrations/2026_07_23_140000_create_core_automation_tables.php',
                 '--force' => true,
             ]);
 
@@ -36,97 +42,46 @@ final class AutomationMigrateCommand extends Command
                 return $exit;
             }
 
-            $missingTables = BusinessHookSchemaGuard::missingV3Tables();
-            $missingColumns = BusinessHookSchemaGuard::missingV3Columns();
-            if ($missingTables !== [] || $missingColumns !== []) {
-                $this->error('Still missing V3: '.implode(', ', array_merge($missingTables, $missingColumns)));
+            $missing = array_merge(
+                BusinessHookSchemaGuard::missingTables(),
+                BusinessHookSchemaGuard::missingV2Tables(),
+                BusinessHookSchemaGuard::missingV3Tables(),
+                BusinessHookSchemaGuard::missingV3Columns(),
+            );
 
-                return self::FAILURE;
-            }
-
-            $this->info('Automation V3 tables ready.');
-
-            return self::SUCCESS;
-        }
-
-        if ((bool) $this->option('only-v2')) {
-            $this->info('Migrating Automation V2 tables only…');
-            $exit = $this->call('migrate', [
-                '--database' => 'omi_seo_ai',
-                '--path' => 'app/Addons/SeoContentAi/database/migrations/2026_07_20_100000_automation_v2_graph_and_scheduler.php',
-                '--force' => true,
-            ]);
-
-            if ($exit !== self::SUCCESS) {
-                return $exit;
-            }
-
-            $missing = BusinessHookSchemaGuard::missingV2Tables();
-            if ($missing !== []) {
-                $this->error('Still missing V2: '.implode(', ', $missing));
-
-                return self::FAILURE;
-            }
-
-            $this->info('Automation V2 tables ready.');
-
-            return self::SUCCESS;
-        }
-
-        if ((bool) $this->option('only-business-hook')) {
-            $this->info('Migrating Business Hook tables only…');
-            $exit = $this->call('migrate', [
-                '--database' => 'omi_seo_ai',
-                '--path' => 'app/Addons/SeoContentAi/database/migrations/2026_07_19_210000_create_business_hook_tables.php',
-                '--force' => true,
-            ]);
-
-            if ($exit !== self::SUCCESS) {
-                return $exit;
-            }
-
-            $missing = BusinessHookSchemaGuard::missingTables();
             if ($missing !== []) {
                 $this->error('Still missing: '.implode(', ', $missing));
+                $this->warn('Runtime connection: '.AutomationConnection::name());
+                $this->warn('Nếu đang cutover: set AUTOMATION_DB_CONNECTION='.$target.' rồi config:clear.');
 
                 return self::FAILURE;
             }
 
-            $this->info('Business Hook tables ready.');
+            $this->info('Automation tables ready on '.$target.'.');
+            $this->comment('Data copy: php artisan automation:migrate-to-core --dry-run');
 
             return self::SUCCESS;
         }
 
-        $query = SeoDatabaseConnection::query()->where('is_active', true)->orderBy('id');
-        $connectionId = (int) ($this->option('connection-id') ?? 0);
-        if ($connectionId > 0) {
-            $query->whereKey($connectionId);
-        }
+        // Full SEO addon migrate (không tạo automation_* trên omi_seo_ai nữa — legacy no-op).
+        $connectionId = $this->option('connection-id');
+        $model = $connectionId
+            ? \App\Models\SeoDatabaseConnection::query()->find((int) $connectionId)
+            : \App\Models\SeoDatabaseConnection::query()->where('is_active', true)->orderBy('id')->first();
 
-        $connection = $query->first();
-        if (! $connection instanceof SeoDatabaseConnection) {
-            $this->error('No active SEO database connection found.');
-
-            return self::FAILURE;
-        }
-
-        $this->info("Running SEO migrations for connection #{$connection->id} ({$connection->name})…");
-        $result = $connections->runMigrationsForConnection($connection);
-
-        $this->line('pending: '.$result['pending']);
-        $this->line('executed: '.($result['executed'] ? 'yes' : 'no'));
-        $this->line('reconciled: '.$result['reconciled']);
-
-        $missing = BusinessHookSchemaGuard::missingTables();
-        if ($missing !== []) {
-            $this->warn('Business Hook tables still missing: '.implode(', ', $missing));
-            $this->line('Retry with: php artisan automation:migrate --only-business-hook');
+        if ($model === null) {
+            $this->error('No active SEO database connection.');
 
             return self::FAILURE;
         }
 
-        $this->info('SEO migrations OK. Business Hook tables present.');
+        $connections->bootstrapFromConnection($model);
+        $this->info('Running SEO addon migrations (automation schema is no-op / owned by core)…');
 
-        return self::SUCCESS;
+        return $this->call('migrate', [
+            '--database' => 'omi_seo_ai',
+            '--path' => 'app/Addons/SeoContentAi/database/migrations',
+            '--force' => true,
+        ]);
     }
 }

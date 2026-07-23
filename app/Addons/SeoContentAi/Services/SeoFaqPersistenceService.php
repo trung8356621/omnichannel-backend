@@ -18,6 +18,7 @@ final class SeoFaqPersistenceService
     public function persistForArticle(SeoArticle $article, array $faqs): int
     {
         $article->faqs()->delete();
+        $article->unsetRelation('faqs');
 
         $rows = $this->buildInsertRows($article->id, $faqs);
 

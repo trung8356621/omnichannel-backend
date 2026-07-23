@@ -182,7 +182,7 @@ ArticlePendingInternalLinkService::assignFromEditor → task + pending link
 | Console | PublishScheduled, BackfillPromptResultLinks, CleanCtaKeywords, ExtractOldArticleTocs |
 | Filament/Livewire | EditArticle save/sync/approve; ListArticles/ListQueue; ArticlesOptimal; project run; Keyword pages |
 | Static helpers | ArticleResource::assignArticlesToContentProject, quickCreateContentProject, syncGlobalSiteForArticle |
-| Cross-DB | omi_seo_ai models + Site/User on mysql; SeoDatabaseConnection core; no cross-DB FK |
+| Cross-DB | Domain SEO models trên `omi_seo_ai`; Site/User + **automation tables** trên core (`config('automation.connection')`); SeoDatabaseConnection core; no cross-DB FK |
 
 ## 6. WordPress capability matrix
 
@@ -227,9 +227,9 @@ Event → Rule → Conditions → Ordered Actions → Queue → Execution logs. 
 | `BusinessHookEmitter` | Emit từ archive / WP queue / run complete / task fail | `.../Support/BusinessHookEmitter.php` |
 | `SyncArticleToWordPressHookAction` | `wordpress.article.sync` wrap `WordPressArticleSyncService` | `.../Actions/SyncArticleToWordPressHookAction.php` |
 
-**Tables (`omi_seo_ai`):** `business_events` (`event_uuid` VARCHAR(64) — nhận cả UUID 36 và sha256 hex 64 từ `wordpressSyncedOnce` / HookAction idempotency), `automation_rules` (+`version`), `automation_rule_actions`, `automation_executions`, `automation_action_executions`.
+**Tables (core DB via `config('automation.connection')` / `AUTOMATION_DB_CONNECTION`):** `business_events` (`event_uuid` VARCHAR(64) — UUID 36 hoặc sha256 hex 64), `automation_rules` (+ graph/version/schedule columns), `automation_rule_actions|nodes|edges`, `automation_rule_versions` (+ version nodes/edges), `automation_executions`, `automation_action_executions`, `automation_node_executions`, `automation_action_runs`, `automation_scheduler_heartbeats`. Schema: `database/migrations/2026_07_23_140000_create_core_automation_tables.php`. Models: `App\Support\Automation\AutomationModel`. Copy/verify: `php artisan automation:migrate-to-core`.
 
-**CLI:** `automation:migrate [--only-business-hook]`, `automation:seed-rules`, `automation:list-events|list-actions|dispatch|run-rule|retry|diagnose`, `automation:audit-wordpress-coupling [--strict]`.
+**CLI:** `automation:migrate-to-core`, `automation:migrate` (ensure core schema), `automation:seed-rules`, `automation:list-events|list-actions|dispatch|run-rule|retry|diagnose`, `automation:audit-wordpress-coupling [--strict]`.
 
 **Seed rules (business enabled):** `sync-article-to-wordpress`, `dispatch-publish-request`, `seo-analysis-on-content-updated`, `notify-workflow-failure`. Product-review legacy rules (`publish-generated-*`, `publish-pending-*`, `execute-wordpress-comment-review-publish`) = **deprecated + hidden + disabled**. Graph sample stays disabled. List UI default: `classification=business` + `visibility=user`.
 

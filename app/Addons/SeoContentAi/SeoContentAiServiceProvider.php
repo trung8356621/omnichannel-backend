@@ -16,12 +16,13 @@ use App\Addons\SeoContentAi\Observers\SeoProjectObserver;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Services\TeamChatAttachmentService;
+use App\Contracts\DeclaresDatabaseTableOwnership;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Notifications\DatabaseNotification;
 use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
 
-class SeoContentAiServiceProvider extends ServiceProvider
+class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDatabaseTableOwnership
 {
     public const DB_CONNECTION = 'omi_seo_ai';
 
@@ -216,6 +217,7 @@ class SeoContentAiServiceProvider extends ServiceProvider
                 \App\Addons\SeoContentAi\Console\DiagnoseContentProjectSyncCommand::class,
                 \App\Addons\SeoContentAi\Console\DiagnoseContentProjectCommand::class,
                 \App\Addons\SeoContentAi\Console\RepairContentProjectCommand::class,
+                \App\Addons\SeoContentAi\Console\RepairContentProjectMonthDriftCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationListEventsCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationListActionsCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationDispatchCommand::class,
@@ -246,6 +248,8 @@ class SeoContentAiServiceProvider extends ServiceProvider
                 \App\Addons\SeoContentAi\Console\AutomationImportCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationHealthCommand::class,
                 \App\Addons\SeoContentAi\Console\WordpressSyncLeaseWatchdogCommand::class,
+                \App\Addons\SeoContentAi\Console\MigrateSeoArticleReviewsCommand::class,
+                \App\Addons\SeoContentAi\Console\RepairArchivedArticleActiveTasksCommand::class,
             ]);
         }
     }
@@ -352,5 +356,84 @@ class SeoContentAiServiceProvider extends ServiceProvider
         } catch (\Throwable $exception) {
             report($exception);
         }
+    }
+
+    /**
+     * Table thuộc connection `omi_seo_ai` (không gồm GSC/SERP credentials — những bảng đó ở core/mysql).
+     *
+     * @return array{connection: string, tables: list<string>, patterns: list<string>}
+     */
+    public function databaseTableOwnership(): array
+    {
+        return [
+            'connection' => self::DB_CONNECTION,
+            'tables' => [
+                'articles',
+                'article_keyword',
+                'article_meta',
+                'article_product_reviews',
+                // automation_* + business_events: ownership core (config/database_table_ownership.php)
+                'entities',
+                'entity_results',
+                'keyword_group_metric_snapshots',
+                'keyword_link',
+                'keyword_meta',
+                'keyword_rank_check_runs',
+                'keyword_rank_snapshots',
+                'keyword_review_histories',
+                'keyword_review_reasons',
+                'keyword_site_meta',
+                'keyword_tag',
+                'keyword_tags',
+                'keywords',
+                'domain_global_cta_settings',
+                'prompt_parts',
+                'prompt_results',
+                'prompts',
+                'seo_article_headings',
+                'seo_article_links',
+                'seo_article_reviews',
+                'seo_article_revisions',
+                'seo_article_wp_sync_jobs',
+                'seo_content_archive_items',
+                'seo_domain_metas',
+                'seo_faqs',
+                'seo_generated_images',
+                'seo_image_optimization_settings',
+                'seo_link_audits',
+                'seo_link_maps',
+                'seo_links',
+                'seo_media',
+                'seo_media_meta',
+                'seo_media_processing_histories',
+                'seo_pending_internal_links',
+                'seo_project_archive_items',
+                'seo_project_archives',
+                'seo_project_run_items',
+                'seo_project_runs',
+                'seo_project_task_events',
+                'seo_project_tasks',
+                'seo_projects',
+                'seo_prompt_result_links',
+                'seo_prompt_resultables',
+                'seo_prompt_templates',
+                'seo_rank_keyword_group_items',
+                'seo_rank_keyword_groups',
+                'seo_settings',
+                'seo_tasks',
+                'seo_watermark_settings',
+                'seo_wp_media_backups',
+                'seo_wp_media_edited_pending',
+                'tags',
+                'task_test_results',
+                'user_workspace_settings',
+                'wordpress_side_effect_attempts',
+            ],
+            'patterns' => [
+                'seo_domain_*',
+                'domain_global_*',
+                'user_workspace_*',
+            ],
+        ];
     }
 }

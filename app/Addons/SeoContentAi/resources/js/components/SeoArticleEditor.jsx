@@ -70,7 +70,7 @@ const SeoModule = lazy(() => import('../modules/SeoModule'));
 const ImagesModule = lazy(() => import('../modules/ImagesModule'));
 const ReviewsModule = lazy(() => import('../modules/ReviewsModule'));
 import { DEFAULT_WIKI_TRUST_DOMAINS } from '../utils/wikiTrustDomains';
-import { setArticleAutosaveLock } from '../utils/articleAutosaveLock';
+import { setArticleAutosaveLock, isArticleAutosaveLocked } from '../utils/articleAutosaveLock';
 import {
     appendProductAlbumItems,
     syncProductAlbumToServer,
@@ -101,6 +101,8 @@ import {
     enrichWpRenamedWithRequestMeta,
     enrichBlocksWithPostImages,
     finalizeBlocksAfterWpRename,
+    mapArticleSlugFixReplacementsToLocalResults,
+    omitFailedLocalSlugRenameQueueItems,
     reconcileSupplementalImagesWithBlocks,
     resetSupplementalImagesAfterSlugRename,
     resolveWpRenameOldUrl,
@@ -128,18 +130,25 @@ import {
 } from '../utils/seoMediaApi';
 import {
     showArticleOperationOverlay,
-    scheduleArticleEditorReload,
 } from '../utils/articleOperationTracker';
 import { articleEditorExtensions } from '../utils/editorExtensions';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { useArticleEditorHistory } from '../hooks/useArticleEditorHistory';
 import {
     clearDraft,
-    draftNeedsRestore,
     hashContent,
+    isDraftPersistenceEnabled,
     loadDraft,
+    resolveLocalDraftDecision,
     saveDraft,
+    setDraftPersistenceEnabled,
+    writeSyncedLocalSnapshot,
 } from '../utils/articleEditorStorage';
+import { saveCurrentArticleFromEditor } from '../utils/articleEditorSaveQueue';
+import {
+    getEditorConflictTokens,
+    setEditorConflictTokens,
+} from '../utils/articleEditorApi';
 import {
     buildClientOutlineTree,
     extractOutlineHeadingFromBlock,
@@ -2153,6 +2162,15 @@ export default function SeoArticleEditor({
     const historyStep = editorSettings?.history_step ?? 20;
     const connectionHashRef = useRef(connectionHash);
     connectionHashRef.current = connectionHash;
+    const siteIdRef = useRef(siteId);
+    siteIdRef.current = siteId;
+    const draftScope = useCallback(() => ({
+        siteId: Number(siteIdRef.current ?? 0) || 0,
+    }), []);
+    const withDraftSite = useCallback((payload = {}) => ({
+        ...payload,
+        site_id: Number(siteIdRef.current ?? 0) || 0,
+    }), []);
     const perfDebugEnabled = Boolean(perfDebug || editorSettings?.perf_debug);
 
     useEffect(() => {
@@ -3448,24 +3466,50 @@ export default function SeoArticleEditor({
     const draftSaveDisabled = autosaveIntervalSeconds === 0;
     const draftSaveDelayMs = Math.max(1, autosaveIntervalSeconds || 2) * 1000;
 
-    const { debounced: debouncedLocalSave } = useDebouncedCallback(() => {
+    const { debounced: debouncedLocalSave, cancel: cancelLocalDraftSave } = useDebouncedCallback(() => {
         if (!articleId || draftSaveDisabled) return;
+        if (!isDraftPersistenceEnabled() || window.__SEO_EDITOR_EXITING__) return;
+        if (isArticleAutosaveLocked()) return;
         setSaveStatus('saving');
-        saveDraft(articleId, connectionHashRef.current, {
+        const tokens = getEditorConflictTokens();
+        saveDraft(articleId, connectionHashRef.current, withDraftSite({
             content: getExportHtml(),
-        });
+            base_updated_at: tokens.expected_updated_at || null,
+            base_content_hash: tokens.expected_content_hash || null,
+            version: tokens.expected_content_hash || null,
+        }));
         setSaveStatus('saved');
     }, draftSaveDelayMs);
 
     // scheduleAutosave chỉ lo lưu nháp local — KHÔNG còn gọi SEO analyze (đó là nguồn lag khi gõ).
     // Analyze giờ chỉ chạy khi requestAnalyze() được gọi rõ ràng (nút Phân tích / sau hành động cụ thể).
     const scheduleAutosave = useCallback(() => {
-        if (draftSaveDisabled) {
+        if (draftSaveDisabled || window.__SEO_EDITOR_EXITING__) {
+            return;
+        }
+        if (!isDraftPersistenceEnabled() || isArticleAutosaveLocked()) {
             return;
         }
         setSaveStatus('pending');
         debouncedLocalSave();
     }, [debouncedLocalSave, draftSaveDisabled]);
+
+    useEffect(() => {
+        window.__SEO_EDITOR_EXITING__ = false;
+        setDraftPersistenceEnabled(true);
+        window.__seoCancelArticleDraftAutosave = cancelLocalDraftSave;
+        window.__seoDisableArticleDraftPersistence = () => {
+            setDraftPersistenceEnabled(false);
+            cancelLocalDraftSave();
+        };
+
+        return () => {
+            if (window.__seoCancelArticleDraftAutosave === cancelLocalDraftSave) {
+                delete window.__seoCancelArticleDraftAutosave;
+            }
+            delete window.__seoDisableArticleDraftPersistence;
+        };
+    }, [cancelLocalDraftSave]);
 
     const skipNextAutosave = useRef(true);
     const loadedArticleIdRef = useRef(null);
@@ -3551,11 +3595,7 @@ export default function SeoArticleEditor({
         };
     }, [undo, redo, canUndo, canRedo, requestAnalyze]);
 
-    // Perf Phase 1 (E): draft là content HTML thuần (schema_version 2) — không còn so khớp
-    // theo contentRevision/parserVersion/số ảnh. Nếu draft khác nội dung server hiện tại,
-    // KHÔNG tự áp — hỏi người dùng qua modal (Khôi phục / Bỏ nháp / Giữ server).
-    const [draftRestoreOffer, setDraftRestoreOffer] = useState(null);
-
+    // Hydrate: tự chọn local/server theo hash + timestamp — không hiện modal draft.
     useEffect(() => {
         if (!articleId) return;
         if (loadedArticleIdRef.current === articleId) return;
@@ -3566,7 +3606,8 @@ export default function SeoArticleEditor({
         clearTempMerge();
 
         const connHash = connectionHashRef.current;
-        const draft = loadDraft(articleId, connHash);
+        const scope = draftScope();
+        const draft = loadDraft(articleId, connHash, scope);
         const serverBodyHash = hashContent(initialHtml);
         const serverContentHash = String(expectedContentHash ?? '').trim() || serverBodyHash;
         const serverBlocks = enrichBlocksWithPostImages(
@@ -3574,65 +3615,56 @@ export default function SeoArticleEditor({
             postImagesRef.current,
         );
 
-        setBlocks(serverBlocks);
         analyzedBlocksRef.current = null;
 
-        if (draft && draftNeedsRestore(draft, {
+        const decision = resolveLocalDraftDecision(draft, {
             content_hash: serverBodyHash || serverContentHash,
             expected_content_hash: serverContentHash,
-        })) {
-            setDraftRestoreOffer({ draft, serverBlocks });
+            site_id: scope.siteId,
+            updated_at: expectedUpdatedAt || null,
+            content: initialHtml,
+            version: serverContentHash,
+        });
+
+        if (decision === 'restore_local' && draft) {
+            const restoredBlocks = enrichBlocksWithPostImages(
+                parseHtmlToBlocks(stripLeadingH1FromHtml(String(draft.content ?? ''))),
+                postImagesRef.current,
+            );
+            setBlocks(restoredBlocks);
+            setSeoStale(true);
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('editor_draft_auto_restored_title'),
+                        body: t('editor_draft_auto_restored_body'),
+                        status: 'info',
+                    },
+                }),
+            );
         } else {
-            setDraftRestoreOffer(null);
-            saveDraft(articleId, connHash, {
+            setBlocks(serverBlocks);
+            cancelLocalDraftSave();
+            window.__seoCancelArticleDraftAutosave?.();
+            clearDraft(articleId, connHash, scope);
+            writeSyncedLocalSnapshot(articleId, connHash, withDraftSite({
                 content: exportBlocksToHtml(serverBlocks),
                 base_updated_at: expectedUpdatedAt || null,
                 base_content_hash: serverContentHash,
-                dirty_fields: [],
-            });
-        }
+                version: serverContentHash,
+            }));
 
-        // Hydrate stale marker từ payload SEO nhẹ (bootstrap): score/analysis đã cache
-        // theo analyzed_content_hash — nếu khác content hiện tại thì gắn stale, KHÔNG auto-analyze.
-        const analyzedContentHash = String(initialSeo?.analyzed_content_hash ?? '').trim();
-        setSeoStale(
-            analyzedContentHash !== ''
-            && serverBodyHash !== ''
-            && analyzedContentHash !== serverBodyHash,
-        );
+            const analyzedContentHash = String(initialSeo?.analyzed_content_hash ?? '').trim();
+            setSeoStale(
+                analyzedContentHash !== ''
+                && serverBodyHash !== ''
+                && analyzedContentHash !== serverBodyHash,
+            );
+        }
 
         setActiveBlockId(null);
         setGlobalEditor(null);
-    }, [articleId, initialHtml, initialPostImages, expectedUpdatedAt, expectedContentHash, clearTempMerge]);
-
-    const applyDraftRestore = useCallback(() => {
-        if (!draftRestoreOffer) return;
-        const restoredBlocks = enrichBlocksWithPostImages(
-            parseHtmlToBlocks(stripLeadingH1FromHtml(String(draftRestoreOffer.draft?.content ?? ''))),
-            postImagesRef.current,
-        );
-        setBlocks(restoredBlocks);
-        setDraftRestoreOffer(null);
-        setSeoStale(true);
-    }, [draftRestoreOffer]);
-
-    const discardDraftRestore = useCallback(() => {
-        clearDraft(articleId, connectionHashRef.current);
-        if (draftRestoreOffer?.serverBlocks) {
-            saveDraft(articleId, connectionHashRef.current, {
-                content: exportBlocksToHtml(draftRestoreOffer.serverBlocks),
-                base_updated_at: expectedUpdatedAt || null,
-                base_content_hash: String(expectedContentHash ?? '').trim(),
-                dirty_fields: [],
-            });
-        }
-        setDraftRestoreOffer(null);
-    }, [articleId, draftRestoreOffer, expectedUpdatedAt, expectedContentHash]);
-
-    const keepServerOverDraft = useCallback(() => {
-        // Giữ nội dung server hiện tại trong editor; KHÔNG xóa nháp — người dùng có thể quay lại sau.
-        setDraftRestoreOffer(null);
-    }, []);
+    }, [articleId, initialHtml, initialPostImages, expectedUpdatedAt, expectedContentHash, clearTempMerge, draftScope, withDraftSite, cancelLocalDraftSave, initialSeo]);
 
     useEffect(() => {
         if (!initialSeo || hasHydratedSeoFromServerRef.current) {
@@ -4011,13 +4043,16 @@ export default function SeoArticleEditor({
                 return true;
             }
 
-            if (seoMediaId > 0) {
-                renameSeoMedia(seoMediaId, trimmed, { articleId })
+            // Ưu tiên rename-by-url khi local /storage — tránh ID WP stale gọi /media/{id}/rename.
+            if ((isLocal || renameSrc.includes('/storage/uploads/seo_media/')) && renameSrc) {
+                const oldSlug = (row.slug || '').trim();
+                renameLocalMediaByUrl(renameSrc, trimmed, { seoMediaId: seoMediaId > 0 ? seoMediaId : null })
                     .then((data) => {
                         applyPatch({
                             slug: data.slug,
                             src: data.url,
-                            seoMediaId: data.id ?? seoMediaId,
+                            seoMediaId: data.id ?? row.seoMediaId,
+                            originalSlug: oldSlug,
                         });
                     })
                     .catch((error) => {
@@ -4035,15 +4070,13 @@ export default function SeoArticleEditor({
                 return true;
             }
 
-            if ((isLocal || renameSrc.includes('/storage/uploads/seo_media/')) && renameSrc) {
-                const oldSlug = (row.slug || '').trim();
-                renameLocalMediaByUrl(renameSrc, trimmed, { seoMediaId: seoMediaId > 0 ? seoMediaId : null })
+            if (seoMediaId > 0) {
+                renameSeoMedia(seoMediaId, trimmed, { articleId })
                     .then((data) => {
                         applyPatch({
                             slug: data.slug,
                             src: data.url,
-                            seoMediaId: data.id ?? row.seoMediaId,
-                            originalSlug: oldSlug,
+                            seoMediaId: data.id ?? seoMediaId,
                         });
                     })
                     .catch((error) => {
@@ -4166,6 +4199,23 @@ export default function SeoArticleEditor({
                         ...pendingLocalRenameResultsRef.current,
                         ...results,
                     ];
+
+                    const skipped = results.errors?.length ?? 0;
+                    if (skipped > 0) {
+                        pendingLocalRenameQueueRef.current = omitFailedLocalSlugRenameQueueItems(
+                            pendingLocalRenameQueueRef.current,
+                            results.errors,
+                        );
+                        window.dispatchEvent(
+                            new CustomEvent('seo-article-editor-notify', {
+                                detail: {
+                                    title: t('editor_local_slug_rename_skipped_title'),
+                                    body: t('editor_local_slug_rename_skipped_body', { count: skipped }),
+                                    status: 'warning',
+                                },
+                            }),
+                        );
+                    }
                 } catch (error) {
                     window.dispatchEvent(
                         new CustomEvent('seo-article-editor-notify', {
@@ -4275,12 +4325,21 @@ export default function SeoArticleEditor({
                 tasks.push(
                     (async () => {
                         const merged = [];
+                        const allErrors = [];
                         try {
                             if (blockRenames.length > 0) {
-                                merged.push(...(await runLocalRenames(blockRenames)));
+                                const blockResults = await runLocalRenames(blockRenames);
+                                merged.push(...blockResults);
+                                if (Array.isArray(blockResults.errors)) {
+                                    allErrors.push(...blockResults.errors);
+                                }
                             }
                             if (supplementalRenames.length > 0) {
-                                merged.push(...(await runLocalRenames(supplementalRenames)));
+                                const supplementalResults = await runLocalRenames(supplementalRenames);
+                                merged.push(...supplementalResults);
+                                if (Array.isArray(supplementalResults.errors)) {
+                                    allErrors.push(...supplementalResults.errors);
+                                }
                             }
                         } catch (error) {
                             window.dispatchEvent(
@@ -4289,6 +4348,24 @@ export default function SeoArticleEditor({
                                         title: t('editor_cannot_rename_local_image_slug'),
                                         body: error?.message ?? t('editor_try_again_later'),
                                         status: 'danger',
+                                    },
+                                }),
+                            );
+                        }
+
+                        if (allErrors.length > 0) {
+                            pendingLocalRenameQueueRef.current = omitFailedLocalSlugRenameQueueItems(
+                                pendingLocalRenameQueueRef.current,
+                                allErrors,
+                            );
+                            window.dispatchEvent(
+                                new CustomEvent('seo-article-editor-notify', {
+                                    detail: {
+                                        title: t('editor_local_slug_rename_skipped_title'),
+                                        body: t('editor_local_slug_rename_skipped_body', {
+                                            count: allErrors.length,
+                                        }),
+                                        status: 'warning',
                                     },
                                 }),
                             );
@@ -4473,7 +4550,20 @@ export default function SeoArticleEditor({
             setSupplementalImages(nextSupplemental);
             finalizeSlugRenameSideEffects();
 
-            return localResults.length > 0;
+            const skipped = localResults.errors?.length ?? 0;
+            if (skipped > 0) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('editor_local_slug_rename_skipped_title'),
+                            body: t('editor_local_slug_rename_skipped_body', { count: skipped }),
+                            status: 'warning',
+                        },
+                    }),
+                );
+            }
+
+            return localResults.length > 0 || skipped > 0;
         } catch (error) {
             window.dispatchEvent(
                 new CustomEvent('seo-article-editor-notify', {
@@ -4621,6 +4711,19 @@ export default function SeoArticleEditor({
             try {
                 slugRenameManagedByBatchRef.current = true;
 
+                // Bắt buộc save article hiện tại trước — tránh fix trên body server thiếu ảnh.
+                window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết trước khi sửa slug…');
+                await saveCurrentArticleFromEditor({
+                    reason: 'before_fix_slug_all',
+                    siteId: Number(siteIdRef.current ?? 0) || 0,
+                    keepOverlay: true,
+                    silentNotification: true,
+                });
+
+                window.__seoArticleHeavyActionOverlay?.setStatusMessage?.(
+                    'Đang sửa slug ảnh…',
+                );
+
                 const wpWaitPromise =
                     totalWpRenames > 0 ? waitForWordPressSlugRenameFinished(1) : Promise.resolve(null);
 
@@ -4634,9 +4737,11 @@ export default function SeoArticleEditor({
                     throw new Error(String(wpDetail?.message ?? t('editor_try_again_later')));
                 }
 
-                let localSucceeded = totalLocalRenames === 0;
+                let localFixResult = null;
+                let localSkipped = 0;
+                let localFixed = 0;
                 if (totalLocalRenames > 0) {
-                    await fixArticleMediaSlugs(
+                    localFixResult = await fixArticleMediaSlugs(
                         articleId,
                         (mergedPreview.localRenameQueue ?? []).map((item) => ({
                             seo_media_id: Number(item?.seo_media_id ?? 0) || null,
@@ -4645,61 +4750,92 @@ export default function SeoArticleEditor({
                             old_slug: String(item?.old_slug ?? '').trim(),
                         })),
                     );
-                    localSucceeded = true;
+                    localSkipped = Number(localFixResult?.skipped_count ?? 0) || 0;
+                    localFixed = Array.isArray(localFixResult?.replacements)
+                        ? localFixResult.replacements.length
+                        : Math.max(0, totalLocalRenames - localSkipped);
                 }
 
-                if (!localSucceeded && totalLocalRenames > 0) {
-                    throw new Error(t('editor_try_again_later'));
-                }
+                // Chỉ patch slug/URL trên state hiện tại — không reload/rebuild từ response cũ.
+                skipNextAutosave.current = true;
+                pendingLocalRenameQueueRef.current = [...(mergedPreview.localRenameQueue ?? [])];
+                pendingLocalRenameResultsRef.current = mapArticleSlugFixReplacementsToLocalResults(
+                    localFixResult?.replacements,
+                    mergedPreview.localRenameQueue ?? [],
+                );
+                applySlugRenameFinished(wpDetail ?? { success: true, renamed: [] });
+                finalizeSlugRenameSideEffects();
+
+                cancelLocalDraftSave();
+                window.__seoCancelArticleDraftAutosave?.();
+                const htmlAfterFix = getExportHtml();
+                const hashAfterFix = hashContent(htmlAfterFix);
+                const tokens = getEditorConflictTokens();
+                setEditorConflictTokens({
+                    expected_updated_at: tokens.expected_updated_at,
+                    expected_content_hash: hashAfterFix,
+                });
+                clearDraft(articleId, connectionHashRef.current, draftScope());
+                writeSyncedLocalSnapshot(articleId, connectionHashRef.current, withDraftSite({
+                    content: htmlAfterFix,
+                    base_updated_at: tokens.expected_updated_at || null,
+                    base_content_hash: hashAfterFix,
+                    version: hashAfterFix,
+                }));
 
                 const wpRenamedCount = Array.isArray(wpDetail?.renamed) ? wpDetail.renamed.length : 0;
-                const totalDone = Math.max(wpRenamedCount, totalWpRenames) + totalLocalRenames;
+                const totalDone = Math.max(wpRenamedCount, totalWpRenames) + localFixed;
+
+                if (localSkipped > 0) {
+                    notifyEditor(
+                        t('editor_local_slug_rename_skipped_title'),
+                        t('editor_local_slug_rename_skipped_body', { count: localSkipped }),
+                        'warning',
+                    );
+                }
 
                 notifyEditor(
                     t('editor_quick_fix_slug_all_done_title'),
                     String(
                         wpDetail?.message
                             || t('editor_quick_fix_slug_all_done_body', {
-                                count: totalDone || totalWpRenames + totalLocalRenames,
+                                count: totalDone || totalWpRenames + localFixed,
                             }),
                     ),
                     'success',
                 );
 
-                // Xóa draft cũ — tránh hydrate lại src trước rename (404).
-                // Server đã rewrite body (WP + local); reload lấy HTML + content_revision mới.
-                clearDraft(articleId, connectionHashRef.current);
-
                 showArticleOperationOverlay('success', 'media_slug_fix');
-                scheduleArticleEditorReload(articleId, { delayMs: 500 });
             } catch (error) {
                 notifyEditor(
                     t('editor_quick_fix_slug_all_failed_title'),
                     String(error?.message ?? t('editor_try_again_later')),
                     'danger',
                 );
-                // Partial WP rename có thể đã ghi DB — reload để đọc trạng thái thật.
-                if (totalWpRenames > 0) {
-                    clearDraft(articleId, connectionHashRef.current);
-                    scheduleArticleEditorReload(articleId, { delayMs: 1500 });
-                } else {
-                    setArticleAutosaveLock('quick-fix-slug-all', false);
-                    window.__seoArticleHeavyActionOverlay && (window.__seoArticleHeavyActionOverlay.persistUntilUnload = false);
-                    window.__seoEndArticleHeavyActionClient?.();
-                    setQuickFixSlugAllBusy(false);
-                }
             } finally {
                 slugRenameManagedByBatchRef.current = false;
+                setArticleAutosaveLock('quick-fix-slug-all', false);
+                if (window.__seoArticleHeavyActionOverlay) {
+                    window.__seoArticleHeavyActionOverlay.persistUntilUnload = false;
+                }
+                window.__seoEndArticleHeavyActionClient?.();
+                setQuickFixSlugAllBusy(false);
             }
         },
         [
+            applySlugRenameFinished,
             articleId,
             buildQuickFixContext,
+            cancelLocalDraftSave,
+            draftScope,
+            finalizeSlugRenameSideEffects,
+            getExportHtml,
             notifyEditor,
             patchSupplementalImageRow,
             quickFixSlugAllBusy,
             requestWordPressRenames,
             waitForWordPressSlugRenameFinished,
+            withDraftSite,
         ],
     );
 
@@ -8560,11 +8696,19 @@ export default function SeoArticleEditor({
             setGlobalEditor(null);
             runLocalSeoAnalysis();
 
+            const faqRows = resolveArticleFaqsSnapshot();
+            const faqCollectorOpen = typeof window.__seoCollectArticleFaqs === 'function';
+            // Phase 2: đừng nhét faqs:[] khi module FAQ chưa hydrate — sync sẽ wipe DB/WP.
+            const faqsForBundle =
+                faqCollectorOpen || (Array.isArray(faqRows) && faqRows.length > 0)
+                    ? faqRows
+                    : null;
+
             return {
                 articleId,
                 html: getExportHtml(),
                 seoAnalysis: lastSeoAnalysisRef.current,
-                faqs: resolveArticleFaqsSnapshot(),
+                faqs: faqsForBundle,
             };
         };
 
@@ -10551,42 +10695,6 @@ export default function SeoArticleEditor({
                       assistantPortalRoots.reviews,
                   )
                 : null}
-
-            {draftRestoreOffer ? (
-                <div className="seo-draft-restore-overlay" role="dialog" aria-modal="true">
-                    <div className="seo-draft-restore-modal">
-                        <h3 className="seo-draft-restore-modal__title">
-                            {t('editor_draft_restore_title')}
-                        </h3>
-                        <p className="seo-draft-restore-modal__body">
-                            {t('editor_draft_restore_body')}
-                        </p>
-                        <div className="seo-draft-restore-modal__actions">
-                            <button
-                                type="button"
-                                className="seo-draft-restore-modal__btn seo-draft-restore-modal__btn--primary"
-                                onClick={applyDraftRestore}
-                            >
-                                {t('editor_draft_restore_action_restore')}
-                            </button>
-                            <button
-                                type="button"
-                                className="seo-draft-restore-modal__btn"
-                                onClick={keepServerOverDraft}
-                            >
-                                {t('editor_draft_restore_action_keep_server')}
-                            </button>
-                            <button
-                                type="button"
-                                className="seo-draft-restore-modal__btn seo-draft-restore-modal__btn--danger"
-                                onClick={discardDraftRestore}
-                            >
-                                {t('editor_draft_restore_action_discard')}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            ) : null}
         </div>
     );
 }

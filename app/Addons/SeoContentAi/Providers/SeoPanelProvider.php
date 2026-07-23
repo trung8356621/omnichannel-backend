@@ -11,6 +11,7 @@ use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorSyncController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorOperationController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleProductReviewReconcileController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleProductReviewStatusController;
+use App\Addons\SeoContentAi\Http\Controllers\ArticleReviewActionController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleWordPressProductReviewsController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleMediaPickerController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleOutlineController;
@@ -142,6 +143,32 @@ class SeoPanelProvider extends PanelProvider
         );
 
         FilamentView::registerRenderHook(
+            PanelsRenderHook::USER_MENU_BEFORE,
+            function (): HtmlString {
+                if (! auth()->check() || ! request()->is('seo', 'seo/*')) {
+                    return new HtmlString('');
+                }
+
+                return new HtmlString(
+                    view('seo-content-ai::filament.hooks.global-help-trigger')->render()
+                );
+            },
+        );
+
+        FilamentView::registerRenderHook(
+            PanelsRenderHook::BODY_END,
+            function (): HtmlString {
+                if (! auth()->check() || ! request()->is('seo', 'seo/*')) {
+                    return new HtmlString('');
+                }
+
+                return new HtmlString(
+                    view('seo-content-ai::filament.hooks.global-help-modal')->render()
+                );
+            },
+        );
+
+        FilamentView::registerRenderHook(
             PanelsRenderHook::BODY_END,
             function (): HtmlString {
                 if (! request()->is('seo', 'seo/*')) {
@@ -219,6 +246,19 @@ class SeoPanelProvider extends PanelProvider
                     .'window.__SEO_CONNECTION_HASH__ = '.json_encode(SeoConnectionContext::hash()).';'
                     .'document.documentElement.setAttribute("lang", '.json_encode(str_replace('_', '-', app()->getLocale())).');'
                     .'</script>'
+                );
+            },
+        );
+
+        FilamentView::registerRenderHook(
+            PanelsRenderHook::HEAD_END,
+            function (): HtmlString {
+                if (! auth()->check() || ! request()->is('seo', 'seo/*')) {
+                    return new HtmlString('');
+                }
+
+                return new HtmlString(
+                    view('seo-content-ai::filament.hooks.global-help-assets')->render()
                 );
             },
         );
@@ -386,6 +426,12 @@ class SeoPanelProvider extends PanelProvider
                     ->whereNumber('article')
                     ->whereNumber('revision')
                     ->name('seo.articles.revisions.show');
+                Route::get('/{article}/review-actions', [ArticleReviewActionController::class, 'show'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.review-actions.show');
+                Route::post('/{article}/review-actions', [ArticleReviewActionController::class, 'store'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.review-actions.store');
             });
 
         Route::middleware($seoWebApiMiddleware)

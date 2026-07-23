@@ -1,5 +1,10 @@
 import { csrfToken, seoArticleApiFetch } from './seoArticleApi.js';
-import { clearDraft, hashContent, loadDraft } from './articleEditorStorage.js';
+import {
+    clearDraft,
+    hashContent,
+    setDraftPersistenceEnabled,
+    writeSyncedLocalSnapshot,
+} from './articleEditorStorage.js';
 
 /**
  * Token conflict hiện tại (expected_updated_at / expected_content_hash) — bootstrap từ
@@ -76,13 +81,35 @@ export function readArticleMetaFromDom() {
  * @param {object|null|undefined} wire
  * @return {Record<string, unknown>}
  */
+/**
+ * Phase 2 lazy FAQ: core bootstrap không còn rows; panelFaqs mặc định [].
+ * Nếu FAQ module chưa hydrate mà gửi faqs:[] → wipe seo_faqs + meta WP (shortcode trống).
+ *
+ * @param {object|null|undefined} editorBundle
+ * @returns {{ faqs: unknown[]|null, faqs_source: 'editor'|'panel'|'none' }}
+ */
+export function resolveFaqsPersistPayload(editorBundle) {
+    const collectorOpen = typeof window.__seoCollectArticleFaqs === 'function';
+    const faqsFromEditor = collectorOpen ? window.__seoCollectArticleFaqs() : null;
+    const faqsFromBundle = Array.isArray(editorBundle?.faqs) ? editorBundle.faqs : null;
+
+    if (Array.isArray(faqsFromEditor)) {
+        return { faqs: faqsFromEditor, faqs_source: 'editor' };
+    }
+
+    if (Array.isArray(faqsFromBundle) && faqsFromBundle.length > 0) {
+        return { faqs: faqsFromBundle, faqs_source: 'panel' };
+    }
+
+    // Module chưa mở / unmount: [] không tin được — bỏ key để backend giữ DB.
+    return { faqs: null, faqs_source: 'none' };
+}
+
 export function buildArticleEditorApiPayload(editorBundle, wire) {
     const articleId = Number(editorBundle?.articleId ?? 0);
     const featured = window.__seoFeaturedImageStorage?.load?.(articleId) ?? null;
     const productAlbum = window.__seoProductAlbumStorage?.load?.(articleId) ?? null;
-    const faqsFromEditor =
-        typeof window.__seoCollectArticleFaqs === 'function' ? window.__seoCollectArticleFaqs() : null;
-    const faqsFromBundle = Array.isArray(editorBundle?.faqs) ? editorBundle.faqs : null;
+    const faqPersist = resolveFaqsPersistPayload(editorBundle);
 
     const conflictTokens = getEditorConflictTokens();
 
@@ -94,7 +121,8 @@ export function buildArticleEditorApiPayload(editorBundle, wire) {
         category_ids: window.__seoPublishCategoriesSnapshot?.() ?? null,
         featured_image: featured,
         product_album: productAlbum,
-        faqs: Array.isArray(faqsFromEditor) ? faqsFromEditor : faqsFromBundle,
+        faqs: faqPersist.faqs,
+        faqs_source: faqPersist.faqs_source,
         expected_updated_at: conflictTokens.expected_updated_at,
         expected_content_hash: conflictTokens.expected_content_hash,
     };
@@ -584,41 +612,49 @@ function resetEditArticleHeavyActionBusyOnWire() {
 /**
  * Hoàn tất Save — không reload, không Livewire.
  *
- * Perf Phase 1 (F+G): sau khi save thành công, cập nhật lại token conflict
- * (expected_updated_at/expected_content_hash) theo nội dung VỪA lưu, và chỉ xóa nháp
- * local nếu nháp hiện tại (localStorage) trùng đúng nội dung vừa lưu — tránh mất nháp
- * của 1 lượt gõ mới hơn xảy ra trong lúc request save đang chạy.
+ * Sau save thành công: hủy debounce autosave, cập nhật baseline/token,
+ * xóa draft cũ rồi ghi snapshot synced (tránh race tạo lại draft bẩn).
  *
  * @param {{ patch?: Record<string, unknown>, notification?: Record<string, string> }} result
- * @param {{ articleId?: number, connectionHash?: string, savedHtml?: string }} [context]
+ * @param {{ articleId?: number, connectionHash?: string, savedHtml?: string, siteId?: number, keepOverlay?: boolean, silentNotification?: boolean }} [context]
  */
 export function finishArticleSaveFromApi(result, context = {}) {
     if (result.patch) {
         applyArticleEditorSavePatch(result.patch);
     }
 
-    if (result.notification) {
+    if (result.notification && context.silentNotification !== true) {
         showArticleEditorFilamentToast(result.notification);
     }
 
     const { articleId, connectionHash, savedHtml } = context;
     if (typeof savedHtml === 'string') {
         const savedContentHash = hashContent(savedHtml);
+        const nextUpdatedAt = result.patch?.article?.updated_at
+            ?? getEditorConflictTokens().expected_updated_at;
         setEditorConflictTokens({
-            expected_updated_at: result.patch?.article?.updated_at ?? getEditorConflictTokens().expected_updated_at,
+            expected_updated_at: nextUpdatedAt,
             expected_content_hash: savedContentHash,
         });
 
         if (articleId) {
-            const draft = loadDraft(articleId, connectionHash);
-            if (draft && draft.content_hash === savedContentHash) {
-                clearDraft(articleId, connectionHash);
-            }
+            window.__seoCancelArticleDraftAutosave?.();
+            const siteId = Number(context.siteId ?? window.__SEO_ARTICLE_SITE_ID__ ?? 0) || 0;
+            clearDraft(articleId, connectionHash, { siteId });
+            writeSyncedLocalSnapshot(articleId, connectionHash, {
+                content: savedHtml,
+                site_id: siteId,
+                base_updated_at: nextUpdatedAt || null,
+                base_content_hash: savedContentHash,
+                version: savedContentHash,
+            });
         }
     }
 
-    window.__seoEndArticleHeavyActionClient?.();
-    resetEditArticleHeavyActionBusyOnWire();
+    if (context.keepOverlay !== true) {
+        window.__seoEndArticleHeavyActionClient?.();
+        resetEditArticleHeavyActionBusyOnWire();
+    }
     window.dispatchEvent(new CustomEvent('article-editor-save-finished'));
 }
 
@@ -648,8 +684,7 @@ export function handleArticleSaveConflict(error) {
 }
 
 /**
- * Optional helper — navigate to Sync Queue list (no forced close).
- * Kept for manual "View queue" actions; enqueue success stays on editor + poll.
+ * Optional helper — navigate to Sync Queue list when browser blocks window.close().
  *
  * @returns {string}
  */
@@ -674,9 +709,48 @@ export function resolveSyncQueueListUrl() {
 }
 
 /**
- * Hoàn tất Sync WP — toast, overlay, poll tới terminal. Không đóng tab / không redirect.
+ * Stop local draft persistence + clear scoped draft before leaving editor after enqueue.
  *
- * @param {{ reload?: boolean, clear_local_state?: boolean, queued?: boolean, notification?: Record<string, string>, operation?: object, notificationShown?: boolean }} result
+ * @param {number} articleId
+ * @param {number} siteId
+ */
+export function prepareEditorExitAfterSyncEnqueue(articleId, siteId) {
+    window.__SEO_EDITOR_EXITING__ = true;
+    setDraftPersistenceEnabled(false);
+    window.__seoDisableArticleDraftPersistence?.();
+    window.__seoCancelArticleDraftAutosave?.();
+    window.__seoArticleAutosaveLock?.set?.('editor-exiting', true);
+    window.__seoClearArticleLocalState?.(articleId, siteId);
+
+    const connectionHash = typeof window.__SEO_EDITOR_CONNECTION_HASH__ === 'string'
+        ? window.__SEO_EDITOR_CONNECTION_HASH__
+        : (typeof window.__SEO_CONNECTION_HASH__ === 'string' ? window.__SEO_CONNECTION_HASH__ : '');
+    // Cancel trước clear — tránh debounce autosave ghi lại draft cũ sau khi sync.
+    window.__seoCancelArticleDraftAutosave?.();
+    clearDraft(articleId, connectionHash, { siteId });
+}
+
+/**
+ * Close current tab after enqueue; fallback redirect to Articles Sync queue tab.
+ */
+export function closeEditorTabOrRedirectToSyncQueue() {
+    try {
+        window.close();
+    } catch {
+        // Some browsers throw; fall through to redirect check.
+    }
+
+    window.setTimeout(() => {
+        if (!window.closed) {
+            window.location.href = resolveSyncQueueListUrl();
+        }
+    }, 300);
+}
+
+/**
+ * Hoàn tất Sync WP — enqueue thành công: toast, clear draft, đóng tab (không poll worker).
+ *
+ * @param {{ reload?: boolean, clear_local_state?: boolean, queued?: boolean, close_editor?: boolean, notification?: Record<string, string>, operation?: object, notificationShown?: boolean }} result
  * @param {number} articleId
  * @param {number} siteId
  */
@@ -686,19 +760,20 @@ export function finishArticleSyncFromApi(result, articleId, siteId) {
     }
 
     if (result.queued) {
-        window.__seoArticleHeavyActionOverlay?.show('sync', {
-            persistUntilUnload: true,
-            title: 'Đang chờ đồng bộ WordPress',
-            message: 'Yêu cầu đã được đưa vào hàng đợi. Vui lòng không chỉnh sửa bài viết trong lúc đồng bộ.',
-        });
-        window.__seoArticleAutosaveLock?.set('article-operation', true);
+        // Enqueue xong — đóng loading overlay ngay, không chờ worker.
+        if (window.__seoArticleHeavyActionOverlay) {
+            window.__seoArticleHeavyActionOverlay.persistUntilUnload = false;
+        }
+        window.__seoArticleHeavyActionOverlay?.hide?.();
+        window.__seoEndArticleHeavyActionClient?.();
+        resetEditArticleHeavyActionBusyOnWire();
+
+        prepareEditorExitAfterSyncEnqueue(articleId, siteId);
         window.dispatchEvent(new CustomEvent('article-wordpress-sync-queued', { detail: result }));
-        window.__seoArticleOperationTracker?.apply?.(articleId, result.operation ?? {
-            type: 'wordpress_sync',
-            status: 'queued',
-            stage: 'queued',
-        });
-        window.__seoArticleOperationTracker?.poll?.(articleId);
+
+        if (result.close_editor !== false) {
+            closeEditorTabOrRedirectToSyncQueue();
+        }
 
         return;
     }

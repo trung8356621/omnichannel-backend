@@ -240,12 +240,14 @@ final class SeoProjectRunItemsReader
             && ! in_array($legacyStatus, ['manual'], true)
             && $type !== SeoProjectTask::TYPE_IMPROVE;
 
-        $canArchive = $taskExists
-            && $articleId !== null
-            && $task->archived_at === null;
+        // Task soft-deleted vẫn tính archived nếu đã có archived_at (để ẩn khỏi UI sau khi detach).
+        $taskArchived = ($task instanceof SeoProjectTask
+            && ($task->archived_at !== null || (string) $task->status === SeoProjectTask::STATUS_ARCHIVED))
+            || (bool) ($snapshot['detached_from_project'] ?? false);
 
-        $taskArchived = $taskExists
-            && ($task->archived_at !== null || (string) $task->status === SeoProjectTask::STATUS_ARCHIVED);
+        // Hiện Archive khi còn article và task chưa detach xong (kể cả task mất / soft-delete
+        // trước khi có archived_at — data kẹt trước khi Complete tự detach).
+        $canArchive = $articleId !== null && ! $taskArchived;
 
         $missingErrorCode = null;
         $missingErrorMessage = null;
@@ -350,7 +352,7 @@ final class SeoProjectRunItemsReader
                 && ! $taskArchived
                 && $status !== 'manual'
                 && $type !== SeoProjectTask::TYPE_IMPROVE;
-            $canArchive = $taskExists && ! $taskArchived && $articleId !== null && $articleId > 0;
+            $canArchive = $articleId !== null && $articleId > 0 && ! $taskArchived;
 
             $editUrl = null;
             if ($articleId !== null && $articleId > 0) {

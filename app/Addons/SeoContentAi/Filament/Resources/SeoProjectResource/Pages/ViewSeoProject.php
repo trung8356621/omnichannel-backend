@@ -44,7 +44,6 @@ final class ViewSeoProject extends EditSeoProject
         $record = $this->getRecord();
 
         return [
-            SeoProjectResource::makeViewProjectArchivesPageAction($record),
             SeoProjectResource::makeArchiveProjectPageAction($record),
             Actions\Action::make('view_runs')
                 ->label(__('seo-content-ai::filament.projects.view_runs'))

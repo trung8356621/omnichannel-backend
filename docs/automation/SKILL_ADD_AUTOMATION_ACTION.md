@@ -75,7 +75,8 @@ Field bắt buộc quan tâm: `key`, `module`, `sideEffect`, `riskLevel`, `selec
 ## Lock / transaction
 
 - `lockScope` khớp entity (`article`, `project_task`, …).
-- Write trong `DB::connection('omi_seo_ai')->transaction()` khi multi-write.
+- Write domain SEO trong `DB::connection('omi_seo_ai')->transaction()` khi multi-write.
+- Persist automation runtime (rule/execution/event) qua model `AutomationModel` / `AutomationConnection::db()` — **không** hard-code `omi_seo_ai`.
 - Emit event **sau** commit (Runner dispatch khi `success`).
 
 ## Event

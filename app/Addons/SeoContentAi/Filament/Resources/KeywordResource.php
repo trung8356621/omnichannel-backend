@@ -2132,11 +2132,18 @@ class KeywordResource extends SeoPanelResource
         return (int) $keyword->linked_articles_count === 0;
     }
 
+    /**
+     * Word count SQL tương thích MySQL 5.7 / MariaDB (không dùng REGEXP_REPLACE).
+     * Chuẩn hóa tab/CR/LF → space, gộp khoảng trắng kép vài vòng, rồi đếm theo space.
+     */
     private static function wordCountExpression(): string
     {
-        return "CASE WHEN TRIM(phrase) = '' THEN 0 ELSE "
-            ."LENGTH(REGEXP_REPLACE(TRIM(phrase), '[[:space:]]+', ' ')) "
-            ."- LENGTH(REPLACE(REGEXP_REPLACE(TRIM(phrase), '[[:space:]]+', ' '), ' ', '')) + 1 END";
+        $normalized = "TRIM(REPLACE(REPLACE(REPLACE(`phrase`, CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' '))";
+        // Gộp '  ' → ' ' (4 vòng đủ cho phrase keyword thông thường).
+        $collapsed = "REPLACE(REPLACE(REPLACE(REPLACE({$normalized}, '  ', ' '), '  ', ' '), '  ', ' '), '  ', ' ')";
+
+        return "CASE WHEN {$collapsed} = '' THEN 0 ELSE "
+            ."LENGTH({$collapsed}) - LENGTH(REPLACE({$collapsed}, ' ', '')) + 1 END";
     }
 
     public static function applyMinimumKeywordWordCount(Builder $query): Builder

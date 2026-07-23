@@ -165,8 +165,8 @@ final class BusinessEventDispatcher
         };
 
         try {
-            if (DB::connection('omi_seo_ai')->transactionLevel() > 0) {
-                DB::connection('omi_seo_ai')->afterCommit($schedule);
+            if (\App\Support\Automation\AutomationConnection::db()->transactionLevel() > 0) {
+                \App\Support\Automation\AutomationConnection::db()->afterCommit($schedule);
                 // Trong transaction: chưa schedule — coi như queued/pending match sau commit.
                 return new AutomationEventDispatchResult(
                     outcome: AutomationEventDispatchOutcome::Queued,

@@ -223,7 +223,7 @@ final class AutomationAvailabilityGate
                 }
             })
             ->when(
-                Schema::connection('omi_seo_ai')->hasColumn('automation_rules', 'allow_manual_trigger'),
+                Schema::connection(\App\Support\Automation\AutomationConnection::name())->hasColumn('automation_rules', 'allow_manual_trigger'),
                 static function ($query): void {
                     $query->where(function ($sub): void {
                         $sub->where('allow_manual_trigger', true)

@@ -7,7 +7,7 @@ namespace App\Addons\SeoContentAi\Tests\Unit;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Sticky editor header + Help modal + page-scoped topbar hide contracts.
+ * Sticky editor header + Global Help modal contracts.
  */
 final class ArticleEditorStickyHeaderHelpTest extends TestCase
 {
@@ -26,15 +26,17 @@ final class ArticleEditorStickyHeaderHelpTest extends TestCase
         self::assertStringContainsString("'class' => 'article-editor-page'", $source);
     }
 
-    public function test_article_edit_page_css_hides_topbar_only_for_editor_page(): void
+    public function test_article_edit_page_css_hides_fixed_topbar_help_on_editor(): void
     {
         $source = (string) file_get_contents(
             $this->addonPath('resources/css/article-edit-page.css'),
         );
 
         self::assertStringContainsString('body.article-editor-page .fi-topbar', $source);
-        self::assertStringContainsString('display: none !important', $source);
+        self::assertStringContainsString('global-help-topbar-host', $source);
         self::assertStringContainsString('seo-article-editor-sticky-header', $source);
+        self::assertStringContainsString('.seo-editor-page-actions .seo-editor-preview-split', $source);
+        self::assertStringContainsString('overflow: visible !important', $source);
     }
 
     public function test_edit_article_blade_has_sticky_header_and_no_shortcuts_rail_include(): void
@@ -48,10 +50,12 @@ final class ArticleEditorStickyHeaderHelpTest extends TestCase
         self::assertStringContainsString('data-seo-sticky-save-status', $source);
         self::assertStringContainsString('data-article-editor-runtime-marker="sticky-help-v1"', $source);
         self::assertStringContainsString('article-editor-ui-revision', $source);
+        self::assertStringContainsString('global-help-topbar-host', $source);
+        self::assertStringContainsString('display: none !important', $source);
         self::assertStringNotContainsString("article-editor-shortcuts-rail')", $source);
     }
 
-    public function test_page_actions_reuse_existing_handlers_and_expose_help(): void
+    public function test_page_actions_mount_help_next_to_more_button(): void
     {
         $source = (string) file_get_contents(
             $this->addonPath('resources/views/filament/resources/article-resource/pages/partials/article-editor-page-actions.blade.php'),
@@ -59,60 +63,64 @@ final class ArticleEditorStickyHeaderHelpTest extends TestCase
 
         self::assertStringContainsString("detail: { action: 'save' }", $source);
         self::assertStringContainsString("detail: { action: 'sync' }", $source);
-        self::assertStringContainsString('wire:click="toggleArticleReview"', $source);
-        self::assertStringContainsString('article-editor:help-open', $source);
+        self::assertStringContainsString('data-seo-page-action="review"', $source);
+        self::assertStringContainsString('submitReviewAction(', $source);
         self::assertStringContainsString('data-seo-page-action="help"', $source);
-        self::assertStringContainsString('page_action_help_aria', $source);
-        self::assertStringContainsString('seo-article-editor-help-btn', $source);
-        self::assertStringContainsString("topic: 'article-editor.overview'", $source);
-        self::assertStringContainsString('seo-editor-toolbar-btn--labeled', $source);
-        self::assertStringContainsString('>Help</span>', $source);
-        // Must not bury Help inside More panel only.
-        $helpPos = strpos($source, 'data-seo-page-action="help"');
-        $morePanelPos = strpos($source, 'seo-editor-page-actions__more-panel');
-        self::assertNotFalse($helpPos);
-        self::assertNotFalse($morePanelPos);
-        self::assertGreaterThan($morePanelPos, $helpPos);
+        self::assertStringContainsString('data-help-trigger', $source);
+        self::assertStringContainsString('data-seo-page-actions-more', $source);
+        self::assertStringNotContainsString('wire:click="toggleArticleReview"', $source);
+        self::assertStringNotContainsString('article-editor:help-open', $source);
+        self::assertStringNotContainsString('seo-article-editor-help-btn', $source);
     }
 
-    public function test_help_modal_always_exposes_dom_marker(): void
+    public function test_global_help_trigger_and_modal_selectors(): void
     {
+        $trigger = (string) file_get_contents(
+            $this->addonPath('resources/views/filament/hooks/global-help-trigger.blade.php'),
+        );
         $modal = (string) file_get_contents(
-            $this->addonPath('resources/js/components/ArticleEditorHelpModal.jsx'),
+            $this->addonPath('resources/views/filament/hooks/global-help-modal.blade.php'),
+        );
+        $provider = (string) file_get_contents(
+            $this->addonPath('Providers/SeoPanelProvider.php'),
         );
 
-        self::assertStringContainsString('data-article-editor-help-modal', $modal);
-        self::assertStringContainsString('data-article-editor-help-modal-host', $modal);
-        self::assertStringContainsString('ARTICLE_EDITOR_HELP_OPEN_EVENT', $modal);
-        self::assertStringContainsString("event.key === 'Escape'", $modal);
+        self::assertStringContainsString('id="global-help-trigger"', $trigger);
+        self::assertStringContainsString('data-help-trigger', $trigger);
+        self::assertStringContainsString('global-help-trigger', $trigger);
+        self::assertStringContainsString('id="global-help-modal"', $modal);
+        self::assertStringContainsString('data-help-modal', $modal);
+        self::assertStringContainsString('help-navigation', $modal);
+        self::assertStringContainsString('USER_MENU_BEFORE', $provider);
+        self::assertStringContainsString('global-help-trigger', $provider);
+        self::assertStringContainsString('global-help-modal', $provider);
+        self::assertStringContainsString('SeoHelpRegistry', (string) file_get_contents(
+            $this->addonPath('resources/views/filament/hooks/global-help-assets.blade.php'),
+        ));
+        self::assertStringNotContainsString('@vite', (string) file_get_contents(
+            $this->addonPath('resources/views/filament/hooks/global-help-assets.blade.php'),
+        ));
     }
 
-    public function test_help_registry_and_modal_contracts(): void
+    public function test_help_registry_is_two_level_and_context_aware(): void
     {
-        $topics = (string) file_get_contents(
-            $this->addonPath('resources/js/help/articleEditorHelpTopics.js'),
+        $phpRegistry = (string) file_get_contents(
+            $this->addonPath('Support/SeoHelpRegistry.php'),
         );
-        $modal = (string) file_get_contents(
-            $this->addonPath('resources/js/components/ArticleEditorHelpModal.jsx'),
+        $assets = (string) file_get_contents(
+            $this->addonPath('resources/views/filament/hooks/global-help-assets.blade.php'),
         );
         $entry = (string) file_get_contents(
             $this->addonPath('resources/js/article-editor.jsx'),
         );
 
-        self::assertStringContainsString('ARTICLE_EDITOR_HELP_TOPICS', $topics);
-        self::assertStringContainsString('article-editor.overview', $topics);
-        self::assertStringContainsString('article-editor.outline', $topics);
-        self::assertStringContainsString('ARTICLE_EDITOR_HELP_OPEN_EVENT', $topics);
-
-        self::assertStringContainsString('role="dialog"', $modal);
-        self::assertStringContainsString('aria-modal="true"', $modal);
-        self::assertStringContainsString('aria-expanded', $modal);
-        self::assertStringContainsString('HelpTopicVideo', $modal);
-        self::assertStringContainsString("iframe.src = 'about:blank'", $modal);
-        self::assertStringContainsString('createPortal', $modal);
-
-        self::assertStringContainsString('ArticleEditorHelpModal', $entry);
-        self::assertStringContainsString('installArticleEditorStickyHeaderBridge', $entry);
+        self::assertStringContainsString('article-editor', $phpRegistry);
+        self::assertStringContainsString('clientPayload', $phpRegistry);
+        self::assertStringContainsString("Alpine.store('help'", $assets);
+        self::assertStringContainsString('Escape', (string) file_get_contents(
+            $this->addonPath('resources/views/filament/hooks/global-help-modal.blade.php'),
+        ));
+        self::assertStringNotContainsString('ArticleEditorHelpModal', $entry);
     }
 
     public function test_shortcuts_mount_helpers_removed_but_shortcut_logic_file_remains(): void
@@ -146,5 +154,6 @@ final class ArticleEditorStickyHeaderHelpTest extends TestCase
         self::assertStringContainsString('article-editor:save-status', $editor);
         self::assertStringContainsString('ARTICLE_EDITOR_SAVE_STATUS_EVENT', $bridge);
         self::assertStringContainsString('data-seo-sticky-save-status', $bridge);
+        self::assertStringContainsString("from '../help/helpEvents'", $bridge);
     }
 }

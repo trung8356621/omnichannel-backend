@@ -138,7 +138,7 @@ final class ManualAutomationDispatcher
         ];
 
         try {
-            $execution = DB::connection('omi_seo_ai')->transaction(function () use (
+            $execution = \App\Support\Automation\AutomationConnection::db()->transaction(function () use (
                 $actionCode,
                 $subject,
                 $actor,

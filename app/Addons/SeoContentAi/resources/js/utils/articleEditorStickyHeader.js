@@ -1,4 +1,4 @@
-import { ARTICLE_EDITOR_SAVE_STATUS_EVENT } from '../help/articleEditorHelpTopics';
+import { ARTICLE_EDITOR_SAVE_STATUS_EVENT } from '../help/helpEvents';
 
 /**
  * Sync sticky header save status from editor client state.

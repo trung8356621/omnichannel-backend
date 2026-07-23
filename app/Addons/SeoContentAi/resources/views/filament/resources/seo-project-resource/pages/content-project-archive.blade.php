@@ -10,7 +10,8 @@
     >
         @include('seo-content-ai::filament.resources.seo-project-resource.partials.archive-dashboard', [
             'siteId' => $siteId,
-            'canUnarchive' => $this->canUnarchiveArchiveItems(),
+            'siteIds' => $this->scopedSiteIds,
+            'canReopen' => $this->canReopenArchivedArticles(),
         ])
     </x-filament::section>
 </x-filament-panels::page>

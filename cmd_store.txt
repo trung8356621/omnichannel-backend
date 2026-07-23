@@ -25,55 +25,13 @@ nohup php artisan queue:work --timeout=360 > storage/logs/queue-worker.log 2>&1 
 
 php artisan queue:work --queue=automation-critical,automation,automation-external,seo,media_generation,default
 
-# ============================================================
-# UNBLOCK WP SYNC TREO — phpMyAdmin DB: lzxzdusj_omi_seo_ai
-# (artisan seo:wordpress-sync-lease-watchdog chỉ chạy SAU khi SFTP upload code mới)
-# ============================================================
 
--- 1 bài (đổi article_id):
-UPDATE article_meta
-SET meta_value = JSON_SET(
-  COALESCE(meta_value, '{}'),
-  '$.status', 'stale',
-  '$.stage', 'stale',
-  '$.finished_at', DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%dT%H:%i:%s+00:00'),
-  '$.error', 'Manual unlock via SQL',
-  '$.error_message', 'Manual unlock via SQL',
-  '$.worker_id', NULL,
-  '$.locked_until', NULL,
-  '$.heartbeat_at', NULL
-)
-WHERE article_id = 3884 AND meta_key = 'wp_sync_queue';
+#Dọn sạch database nhầm table lẫn nhau
+# Dry-run (mặc định, không DROP)
+php artisan database:cleanup-misplaced-tables
 
--- Tất cả bài đang processing/pending:
-UPDATE article_meta
-SET meta_value = JSON_SET(
-  meta_value,
-  '$.status', 'stale',
-  '$.stage', 'stale',
-  '$.finished_at', DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%dT%H:%i:%s+00:00'),
-  '$.error', 'Manual unlock via SQL',
-  '$.error_message', 'Manual unlock via SQL',
-  '$.worker_id', NULL,
-  '$.locked_until', NULL,
-  '$.heartbeat_at', NULL
-)
-WHERE meta_key = 'wp_sync_queue'
-  AND (meta_value LIKE '%"status":"processing"%' OR meta_value LIKE '%"status":"pending"%');
+# Execute + confirm
+php artisan database:cleanup-misplaced-tables --execute
 
--- Cache lock (thường ở DB core Laravel, không phải omi_seo_ai):
--- DELETE FROM cache_locks WHERE `key` LIKE '%manual-wp-sync%' OR `key` LIKE '%seo-wp-publish-article%';
-
--- Sau SFTP upload file mới + optimize:clear:
--- php artisan seo:wordpress-sync-lease-watchdog --article=3884
--- php artisan seo:wordpress-sync-lease-watchdog --force
-
-# aaPanel: sửa .env trên host
-# CACHE_STORE=file
-# rồi: php artisan optimize:clear
-#
-# Cron queue (mỗi phút) — KHÔNG dùng daemon queue:work (pcntl):
-# cd /www/wwwroot/seo.teamviahe.com && /usr/local/lsws/lsphp83/bin/php artisan queue:work --stop-when-empty --max-time=50 --timeout=360 --queue=automation-critical,automation,automation-external,seo,media_generation,default >> storage/logs/queue-cron.log 2>&1
-#
-# Watchdog (mỗi phút) — sau upload code: pending không có jobs row → stale ~90s
-# cd /www/wwwroot/seo.teamviahe.com && /usr/local/lsws/lsphp83/bin/php artisan seo:wordpress-sync-lease-watchdog --force >> storage/logs/watchdog.log 2>&1
+# CI
+php artisan database:cleanup-misplaced-tables --execute --force

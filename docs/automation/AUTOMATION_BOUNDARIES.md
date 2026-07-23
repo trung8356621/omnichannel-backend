@@ -105,3 +105,5 @@ Chỉ tạo action “update an toàn” mới khi code thật sự không gửi
 ## 9. Cross-database
 
 Logical IDs only. Không FK cross-DB. Không giả định transaction atomic core ↔ `omi_seo_ai`.
+
+**Storage (2026-07-23):** rule/event/execution/heartbeat nằm **core** (`AUTOMATION_DB_CONNECTION`, default sau cutover = core/`mysql`). Addon SEO chỉ đăng ký action/trigger handler; domain write (article/keyword) vẫn `omi_seo_ai`.

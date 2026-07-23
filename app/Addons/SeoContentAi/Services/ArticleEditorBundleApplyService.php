@@ -29,8 +29,13 @@ final class ArticleEditorBundleApplyService
         }
 
         $faqs = $bundle['faqs'] ?? null;
-        if (is_array($faqs) && ! $this->shouldSkipMalformedFaqsBundle($faqs)) {
+        if (
+            is_array($faqs)
+            && ! $this->shouldSkipMalformedFaqsBundle($faqs)
+            && ! $this->shouldSkipUnhydratedEmptyFaqsWipe($article, $bundle, $faqs)
+        ) {
             $this->faqEditor->saveFromEditor($article, $faqs);
+            $article->unsetRelation('faqs');
         }
 
         $featuredImage = $bundle['featured_image'] ?? null;
@@ -252,6 +257,30 @@ final class ArticleEditorBundleApplyService
         }
 
         return false;
+    }
+
+    /**
+     * Lazy FAQ (Phase 2): client gửi faqs:[] khi panel chưa hydrate → không được xóa DB.
+     *
+     * @param  array<string, mixed>  $bundle
+     * @param  list<mixed>  $faqs
+     */
+    private function shouldSkipUnhydratedEmptyFaqsWipe(SeoArticle $article, array $bundle, array $faqs): bool
+    {
+        if ($faqs !== []) {
+            return false;
+        }
+
+        $source = strtolower(trim((string) ($bundle['faqs_source'] ?? '')));
+        if ($source === 'editor') {
+            return false;
+        }
+
+        if ($source === 'none' || $source === '') {
+            return $article->faqs()->exists();
+        }
+
+        return $article->faqs()->exists();
     }
 
     private function supportsProductGallery(SeoArticle $article, string $postType): bool

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Automation\BusinessHook\Models;
 
-use Illuminate\Database\Eloquent\Model;
+use App\Support\Automation\AutomationModel;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
@@ -18,10 +18,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property array<string, mixed>|null $input_mapping
  * @property array<string, mixed>|null $settings
  */
-final class AutomationRuleAction extends Model
+final class AutomationRuleAction extends AutomationModel
 {
-    protected $connection = 'omi_seo_ai';
-
     protected $table = 'automation_rule_actions';
 
     protected $guarded = [];

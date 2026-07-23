@@ -16,7 +16,6 @@ import { clearArticleLocalState } from './utils/articleLocalState';
 import { loadFaqDraft } from './utils/articleEditorStorage';
 import { registerFilamentHeaderActionsPersistence } from './utils/articleEditorHeaderActions';
 import { installArticleEditorStickyHeaderBridge } from './utils/articleEditorStickyHeader';
-import ArticleEditorHelpModal from './components/ArticleEditorHelpModal';
 import { normalizeArticleSlug } from './utils/articleSlugUtils';
 import {
     buildArticleEditorApiPayload,
@@ -193,6 +192,7 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
                 });
                 finishArticleSaveFromApi(result, {
                     articleId,
+                    siteId,
                     connectionHash: window.__SEO_EDITOR_CONNECTION_HASH__ ?? '',
                     savedHtml: String(window.__SEO_EDITOR_LAST_SAVE_HTML__ ?? editorBundle.html ?? ''),
                 });
@@ -287,6 +287,7 @@ async function runArticleEditorApiAction(action, wire, editorDetail = {}) {
                 });
                 finishArticleSaveFromApi(result, {
                     articleId,
+                    siteId,
                     connectionHash: window.__SEO_EDITOR_CONNECTION_HASH__ ?? '',
                     savedHtml: String(window.__SEO_EDITOR_LAST_SAVE_HTML__ ?? apiPayload.html ?? ''),
                 });
@@ -812,6 +813,7 @@ function mountArticleEditorPage() {
         expected_content_hash: expectedContentHash || null,
     };
     window.__SEO_EDITOR_CONNECTION_HASH__ = connectionHash || '';
+    window.__SEO_ARTICLE_SITE_ID__ = Number(siteId ?? 0) || 0;
     window.__SEO_EDITOR_LAZY_ENDPOINTS__ = lazyEndpoints || window.__SEO_EDITOR_LAZY_ENDPOINTS__ || {};
 
     const perfDebugEnabled = Boolean(window.__SEO_ARTICLE_EDITOR_PERF_DEBUG__ || editorSettings?.perf_debug);
@@ -872,7 +874,6 @@ function mountArticleEditorPage() {
                 canGenerateVideo={editorSettings?.can_generate_video === true}
                 showLinkWidgets={editorSettings?.show_link_widgets !== false}
             />
-            <ArticleEditorHelpModal />
         </>,
     );
 

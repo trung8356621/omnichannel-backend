@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Automation\BusinessHook\Support;
 
+use App\Support\Automation\AutomationConnection;
 use Illuminate\Support\Facades\Schema;
 
 final class BusinessHookSchemaGuard
@@ -35,8 +36,9 @@ final class BusinessHookSchemaGuard
     /**
      * @return list<string>
      */
-    public static function missingTables(string $connection = 'omi_seo_ai'): array
+    public static function missingTables(?string $connection = null): array
     {
+        $connection ??= AutomationConnection::name();
         $missing = [];
         foreach (self::REQUIRED_TABLES as $table) {
             if (! Schema::connection($connection)->hasTable($table)) {
@@ -50,8 +52,9 @@ final class BusinessHookSchemaGuard
     /**
      * @return list<string>
      */
-    public static function missingV2Tables(string $connection = 'omi_seo_ai'): array
+    public static function missingV2Tables(?string $connection = null): array
     {
+        $connection ??= AutomationConnection::name();
         $missing = [];
         foreach (self::V2_TABLES as $table) {
             if (! Schema::connection($connection)->hasTable($table)) {
@@ -65,8 +68,9 @@ final class BusinessHookSchemaGuard
     /**
      * @return list<string>
      */
-    public static function missingV3Tables(string $connection = 'omi_seo_ai'): array
+    public static function missingV3Tables(?string $connection = null): array
     {
+        $connection ??= AutomationConnection::name();
         $missing = [];
         foreach (self::V3_TABLES as $table) {
             if (! Schema::connection($connection)->hasTable($table)) {
@@ -80,8 +84,9 @@ final class BusinessHookSchemaGuard
     /**
      * @return list<string>
      */
-    public static function missingV3Columns(string $connection = 'omi_seo_ai'): array
+    public static function missingV3Columns(?string $connection = null): array
     {
+        $connection ??= AutomationConnection::name();
         $schema = Schema::connection($connection);
         $missing = [];
 

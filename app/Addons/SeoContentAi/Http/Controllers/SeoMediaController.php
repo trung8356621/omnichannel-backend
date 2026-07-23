@@ -141,9 +141,17 @@ class SeoMediaController extends Controller
         ]);
     }
 
-    public function rename(Request $request, SeoMedia $media): JsonResponse
+    public function rename(Request $request, int $media): JsonResponse
     {
-        abort_unless($this->canAccessMedia($media), 403);
+        $record = SeoMedia::query()->find($media);
+        if (! $record instanceof SeoMedia) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Không tìm thấy ảnh trong thư viện (seo_media). Thử đổi slug theo URL /storage.',
+            ], 404);
+        }
+
+        abort_unless($this->canAccessMedia($record), 403);
 
         $validated = $request->validate([
             'new_slug' => ['required', 'string', 'regex:/^[a-z0-9\-]+$/i', 'max:200'],
@@ -161,8 +169,8 @@ class SeoMediaController extends Controller
         }
 
         try {
-            $result = $this->slugFix->renameOne($media, (string) $validated['new_slug'], $article);
-            $media = $result['media'];
+            $result = $this->slugFix->renameOne($record, (string) $validated['new_slug'], $article);
+            $record = $result['media'];
         } catch (\InvalidArgumentException $e) {
             throw ValidationException::withMessages(['new_slug' => $e->getMessage()]);
         } catch (\RuntimeException $e) {
@@ -171,9 +179,9 @@ class SeoMediaController extends Controller
 
         return response()->json([
             'success' => true,
-            'url' => $media->publicUrl(),
-            'slug' => $media->slug,
-            'id' => (int) $media->id,
+            'url' => $record->publicUrl(),
+            'slug' => $record->slug,
+            'id' => (int) $record->id,
             'replacement' => $result['replacement'] ?? null,
             'article_updated' => (bool) ($result['article_updated'] ?? false),
         ]);

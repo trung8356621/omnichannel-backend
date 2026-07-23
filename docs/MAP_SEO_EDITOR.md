@@ -166,6 +166,8 @@ Split toàn trang (eraser/splitter tab): [MAP_SEO_MEDIA.md §2.2](MAP_SEO_MEDIA.
 
 **FAQ manager vs content:** block `[omi_faq]` trong TipTap = compact shortcode card (count / Create|Edit). Không placeholder «FAQ chưa tải» dưới editor. `ArticleFaqEditor` lazy qua ModuleHost khi: click shortcode / SEO action Generate FAQ (`article-editor:module-open`). Count nhẹ từ core `faqCount` hoặc `GET .../editor/faqs/count` — không fetch full FAQ rows lúc mount. FAQ đã bỏ khỏi assistant tags và Links accordion.
 
+**FAQ persist / sync (Phase 2 anti-wipe):** `article-editor.jsx` luôn `initialFaqs={[]}`. `utils/articleEditorApi.js` → `resolveFaqsPersistPayload()` + `faqs_source` (`editor`|`panel`|`none`). Module FAQ chưa hydrate → **không** gửi `faqs:[]`. `ArticleEditorBundleApplyService` / `EditArticle` skip wipe DB khi `faqs:[]` + source ≠ `editor` mà bài vẫn có `seo_faqs`. `SeoArticle::resolveFaqs()` không tin relation rỗng stale; `SeoFaqPersistenceService` `unsetRelation('faqs')` sau delete.
+
 **SEO idle auto-analysis:** content đổi → `seoStale` → debounce **4000ms** (`seo-idle-analyze` qua utility scheduler). Gõ tiếp = cancel prior (same task id). Single-flight + document version guard. Không loop 150ms. Module SEO đóng vẫn cập nhật summary (score/violations) vì analysis sống ở `SeoArticleEditor`.
 
 **SEO violation action map:** `utils/seoViolationActions.js` — `faq_missing` → Generate FAQ (flow `generate-article-faqs` cũ); `featured_snippet_missing` → Create prompt (`FeaturedSnippetPromptModal`, hook `article.featured_snippet.generate`). Không hardcode action rải JSX.
@@ -688,7 +690,7 @@ sequenceDiagram
 
 CSS bước: `article-edit-page.css` — `.seo-article-sync-overlay__steps`.
 
-**Payload editor-sync (post/product):** `title`, `slug`, `status`, `post_date`, `post_type`, `post_content`, `faqs`, `seo`, `category_ids`.
+**Payload editor-sync (post/product):** `title`, `slug`, `status`, `post_date`, `post_type`, `post_content`, `faqs`, `seo`, `category_ids`. Khi `faqs` rỗng thật trên Laravel → thêm `clear_faqs: true` (`WordPressArticleSyncService::buildEditorSyncPayload`) để WP được phép xóa meta.
 
 ### 2.6.3 Trạng thái đăng bài & lên lịch
 

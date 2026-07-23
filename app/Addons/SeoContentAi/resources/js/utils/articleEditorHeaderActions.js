@@ -92,9 +92,7 @@ function isPersistentToolbarChild(child) {
         || child.classList.contains('seo-editor-restore-action')
         || child.classList.contains('seo-editor-menu-item')
         || child.classList.contains('seo-editor-menu-divider')
-        || child.classList.contains('seo-editor-preview-split')
-        || child.classList.contains('seo-article-editor-help-btn')
-        || child.getAttribute('data-seo-page-action') === 'help';
+        || child.classList.contains('seo-editor-preview-split');
 }
 
 function findDeleteAction(host) {

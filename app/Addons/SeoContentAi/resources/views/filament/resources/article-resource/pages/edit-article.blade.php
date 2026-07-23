@@ -9,7 +9,39 @@
         html.article-editor-page .fi-topbar,
         body:has(.article-editor-page) .fi-topbar,
         body:has([data-article-editor-runtime-marker="sticky-help-v1"]) .fi-topbar {
+            display: block !important;
+            position: fixed !important;
+            top: 0;
+            right: 0;
+            left: 0;
+            width: 100%;
+            height: 0;
+            min-height: 0;
+            padding: 0;
+            overflow: visible !important;
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            z-index: 55;
+            pointer-events: none;
+        }
+        body.article-editor-page .fi-topbar *,
+        html.article-editor-page .fi-topbar *,
+        body:has(.article-editor-page) .fi-topbar * {
+            visibility: hidden !important;
+            pointer-events: none !important;
+        }
+        body.article-editor-page .fi-topbar .global-help-topbar-host,
+        body.article-editor-page .fi-topbar .global-help-topbar-host *,
+        html.article-editor-page .fi-topbar .global-help-topbar-host,
+        html.article-editor-page .fi-topbar .global-help-topbar-host * {
+            /* Help nằm cạnh nút More trong toolbar — ẩn host fixed trên topbar */
             display: none !important;
+            visibility: hidden !important;
+            pointer-events: none !important;
+        }
+        body.article-editor-page .seo-article-editor-sticky-header {
+            padding-right: 0.75rem;
         }
         body.article-editor-page .fi-main,
         body:has(.article-editor-page) .fi-main,
@@ -38,15 +70,6 @@
         .seo-article-editor-sticky-header__title,
         .seo-article-editor-sticky-header__meta {
             display: none !important;
-        }
-        .seo-article-editor-help-btn {
-            display: inline-flex !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            flex-shrink: 0 !important;
-        }
-        .seo-article-editor-help-btn .seo-editor-toolbar-btn__label {
-            display: inline !important;
         }
     </style>
 @endpush

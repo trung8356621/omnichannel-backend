@@ -82,6 +82,17 @@ class User extends Authenticatable implements FilamentUser
         )->withTimestamps();
     }
 
+    /**
+     * Lịch sử duyệt bài SEO (cross-DB query — bảng trên connection omi_seo_ai).
+     *
+     * @return \Illuminate\Database\Eloquent\Builder<\App\Addons\SeoContentAi\Models\SeoArticleReview>
+     */
+    public function articleReviews()
+    {
+        return \App\Addons\SeoContentAi\Models\SeoArticleReview::query()
+            ->where('reviewer_id', (int) $this->id);
+    }
+
     public function meta(): \Illuminate\Database\Eloquent\Relations\HasMany
     {
         return $this->hasMany(UserMeta::class, 'user_id');

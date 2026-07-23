@@ -411,9 +411,20 @@ final class SeoProjectArchiveService
      *     month_options: list<array{value: string, label: string}>
      * }
      */
-    public function buildGroupedDashboard(int $siteId): array
+    /**
+     * @param  list<int>|int  $siteIds  Single site id (legacy) or list of accessible site ids.
+     */
+    public function buildGroupedDashboard(array|int $siteIds): array
     {
-        if ($siteId <= 0) {
+        $normalizedSiteIds = array_values(array_unique(array_filter(
+            array_map(
+                static fn (mixed $id): int => (int) $id,
+                is_array($siteIds) ? $siteIds : [$siteIds],
+            ),
+            static fn (int $id): bool => $id > 0,
+        )));
+
+        if ($normalizedSiteIds === []) {
             return [
                 'groups' => [],
                 'month_options' => [],
@@ -421,7 +432,7 @@ final class SeoProjectArchiveService
         }
 
         $items = SeoContentArchiveItem::query()
-            ->where('site_id', $siteId)
+            ->whereIn('site_id', $normalizedSiteIds)
             ->with([
                 'article:id,title,slug,user_id,site_id',
                 'article.user:id,name',

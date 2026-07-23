@@ -136,7 +136,7 @@ final class ArticleEditorModuleSyncQueueHardeningTest extends TestCase
     {
         $body = $this->methodBody(ArticleEditorSyncController::class, 'syncWp');
 
-        self::assertStringContainsString("'close_editor' => false", $body);
+        self::assertStringContainsString("'close_editor' => true", $body);
         self::assertStringContainsString('manual_sync_already_queued', $body);
         self::assertStringContainsString("'data' => null", $body);
     }
@@ -147,9 +147,10 @@ final class ArticleEditorModuleSyncQueueHardeningTest extends TestCase
 
         self::assertStringContainsString('export function resolveSyncQueueListUrl', $api);
         self::assertStringContainsString('tab=queue', $api);
-        self::assertStringContainsString('__seoArticleOperationTracker?.poll?.(articleId)', $api);
-        self::assertStringNotContainsString('closeEditorAfterSyncEnqueue(result)', $api);
-        self::assertStringNotContainsString('window.close()', $api);
+        self::assertStringContainsString('closeEditorTabOrRedirectToSyncQueue', $api);
+        self::assertStringContainsString('prepareEditorExitAfterSyncEnqueue', $api);
+        self::assertStringContainsString('window.close()', $api);
+        self::assertStringNotContainsString('__seoArticleOperationTracker?.poll?.(articleId)', $api);
     }
 
     public function test_list_articles_exposes_sync_queue_badge_count(): void

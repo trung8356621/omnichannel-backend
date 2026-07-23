@@ -45,23 +45,8 @@ return new class extends Migration
                 ]);
         }
 
-        if ($schema->hasTable('automation_rules')) {
-            $schema->table('automation_rules', function (Blueprint $table) use ($schema): void {
-                if (! $schema->hasColumn('automation_rules', 'visibility')) {
-                    $table->string('visibility', 16)->default('user')->after('classification');
-                }
-            });
-
-            DB::connection('omi_seo_ai')
-                ->table('automation_rules')
-                ->where('classification', 'production')
-                ->update(['classification' => 'business']);
-
-            DB::connection('omi_seo_ai')
-                ->table('automation_rules')
-                ->whereIn('classification', ['experimental', 'manual-only'])
-                ->update(['classification' => 'system', 'visibility' => 'admin']);
-        }
+        // automation_rules.visibility / classification: đã nằm trong core schema + data migration.
+        // Không ghi SEO DB nữa.
     }
 
     public function down(): void
@@ -73,14 +58,6 @@ return new class extends Migration
         ) {
             $schema->table('article_product_reviews', function (Blueprint $table): void {
                 $table->dropColumn('synced_at');
-            });
-        }
-
-        if ($schema->hasTable('automation_rules')
-            && $schema->hasColumn('automation_rules', 'visibility')
-        ) {
-            $schema->table('automation_rules', function (Blueprint $table): void {
-                $table->dropColumn('visibility');
             });
         }
     }

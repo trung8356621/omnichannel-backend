@@ -11,6 +11,7 @@ use App\Addons\SeoContentAi\Services\SeoProjectArticleOwnerSyncService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskMoveService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Support\RuntimeLogger;
 use Carbon\Carbon;
 use Filament\Actions;
 use Filament\Notifications\Notification;
@@ -27,7 +28,7 @@ class EditSeoProject extends SeoEditRecord
         /** @var SeoProject $project */
         $project = $this->getRecord();
         if ($project->isArchive()) {
-            $this->redirect(SeoProjectResource::getUrl('archive'));
+            $this->redirect(SeoProjectResource::getUrl('index'));
         }
     }
 
@@ -139,7 +140,6 @@ class EditSeoProject extends SeoEditRecord
 
         return [
             Actions\ActionGroup::make([
-                SeoProjectResource::makeViewProjectArchivesPageAction($record),
                 SeoProjectResource::makeArchiveProjectPageAction($record),
                 Actions\Action::make('view_runs')
                     ->label(__('seo-content-ai::filament.projects.view_runs'))
@@ -156,18 +156,11 @@ class EditSeoProject extends SeoEditRecord
                     ->successNotification(null)
                     ->using(function (SeoProject $record): bool {
                         try {
-                            $result = app(SeoProjectTaskMoveService::class)
-                                ->deleteProjectRollingBackToPreviousMonth($record);
+                            app(SeoProjectTaskMoveService::class)->deleteProject($record);
 
                             Notification::make()
                                 ->title(__('seo-content-ai::filament.projects.delete_completed'))
-                                ->body(
-                                    (int) ($result['moved'] ?? 0) > 0
-                                        ? __('seo-content-ai::filament.projects.delete_completed_rollback_body', $result)
-                                        : __('seo-content-ai::filament.projects.delete_completed_body', [
-                                            'moved' => 0,
-                                        ])
-                                )
+                                ->body(__('seo-content-ai::filament.projects.delete_completed_body'))
                                 ->success()
                                 ->send();
 
@@ -183,7 +176,7 @@ class EditSeoProject extends SeoEditRecord
 
                             throw $exception;
                         } catch (\Throwable $exception) {
-                            report($exception);
+                            RuntimeLogger::report($exception, ['project_id' => (int) $record->getKey()]);
 
                             Notification::make()
                                 ->title(__('seo-content-ai::filament.projects.delete_failed'))

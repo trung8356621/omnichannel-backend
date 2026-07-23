@@ -49,7 +49,41 @@ body:has(.seo-article-edit-page) .fi-header {
 body.article-editor-page .fi-topbar,
 body:has(.article-editor-page) .fi-topbar,
 html.article-editor-page .fi-topbar {
+    display: block !important;
+    position: fixed !important;
+    top: 0;
+    right: 0;
+    left: 0;
+    width: 100%;
+    height: 0;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    overflow: visible !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    z-index: 55;
+    pointer-events: none;
+}
+
+body.article-editor-page .fi-topbar *,
+body:has(.article-editor-page) .fi-topbar *,
+html.article-editor-page .fi-topbar * {
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+body.article-editor-page .fi-topbar .global-help-topbar-host,
+body:has(.article-editor-page) .fi-topbar .global-help-topbar-host,
+body:has(.article-editor-page) .fi-topbar .global-help-topbar-host *,
+body.article-editor-page .fi-topbar .global-help-topbar-host *,
+html.article-editor-page .fi-topbar .global-help-topbar-host,
+html.article-editor-page .fi-topbar .global-help-topbar-host * {
+    /* Help sits next to More (…) in editor toolbar — hide fixed topbar host */
     display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
 }
 
 .seo-article-edit-page .fi-header {
@@ -194,28 +228,6 @@ body.article-editor-page .fi-page-content {
     overflow: visible;
 }
 
-.seo-article-editor-help-btn {
-    flex-shrink: 0 !important;
-    order: 99;
-    display: inline-flex !important;
-    visibility: visible !important;
-    opacity: 1 !important;
-}
-
-.seo-article-editor-help-btn.seo-editor-toolbar-btn--labeled {
-    max-width: none !important;
-    width: auto !important;
-    min-width: 2.75rem !important;
-    padding-inline: 0.55rem !important;
-}
-
-.seo-article-editor-help-btn .seo-editor-toolbar-btn__label {
-    display: inline !important;
-    font-size: 0.8125rem;
-    font-weight: 700;
-    line-height: 1;
-}
-
 /* Nội dung editor giữ gutter dưới topbar full-bleed */
 .wp-article-edit-layout {
     padding-inline: 0.75rem;
@@ -227,6 +239,11 @@ body.article-editor-page .fi-page-content {
 .seo-article-editor-sticky-header .seo-editor-page-actions__more-panel,
 .seo-article-editor-sticky-header .seo-editor-preview-split__menu {
     z-index: 60;
+}
+
+/* Split dropdown menu sits below the control — parent must not clip it */
+.seo-editor-page-actions .seo-editor-preview-split {
+    overflow: visible !important;
 }
 
 @media (max-width: 1024px) {
@@ -433,6 +450,192 @@ html.seo-article-sync-locked .fi-no {
 .seo-article-sync-overlay__step.is-done {
     border-color: rgb(34 197 94 / 45%);
     background: rgb(240 253 244);
+}
+
+/* Article Review split-button cluster (Duyệt bài) */
+.seo-editor-review-cluster {
+    display: inline-flex;
+    align-items: center;
+}
+
+/* Disable toàn bộ split/toggle review khi đang gọi API — không chỉ disabled từng nút con */
+.seo-editor-review-cluster .seo-editor-preview-split.is-disabled {
+    pointer-events: none;
+    opacity: 0.7;
+}
+
+.seo-editor-review-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.4rem 0.75rem;
+    border-radius: 9999px;
+    border: 1px solid rgb(226 232 240);
+    background: rgb(248 250 252);
+    color: rgb(51 65 85);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: default;
+}
+
+.seo-editor-review-badge[data-status='pending_review'] {
+    border-color: rgb(250 204 21 / 55%);
+    background: rgb(254 252 232);
+    color: rgb(161 98 7);
+}
+
+.seo-editor-review-badge[data-status='approved'] {
+    border-color: rgb(34 197 94 / 45%);
+    background: rgb(240 253 244);
+    color: rgb(21 128 61);
+}
+
+.seo-editor-review-badge[data-status='archived'] {
+    border-color: rgb(148 163 184 / 55%);
+    background: rgb(241 245 249);
+    color: rgb(71 85 105);
+}
+
+.dark .seo-editor-review-badge {
+    border-color: rgb(255 255 255 / 12%);
+    background: rgb(15 23 42);
+    color: rgb(226 232 240);
+}
+
+.seo-editor-review-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 2147482400;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+}
+
+.seo-editor-review-modal__backdrop {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    background: rgb(15 23 42 / 55%);
+    cursor: pointer;
+}
+
+.seo-editor-review-modal__panel {
+    position: relative;
+    width: 100%;
+    max-width: 30rem;
+    border-radius: 0.75rem;
+    background: #fff;
+    box-shadow: 0 20px 45px -12px rgb(15 23 42 / 35%);
+    padding: 1.25rem;
+}
+
+.dark .seo-editor-review-modal__panel {
+    background: rgb(15 23 42);
+    color: rgb(226 232 240);
+}
+
+.seo-editor-review-modal__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.seo-editor-review-modal__title {
+    font-size: 1rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.seo-editor-review-modal__close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 9999px;
+    border: 0;
+    background: transparent;
+    color: rgb(100 116 139);
+    cursor: pointer;
+}
+
+.seo-editor-review-modal__close:hover {
+    background: rgb(241 245 249);
+}
+
+.seo-editor-review-modal__body {
+    margin-top: 0.85rem;
+}
+
+.seo-editor-review-modal__textarea {
+    width: 100%;
+    min-height: 6rem;
+    border-radius: 0.5rem;
+    border: 1px solid rgb(203 213 225);
+    padding: 0.5rem 0.65rem;
+    font-size: 0.875rem;
+    resize: vertical;
+}
+
+.dark .seo-editor-review-modal__textarea {
+    border-color: rgb(255 255 255 / 12%);
+    background: rgb(2 6 23);
+    color: rgb(226 232 240);
+}
+
+.seo-editor-review-modal__counter {
+    margin-top: 0.35rem;
+    text-align: right;
+    font-size: 0.75rem;
+    color: rgb(100 116 139);
+}
+
+.seo-editor-review-modal__actions {
+    margin-top: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.seo-editor-review-modal__actions .seo-editor-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    padding: 0.45rem 0.9rem;
+    border-radius: 0.5rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    border: 1px solid transparent;
+    cursor: pointer;
+}
+
+.seo-editor-review-modal__actions .seo-editor-btn--ghost {
+    border-color: rgb(203 213 225);
+    background: #fff;
+    color: rgb(51 65 85);
+}
+
+.seo-editor-review-modal__actions .seo-editor-btn--ghost:hover:not(:disabled) {
+    background: rgb(248 250 252);
+}
+
+.seo-editor-review-modal__actions .seo-editor-btn--primary {
+    background: rgb(22 163 74);
+    color: #fff;
+}
+
+.seo-editor-review-modal__actions .seo-editor-btn--primary:hover:not(:disabled) {
+    background: rgb(21 128 61);
+}
+
+.seo-editor-review-modal__actions .seo-editor-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 .seo-article-sync-overlay__step.is-done .seo-article-sync-overlay__step-label::before {

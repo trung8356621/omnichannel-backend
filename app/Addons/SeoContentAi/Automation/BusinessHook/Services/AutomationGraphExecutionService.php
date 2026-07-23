@@ -633,7 +633,7 @@ final class AutomationGraphExecutionService
 
     private function claimExecution(int $executionId): ?AutomationExecution
     {
-        return DB::connection('omi_seo_ai')->transaction(function () use ($executionId): ?AutomationExecution {
+        return \App\Support\Automation\AutomationConnection::db()->transaction(function () use ($executionId): ?AutomationExecution {
             /** @var AutomationExecution|null $execution */
             $execution = AutomationExecution::query()->whereKey($executionId)->lockForUpdate()->first();
             if (! $execution instanceof AutomationExecution) {
@@ -668,7 +668,7 @@ final class AutomationGraphExecutionService
 
     private function claimNode(int $nodeExecutionId): ?AutomationNodeExecution
     {
-        return DB::connection('omi_seo_ai')->transaction(function () use ($nodeExecutionId): ?AutomationNodeExecution {
+        return \App\Support\Automation\AutomationConnection::db()->transaction(function () use ($nodeExecutionId): ?AutomationNodeExecution {
             /** @var AutomationNodeExecution|null $nodeExec */
             $nodeExec = AutomationNodeExecution::query()->whereKey($nodeExecutionId)->lockForUpdate()->first();
             if (! $nodeExec instanceof AutomationNodeExecution) {

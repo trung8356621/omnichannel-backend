@@ -331,6 +331,30 @@ final class SeoAccessControl
     }
 
     /**
+     * Article Review workflow — content manager gửi bài để planner duyệt.
+     */
+    public static function canSubmitArticleReview(): bool
+    {
+        return self::canMutateInSeoPanel() && self::isContentManager();
+    }
+
+    /**
+     * Article Review workflow — planner (hoặc rank cao hơn) duyệt bài.
+     */
+    public static function canApproveArticleReview(): bool
+    {
+        return self::canMutateInSeoPanel() && self::canAccessPlannerFeatures();
+    }
+
+    /**
+     * Article Review workflow — chỉ manager mới được lưu trữ (archive) bài đã duyệt.
+     */
+    public static function canFinalizeArticleReview(): bool
+    {
+        return self::canArchiveContentProjects();
+    }
+
+    /**
      * @return list<int>
      */
     public static function accessibleSiteIds(): array

@@ -12,6 +12,7 @@ use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Schema;
 
@@ -36,6 +37,7 @@ class SeoArticle extends Model
         'skip_seo_score' => 'boolean',
         'is_reviewed' => 'boolean',
         'reviewed_at' => 'datetime',
+        'review_status' => 'string',
         'content_archived_at' => 'datetime',
         'content_archived_by' => 'integer',
         'published_at' => 'datetime',
@@ -106,13 +108,27 @@ class SeoArticle extends Model
         return $this->hasMany(SeoFaq::class, 'article_id')->orderBy('sort_order');
     }
 
+    public function reviews(): HasMany
+    {
+        return $this->hasMany(SeoArticleReview::class, 'article_id')->orderByDesc('created_at');
+    }
+
+    public function latestReview(): HasOne
+    {
+        return $this->hasOne(SeoArticleReview::class, 'article_id')->latestOfMany();
+    }
+
     /**
      * @return list<array{question: string, answer: string, more?: string}>
      */
     public function resolveFaqs(): array
     {
         if ($this->relationLoaded('faqs')) {
-            return $this->faqsToArray($this->faqs);
+            $loaded = $this->faqsToArray($this->faqs);
+            // Relation rỗng có thể stale (bundle skip wipe / persist chưa unset) — query lại.
+            if ($loaded !== []) {
+                return $loaded;
+            }
         }
 
         if (SeoFaq::query()->where('article_id', $this->id)->exists()) {

@@ -10,6 +10,7 @@
 - Outbound Laravel → WP **không** xóa / trash WP. Sync status **chỉ** gửi `publish` (+ `post_date` clamp ≤ now) — `WordPressArticleSyncService::resolveWordPressStatusPayload()`.
 - Lịch đăng (`scheduled`) sống **chỉ trên Laravel**; cron tới giờ mới sync. **Không** gửi `draft` / WP `future` khi đồng bộ.
 - Plugin `omi-seo-ai-bridge` ≥ **1.0.57**: chặn demote `publish/private/future` → `draft`; elevate admin + `force_post_status`; clamp `post_date` tương lai khi publish.
+- Plugin `omi-seo-ai-bridge` ≥ **1.0.61**: `editor-sync` / `apply_supplementary_sync_fields` — `faqs:[]` **không** xóa `_omi_seo_faqs` nếu meta đang có, trừ khi `clear_faqs` (tránh sync Laravel gửi [] nhầm → shortcode `[omi_faq]` trống trên frontend).
 - Inbound WP → Laravel (push trash / force_delete) vẫn phản ánh trạng thái WP — xem bridge bên dưới.
 
 ---

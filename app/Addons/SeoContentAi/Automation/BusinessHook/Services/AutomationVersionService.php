@@ -37,7 +37,7 @@ final class AutomationVersionService
         ?int $expectedRevision = null,
         ?int $actorId = null,
     ): AutomationRule {
-        return DB::connection('omi_seo_ai')->transaction(function () use ($rule, $nodes, $edges, $layout, $expectedRevision, $actorId): AutomationRule {
+        return \App\Support\Automation\AutomationConnection::db()->transaction(function () use ($rule, $nodes, $edges, $layout, $expectedRevision, $actorId): AutomationRule {
             /** @var AutomationRule $locked */
             $locked = AutomationRule::query()->whereKey($rule->id)->lockForUpdate()->firstOrFail();
 
@@ -120,7 +120,7 @@ final class AutomationVersionService
 
     public function publish(AutomationRule $rule, ?int $actorId = null): AutomationRuleVersion
     {
-        return DB::connection('omi_seo_ai')->transaction(function () use ($rule, $actorId): AutomationRuleVersion {
+        return \App\Support\Automation\AutomationConnection::db()->transaction(function () use ($rule, $actorId): AutomationRuleVersion {
             /** @var AutomationRule $locked */
             $locked = AutomationRule::query()->whereKey($rule->id)->lockForUpdate()->firstOrFail();
             $locked->load(['nodes', 'edges', 'actions']);

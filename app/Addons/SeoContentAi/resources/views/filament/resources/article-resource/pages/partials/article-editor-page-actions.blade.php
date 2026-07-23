@@ -4,21 +4,29 @@
     $wpPreviewUrl = (int) ($record->wp_post_id ?? 0) > 0 ? trim((string) $this->getArticlePermalink()) : '';
     $hasWpPreview = $wpPreviewUrl !== '';
     $hasInternalPreview = $internalPreviewUrl !== '';
-    $staffSubmitted = $isContentManager && $this->contentManagerSubmittedForReview();
-    $reviewButtonActive = $isContentManager ? $staffSubmitted : (bool) $record->is_reviewed;
-    $approvedToggleTitle = $isContentManager
-        ? __('seo-content-ai::filament.article_list.staff_mark_editing_done')
-        : __('seo-content-ai::filament.article_list.mark_reviewed');
-    $approveLabel = $reviewButtonActive
-        ? ($isContentManager
-            ? __('seo-content-ai::filament.article_list.staff_mark_editing_done_already')
-            : __('seo-content-ai::filament.article_list.reviewed'))
-        : ($isContentManager
-            ? $approvedToggleTitle
-            : __('seo-content-ai::filament.article_list.page_action_approve_label'));
-    $reviewConfirm = $isContentManager
-        ? __('seo-content-ai::filament.article_list.staff_mark_editing_done_confirm')
-        : __('seo-content-ai::filament.article_list.review_article_description');
+    $reviewBootstrap = $this->getArticleReviewBootstrap();
+    $reviewActionEndpoint = route('seo.articles.review-actions.store', ['article' => $record->getKey()]);
+    $reviewBadgeMap = [
+        'draft' => __('seo-content-ai::filament.article_review.badge.draft'),
+        'pending_review' => __('seo-content-ai::filament.article_review.badge.pending_review'),
+        'approved' => __('seo-content-ai::filament.article_review.badge.approved'),
+        'archived' => __('seo-content-ai::filament.article_review.badge.archived'),
+    ];
+    $reviewToggleLabels = [
+        'complete' => __('seo-content-ai::filament.article_review.toggle.complete'),
+        'completed' => __('seo-content-ai::filament.article_review.toggle.completed'),
+        'approve' => __('seo-content-ai::filament.article_review.toggle.approve'),
+        'approved' => __('seo-content-ai::filament.article_review.toggle.approved'),
+    ];
+    $reviewPageActionsConfig = [
+        'reviewStatus' => $reviewBootstrap['review_status'],
+        'reviewBadgeMap' => $reviewBadgeMap,
+        'reviewToggleLabels' => $reviewToggleLabels,
+        'reviewActions' => $reviewBootstrap['available_actions'],
+        'reviewLatest' => $reviewBootstrap['latest_review'],
+        'reviewEndpoint' => $reviewActionEndpoint,
+        'reviewGenericError' => __('seo-content-ai::filament.article_review.errors.invalid_transition'),
+    ];
     $saveLabel = __('seo-content-ai::filament.article_list.page_action_save_label');
     $syncLabel = __('seo-content-ai::filament.article_list.page_action_sync_label');
     $previewLabel = __('seo-content-ai::filament.article_list.page_action_preview_label');
@@ -31,15 +39,194 @@
         : null;
 @endphp
 
-{{-- Top bar: Save → Sync → Preview(split) → Approve | More (secondary + delete) --}}
+@once
+    <script>
+        window.seoArticleEditorPageActions = function seoArticleEditorPageActions(config) {
+            return {
+                moreOpen: false,
+                previewOpen: false,
+                reviewMenuOpen: false,
+                reviewStatus: config.reviewStatus ?? 'draft',
+                reviewBadgeMap: config.reviewBadgeMap ?? {},
+                reviewToggleLabels: config.reviewToggleLabels ?? {},
+                reviewActions: Array.isArray(config.reviewActions) ? config.reviewActions : [],
+                reviewLatest: config.reviewLatest ?? null,
+                reviewEndpoint: config.reviewEndpoint ?? '',
+                reviewLoading: false,
+                reviewModalOpen: false,
+                reviewModalAction: null,
+                reviewNote: '',
+                reviewNoteMax: 5000,
+                reviewGenericError: config.reviewGenericError ?? '',
+
+                reviewPrimaryAction() {
+                    return this.reviewActions[0] ?? null;
+                },
+
+                // "Toggle reverse" actions (reopen/unapprove) hiển thị như một nút trạng thái
+                // đã bấm (is-active) thay vì split-button hành động tiến tới.
+                reviewIsToggleAction() {
+                    const type = this.reviewPrimaryAction()?.type;
+
+                    return type === 'reopen' || type === 'unapprove';
+                },
+
+                reviewToggleLabel() {
+                    const action = this.reviewPrimaryAction();
+                    if (! action) {
+                        return '';
+                    }
+
+                    if (action.type === 'reopen') {
+                        return this.reviewToggleLabels.completed || action.quick_label || '';
+                    }
+
+                    if (action.type === 'unapprove') {
+                        return this.reviewToggleLabels.approved || action.quick_label || '';
+                    }
+
+                    return action.quick_label || '';
+                },
+
+                reviewBadgeLabelText() {
+                    return this.reviewBadgeMap[this.reviewStatus] ?? this.reviewStatus;
+                },
+
+                reviewLatestTooltip() {
+                    if (! this.reviewLatest) {
+                        return '';
+                    }
+
+                    const parts = [];
+                    if (this.reviewLatest.reviewer_name) {
+                        parts.push(this.reviewLatest.reviewer_name);
+                    }
+                    if (this.reviewLatest.created_at) {
+                        parts.push(new Date(this.reviewLatest.created_at).toLocaleString());
+                    }
+                    if (this.reviewLatest.note) {
+                        parts.push(this.reviewLatest.note);
+                    }
+
+                    return parts.join(' · ');
+                },
+
+                openReviewModal(action) {
+                    if (! action) {
+                        return;
+                    }
+
+                    this.reviewModalAction = action;
+                    this.reviewNote = '';
+                    this.reviewModalOpen = true;
+                    this.moreOpen = false;
+                    this.previewOpen = false;
+                    this.reviewMenuOpen = false;
+                },
+
+                closeReviewModal() {
+                    if (this.reviewLoading) {
+                        return;
+                    }
+
+                    this.reviewModalOpen = false;
+                    this.reviewModalAction = null;
+                    this.reviewNote = '';
+                },
+
+                reviewCsrfToken() {
+                    return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '';
+                },
+
+                notifyReview(title, status = 'success') {
+                    if (typeof window.FilamentNotification === 'undefined') {
+                        return;
+                    }
+
+                    const toast = new window.FilamentNotification().title(title || '');
+                    if (status === 'danger') {
+                        toast.danger();
+                    } else if (status === 'warning') {
+                        toast.warning();
+                    } else {
+                        toast.success();
+                    }
+                    toast.send();
+                },
+
+                submitReviewAction(actionType, note) {
+                    if (this.reviewLoading || ! actionType) {
+                        return;
+                    }
+
+                    const trimmedNote = typeof note === 'string' ? note.trim() : null;
+
+                    this.reviewLoading = true;
+
+                    fetch(this.reviewEndpoint, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            Accept: 'application/json',
+                            'X-CSRF-TOKEN': this.reviewCsrfToken(),
+                            'X-Requested-With': 'XMLHttpRequest',
+                        },
+                        body: JSON.stringify({
+                            action: actionType,
+                            note: trimmedNote ? trimmedNote : null,
+                        }),
+                    })
+                        .then(async (response) => {
+                            let payload = null;
+                            try {
+                                payload = await response.json();
+                            } catch (error) {
+                                payload = null;
+                            }
+
+                            if (! response.ok || ! payload || payload.success === false) {
+                                this.notifyReview(payload?.message || this.reviewGenericError, 'danger');
+
+                                return;
+                            }
+
+                            this.reviewStatus = payload.data.review_status;
+                            this.reviewActions = payload.data.available_actions;
+                            this.reviewLatest = payload.data.latest_review;
+                            this.reviewModalOpen = false;
+                            this.reviewModalAction = null;
+                            this.reviewNote = '';
+
+                            if (payload.message) {
+                                this.notifyReview(payload.message, 'success');
+                            }
+
+                            if (this.$wire && typeof this.$wire.$refresh === 'function') {
+                                this.$wire.$refresh();
+                            }
+                        })
+                        .catch(() => {
+                            this.notifyReview(this.reviewGenericError, 'danger');
+                        })
+                        .finally(() => {
+                            this.reviewLoading = false;
+                        });
+                },
+            };
+        };
+    </script>
+@endonce
+
+{{-- Top bar: Save → Sync → Preview(split) → Duyệt bài | More --}}
 <div
     class="seo-editor-page-actions"
     data-seo-page-actions-slot
     wire:ignore.self
-    x-data="{ moreOpen: false, previewOpen: false }"
+    x-data="seoArticleEditorPageActions(@js($reviewPageActionsConfig))"
     x-bind:class="{ 'is-more-open': moreOpen }"
-    x-on:click.outside="moreOpen = false; previewOpen = false"
-    x-on:keydown.escape.window="moreOpen = false; previewOpen = false"
+    x-on:click.outside="moreOpen = false; previewOpen = false; reviewMenuOpen = false"
+    x-on:keydown.escape.window="moreOpen = false; previewOpen = false; reviewMenuOpen = false"
 >
     <div class="seo-editor-page-actions__group seo-editor-page-actions__group--primary" data-seo-page-actions-primary>
         <button
@@ -126,7 +313,7 @@
                 title="{{ __('seo-content-ai::filament.article_list.page_action_preview_menu') }}"
                 aria-label="{{ __('seo-content-ai::filament.article_list.page_action_preview_menu') }}"
                 x-bind:aria-expanded="previewOpen"
-                x-on:click.stop="previewOpen = !previewOpen; moreOpen = false"
+                x-on:click.stop="previewOpen = !previewOpen; moreOpen = false; reviewMenuOpen = false"
             >
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                     <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 10.94l3.71-3.71a.75.75 0 1 1 1.06 1.06l-4.24 4.24a.75.75 0 0 1-1.06 0L5.21 8.29a.75.75 0 0 1 .02-1.08Z" clip-rule="evenodd" />
@@ -181,32 +368,148 @@
             </div>
         </div>
 
-        <button
-            type="button"
-            wire:click="toggleArticleReview"
-            @if (! $reviewButtonActive) wire:confirm="{{ $reviewConfirm }}" @endif
-            wire:loading.attr="disabled"
-            wire:target="toggleArticleReview,approveArticle"
-            @if (! $this->canToggleArticleReview()) disabled @endif
-            class="seo-editor-toolbar-btn seo-editor-toolbar-btn--success seo-editor-toolbar-btn--labeled seo-editor-page-actions__desktop-only @if ($reviewButtonActive) is-active @endif"
-            title="{{ $reviewButtonActive
-                ? ($isContentManager
-                    ? __('seo-content-ai::filament.article_list.staff_mark_editing_done_already')
-                    : __('seo-content-ai::filament.article_list.reviewed'))
-                : $approvedToggleTitle }}"
-            aria-label="{{ $approveLabel }}"
-            aria-pressed="{{ $reviewButtonActive ? 'true' : 'false' }}"
-            data-seo-page-action="review"
-        >
-            <span wire:loading.remove wire:target="toggleArticleReview,approveArticle" class="seo-editor-toolbar-btn__inner">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                </svg>
-                <span class="seo-editor-toolbar-btn__label">{{ $approveLabel }}</span>
-            </span>
-            <span wire:loading wire:target="toggleArticleReview,approveArticle" class="seo-editor-toolbar-btn__spinner" aria-hidden="true"></span>
-        </button>
+        <div class="seo-editor-review-cluster seo-editor-page-actions__desktop-only" data-seo-page-action="review">
+            {{-- Toggle reverse (reopen/unapprove): 1 nút trạng thái đã bấm (is-active), chevron mở dropdown "kèm ghi chú" tuỳ chọn --}}
+            <template x-if="reviewPrimaryAction() && reviewIsToggleAction()">
+                <div
+                    class="seo-editor-preview-split"
+                    x-bind:class="{ 'is-open': reviewMenuOpen, 'is-disabled': reviewLoading }"
+                >
+                    <button
+                        type="button"
+                        class="seo-editor-toolbar-btn seo-editor-toolbar-btn--success seo-editor-toolbar-btn--labeled is-active seo-editor-preview-split__main"
+                        x-bind:disabled="reviewLoading"
+                        x-on:click="submitReviewAction(reviewPrimaryAction()?.type, null)"
+                        x-bind:title="reviewPrimaryAction()?.label"
+                        x-bind:aria-label="reviewToggleLabel()"
+                        data-seo-page-action="review-toggle"
+                    >
+                        <span class="seo-editor-toolbar-btn__inner" x-show="! reviewLoading">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                            </svg>
+                            <span class="seo-editor-toolbar-btn__label" x-text="reviewToggleLabel()"></span>
+                        </span>
+                        <span class="seo-editor-toolbar-btn__spinner" x-show="reviewLoading" aria-hidden="true"></span>
+                    </button>
+                    <button
+                        type="button"
+                        class="seo-editor-toolbar-btn seo-editor-toolbar-btn--success is-active seo-editor-preview-split__chevron"
+                        x-bind:disabled="reviewLoading"
+                        x-bind:aria-expanded="reviewMenuOpen"
+                        x-on:click.stop="reviewMenuOpen = ! reviewMenuOpen; moreOpen = false; previewOpen = false"
+                        x-bind:aria-label="reviewPrimaryAction()?.note_label"
+                        x-bind:title="reviewPrimaryAction()?.note_label"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 10.94l3.71-3.71a.75.75 0 1 1 1.06 1.06l-4.24 4.24a.75.75 0 0 1-1.06 0L5.21 8.29a.75.75 0 0 1 .02-1.08Z" clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                    <div class="seo-editor-preview-split__menu" x-show="reviewMenuOpen" x-cloak role="menu">
+                        <button
+                            type="button"
+                            role="menuitem"
+                            class="seo-editor-menu-item"
+                            x-on:click="reviewMenuOpen = false; openReviewModal(reviewPrimaryAction())"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487 18.549 2.8a2.121 2.121 0 0 1 3 3l-1.687 1.688m-3-3L6.75 15.7l-.375 3.375 3.375-.375L18.862 7.487m-3-3 3 3M6.75 19.5H4.5a2.25 2.25 0 0 1-2.25-2.25v-11A2.25 2.25 0 0 1 4.5 4h5.25" />
+                            </svg>
+                            <span x-text="reviewPrimaryAction()?.note_label"></span>
+                        </button>
+                    </div>
+                </div>
+            </template>
+
+            {{-- Split button "tiến tới" (submit_review / approve / archive): main = quick, chevron mở dropdown kèm ghi chú --}}
+            <template x-if="reviewPrimaryAction() && ! reviewIsToggleAction()">
+                <div
+                    class="seo-editor-preview-split"
+                    x-bind:class="{ 'is-open': reviewMenuOpen, 'is-disabled': reviewLoading }"
+                >
+                    <button
+                        type="button"
+                        class="seo-editor-toolbar-btn seo-editor-toolbar-btn--success seo-editor-toolbar-btn--labeled seo-editor-preview-split__main"
+                        x-bind:disabled="reviewLoading"
+                        x-on:click="submitReviewAction(reviewPrimaryAction()?.type, null)"
+                        x-bind:title="reviewPrimaryAction()?.label"
+                        x-bind:aria-label="reviewPrimaryAction()?.quick_label"
+                    >
+                        <span class="seo-editor-toolbar-btn__inner" x-show="! reviewLoading">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                            </svg>
+                            <span class="seo-editor-toolbar-btn__label" x-text="reviewPrimaryAction()?.quick_label"></span>
+                        </span>
+                        <span class="seo-editor-toolbar-btn__spinner" x-show="reviewLoading" aria-hidden="true"></span>
+                    </button>
+                    <button
+                        type="button"
+                        class="seo-editor-toolbar-btn seo-editor-preview-split__chevron"
+                        x-bind:disabled="reviewLoading"
+                        x-bind:aria-expanded="reviewMenuOpen"
+                        x-on:click.stop="reviewMenuOpen = ! reviewMenuOpen; moreOpen = false; previewOpen = false"
+                        x-bind:aria-label="reviewPrimaryAction()?.note_label"
+                        x-bind:title="reviewPrimaryAction()?.note_label"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 10.94l3.71-3.71a.75.75 0 1 1 1.06 1.06l-4.24 4.24a.75.75 0 0 1-1.06 0L5.21 8.29a.75.75 0 0 1 .02-1.08Z" clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                    <div class="seo-editor-preview-split__menu" x-show="reviewMenuOpen" x-cloak role="menu">
+                        <button
+                            type="button"
+                            role="menuitem"
+                            class="seo-editor-menu-item"
+                            x-on:click="reviewMenuOpen = false; openReviewModal(reviewPrimaryAction())"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487 18.549 2.8a2.121 2.121 0 0 1 3 3l-1.687 1.688m-3-3L6.75 15.7l-.375 3.375 3.375-.375L18.862 7.487m-3-3 3 3M6.75 19.5H4.5a2.25 2.25 0 0 1-2.25-2.25v-11A2.25 2.25 0 0 1 4.5 4h5.25" />
+                            </svg>
+                            <span x-text="reviewPrimaryAction()?.note_label"></span>
+                        </button>
+                    </div>
+                </div>
+            </template>
+
+            <template x-if="! reviewPrimaryAction() && reviewStatus !== 'draft'">
+                <span
+                    class="seo-editor-review-badge"
+                    x-bind:data-status="reviewStatus"
+                    x-bind:title="reviewLatestTooltip()"
+                    data-seo-page-action="review-badge"
+                >
+                    <span x-text="reviewBadgeLabelText()"></span>
+                </span>
+            </template>
+        </div>
     </div>
+
+    <button
+        type="button"
+        class="seo-editor-toolbar-btn seo-editor-toolbar-btn--labeled"
+        title="{{ __('seo-content-ai::filament.article_list.page_action_help') }}"
+        aria-label="{{ __('seo-content-ai::filament.help.trigger_aria') }}"
+        aria-haspopup="dialog"
+        aria-controls="global-help-modal"
+        data-seo-page-action="help"
+        data-help-trigger
+        x-on:click="
+            moreOpen = false;
+            previewOpen = false;
+            reviewMenuOpen = false;
+            if (window.Alpine?.store('help')) {
+                Alpine.store('help').open({ trigger: $el });
+            } else {
+                window.dispatchEvent(new CustomEvent('seo-global-help:open', { detail: { trigger: $el } }));
+            }
+        "
+    >
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z" />
+        </svg>
+        <span class="seo-editor-toolbar-btn__label">{{ __('seo-content-ai::filament.article_list.page_action_help') }}</span>
+    </button>
 
     {{-- More: History, Prompts, Assign/Open project, Restore, Debug(JS), Delete --}}
     <div class="seo-editor-page-actions__more" data-seo-page-actions-more>
@@ -216,7 +519,7 @@
             title="{{ __('seo-content-ai::filament.article_list.page_action_more') }}"
             aria-label="{{ __('seo-content-ai::filament.article_list.page_action_more') }}"
             x-bind:aria-expanded="moreOpen"
-            x-on:click="moreOpen = !moreOpen; previewOpen = false"
+            x-on:click="moreOpen = !moreOpen; previewOpen = false; reviewMenuOpen = false"
             data-seo-page-action="more"
         >
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
@@ -280,25 +583,52 @@
                 </button>
             @endif
 
-            <button
-                type="button"
-                wire:click="toggleArticleReview"
-                @if (! $reviewButtonActive) wire:confirm="{{ $reviewConfirm }}" @endif
-                wire:loading.attr="disabled"
-                wire:target="toggleArticleReview,approveArticle"
-                @if (! $this->canToggleArticleReview()) disabled @endif
-                class="seo-editor-menu-item seo-editor-page-actions__compact-only @if ($reviewButtonActive) is-active @endif"
-                role="menuitem"
-                title="{{ $approveLabel }}"
-                aria-label="{{ $approveLabel }}"
-                data-seo-page-action="review"
-                x-on:click="moreOpen = false"
-            >
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                </svg>
-                <span>{{ $approveLabel }}</span>
-            </button>
+            <template x-if="reviewActions.length > 0">
+                <button
+                    type="button"
+                    class="seo-editor-menu-item seo-editor-page-actions__compact-only"
+                    role="menuitem"
+                    x-bind:disabled="reviewLoading"
+                    x-bind:title="reviewPrimaryAction()?.label"
+                    data-seo-page-action="review"
+                    x-on:click="moreOpen = false; submitReviewAction(reviewPrimaryAction()?.type, null)"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                    </svg>
+                    <span x-text="reviewIsToggleAction() ? reviewToggleLabel() : reviewPrimaryAction()?.quick_label"></span>
+                </button>
+            </template>
+            <template x-if="reviewActions.length > 0">
+                <button
+                    type="button"
+                    class="seo-editor-menu-item seo-editor-page-actions__compact-only"
+                    role="menuitem"
+                    x-bind:disabled="reviewLoading"
+                    x-bind:title="reviewPrimaryAction()?.note_label"
+                    data-seo-page-action="review-with-note"
+                    x-on:click="openReviewModal(reviewPrimaryAction())"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25Z" />
+                    </svg>
+                    <span x-text="reviewPrimaryAction()?.note_label"></span>
+                </button>
+            </template>
+            <template x-if="reviewActions.length === 0 && reviewStatus && reviewStatus !== 'draft'">
+                <div
+                    class="seo-editor-menu-item is-disabled seo-editor-page-actions__compact-only"
+                    role="menuitem"
+                    aria-disabled="true"
+                    x-bind:title="reviewLatestTooltip()"
+                    data-seo-page-action="review-badge"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                    </svg>
+                    <span x-text="reviewBadgeLabelText()"></span>
+                </div>
+            </template>
 
             <div class="seo-editor-menu-divider seo-editor-page-actions__compact-only" aria-hidden="true"></div>
 
@@ -379,17 +709,72 @@
         </div>
     </div>
 
-    <button
-        type="button"
-        class="seo-editor-toolbar-btn seo-editor-toolbar-btn--labeled seo-article-editor-help-btn"
-        title="{{ __('seo-content-ai::filament.article_list.page_action_help') }}"
-        aria-label="{{ __('seo-content-ai::filament.article_list.page_action_help_aria') }}"
-        data-seo-page-action="help"
-        x-on:click="window.dispatchEvent(new CustomEvent('article-editor:help-open', { detail: { topic: 'article-editor.overview' } }))"
-    >
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z" />
-        </svg>
-        <span class="seo-editor-toolbar-btn__label">Help</span>
-    </button>
+    {{-- Article Review note modal — teleport ra <body> để không bao giờ đẩy chiều cao toolbar;
+         Alpine mở khung ngay (open=true) trước khi gọi fetch --}}
+    <template x-teleport="body">
+        <div
+            class="seo-editor-review-modal"
+            x-show="reviewModalOpen"
+            x-cloak
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="seo-article-review-modal-title"
+        >
+            <button
+                type="button"
+                class="seo-editor-review-modal__backdrop"
+                x-on:click="closeReviewModal()"
+                tabindex="-1"
+                aria-hidden="true"
+            ></button>
+
+            <div class="seo-editor-review-modal__panel">
+                <div class="seo-editor-review-modal__header">
+                    <h2 id="seo-article-review-modal-title" class="seo-editor-review-modal__title" x-text="reviewModalAction?.note_modal_title"></h2>
+                    <button
+                        type="button"
+                        class="seo-editor-review-modal__close"
+                        x-on:click="closeReviewModal()"
+                        aria-label="{{ __('seo-content-ai::filament.article_review.modal.cancel') }}"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="seo-editor-review-modal__body">
+                    <textarea
+                        x-model="reviewNote"
+                        x-bind:maxlength="reviewNoteMax"
+                        x-bind:disabled="reviewLoading"
+                        rows="4"
+                        placeholder="{{ __('seo-content-ai::filament.article_review.modal.note_placeholder') }}"
+                        class="seo-editor-review-modal__textarea"
+                    ></textarea>
+                    <div class="seo-editor-review-modal__counter" x-text="`${reviewNote.length} / ${reviewNoteMax}`"></div>
+                </div>
+
+                <div class="seo-editor-review-modal__actions">
+                    <button
+                        type="button"
+                        class="seo-editor-btn seo-editor-btn--ghost"
+                        x-on:click="closeReviewModal()"
+                        x-bind:disabled="reviewLoading"
+                    >
+                        {{ __('seo-content-ai::filament.article_review.modal.cancel') }}
+                    </button>
+                    <button
+                        type="button"
+                        class="seo-editor-btn seo-editor-btn--primary"
+                        x-bind:disabled="reviewLoading || reviewNote.trim().length < 3"
+                        x-on:click="submitReviewAction(reviewModalAction?.type, reviewNote)"
+                    >
+                        <span x-show="! reviewLoading" x-text="reviewModalAction?.note_label"></span>
+                        <span x-show="reviewLoading">…</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
 </div>

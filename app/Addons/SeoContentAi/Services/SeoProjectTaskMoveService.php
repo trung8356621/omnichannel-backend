@@ -15,12 +15,17 @@ use RuntimeException;
 final class SeoProjectTaskMoveService
 {
     /**
-     * Xóa project: chuyển toàn bộ task (đã chạy / chưa chạy) về tháng trước cùng domain.
-     * Tháng trước chưa có thì tạo; đã đầy thì chặn xóa.
+     * Xóa project: CHỈ xóa khi không còn task active (cùng nguồn dữ liệu với cột
+     * "Total items" trên UI — `tasks()->active()`, xem `SeoProjectResource::getEloquentQuery()`
+     * `active_tasks_count`). Task đã archive còn sót lại sẽ bị soft-delete theo project.
      *
-     * @return array{moved: int, target_project_id: int|null, target_month: string|null}
+     * KHÔNG rollback tháng: project còn task active phải bị chặn xóa, không tự động
+     * chuyển task sang project tháng trước (đó là hành vi cũ gây lệch tháng — xem
+     * `deleteProjectRollingBackToPreviousMonth` deprecated bên dưới).
+     *
+     * @return array{deleted: bool, moved: int, target_project_id: int|null, target_month: string|null}
      */
-    public function deleteProjectRollingBackToPreviousMonth(SeoProject $project): array
+    public function deleteProject(SeoProject $project): array
     {
         return DB::connection($project->getConnectionName())->transaction(function () use ($project): array {
             /** @var SeoProject|null $locked */
@@ -39,41 +44,49 @@ final class SeoProjectTaskMoveService
                 ]);
             }
 
-            $tasks = $locked->tasks()
-                ->orderBy('target_date')
-                ->orderBy('id')
+            $activeTasks = $locked->tasks()
+                ->active()
                 ->lockForUpdate()
                 ->get();
 
-            if ($tasks->isEmpty()) {
-                $locked->delete();
-
-                return [
-                    'moved' => 0,
-                    'target_project_id' => null,
-                    'target_month' => null,
-                ];
+            if ($activeTasks->isNotEmpty()) {
+                throw ValidationException::withMessages([
+                    'project' => __('seo-content-ai::filament.projects.delete_blocked_has_items', [
+                        'count' => $activeTasks->count(),
+                    ]),
+                ]);
             }
 
-            $target = $this->findOrCreatePreviousMonthProject($locked);
-            $target->setRelation(
-                'tasks',
-                $target->tasks()->orderBy('id')->lockForUpdate()->get(),
-            );
-            $this->assertTargetHasCapacity($target, $tasks->count());
+            $archivedTasks = $locked->tasks()
+                ->archived()
+                ->lockForUpdate()
+                ->get();
 
-            $this->appendTasksToProject($target, $tasks);
-            $locked->syncTotalTasksCounter();
+            foreach ($archivedTasks as $archivedTask) {
+                $archivedTask->delete();
+            }
+
             $locked->delete();
 
-            app(SeoProjectArticleOwnerSyncService::class)->syncProjectArticles($target->fresh() ?? $target);
-
             return [
-                'moved' => $tasks->count(),
-                'target_project_id' => (int) $target->getKey(),
-                'target_month' => $target->monthCarbon()->format('m/Y'),
+                'deleted' => true,
+                'moved' => 0,
+                'target_project_id' => null,
+                'target_month' => null,
             ];
         });
+    }
+
+    /**
+     * @deprecated Dùng {@see self::deleteProject()}. Wrapper giữ lại để tương thích ngược
+     * (không còn rollback task sang tháng trước — hành vi cũ gây lệch tháng project khi
+     * project chỉ còn task đã archive, ví dụ 6/2026 → 5/2026 → 4/2026 dù "Total items" = 0).
+     *
+     * @return array{deleted: bool, moved: int, target_project_id: int|null, target_month: string|null}
+     */
+    public function deleteProjectRollingBackToPreviousMonth(SeoProject $project): array
+    {
+        return $this->deleteProject($project);
     }
 
     /**

@@ -378,7 +378,7 @@ final class AutomationExecutionService
 
     public function claim(int $executionId): ?AutomationExecution
     {
-        return DB::connection('omi_seo_ai')->transaction(function () use ($executionId): ?AutomationExecution {
+        return \App\Support\Automation\AutomationConnection::db()->transaction(function () use ($executionId): ?AutomationExecution {
             /** @var AutomationExecution|null $execution */
             $execution = AutomationExecution::query()
                 ->whereKey($executionId)

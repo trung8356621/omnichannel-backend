@@ -4,13 +4,11 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Automation\BusinessHook\Models;
 
-use Illuminate\Database\Eloquent\Model;
+use App\Support\Automation\AutomationModel;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-final class AutomationRuleVersionNode extends Model
+final class AutomationRuleVersionNode extends AutomationModel
 {
-    protected $connection = 'omi_seo_ai';
-
     protected $table = 'automation_rule_version_nodes';
 
     protected $guarded = [];

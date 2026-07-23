@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\ArticleCompletedArchiveQueryService;
 use App\Addons\SeoContentAi\Services\SeoProjectArchiveService;
 use App\Addons\SeoContentAi\Services\SeoProjectKeywordAiGeneratorService;
 use App\Addons\SeoContentAi\Services\SeoProjectKeywordListParser;
@@ -19,6 +20,7 @@ use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use App\Models\User;
+use App\Support\RuntimeLogger;
 use Carbon\Carbon;
 use Filament\Forms;
 use Filament\Forms\Components\Actions\Action;
@@ -703,23 +705,15 @@ class SeoProjectResource extends SeoPanelResource
                         ->color('gray')
                         ->visible(fn (SeoProject $record): bool => SeoAccessControl::canAccessContentProjectRun($record))
                         ->url(fn (SeoProject $record): string => static::getRunHistoryUrl($record)),
-                    Tables\Actions\Action::make('view_archives')
-                        ->label(fn (SeoProject $record): string => __('seo-content-ai::filament.projects.view_archives', [
-                            'count' => (int) ($record->archives_count ?? static::archivesCountFor($record)),
-                        ]))
-                        ->icon('heroicon-o-archive-box')
-                        ->color('gray')
-                        ->visible(fn (SeoProject $record): bool => SeoAccessControl::canViewProjectArchives()
-                            && ! $record->isArchive()
-                            && (int) ($record->site_id ?? 0) > 0)
-                        ->url(fn (SeoProject $record): string => static::projectArchivesUrl($record)),
+                    // Project-level "archive whole project" action removed from UI — quyết định archive
+                    // giờ nằm ở cấp bài viết (ArticleReviewService::performAction Archive), tránh archive
+                    // nhầm cả project khi chỉ vài bài đã xong. Giữ block form/action cũ (visible(false))
+                    // để không phải xóa SeoProjectArchiveService::archiveProject (còn dùng ở diagnose/tests).
                     Tables\Actions\Action::make('archive_project_articles')
                         ->label(__('seo-content-ai::filament.projects.archive_project'))
                         ->icon('heroicon-o-archive-box')
                         ->color('warning')
-                        ->visible(fn (SeoProject $record): bool => SeoAccessControl::canArchiveContentProjects()
-                            && ! $record->isArchive()
-                            && (int) ($record->active_articles_count ?? 0) > 0)
+                        ->visible(false)
                         ->modalHeading(__('seo-content-ai::filament.projects.archive_project_heading'))
                         ->modalDescription(__('seo-content-ai::filament.projects.archive_project_description'))
                         ->modalSubmitActionLabel(__('seo-content-ai::filament.projects.archive_project_submit'))
@@ -763,18 +757,11 @@ class SeoProjectResource extends SeoPanelResource
                         ->successNotification(null)
                         ->using(function (SeoProject $record): bool {
                             try {
-                                $result = app(SeoProjectTaskMoveService::class)
-                                    ->deleteProjectRollingBackToPreviousMonth($record);
+                                app(SeoProjectTaskMoveService::class)->deleteProject($record);
 
                                 Notification::make()
                                     ->title(__('seo-content-ai::filament.projects.delete_completed'))
-                                    ->body(
-                                        (int) ($result['moved'] ?? 0) > 0
-                                            ? __('seo-content-ai::filament.projects.delete_completed_rollback_body', $result)
-                                            : __('seo-content-ai::filament.projects.delete_completed_body', [
-                                                'moved' => 0,
-                                            ])
-                                    )
+                                    ->body(__('seo-content-ai::filament.projects.delete_completed_body'))
                                     ->success()
                                     ->send();
 
@@ -790,7 +777,7 @@ class SeoProjectResource extends SeoPanelResource
 
                                 throw $exception;
                             } catch (\Throwable $exception) {
-                                report($exception);
+                                RuntimeLogger::report($exception, ['project_id' => (int) $record->getKey()]);
 
                                 Notification::make()
                                     ->title(__('seo-content-ai::filament.projects.delete_failed'))
@@ -820,7 +807,7 @@ class SeoProjectResource extends SeoPanelResource
                         ->modalDescription(__('seo-content-ai::filament.projects.delete_description'))
                         ->modalSubmitActionLabel(__('seo-content-ai::filament.projects.delete_submit'))
                         ->action(function (\Illuminate\Support\Collection $records): void {
-                            $movedTotal = 0;
+                            $deletedTotal = 0;
                             $failed = 0;
 
                             foreach ($records as $record) {
@@ -829,9 +816,8 @@ class SeoProjectResource extends SeoPanelResource
                                 }
 
                                 try {
-                                    $result = app(SeoProjectTaskMoveService::class)
-                                        ->deleteProjectRollingBackToPreviousMonth($record);
-                                    $movedTotal += (int) ($result['moved'] ?? 0);
+                                    app(SeoProjectTaskMoveService::class)->deleteProject($record);
+                                    $deletedTotal++;
                                 } catch (ValidationException $exception) {
                                     $failed++;
                                     Notification::make()
@@ -843,7 +829,7 @@ class SeoProjectResource extends SeoPanelResource
                                         ->send();
                                 } catch (\Throwable $exception) {
                                     $failed++;
-                                    report($exception);
+                                    RuntimeLogger::report($exception, ['project_id' => (int) $record->getKey()]);
                                     Notification::make()
                                         ->title(__('seo-content-ai::filament.projects.delete_failed'))
                                         ->body($exception->getMessage())
@@ -852,12 +838,10 @@ class SeoProjectResource extends SeoPanelResource
                                 }
                             }
 
-                            if ($failed === 0) {
+                            if ($failed === 0 && $deletedTotal > 0) {
                                 Notification::make()
                                     ->title(__('seo-content-ai::filament.projects.delete_completed'))
-                                    ->body(__('seo-content-ai::filament.projects.delete_completed_body', [
-                                        'moved' => $movedTotal,
-                                    ]))
+                                    ->body(__('seo-content-ai::filament.projects.delete_completed_body'))
                                     ->success()
                                     ->send();
                             }
@@ -953,6 +937,8 @@ class SeoProjectResource extends SeoPanelResource
         return [
             'index' => Pages\ListSeoProjects::route('/'),
             'create' => Pages\CreateSeoProject::route('/create'),
+            // Archive theo domain (bài viết review_status=archived) — không còn master/detail
+            // project cũ, xem ArticleCompletedArchiveQueryService.
             'archive' => Pages\ContentProjectArchive::route('/archive'),
             'run-history' => Pages\ListSeoProjectRuns::route('/{record}/runs'),
             'view-run-step' => Pages\ViewSeoProjectRunStep::route('/runs/{run}/items/{article}'),
@@ -984,7 +970,9 @@ class SeoProjectResource extends SeoPanelResource
             return 0;
         }
 
-        return app(SeoProjectArchiveService::class)->countForSite($siteId);
+        return app(ArticleCompletedArchiveQueryService::class)
+            ->queryForSites([$siteId])
+            ->count();
     }
 
     public static function formatTaskTimestamp(mixed $value): string
@@ -1000,29 +988,18 @@ class SeoProjectResource extends SeoPanelResource
         }
     }
 
-    public static function makeViewProjectArchivesPageAction(SeoProject $project): \Filament\Actions\Action
-    {
-        return \Filament\Actions\Action::make('view_project_archives')
-            ->label(__('seo-content-ai::filament.projects.view_archives', [
-                'count' => static::archivesCountFor($project),
-            ]))
-            ->icon('heroicon-o-archive-box')
-            ->color('gray')
-            ->visible(fn (): bool => SeoAccessControl::canViewProjectArchives()
-                && ! $project->isArchive()
-                && (int) ($project->site_id ?? 0) > 0)
-            ->url(static::projectArchivesUrl($project));
-    }
-
+    /**
+     * @deprecated Project-level archive action removed from UI (archive quyết định ở cấp bài viết
+     * qua ArticleReviewService). Giữ hàm + visible(false) để các page header (Edit/View/ListRuns)
+     * không cần sửa từng nơi, và SeoProjectArchiveService::archiveProject vẫn còn cho diagnose/tests.
+     */
     public static function makeArchiveProjectPageAction(SeoProject $project): \Filament\Actions\Action
     {
         return \Filament\Actions\Action::make('archive_project_articles')
             ->label(__('seo-content-ai::filament.projects.archive_project'))
             ->icon('heroicon-o-archive-box')
             ->color('warning')
-            ->visible(fn (): bool => SeoAccessControl::canArchiveContentProjects()
-                && ! $project->isArchive()
-                && $project->activeArticleCount() > 0)
+            ->visible(false)
             ->modalHeading(__('seo-content-ai::filament.projects.archive_project_heading'))
             ->modalDescription(__('seo-content-ai::filament.projects.archive_project_description'))
             ->modalSubmitActionLabel(__('seo-content-ai::filament.projects.archive_project_submit'))

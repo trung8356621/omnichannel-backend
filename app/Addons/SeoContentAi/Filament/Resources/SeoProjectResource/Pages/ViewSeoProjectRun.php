@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages;
 
+use App\Addons\SeoContentAi\Enums\ArticleReviewActionType;
+use App\Addons\SeoContentAi\Enums\ArticleReviewStatus;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
@@ -11,21 +13,26 @@ use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ArticleEditorReadinessService;
-use App\Addons\SeoContentAi\Services\SeoProjectArchiveService;
+use App\Addons\SeoContentAi\Services\ArticleReviewService;
+use App\Addons\SeoContentAi\Services\Exceptions\ArticleReviewException;
 use App\Addons\SeoContentAi\Services\SeoProjectRunItemService;
 use App\Addons\SeoContentAi\Services\SeoProjectRunItemsReader;
+use App\Addons\SeoContentAi\Services\SeoProjectTaskLifecycleService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectRunBulkSyncService;
 use App\Addons\SeoContentAi\Support\ContentProjectRunSettings;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoProjectRunErrorFormatter;
 use App\Addons\SeoContentAi\Support\SeoProjectRunItemsDisplayPresenter;
+use App\Models\User;
+use App\Support\RuntimeLogger;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Page;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\HtmlString;
+use Throwable;
 
 class ViewSeoProjectRun extends Page
 {
@@ -274,7 +281,8 @@ class ViewSeoProjectRun extends Page
 
         $items = app(SeoProjectRunItemsReader::class)->forRunAsArrays($this->projectRun);
 
-        // Task đã archive → loại khỏi UI project (audit row DB vẫn giữ).
+        // Ẩn khi task đã có archived_at (kể cả soft-delete). Hàng kẹt
+        // "Task gốc không còn tồn tại" (soft-delete chưa archived_at) vẫn hiện + nút Archive.
         return array_values(array_filter(
             $items,
             static fn (array $item): bool => ! (bool) ($item['task_archived'] ?? false),
@@ -1076,21 +1084,25 @@ class ViewSeoProjectRun extends Page
             return;
         }
 
-        abort_unless(SeoAccessControl::canArchiveContentProjects(), 403);
+        abort_unless(
+            SeoAccessControl::canArchiveContentProjects()
+                || SeoAccessControl::canFinalizeArticleReview(),
+            403,
+        );
 
-        $taskExists = $project->tasks()->whereKey($taskId)->exists();
-        if (! $taskExists) {
-            Notification::make()
-                ->title(__('seo-content-ai::filament.projects.archive_failed'))
-                ->body('Task gốc không còn tồn tại. Không thể archive từ lịch sử run.')
-                ->danger()
-                ->send();
-            $this->skipRender();
-
-            return;
+        $user = auth()->user();
+        if (! $user instanceof User) {
+            abort(403);
         }
 
         $articleId = $this->resolveArticleIdForRunTask($taskId);
+        /** @var SeoProjectTask|null $task */
+        $task = SeoProjectTask::withTrashed()->whereKey($taskId)->first();
+
+        if ($articleId <= 0 && $task instanceof SeoProjectTask) {
+            $articleId = (int) ($task->article_id ?? 0);
+        }
+
         if ($articleId <= 0) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.projects.archive_failed'))
@@ -1103,13 +1115,29 @@ class ViewSeoProjectRun extends Page
         }
 
         try {
-            $result = app(SeoProjectArchiveService::class)->archiveTasks(
-                $project,
-                [$taskId],
-                (int) auth()->id(),
-                null,
-                [$taskId => $articleId],
-            );
+            $article = SeoArticle::query()->find($articleId);
+            if ($article instanceof SeoArticle) {
+                $review = app(ArticleReviewService::class);
+                $status = $review->resolveStatus($article);
+
+                if ($status === ArticleReviewStatus::Approved) {
+                    $review->performAction($article, $user, ArticleReviewActionType::Archive);
+                } elseif ($status !== ArticleReviewStatus::Archived) {
+                    // Data cũ không ở approved — vẫn đánh archived + detach task bên dưới.
+                    $article->forceFill([
+                        'review_status' => ArticleReviewStatus::Archived->value,
+                        'content_archived_at' => $article->content_archived_at ?? now(),
+                        'content_archived_by' => (int) ($article->content_archived_by ?? $user->id),
+                    ])->save();
+                }
+            }
+
+            $this->detachStuckProjectTask($task, $project, $articleId, (int) $user->id);
+
+            if (! $task instanceof SeoProjectTask) {
+                // Task hard-delete: đánh dấu run item đã detach để UI ẩn hàng.
+                $this->markRunItemDetached($taskId);
+            }
 
             // Giữ run item history — chỉ sửa JSON nếu legacy run; DB run giữ audit row.
             if (app(SeoProjectRunItemsReader::class)->usesLegacyFallback($this->projectRun)) {
@@ -1123,11 +1151,24 @@ class ViewSeoProjectRun extends Page
 
             Notification::make()
                 ->title(__('seo-content-ai::filament.projects.archive_item_completed'))
-                ->body(__('seo-content-ai::filament.projects.archive_item_completed_body', $result))
+                ->body(__('seo-content-ai::filament.projects.archive_item_completed_body', [
+                    'archived' => 1,
+                    'tasks_removed' => 1,
+                ]))
                 ->success()
                 ->send();
-        } catch (\Throwable $exception) {
-            report($exception);
+        } catch (ArticleReviewException $exception) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.archive_failed'))
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+        } catch (Throwable $exception) {
+            RuntimeLogger::report($exception, [
+                'endpoint' => 'content_project_run.archive_item',
+                'task_id' => $taskId,
+                'article_id' => $articleId,
+            ]);
 
             Notification::make()
                 ->title(__('seo-content-ai::filament.projects.archive_failed'))
@@ -1137,6 +1178,72 @@ class ViewSeoProjectRun extends Page
         }
 
         $this->skipRender();
+    }
+
+    /**
+     * Detach task khỏi Content Project active — kể cả soft-delete chưa có archived_at
+     * (data kẹt trước khi Complete tự detach).
+     */
+    private function detachStuckProjectTask(
+        ?SeoProjectTask $task,
+        \App\Addons\SeoContentAi\Models\SeoProject $project,
+        int $articleId,
+        int $userId,
+    ): void {
+        $lifecycle = app(SeoProjectTaskLifecycleService::class);
+
+        if ($task instanceof SeoProjectTask) {
+            if ($task->archived_at !== null) {
+                return;
+            }
+
+            if ($task->trashed()) {
+                $task->forceFill([
+                    'status_before_archive' => $task->status_before_archive
+                        ?? ((string) $task->status !== '' ? (string) $task->status : null),
+                    'status' => SeoProjectTask::STATUS_ARCHIVED,
+                    'archived_at' => now(),
+                ])->save();
+
+                return;
+            }
+
+            $lifecycle->archive($task, $userId, ['from_run_archive_item' => true]);
+
+            return;
+        }
+
+        $activeTasks = SeoProjectTask::query()
+            ->where('project_id', (int) $project->getKey())
+            ->where('article_id', $articleId)
+            ->active()
+            ->get();
+
+        foreach ($activeTasks as $activeTask) {
+            $lifecycle->archive($activeTask, $userId, ['from_run_archive_item' => true]);
+        }
+    }
+
+    /**
+     * Đánh dấu run item đã đẩy khỏi project khi task gốc không còn trong DB.
+     */
+    private function markRunItemDetached(int $taskId): void
+    {
+        if ($this->projectRun === null || $taskId <= 0) {
+            return;
+        }
+
+        $items = SeoProjectRunItem::query()
+            ->where('run_id', (int) $this->projectRun->id)
+            ->where('task_id', $taskId)
+            ->get();
+
+        foreach ($items as $item) {
+            $snapshot = is_array($item->input_snapshot) ? $item->input_snapshot : [];
+            $snapshot['detached_from_project'] = true;
+            $snapshot['detached_from_project_at'] = now()->toIso8601String();
+            $item->forceFill(['input_snapshot' => $snapshot])->save();
+        }
     }
 
     private function removeTaskFromCurrentRunItems(int $taskId): void
@@ -1239,8 +1346,8 @@ class ViewSeoProjectRun extends Page
             return 0;
         }
 
-        // Đọc raw run.items trước — tránh getAllItems() enrich fuzzy gắn nhầm bài.
-        foreach ($this->getResultItems() as $item) {
+        // Đọc raw reader (kể cả task đã archive) — tránh getResultItems() đã filter.
+        foreach (app(SeoProjectRunItemsReader::class)->forRunAsArrays($this->projectRun) as $item) {
             if ((int) ($item['task_id'] ?? 0) !== $taskId) {
                 continue;
             }
@@ -1258,12 +1365,18 @@ class ViewSeoProjectRun extends Page
             return 0;
         }
 
-        return (int) ($project->tasks()->whereKey($taskId)->value('article_id') ?? 0);
+        return (int) (SeoProjectTask::withTrashed()
+            ->where('project_id', (int) $project->getKey())
+            ->whereKey($taskId)
+            ->value('article_id') ?? 0);
     }
 
     public function canArchiveRunItem(array $item): bool
     {
-        if (! SeoAccessControl::canArchiveContentProjects()) {
+        if (
+            ! SeoAccessControl::canArchiveContentProjects()
+            && ! SeoAccessControl::canFinalizeArticleReview()
+        ) {
             return false;
         }
 
@@ -1271,11 +1384,10 @@ class ViewSeoProjectRun extends Page
             return (bool) $item['can_archive'];
         }
 
-        $taskId = (int) ($item['task_id'] ?? 0);
         $articleId = (int) ($item['article_id'] ?? 0);
-        $taskExists = (bool) ($item['task_exists'] ?? true);
+        $taskArchived = (bool) ($item['task_archived'] ?? false);
 
-        return $taskExists && $taskId > 0 && $articleId > 0;
+        return $articleId > 0 && ! $taskArchived;
     }
 
     public function canRetryRunItem(array $item): bool

@@ -1,14 +1,20 @@
 @php
-    use App\Addons\SeoContentAi\Services\SeoProjectArchiveService;
+    use App\Addons\SeoContentAi\Services\ArticleCompletedArchiveQueryService;
 
     /** @var int $siteId */
     $siteId = (int) ($siteId ?? 0);
-    $canUnarchive = (bool) ($canUnarchive ?? false);
-    $dashboard = app(SeoProjectArchiveService::class)->buildGroupedDashboard($siteId);
+    /** @var list<int> $siteIds */
+    $siteIds = isset($siteIds) && is_array($siteIds)
+        ? array_values(array_map('intval', $siteIds))
+        : ($siteId > 0 ? [$siteId] : []);
+    $canReopen = (bool) ($canReopen ?? $canUnarchive ?? false);
+    $dashboard = app(ArticleCompletedArchiveQueryService::class)->buildGroupedDashboard($siteIds);
     $archiveGroups = $dashboard['groups'];
     $monthOptions = $dashboard['month_options'];
+    $domainOptions = $dashboard['domain_options'] ?? [];
     $defaultExpandedDate = $archiveGroups[0]['date'] ?? null;
     $archiveToday = now()->toDateString();
+    $showDomainFilter = count($domainOptions) > 1;
 
     $archiveUiContext = [
         'today' => $archiveToday,
@@ -43,9 +49,17 @@
         archiveSearch: '',
         archiveMonthFilter: 'all',
         archiveDateFilter: 'all',
+        archiveDomainFilter: 'all',
         archiveSort: 'newest',
         archiveBadgeTemplate: @js(__('seo-content-ai::filament.projects.archive_badge_articles', ['count' => ':count'])),
         expandedDates: @js($defaultExpandedDate ? [$defaultExpandedDate] : []),
+        openMenuArticleId: null,
+        noteModalOpen: false,
+        noteModalTitle: '',
+        noteModalBody: '',
+        historyModalOpen: false,
+        historyModalTitle: '',
+        historyRows: [],
         archiveBadgeLabel(count) {
             return this.archiveBadgeTemplate.replace(':count', String(count));
         },
@@ -91,6 +105,16 @@
                 groups = groups.filter((group) => group.date >= ctx.monthStart && group.date <= ctx.monthEnd);
             }
 
+            if (this.archiveDomainFilter !== 'all') {
+                const domainId = Number(this.archiveDomainFilter);
+                groups = groups
+                    .map((group) => {
+                        const articles = group.articles.filter((article) => Number(article.site_id) === domainId);
+                        return { ...group, articles, count: articles.length };
+                    })
+                    .filter((group) => group.count > 0);
+            }
+
             const query = this.archiveSearch.trim().toLowerCase();
             if (query !== '') {
                 groups = groups
@@ -98,7 +122,12 @@
                         const articles = group.articles.filter((article) => {
                             const title = (article.title || '').toLowerCase();
                             const author = (article.author || '').toLowerCase();
-                            return title.includes(query) || author.includes(query);
+                            const domain = (article.domain || '').toLowerCase();
+                            const project = (article.project_label || '').toLowerCase();
+                            return title.includes(query)
+                                || author.includes(query)
+                                || domain.includes(query)
+                                || project.includes(query);
                         });
                         return { ...group, articles, count: articles.length };
                     })
@@ -124,7 +153,43 @@
         isDateExpanded(dateKey) {
             return this.expandedDates.includes(dateKey);
         },
+        toggleMenu(articleId) {
+            this.openMenuArticleId = this.openMenuArticleId === articleId ? null : articleId;
+        },
+        closeMenu() {
+            this.openMenuArticleId = null;
+        },
+        openNoteModal(article) {
+            this.closeMenu();
+            this.noteModalTitle = article.title || '';
+            this.noteModalBody = article.latest_note || '';
+            this.noteModalOpen = true;
+        },
+        closeNoteModal() {
+            this.noteModalOpen = false;
+        },
+        openHistoryModal(article) {
+            this.closeMenu();
+            this.historyModalTitle = article.title || '';
+            this.historyRows = Array.isArray(article.reviews) ? article.reviews : [];
+            this.historyModalOpen = true;
+        },
+        closeHistoryModal() {
+            this.historyModalOpen = false;
+        },
+        confirmReopen(articleId) {
+            this.closeMenu();
+            if (! confirm(@js(__('seo-content-ai::filament.projects.unarchive_item_confirm')))) {
+                return;
+            }
+            $wire.reopenArticle(articleId);
+        },
     }"
+    x-on:keydown.escape.window="
+        if (noteModalOpen) { closeNoteModal(); return; }
+        if (historyModalOpen) { closeHistoryModal(); return; }
+        closeMenu();
+    "
 >
     <div class="reviewed-dashboard">
         @if ($archiveGroups === [])
@@ -188,6 +253,17 @@
                     >
                 </div>
                 <div class="reviewed-toolbar__filters">
+                    @if ($showDomainFilter)
+                        <div class="reviewed-field">
+                            <label class="reviewed-field__label" for="archive-domain-filter">{{ __('seo-content-ai::filament.article_list.domain') }}</label>
+                            <x-select id="archive-domain-filter" x-model="archiveDomainFilter" class="reviewed-field__input">
+                                <option value="all">{{ __('seo-content-ai::filament.projects.archive_filter_domain_all') }}</option>
+                                @foreach ($domainOptions as $domainOption)
+                                    <option value="{{ $domainOption['value'] }}">{{ $domainOption['label'] }}</option>
+                                @endforeach
+                            </x-select>
+                        </div>
+                    @endif
                     <div class="reviewed-field">
                         <label class="reviewed-field__label" for="archive-month-filter">{{ __('seo-content-ai::filament.projects.month') }}</label>
                         <x-select id="archive-month-filter" x-model="archiveMonthFilter" class="reviewed-field__input">
@@ -273,7 +349,7 @@
                             class="reviewed-day-card__body"
                         >
                             <div class="reviewed-article-list">
-                                <template x-for="article in group.articles" :key="article.task_id">
+                                <template x-for="article in group.articles" :key="article.id">
                                     <div class="reviewed-article-item">
                                         <div class="reviewed-article-item__icon">
                                             <x-filament::icon icon="heroicon-o-document-text" class="h-5 w-5" />
@@ -283,60 +359,95 @@
                                             <div class="reviewed-article-item__meta">
                                                 <span class="reviewed-article-item__status-dot" aria-hidden="true"></span>
                                                 <span x-text="article.author"></span>
+                                                <template x-if="article.domain && article.domain !== '—'">
+                                                    <span>
+                                                        <span aria-hidden="true">·</span>
+                                                        <span x-text="article.domain"></span>
+                                                    </span>
+                                                </template>
+                                                <template x-if="article.project_label">
+                                                    <span>
+                                                        <span aria-hidden="true">·</span>
+                                                        <span x-text="article.project_label"></span>
+                                                    </span>
+                                                </template>
                                                 <span aria-hidden="true">·</span>
-                                                <span>{{ __('seo-content-ai::filament.projects.archive_joined_project') }}</span>
-                                                <span x-text="article.connected_label"></span>
-                                                <span aria-hidden="true">·</span>
-                                                <span x-text="article.completed_time"></span>
+                                                <span>{{ __('seo-content-ai::filament.projects.completed_at') }}</span>
+                                                <span x-text="article.completed_at_label || article.completed_time"></span>
+                                                <template x-if="article.completed_by && article.completed_by !== '—'">
+                                                    <span>
+                                                        <span aria-hidden="true">·</span>
+                                                        <span x-text="article.completed_by"></span>
+                                                    </span>
+                                                </template>
                                             </div>
                                         </div>
-                                        <div class="reviewed-article-item__actions">
-                                            <a
-                                                x-bind:href="article.view_url || '#'"
-                                                x-bind:aria-disabled="!article.view_url"
-                                                x-bind:class="!article.view_url ? 'pointer-events-none opacity-50' : ''"
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                class="inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-gray-700 bg-white ring-1 ring-gray-300 shadow-sm transition hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:ring-gray-600 dark:hover:bg-gray-700"
+                                        <div class="reviewed-article-item__actions relative" x-on:click.outside="if (openMenuArticleId === article.id) closeMenu()">
+                                            <button
+                                                type="button"
+                                                class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-gray-600 ring-1 ring-gray-300 bg-white shadow-sm transition hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:ring-gray-600 dark:hover:bg-gray-700"
+                                                x-bind:aria-expanded="openMenuArticleId === article.id"
+                                                aria-label="{{ __('seo-content-ai::filament.projects.archive_actions_menu') }}"
+                                                x-on:click.stop="toggleMenu(article.id)"
                                             >
-                                                <x-filament::icon icon="heroicon-o-eye" class="h-4 w-4" />
-                                                <span>{{ __('seo-content-ai::filament.articles_optimal.reviewed_action_view') }}</span>
-                                            </a>
-                                            <a
-                                                x-bind:href="article.edit_url"
-                                                class="inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-white bg-primary-600 shadow-sm transition hover:bg-primary-500 dark:bg-primary-500 dark:hover:bg-primary-400"
+                                                <x-filament::icon icon="heroicon-o-ellipsis-vertical" class="h-5 w-5" />
+                                            </button>
+
+                                            <div
+                                                x-show="openMenuArticleId === article.id"
+                                                x-cloak
+                                                x-transition
+                                                class="absolute right-0 z-30 mt-1 w-56 overflow-hidden rounded-xl bg-white py-1 shadow-lg ring-1 ring-gray-200 dark:bg-gray-900 dark:ring-gray-700"
                                             >
-                                                <x-filament::icon icon="heroicon-o-pencil-square" class="h-4 w-4" />
-                                                <span>{{ __('seo-content-ai::filament.articles_optimal.action_edit') }}</span>
-                                            </a>
-                                            @if ($canUnarchive)
+                                                <a
+                                                    x-bind:href="article.edit_url"
+                                                    class="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800"
+                                                    x-on:click="closeMenu()"
+                                                >
+                                                    <x-filament::icon icon="heroicon-o-pencil-square" class="h-4 w-4" />
+                                                    <span>{{ __('seo-content-ai::filament.projects.archive_open_article') }}</span>
+                                                </a>
                                                 <button
                                                     type="button"
-                                                    x-on:click="
-                                                        if (! confirm(@js(__('seo-content-ai::filament.projects.unarchive_item_confirm')))) {
-                                                            return;
-                                                        }
-                                                        $wire.unarchiveItem(article.archive_item_id ?? article.task_id);
-                                                    "
-                                                    wire:loading.attr="disabled"
-                                                    wire:target="unarchiveItem"
-                                                    class="inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-danger-700 bg-white ring-1 ring-danger-300 shadow-sm transition hover:bg-danger-50 disabled:opacity-50 disabled:pointer-events-none dark:bg-gray-800 dark:text-danger-400 dark:ring-danger-500/50 dark:hover:bg-danger-500/10"
+                                                    class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800"
+                                                    x-on:click="openHistoryModal(article)"
                                                 >
-                                                    <x-filament::icon
-                                                        icon="heroicon-o-arrow-uturn-left"
-                                                        class="h-4 w-4"
-                                                        wire:loading.remove
-                                                        wire:target="unarchiveItem"
-                                                    />
-                                                    <x-filament::loading-indicator
-                                                        class="h-4 w-4"
-                                                        wire:loading
-                                                        wire:target="unarchiveItem"
-                                                    />
-                                                    <span wire:loading.remove wire:target="unarchiveItem">{{ __('seo-content-ai::filament.projects.unarchive_item') }}</span>
-                                                    <span wire:loading wire:target="unarchiveItem">{{ __('seo-content-ai::filament.projects.unarchive_item_running') }}</span>
+                                                    <x-filament::icon icon="heroicon-o-clock" class="h-4 w-4" />
+                                                    <span>{{ __('seo-content-ai::filament.projects.archive_view_history') }}</span>
                                                 </button>
-                                            @endif
+                                                <button
+                                                    type="button"
+                                                    class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:text-gray-200 dark:hover:bg-gray-800"
+                                                    x-bind:disabled="!article.has_note"
+                                                    x-on:click="article.has_note && openNoteModal(article)"
+                                                >
+                                                    <x-filament::icon icon="heroicon-o-chat-bubble-left-ellipsis" class="h-4 w-4" />
+                                                    <span>{{ __('seo-content-ai::filament.projects.archive_view_note') }}</span>
+                                                </button>
+                                                @if ($canReopen)
+                                                    <button
+                                                        type="button"
+                                                        class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-danger-700 hover:bg-danger-50 disabled:opacity-50 dark:text-danger-400 dark:hover:bg-danger-500/10"
+                                                        wire:loading.attr="disabled"
+                                                        wire:target="reopenArticle"
+                                                        x-on:click="confirmReopen(article.id)"
+                                                    >
+                                                        <x-filament::icon
+                                                            icon="heroicon-o-arrow-uturn-left"
+                                                            class="h-4 w-4"
+                                                            wire:loading.remove
+                                                            wire:target="reopenArticle"
+                                                        />
+                                                        <x-filament::loading-indicator
+                                                            class="h-4 w-4"
+                                                            wire:loading
+                                                            wire:target="reopenArticle"
+                                                        />
+                                                        <span wire:loading.remove wire:target="reopenArticle">{{ __('seo-content-ai::filament.projects.unarchive_item') }}</span>
+                                                        <span wire:loading wire:target="reopenArticle">{{ __('seo-content-ai::filament.projects.unarchive_item_running') }}</span>
+                                                    </button>
+                                                @endif
+                                            </div>
                                         </div>
                                     </div>
                                 </template>
@@ -347,4 +458,78 @@
             </div>
         @endif
     </div>
+
+    <template x-teleport="body">
+        <div
+            x-show="noteModalOpen"
+            x-cloak
+            class="fixed inset-0 z-[80] flex items-center justify-center p-4"
+            role="dialog"
+            aria-modal="true"
+        >
+            <div class="absolute inset-0 bg-gray-950/50" x-on:click="closeNoteModal()"></div>
+            <div class="relative z-10 w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl dark:bg-gray-900">
+                <div class="mb-3 flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ __('seo-content-ai::filament.projects.archive_view_note') }}</h3>
+                        <p class="mt-1 truncate text-sm text-gray-500 dark:text-gray-400" x-text="noteModalTitle"></p>
+                    </div>
+                    <button type="button" class="rounded-lg p-1 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800" x-on:click="closeNoteModal()">
+                        <x-filament::icon icon="heroicon-o-x-mark" class="h-5 w-5" />
+                    </button>
+                </div>
+                <p class="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-200" x-text="noteModalBody || '—'"></p>
+            </div>
+        </div>
+    </template>
+
+    <template x-teleport="body">
+        <div
+            x-show="historyModalOpen"
+            x-cloak
+            class="fixed inset-0 z-[80] flex items-center justify-center p-4"
+            role="dialog"
+            aria-modal="true"
+        >
+            <div class="absolute inset-0 bg-gray-950/50" x-on:click="closeHistoryModal()"></div>
+            <div class="relative z-10 flex max-h-[80vh] w-full max-w-2xl flex-col rounded-2xl bg-white shadow-xl dark:bg-gray-900">
+                <div class="flex items-start justify-between gap-3 border-b border-gray-200 px-5 py-4 dark:border-gray-700">
+                    <div class="min-w-0">
+                        <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ __('seo-content-ai::filament.article_review.modal.history_title') }}</h3>
+                        <p class="mt-1 truncate text-sm text-gray-500 dark:text-gray-400" x-text="historyModalTitle"></p>
+                    </div>
+                    <button type="button" class="rounded-lg p-1 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800" x-on:click="closeHistoryModal()">
+                        <x-filament::icon icon="heroicon-o-x-mark" class="h-5 w-5" />
+                    </button>
+                </div>
+                <div class="overflow-y-auto px-5 py-4">
+                    <p
+                        x-show="historyRows.length === 0"
+                        class="text-sm text-gray-600 dark:text-gray-300"
+                    >{{ __('seo-content-ai::filament.article_review.modal.history_empty') }}</p>
+                    <ul class="space-y-3" x-show="historyRows.length > 0">
+                        <template x-for="(row, index) in historyRows" :key="index">
+                            <li class="rounded-xl bg-gray-50 p-3 ring-1 ring-gray-200 dark:bg-gray-800/60 dark:ring-gray-700">
+                                <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                                    <span class="font-semibold text-gray-900 dark:text-white" x-text="row.action_label || row.action"></span>
+                                    <span class="text-gray-400" aria-hidden="true">·</span>
+                                    <span class="text-gray-600 dark:text-gray-300" x-text="(row.from_status || '—') + ' → ' + (row.to_status || '—')"></span>
+                                </div>
+                                <div class="mt-1 flex flex-wrap gap-x-2 text-xs text-gray-500 dark:text-gray-400">
+                                    <span x-text="row.reviewer"></span>
+                                    <span aria-hidden="true">·</span>
+                                    <span x-text="row.at"></span>
+                                </div>
+                                <p
+                                    x-show="row.note"
+                                    class="mt-2 whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-200"
+                                    x-text="row.note"
+                                ></p>
+                            </li>
+                        </template>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </template>
 </div>

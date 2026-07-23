@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Automation\BusinessHook\Models;
 
-use Illuminate\Database\Eloquent\Model;
+use App\Support\Automation\AutomationModel;
 
 /**
  * @property int $id
@@ -12,10 +12,8 @@ use Illuminate\Database\Eloquent\Model;
  * @property \Illuminate\Support\Carbon $last_beat_at
  * @property array<string, mixed>|null $meta
  */
-final class AutomationSchedulerHeartbeat extends Model
+final class AutomationSchedulerHeartbeat extends AutomationModel
 {
-    protected $connection = 'omi_seo_ai';
-
     protected $table = 'automation_scheduler_heartbeats';
 
     protected $guarded = [];

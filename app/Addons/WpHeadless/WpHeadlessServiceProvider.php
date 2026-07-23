@@ -12,11 +12,12 @@ use App\Addons\WpHeadless\Http\Middleware\WpHeadlessCors;
 use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
 use App\Addons\WpHeadless\Observers\SiteServiceObserver;
 use App\Addons\WpHeadless\Observers\WpHeadlessTemplateObserver;
+use App\Contracts\DeclaresDatabaseTableOwnership;
 use App\Models\SiteService;
 use Illuminate\Support\ServiceProvider;
 use Route;
 
-class WpHeadlessServiceProvider extends ServiceProvider
+class WpHeadlessServiceProvider extends ServiceProvider implements DeclaresDatabaseTableOwnership
 {
     use RegistersAddonDatabase;
 
@@ -73,5 +74,24 @@ class WpHeadlessServiceProvider extends ServiceProvider
         Route::middleware('api')
             ->prefix('api')
             ->group(__DIR__.'/routes/api.php');
+    }
+
+    /**
+     * @return array{connection: string, tables: list<string>, patterns: list<string>}
+     */
+    public function databaseTableOwnership(): array
+    {
+        return [
+            'connection' => self::DB_CONNECTION,
+            'tables' => [
+                'wp_headless_sites',
+                'wp_headless_styles',
+                'wp_headless_templates',
+                'wp_headless_styles_optimized',
+            ],
+            'patterns' => [
+                'wp_headless_*',
+            ],
+        ];
     }
 }

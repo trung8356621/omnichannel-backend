@@ -1090,6 +1090,11 @@ final class WordPressArticleSyncService
             }
         }
 
+        // FAQ rỗng thật trên Laravel → cho phép WP xóa meta; tránh giữ FAQ cũ lệch.
+        if ($faqs === []) {
+            $payload['clear_faqs'] = true;
+        }
+
         $prepared = [
             'request_payload' => $payload,
             'post_content' => $postContent,

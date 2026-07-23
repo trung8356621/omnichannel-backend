@@ -34,8 +34,7 @@ class ListSeoProjects extends ListRecords
                 ->label(__('seo-content-ai::filament.projects.open_site_archive'))
                 ->icon('heroicon-o-archive-box')
                 ->color('gray')
-                ->visible(fn (): bool => SeoAccessControl::canViewProjectArchives()
-                    && SeoAccessControl::globalSiteId() !== null)
+                ->visible(fn (): bool => SeoAccessControl::canViewProjectArchives())
                 ->url(fn (): string => SeoProjectResource::getUrl('archive')),
             Actions\CreateAction::make(),
         ];
