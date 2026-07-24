@@ -8,7 +8,10 @@ use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\PromptHooks\Contracts\PromptOutputContractCatalog;
 use App\Addons\SeoContentAi\PromptHooks\Contracts\PromptOutputContractResolver;
 use App\Addons\SeoContentAi\PromptHooks\Data\PromptHookDefinition;
+use App\Addons\SeoContentAi\Services\ImageOutputModePromptInjector;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
+use App\Addons\SeoContentAi\Support\ImageToolType;
+use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 
 /**
  * Single place to assemble final prompt for hooks.
@@ -77,8 +80,14 @@ final class PromptHookPromptAssembler
 
         $appended = $this->contracts()->appendToPrompt($final, $contractKey !== '' ? $contractKey : null);
 
+        $finalPrompt = $appended['prompt'];
+        if (ImageToolType::fromMixed($prompt->tools ?? 'default')->isImagePipeline()) {
+            $config = PromptPostProcessing::fromPrompt($prompt);
+            $finalPrompt = app(ImageOutputModePromptInjector::class)->inject($finalPrompt, $config);
+        }
+
         return [
-            'final_prompt' => $appended['prompt'],
+            'final_prompt' => $finalPrompt,
             'variables' => $variables,
             'output_contracts' => $appended['contracts'],
         ];

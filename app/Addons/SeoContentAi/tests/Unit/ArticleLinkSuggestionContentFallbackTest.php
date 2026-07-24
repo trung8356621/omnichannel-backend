@@ -50,6 +50,8 @@ final class ArticleLinkSuggestionContentFallbackTest extends TestCase
 
         $body = $this->methodBody(ArticleLinkSuggestionContentKeywordFallback::class, 'supplement');
         self::assertStringContainsString('$this->searchService->search(', $body);
+        self::assertStringContainsString('resolveKeywordIdForPhrase', $body);
+        self::assertStringNotContainsString("'keyword_id' => null", $body);
         self::assertStringNotContainsString('OpenAI', $body);
         self::assertStringNotContainsString('embedding', $body);
         self::assertStringNotContainsString('PromptRunner', $body);
@@ -108,21 +110,68 @@ final class ArticleLinkSuggestionContentFallbackTest extends TestCase
         );
     }
 
-    public function test_extractor_prefers_heading_and_strong(): void
+    public function test_normalize_anchor_trims_edge_punctuation_only(): void
     {
         $extractor = new ArticleLinkSuggestionContentPhraseExtractor;
-        $html = '<h2>Balo laptop văn phòng</h2><p>Nên chọn <strong>ngăn chống sốc</strong> dày.</p>';
-        $phrases = $extractor->extract($html);
-        $bySource = [];
-        foreach ($phrases as $row) {
-            $bySource[$row['source']][] = mb_strtolower($row['phrase']);
-        }
 
-        self::assertTrue(isset($bySource['heading']) || isset($bySource['strong']));
-        $all = array_map(static fn (array $r): string => mb_strtolower($r['phrase']), $phrases);
+        self::assertSame('Chất liệu vải cao cấp', $extractor->normalizeAnchorText('Chất liệu vải cao cấp:'));
+        self::assertSame('Vệ sinh đúng cách', $extractor->normalizeAnchorText('Vệ sinh đúng cách:'));
+        self::assertSame('Balo chống nước', $extractor->normalizeAnchorText('- Balo chống nước'));
+        self::assertSame('Khóa kéo YKK', $extractor->normalizeAnchorText('(Khóa kéo YKK)'));
+        self::assertSame('Máy tính xách tay', $extractor->normalizeAnchorText('Máy tính xách tay,'));
+        self::assertSame('Balo chống nước', $extractor->normalizeAnchorText('   Balo chống nước   '));
+
+        // Giữ ký tự giữa cụm.
+        self::assertSame('USB-C', $extractor->normalizeAnchorText('USB-C'));
+        self::assertSame('Wi-Fi', $extractor->normalizeAnchorText('Wi-Fi'));
+        self::assertSame('TP.HCM', $extractor->normalizeAnchorText('TP.HCM'));
+        self::assertSame('2-in-1', $extractor->normalizeAnchorText('2-in-1'));
+        self::assertSame('Laptop 14-inch', $extractor->normalizeAnchorText('Laptop 14-inch'));
+    }
+
+    public function test_normalize_rejects_short_cta_anchors(): void
+    {
+        $extractor = new ArticleLinkSuggestionContentPhraseExtractor;
+        $html = '<p><strong>Xem thêm:</strong> và <strong>Chi tiết</strong> cùng <strong>ngăn chống sốc:</strong></p>';
+        $phrases = $extractor->extract($html);
+        $texts = array_map(static fn (array $r): string => mb_strtolower($r['phrase']), $phrases);
+
+        self::assertNotContains('xem thêm', $texts);
+        self::assertNotContains('chi tiết', $texts);
+        self::assertContains('ngăn chống sốc', $texts);
+    }
+
+    public function test_extractor_prefers_highlight_over_heading(): void
+    {
+        $extractor = new ArticleLinkSuggestionContentPhraseExtractor;
+        $html = '<h2>Hướng dẫn bảo quản balo bền đẹp</h2><p>Nên chọn <strong>ngăn chống sốc</strong> dày.</p>';
+        $phrases = $extractor->extract($html);
+        self::assertNotSame([], $phrases);
+        self::assertSame('strong', $phrases[0]['source']);
+        self::assertSame('ngăn chống sốc', mb_strtolower($phrases[0]['phrase']));
+        self::assertGreaterThanOrEqual(
+            ArticleLinkSuggestionContentPhraseExtractor::SCORE_STRONG,
+            (int) ($phrases[0]['source_score'] ?? 0),
+        );
+    }
+
+    public function test_heading_prefix_stripped_to_core_phrase(): void
+    {
+        $extractor = new ArticleLinkSuggestionContentPhraseExtractor;
+        self::assertSame(
+            'bảo quản balo bền đẹp',
+            $extractor->stripHeadingPrefix('Hướng dẫn bảo quản balo bền đẹp'),
+        );
+
+        $html = '<h2>Hướng dẫn bảo quản balo bền đẹp</h2><p>Nội dung không highlight.</p>';
+        $phrases = $extractor->extract($html);
+        $texts = array_map(static fn (array $r): string => mb_strtolower($r['phrase']), $phrases);
+        self::assertNotContains('hướng dẫn bảo quản balo bền đẹp', $texts);
         self::assertTrue(
-            in_array('balo laptop văn phòng', $all, true)
-            || in_array('ngăn chống sốc', $all, true),
+            in_array('bảo quản balo', $texts, true)
+            || in_array('bảo quản balo bền đẹp', $texts, true)
+            || in_array('bảo quản balo bền', $texts, true),
+            'Expected stripped heading core, got: '.implode(' | ', $texts),
         );
     }
 

@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoPromptPart;
 use App\Addons\SeoContentAi\Support\GeminiModelCatalog;
 use App\Addons\SeoContentAi\Support\ImageToolType;
+use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Models\ApiConnection;
 use Illuminate\Support\Facades\Http;
@@ -136,13 +137,13 @@ final class PromptRunnerService
             'user_id' => (int) auth()->id(),
             'site_id' => 0,
             'status' => 'running',
-            'input_snapshot' => $this->sanitizeInputSnapshot([
+            'input_snapshot' => $this->sanitizeInputSnapshot($this->withImageOutputModeAudit([
                 'variables' => $variables,
                 'compiled_prompt' => $compiled,
                 'model_category' => $category,
                 'is_task_mode' => $isTaskMode,
                 'tools' => $toolType,
-            ]),
+            ], $prompt, $variables, $toolType)),
             'started_at' => now(),
         ]);
 
@@ -204,7 +205,7 @@ final class PromptRunnerService
             'user_id' => (int) auth()->id(),
             'site_id' => 0,
             'status' => 'running',
-            'input_snapshot' => $this->sanitizeInputSnapshot([
+            'input_snapshot' => $this->sanitizeInputSnapshot($this->withImageOutputModeAudit([
                 'variables' => $variables,
                 'compiled_prompt' => $compiled,
                 'model_category' => $category,
@@ -214,7 +215,7 @@ final class PromptRunnerService
                 'chain_step' => 'task',
                 'chain_step_index' => 0,
                 'direct_image_preview' => true,
-            ]),
+            ], $prompt, $variables, $this->normalizeToolType($prompt))),
             'started_at' => now(),
         ]);
 
@@ -304,14 +305,14 @@ final class PromptRunnerService
 
         $category = $this->aiModelRouter->resolveCategoryForPrompt($prompt, $toolType);
 
-        $snapshot = [
+        $snapshot = $this->withImageOutputModeAudit([
             'variables' => $variables,
             'compiled_prompt' => $compiled,
             'model_category' => $category,
             'is_task_mode' => $isTaskMode,
             'tools' => $toolType,
             'manual_compiled' => true,
-        ];
+        ], $prompt, $variables, $toolType);
 
         if ($chainParentStep && $this->hasDependentSubTasks($prompt)) {
             $snapshot['chain_mode'] = true;
@@ -610,14 +611,14 @@ final class PromptRunnerService
             'user_id' => (int) auth()->id(),
             'site_id' => 0,
             'status' => 'running',
-            'input_snapshot' => $this->sanitizeInputSnapshot([
+            'input_snapshot' => $this->sanitizeInputSnapshot($this->withImageOutputModeAudit([
                 'variables' => $variables,
                 'compiled_prompt' => $this->compilePrompt($prompt, $variables),
                 'model_category' => $baseCategory,
                 'is_task_mode' => $isTaskMode,
                 'tools' => $toolType,
                 'chain_mode' => true,
-            ]),
+            ], $prompt, $variables, $toolType)),
             'started_at' => now(),
         ]);
 
@@ -947,7 +948,14 @@ final class PromptRunnerService
     {
         $variables = app(PromptLanguageVariableService::class)->mergeInto($variables);
 
-        return $this->assemblePromptBlocks($prompt, $variables);
+        $assembled = $this->assemblePromptBlocks($prompt, $variables);
+
+        if (ImageToolType::fromMixed($prompt->tools ?? 'default')->isImagePipeline()) {
+            $config = PromptPostProcessing::resolveFromVariablesOrPrompt($variables, $prompt);
+            $assembled = app(ImageOutputModePromptInjector::class)->inject($assembled, $config);
+        }
+
+        return Utf8Sanitizer::string($assembled);
     }
 
     /**
@@ -1045,6 +1053,27 @@ final class PromptRunnerService
             },
             Utf8Sanitizer::string($text),
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $snapshot
+     * @param  array<string, mixed>  $variables
+     * @return array<string, mixed>
+     */
+    private function withImageOutputModeAudit(
+        array $snapshot,
+        SeoPrompt $prompt,
+        array $variables,
+        string $toolType,
+    ): array {
+        if (! ImageToolType::fromMixed($toolType)->isImagePipeline()) {
+            return $snapshot;
+        }
+
+        $config = PromptPostProcessing::resolveFromVariablesOrPrompt($variables, $prompt);
+        $snapshot['image_output_mode'] = app(ImageOutputModePromptInjector::class)->auditMeta($config);
+
+        return $snapshot;
     }
 
     /**

@@ -501,6 +501,11 @@ class ViewSeoProjectRun extends Page
      */
     public function itemKeywordLabel(array $item): string
     {
+        $articleTitle = trim((string) ($item['article_title'] ?? ''));
+        if ($articleTitle !== '') {
+            return $articleTitle;
+        }
+
         $label = trim((string) ($item['source_content'] ?? ''));
 
         return $label !== '' ? $label : '—';
@@ -628,7 +633,7 @@ class ViewSeoProjectRun extends Page
 
         if ($articleId > 0) {
             $article = SeoArticle::query()
-                ->select(['id', 'is_reviewed', 'last_manual_saved_at', 'last_synced_at'])
+                ->select(['id', 'title', 'is_reviewed', 'last_manual_saved_at', 'last_synced_at'])
                 ->whereKey($articleId)
                 ->first();
 
@@ -642,6 +647,7 @@ class ViewSeoProjectRun extends Page
                 $item['article_editor_preparing_message'] = app(ArticleEditorReadinessService::class)->userMessage($readiness);
             }
             $item['article_is_reviewed'] = (bool) ($article?->is_reviewed ?? false);
+            $item['article_title'] = trim((string) ($article?->title ?? ''));
             $item['last_manual_saved_at'] = $article?->last_manual_saved_at?->toIso8601String();
             $item['last_synced_at'] = $article?->last_synced_at?->toIso8601String();
 
@@ -656,7 +662,7 @@ class ViewSeoProjectRun extends Page
         $resolvedId = $this->resolveArticleIdForSource($source);
         if ($resolvedId > 0) {
             $article = SeoArticle::query()
-                ->select(['id', 'is_reviewed', 'last_manual_saved_at', 'last_synced_at'])
+                ->select(['id', 'title', 'is_reviewed', 'last_manual_saved_at', 'last_synced_at'])
                 ->whereKey($resolvedId)
                 ->first();
 
@@ -673,6 +679,7 @@ class ViewSeoProjectRun extends Page
                 $item['article_editor_preparing_message'] = app(ArticleEditorReadinessService::class)->userMessage($readiness);
             }
             $item['article_is_reviewed'] = (bool) ($article?->is_reviewed ?? false);
+            $item['article_title'] = trim((string) ($article?->title ?? ''));
             $item['last_manual_saved_at'] = $article?->last_manual_saved_at?->toIso8601String();
             $item['last_synced_at'] = $article?->last_synced_at?->toIso8601String();
         }

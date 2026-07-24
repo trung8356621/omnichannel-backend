@@ -1909,7 +1909,10 @@
                                 x-show="!aiChatOpen"
                                 x-cloak
                                 class="wp-article-edit-sidebar-scroll seo-assistant-host seo-assistant-sidebar space-y-3"
-                                x-data="seoAssistantNavigator()"
+                                x-data="seoAssistantNavigator(@js([
+                                    'postType' => \App\Addons\SeoContentAi\Models\SeoProjectTask::normalizePostType($this->articlePostType),
+                                    'supportsProductGallery' => $this->supportsProductGallery(),
+                                ]))"
                                 x-init="initWorkspace()"
                                 x-bind:class="{ 'is-panel-filter': panelFilterActive }"
                             >
@@ -1991,7 +1994,7 @@
                                         <div wire:ignore id="seo-article-seo-assistant-root"></div>
                                     </div>
 
-                                    @if (! $this->supportsProductGallery())
+                                        {{-- Both panels always in DOM; Alpine toggles by live post_type (no WP sync). --}}
                                         <div
                                             class="seo-assistant-panel-slot"
                                             data-assistant-widget
@@ -1999,7 +2002,9 @@
                                             data-assistant-tab-label="Featured"
                                             data-assistant-widget-label="Featured Image"
                                             data-assistant-search-keywords="featured,thumbnail,cover,đại diện"
-                                            x-show="isWidgetVisible('featured')"
+                                            data-assistant-requires-non-product="1"
+                                            x-show="!supportsProductGalleryUi && isWidgetVisible('featured')"
+                                            x-cloak
                                             x-bind:class="{ 'is-active': panelFilterActive && activePanel === 'featured' }"
                                         >
                                             <section class="seo-assistant-widget seo-assistant-widget--featured-image seo-assistant-widget--static">
@@ -2041,9 +2046,7 @@
                         </div>
                     </section>
                                         </div>
-                @endif
 
-                @if ($this->supportsProductGallery())
                                         <div
                                             class="seo-assistant-panel-slot"
                                             data-assistant-widget
@@ -2051,7 +2054,9 @@
                                             data-assistant-tab-label="Featured"
                                             data-assistant-widget-label="Product Album"
                                             data-assistant-search-keywords="album,gallery,product,featured,sản phẩm"
-                                            x-show="isWidgetVisible('featured')"
+                                            data-assistant-requires-product="1"
+                                            x-show="supportsProductGalleryUi && isWidgetVisible('featured')"
+                                            x-cloak
                                             x-bind:class="{ 'is-active': panelFilterActive && activePanel === 'featured' }"
                                         >
                     <section class="seo-assistant-widget seo-assistant-widget--product-album seo-assistant-widget--static">
@@ -2138,7 +2143,6 @@
                         </div>
                     </section>
                                         </div>
-                @endif
 
                                     <div
                                         class="seo-assistant-panel-slot"
@@ -2153,7 +2157,6 @@
                                 <div wire:ignore id="seo-article-image-assistant-root"></div>
                                     </div>
 
-                                    @if ($this->supportsProductGallery())
                                     <div
                                         class="seo-assistant-panel-slot"
                                         data-assistant-widget
@@ -2161,12 +2164,13 @@
                                         data-assistant-tab-label="Reviews"
                                         data-assistant-widget-label="Reviews Assistant"
                                         data-assistant-search-keywords="reviews,rating,comment"
-                                        x-show="isWidgetVisible('reviews')"
+                                        data-assistant-requires-product="1"
+                                        x-show="supportsProductGalleryUi && isWidgetVisible('reviews')"
+                                        x-cloak
                                         x-bind:class="{ 'is-active': panelFilterActive && activePanel === 'reviews' }"
                                     >
                                 <div wire:ignore id="seo-article-reviews-assistant-root"></div>
                                     </div>
-                                    @endif
 
                                     <div
                                         class="seo-assistant-panel-slot"
@@ -2653,70 +2657,105 @@
 
     @if (\App\Addons\SeoContentAi\Support\SeoAccessControl::canAccessManagerFeatures())
         <div
-            class="seo-debug-markdown-import"
+            class="seo-pipeline-rerun"
             x-data="{
                 open: false,
-                markdown: '',
-                openModal() {
-                    this.open = true;
-                    this.$nextTick(() => this.$refs.debugMarkdownInput?.focus());
-                },
-                closeModal() {
-                    this.open = false;
-                },
-                async importMarkdown() {
-                    const text = (this.markdown || '').trim();
-                    if (text === '') {
-                        return;
+                from: 'outline',
+                submitting: false,
+                openModal() { if (this.submitting) { return; } this.open = true; },
+                closeModal() { this.open = false; },
+                async submit() {
+                    if (this.submitting) { return; }
+                    this.submitting = true;
+                    try {
+                        await $wire.queueArticlePipelineRerun(this.from);
+                    } finally {
+                        this.submitting = false;
+                        this.open = false;
                     }
-                    await $wire.importMarkdownDebug(text);
-                    this.markdown = '';
-                    this.open = false;
                 },
             }"
-            x-on:open-debug-markdown-import.window="openModal()"
+            x-on:open-article-pipeline-rerun-modal.window="openModal()"
+            x-on:close-article-pipeline-rerun-modal.window="closeModal()"
             x-on:keydown.escape.window="if (open) closeModal()"
         >
             <div
+                x-show="$wire.pipelineRerunStatus"
+                x-cloak
+                class="seo-pipeline-rerun-status"
+                style="margin: 0.5rem 0;"
+            >
+                <span>
+                    {{ __('seo-content-ai::filament.article_pipeline_rerun.status_label') }}:
+                    <strong
+                        x-text="{
+                            queued: @js(__('seo-content-ai::filament.article_pipeline_rerun.status_queued')),
+                            running: @js(__('seo-content-ai::filament.article_pipeline_rerun.status_running')),
+                            completed: @js(__('seo-content-ai::filament.article_pipeline_rerun.status_completed')),
+                            failed: @js(__('seo-content-ai::filament.article_pipeline_rerun.status_failed')),
+                        }[$wire.pipelineRerunStatus] || ($wire.pipelineRerunStatus || '')"
+                    ></strong>
+                </span>
+                <template x-if="$wire.pipelineRerunUrl">
+                    <a x-bind:href="$wire.pipelineRerunUrl" target="_blank" rel="noopener noreferrer">
+                        {{ __('seo-content-ai::filament.article_pipeline_rerun.view_run') }}
+                    </a>
+                </template>
+            </div>
+
+            <div
                 x-show="open"
                 x-cloak
-                class="seo-debug-markdown-import__backdrop"
+                class="seo-pipeline-rerun__backdrop"
                 x-on:click.self="closeModal()"
                 role="dialog"
                 aria-modal="true"
-                aria-labelledby="seo-debug-markdown-import-title"
+                aria-labelledby="seo-pipeline-rerun-title"
             >
-                <div class="seo-debug-markdown-import__panel">
-                    <h3 id="seo-debug-markdown-import-title" class="seo-debug-markdown-import__title">
-                        Debug: import nội dung markdown
+                <div class="seo-pipeline-rerun__panel">
+                    <h3 id="seo-pipeline-rerun-title" class="seo-pipeline-rerun__title">
+                        {{ __('seo-content-ai::filament.article_pipeline_rerun.modal_title') }}
                     </h3>
-                    <p class="seo-debug-markdown-import__desc">
-                        Dán markdown AI để convert sang HTML editor. Chỉ gửi request khi bấm Import.
+                    <p class="seo-pipeline-rerun__desc">
+                        {{ __('seo-content-ai::filament.article_pipeline_rerun.modal_intro') }}
                     </p>
-                    <textarea
-                        x-ref="debugMarkdownInput"
-                        x-model="markdown"
-                        rows="14"
-                        class="seo-debug-markdown-import__textarea"
-                        placeholder="Nội dung markdown…"
-                    ></textarea>
-                    <div class="seo-debug-markdown-import__actions">
-                        <button
-                            type="button"
-                            class="fi-btn fi-btn-size-md fi-color-gray"
-                            x-on:click="closeModal()"
-                        >
-                            Hủy
+                    <div class="seo-pipeline-rerun__options" role="radiogroup">
+                        <label class="seo-pipeline-rerun__option">
+                            <input type="radio" name="pipeline-rerun-from" value="outline" x-model="from" />
+                            <span>
+                                <span class="seo-pipeline-rerun__option-title">{{ __('seo-content-ai::filament.article_pipeline_rerun.from_outline_title') }}</span>
+                                <span class="seo-pipeline-rerun__option-desc">{{ __('seo-content-ai::filament.article_pipeline_rerun.from_outline_desc') }}</span>
+                            </span>
+                        </label>
+                        <label class="seo-pipeline-rerun__option">
+                            <input type="radio" name="pipeline-rerun-from" value="article" x-model="from" />
+                            <span>
+                                <span class="seo-pipeline-rerun__option-title">{{ __('seo-content-ai::filament.article_pipeline_rerun.from_article_title') }}</span>
+                                <span class="seo-pipeline-rerun__option-desc">{{ __('seo-content-ai::filament.article_pipeline_rerun.from_article_desc') }}</span>
+                            </span>
+                        </label>
+                    </div>
+                    <p class="seo-pipeline-rerun__warn">
+                        {{ __('seo-content-ai::filament.article_pipeline_rerun.warning') }}
+                    </p>
+                    <div class="seo-pipeline-rerun__actions">
+                        <button type="button" class="fi-btn fi-btn-size-md fi-color-gray" x-on:click="closeModal()" x-bind:disabled="submitting">
+                            {{ __('seo-content-ai::filament.article_pipeline_rerun.cancel') }}
                         </button>
                         <button
                             type="button"
                             class="fi-btn fi-btn-size-md fi-color-primary"
-                            x-on:click="importMarkdown()"
+                            x-on:click="submit()"
                             wire:loading.attr="disabled"
-                            wire:target="importMarkdownDebug"
+                            wire:target="queueArticlePipelineRerun"
+                            x-bind:disabled="submitting"
                         >
-                            <span wire:loading.remove wire:target="importMarkdownDebug">Import</span>
-                            <span wire:loading wire:target="importMarkdownDebug">Đang import…</span>
+                            <span x-show="!submitting">
+                                {{ __('seo-content-ai::filament.article_pipeline_rerun.queue') }}
+                            </span>
+                            <span x-show="submitting" x-cloak>
+                                {{ __('seo-content-ai::filament.article_pipeline_rerun.queueing') }}
+                            </span>
                         </button>
                     </div>
                 </div>
@@ -2727,43 +2766,6 @@
     @push('scripts')
         @viteReactRefresh
         @vite('app/Addons/SeoContentAi/resources/js/article-editor.jsx')
-        @if (\App\Addons\SeoContentAi\Support\SeoAccessControl::canAccessManagerFeatures())
-            <script>
-                (function () {
-                    function mountDebugMarkdownHeaderButton() {
-                        const slot = document.querySelector('[data-seo-page-actions-slot]');
-                        if (!slot || slot.querySelector('[data-seo-debug-md-import]')) {
-                            return;
-                        }
-
-                        const host = slot.querySelector('[data-seo-page-actions-secondary]') ?? slot;
-                        if (!host) {
-                            return;
-                        }
-
-                        const button = document.createElement('button');
-                        button.type = 'button';
-                        button.setAttribute('data-seo-debug-md-import', '1');
-                        button.className = 'seo-editor-menu-item';
-                        button.setAttribute('role', 'menuitem');
-                        button.title = 'Debug import Markdown';
-                        button.setAttribute('aria-label', 'Debug import Markdown');
-                        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" /></svg><span>Debug import Markdown</span>';
-                        button.addEventListener('click', function (event) {
-                            event.preventDefault();
-                            window.dispatchEvent(new CustomEvent('open-debug-markdown-import'));
-                        });
-
-                        host.insertBefore(button, host.firstChild);
-                        window.dispatchEvent(new CustomEvent('seo-article-editor-toolbar-refresh'));
-                    }
-
-                    document.addEventListener('DOMContentLoaded', mountDebugMarkdownHeaderButton);
-                    document.addEventListener('livewire:navigated', mountDebugMarkdownHeaderButton);
-                    document.addEventListener('seo-article-editor-header-actions-mounted', mountDebugMarkdownHeaderButton);
-                })();
-            </script>
-        @endif
     @endpush
 
     @include('seo-content-ai::filament.resources.article-resource.pages.partials.article-assign-content-project-modals', ['record' => $record])

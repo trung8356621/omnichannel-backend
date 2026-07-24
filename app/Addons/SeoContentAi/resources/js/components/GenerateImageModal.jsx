@@ -81,11 +81,38 @@ function requestPromptPreview(detail) {
 
 function normalizePostProcessing(raw) {
     const source = raw != null && typeof raw === 'object' ? raw : {};
+    const min = 2;
+    const max = 6;
+    const defaultGrid = 3;
+
+    let grid = Number.parseInt(
+        String(source.split_grid_size ?? source.grid_size ?? source.split_rows ?? defaultGrid),
+        10,
+    );
+    if (! Number.isFinite(grid) || grid < min) {
+        grid = defaultGrid;
+    }
+    grid = Math.max(min, Math.min(max, grid));
+
+    const rowsRaw = Number.parseInt(String(source.split_rows ?? grid), 10);
+    const colsRaw = Number.parseInt(String(source.split_columns ?? grid), 10);
+    if (
+        source.split_grid_size == null
+        && source.grid_size == null
+        && Number.isFinite(rowsRaw)
+        && Number.isFinite(colsRaw)
+        && rowsRaw === colsRaw
+        && rowsRaw >= min
+    ) {
+        grid = Math.max(min, Math.min(max, rowsRaw));
+    }
 
     return {
         split_enabled: Boolean(source.split_enabled),
-        split_rows: Math.max(1, Math.min(12, Number.parseInt(String(source.split_rows ?? 3), 10) || 3)),
-        split_columns: Math.max(1, Math.min(12, Number.parseInt(String(source.split_columns ?? 2), 10) || 2)),
+        split_grid_size: grid,
+        split_rows: grid,
+        split_columns: grid,
+        expected_panels: grid * grid,
         resize_enabled: Boolean(source.resize_enabled),
         resize_width:
             source.resize_width === null || source.resize_width === undefined || source.resize_width === ''
@@ -636,8 +663,8 @@ export default function GenerateImageModal({
                         seoMediaId={selectedSplitItem.id}
                         imageUrl={selectedSplitItem.url}
                         variant="gallery"
-                        defaultRows={postProcessing.split_rows}
-                        defaultCols={postProcessing.split_columns}
+                        defaultRows={postProcessing.split_grid_size ?? postProcessing.split_rows}
+                        defaultCols={postProcessing.split_grid_size ?? postProcessing.split_columns}
                         autoSaveOnSplit
                         canDeleteOriginal={false}
                         onSplitSaved={handleSplitSaved}

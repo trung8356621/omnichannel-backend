@@ -243,12 +243,18 @@ Lưu kết quả test workflow cho một task. Columns: `task_id` (FK → `seo_t
 - Hiển thị: stats (total/succeeded/failed/pending) từ `getRunStatsPayload()` + bảng `getAllItems()` (merge `run.items` + pending chưa có trong items → `SeoProjectRunItemsDisplayPresenter::consolidate()` → enrich → sort)
 - **Display consolidate (view-only):** 1 article/task = 1 hàng; gom theo `task_id` → `article_id` → `retry_task_id` (nối pending shadow); không ghi đè raw `run.items`. Status/message/AI stats lấy attempt mới nhất; `retry_count` = số lần chạy lại thêm (badge `data-run-retry-badge` trên `...`, tooltip `run_item_rerun_badge_tooltip`; ghi chú chèn `run_item_rerun_count_inline`)
 - Mount: `ensureFailedTasksQueued()` + `reconcileMissingCompletedItems()` (khôi phục hàng completed bị thiếu trên run cũ)
-- Gọi `SeoProjectWorkflowRunService::retryTask()` qua Livewire `runItemQueued` / `completeRunQueue`
-- Trước khi rerun: `syncResolvedArticleIdForRunTask()` resolve `article_id` từ raw `run.items` (nếu > 0) rồi fallback `seo_project_tasks.article_id` — **không** fuzzy title/keyword; ghi lại cả `run.items` + task rồi truyền `forcedArticleId` vào `retryTask()`. `enrichItemArticleLink()` ưu tiên `task.article_id` trước khi resolve theo source content
-- Row actions: chỉ nút `...` (Alpine + `position:fixed`); menu gồm `archiveItem`, xem steps, chạy lại, đánh dấu đã fix — CSS `project-run-queue.css` + `white-space: nowrap`
-- Cột «Chạy lần cuối» (`last_run_at`, `itemLastRunAt()`); `getAllItems()` sort theo `last_run_at` desc
+- Gọi `SeoProjectWorkflowRunService::retryTask()` qua Livewire `runItemQueued` / `completeRunQueue` — **chỉ** cho hàng `pending` (lần chạy đầu / «Chạy»)
+- **Không** còn entry «Chạy lại toàn bộ» (`canRerunAllItems()` luôn false; button + modal rerun-all đã gỡ)
+- **Chạy lại từng prompt:** menu hàng liệt kê node `prompt` từ workflow SeoTask (`SeoProjectWorkflowStepCatalogService` + `SeoProjectWorkflowStepRetryService`); Livewire `retryWorkflowStep` / `bulkRetryWorkflowSteps`; run item `action=step:{nodeId}`; không chạy lại full pipeline; duplicate guard `pending|processing`
+- Bulk: checkbox hàng + select-all → chọn nhiều prompt → modal xác nhận → tạo task riêng từng bài×prompt; outline trước content khi cùng bulk
+- Trước khi rerun full pending: `syncResolvedArticleIdForRunTask()` resolve `article_id` từ raw `run.items` (nếu > 0) rồi fallback `seo_project_tasks.article_id` — **không** fuzzy title/keyword; ghi lại cả `run.items` + task rồi truyền `forcedArticleId` vào `retryTask()`. `enrichItemArticleLink()` ưu tiên `task.article_id` trước khi resolve theo source content
+- **Nhãn cột Từ khóa/title:** `itemKeywordLabel()` ưu tiên `articles.title` (`article_title` từ enrich) — không dùng `source_content` khi đã có bài (tránh lệch keyword task vs title editor)
+- Cột bảng: Checkbox | # | Loại bài (task type) | Từ khóa/title | Trạng thái | **Lần cuối lưu** | Ghi chú (line-clamp) | **Ngày chạy** (`last_run_at`) | Thao tác — đã bỏ cột `post_type` trùng nhãn «Loại bài»
+- **Lần cuối lưu:** `max(articles.last_manual_saved_at, articles.last_synced_at)` qua `ArticleLastSavedTimestampService` — không dùng `updated_at`; nhãn «Lưu thủ công» / «Đồng bộ» / `—`
+- Row actions: nút `...`; menu = Archive, Xem runs, «Chạy» (pending only), submenu prompt rerun, đánh dấu đã fix — CSS `project-run-queue.css`
+- `getAllItems()` sort theo `last_run_at` desc
 - `archiveItem(taskId)` → `SeoProjectArchiveService::archiveTasks()` chuyển task có `article_id` sang Project Lưu trữ domain
-- Frontend: `project-run-queue.js` — không `$refresh` Livewire khi queue đang chạy; chặn Alpine re-init spawn queue thứ 2; `runSingleTask()` update in-place (status/message/last-run/badge, highlight + scroll), `updateRetryBadge()` realtime (+ title tooltip)
+- Frontend: `project-run-queue.js` — bulk select + `retryWorkflowStep` / `confirmBulkRetry`; không `$refresh` khi queue đang chạy; `runSingleTask()` vẫn dùng cho pending/autorun
 
 ### 3.7 ViewSeoProjectRunStep (`Filament/.../Pages/ViewSeoProjectRunStep.php`)
 
@@ -355,6 +361,9 @@ flowchart TB
 | **SeoProjectRunItemsReader** | `SeoProjectRunItemsReader.php` | Đọc run: DB XOR legacy JSON — không merge dual-source. |
 | **SeoProjectRunItemMergeService** | `SeoProjectRunItemMergeService.php` | Relink/merge khi collapse duplicate task hoặc consolidate run (`relinkTask` / `relinkRun`). |
 | **SeoProjectRunItemsDisplayPresenter** | `Support/SeoProjectRunItemsDisplayPresenter.php` | Gom hàng bảng ViewSeoProjectRun: `consolidate()` — 1 task/article = 1 row (view layer); giữ raw history; badge/note `retry_count`. Test: `SeoProjectRunItemsDisplayPresenterTest`. |
+| **SeoProjectWorkflowStepCatalogService** | `SeoProjectWorkflowStepCatalogService.php` | Liệt kê node `prompt` rerunnable từ SeoTask publish/rewrite; kind + label + order outline→content. |
+| **SeoProjectWorkflowStepRetryService** | `SeoProjectWorkflowStepRetryService.php` | Queue/execute rerun từng prompt (`action=step:{nodeId}`); bulk; idempotent skip khi pending/processing; `TaskWorkflowTestRunner::runSingleStep`. |
+| **ArticleLastSavedTimestampService** | `ArticleLastSavedTimestampService.php` | `last_manual_saved_at` / `last_synced_at` trên `articles`; resolve display cho cột «Lần cuối lưu». |
 | **SeoProjectTaskSyncService** | `SeoProjectTaskSyncService.php` | Diff/upsert theo `task_id` → `source_key`; không delete-all/recreate; create qua `SeoProjectTaskUniqueWriter::createStrict()`. |
 | **SeoProjectTaskLifecycleService** | `SeoProjectTaskLifecycleService.php` | Archive/restore/softDelete trên task row; mirror `seo_content_archive_items`. |
 | **SeoProjectTaskRepairService** | `SeoProjectTaskRepairService.php` | Phase 3C3 repair: backfill `source_key`, merge duplicate groups, archive mirrors, purge sync orphans. |

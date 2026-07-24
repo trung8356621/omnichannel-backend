@@ -17,6 +17,7 @@ use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookUiFailureMapper;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\PromptMediaPersistContext;
+use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoRuleViolationsResolver;
 use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
@@ -118,6 +119,175 @@ final class TaskWorkflowTestRunner
         }
 
         throw new \InvalidArgumentException('Không tìm thấy bước quy trình: '.$nodeId);
+    }
+
+    /**
+     * Chạy workflow từ một prompt node (và mọi node phía sau theo thứ tự topo).
+     * Node trước start được skip; khi $seedOutlineFromArticle=true, hydrate outline từ article hiện có.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function runFromNodeId(
+        SeoTask $task,
+        TaskTestContext $context,
+        string $startNodeId,
+        bool $seedOutlineFromArticle = false,
+    ): array {
+        $startNodeId = trim($startNodeId);
+        if ($startNodeId === '') {
+            throw new \InvalidArgumentException('Thiếu start node id.');
+        }
+
+        $ordered = $this->orderedNodesForTask($task);
+        $flow = is_array($task->flow_data) ? $task->flow_data : [];
+        $nodes = is_array($flow['nodes'] ?? null) ? $flow['nodes'] : [];
+        $edges = $this->normalizeWorkflowEdges(
+            is_array($flow['edges'] ?? null) ? $flow['edges'] : [],
+            $nodes,
+        );
+
+        $startIndex = null;
+        foreach ($ordered as $index => $node) {
+            if ((string) ($node['id'] ?? '') === $startNodeId) {
+                $startIndex = $index;
+                break;
+            }
+        }
+
+        if ($startIndex === null) {
+            throw new \InvalidArgumentException('Không tìm thấy bước bắt đầu: '.$startNodeId);
+        }
+
+        $state = $this->initialState($context);
+        $outlineMarkdown = '';
+        if ($seedOutlineFromArticle) {
+            $outlineMarkdown = $this->seedOutlineStateFromArticle($state, $context->article);
+            if ($outlineMarkdown === '') {
+                throw new \InvalidArgumentException(
+                    'Bài chưa có dàn ý (seo_article_outline). Chọn «Từ dàn ý» để tạo lại, hoặc lưu outline rồi chạy «Từ bài viết».',
+                );
+            }
+        }
+
+        $steps = [];
+        foreach ($ordered as $index => $node) {
+            if ($index < $startIndex) {
+                if ($outlineMarkdown !== '') {
+                    $this->hydrateSkippedNodeWithOutline($node, $state, $outlineMarkdown);
+                }
+
+                $steps[] = [
+                    'node_id' => (string) ($node['id'] ?? ''),
+                    'type' => (string) ($node['type'] ?? ''),
+                    'title' => (string) ($node['title'] ?? 'Bước'),
+                    'status' => 'skipped',
+                    'message' => 'Bỏ qua — nằm trước điểm bắt đầu rerun.',
+                ];
+
+                continue;
+            }
+
+            try {
+                $steps[] = $this->executeNode($node, $context, $state, $edges);
+            } catch (\Throwable $exception) {
+                $steps[] = [
+                    'node_id' => (string) ($node['id'] ?? ''),
+                    'type' => (string) ($node['type'] ?? ''),
+                    'title' => (string) ($node['title'] ?? 'Bước'),
+                    'status' => 'failed',
+                    'message' => $exception->getMessage(),
+                ];
+            }
+        }
+
+        return $steps;
+    }
+
+    /**
+     * @return string Outline markdown đã seed (có thể rỗng)
+     */
+    private function seedOutlineStateFromArticle(WorkflowExecutionState $state, ?SeoArticle $article): string
+    {
+        if (! $article instanceof SeoArticle) {
+            return '';
+        }
+
+        $article->loadMissing('articleMetas');
+        $markdown = trim((string) (
+            $article->articleMetas->firstWhere('meta_key', 'seo_article_outline')?->meta_value ?? ''
+        ));
+        if ($markdown === '') {
+            return '';
+        }
+
+        $state->meta['direct_publish_outline_markdown'] = $markdown;
+        $state->lastPromptOutput = $markdown;
+        $parsed = $this->workflowParser->parseOutline($markdown);
+        if ($parsed !== []) {
+            $state->setParsedOutline($parsed);
+        }
+
+        $keywordsRaw = trim((string) (
+            $article->articleMetas->firstWhere('meta_key', 'seo_article_keywords')?->meta_value ?? ''
+        ));
+        if ($keywordsRaw !== '') {
+            $decoded = json_decode($keywordsRaw, true);
+            if (is_array($decoded) && $decoded !== []) {
+                /** @var array<string, list<string>> $decoded */
+                $state->setParsedKeywords($decoded);
+            }
+        }
+
+        return $markdown;
+    }
+
+    /**
+     * Khi skip node trước content: gắn outline vào nodeOutputs để resolveInputForNode / hook `input` có dữ liệu.
+     *
+     * @param  array<string, mixed>  $node
+     */
+    private function hydrateSkippedNodeWithOutline(array $node, WorkflowExecutionState $state, string $markdown): void
+    {
+        $nodeId = trim((string) ($node['id'] ?? ''));
+        if ($nodeId === '' || $markdown === '') {
+            return;
+        }
+
+        $type = (string) ($node['type'] ?? '');
+        if ($type === 'prompt') {
+            $state->nodeOutputs[$nodeId] = [
+                'out_main' => $markdown,
+                'out_outline' => $markdown,
+            ];
+            $state->lastPromptOutput = $markdown;
+
+            return;
+        }
+
+        if ($type !== 'filter') {
+            return;
+        }
+
+        $data = is_array($node['data'] ?? null) ? $node['data'] : [];
+        $filterType = (string) ($data['filterType'] ?? $data['filter_type'] ?? $data['type'] ?? '');
+        $title = mb_strtolower(trim((string) ($node['title'] ?? '')));
+        $isOutlineFilter = $filterType === 'parse_outline'
+            || str_contains($filterType, 'outline')
+            || str_contains($title, 'outline')
+            || str_contains($title, 'dàn ý')
+            || str_contains($title, 'dan y');
+
+        if (! $isOutlineFilter) {
+            return;
+        }
+
+        $parsed = $this->workflowParser->parseOutline($markdown);
+        if ($parsed !== []) {
+            $state->setParsedOutline($parsed);
+        }
+        $state->meta['direct_publish_outline_markdown'] = $markdown;
+        $state->nodeOutputs[$nodeId] = ['out_main' => $markdown];
+        $state->lastPromptOutput = $markdown;
     }
 
     /**
@@ -393,6 +563,12 @@ final class TaskWorkflowTestRunner
 
             try {
                 $input = $this->resolveInputForNode($nodeId, $edges, $state);
+                if ($input === '') {
+                    $input = trim((string) ($state->meta['direct_publish_outline_markdown'] ?? ''));
+                }
+                if ($input === '') {
+                    $input = trim((string) ($state->lastPromptOutput ?? ''));
+                }
                 if ($input !== '') {
                     $variables['input'] = $input;
                 }
@@ -1109,14 +1285,16 @@ final class TaskWorkflowTestRunner
         try {
             $sync = $this->syncKeywordResearchForArticle($article, $context, $state);
         } catch (\InvalidArgumentException $exception) {
+            // Rerun từ article thường skip bước parse keywords → không có data mới.
+            // Không fail cả pipeline; giữ từ khóa hiện có trên bài.
             return [
                 'node_id' => $nodeId,
                 'type' => 'action',
                 'title' => $title,
                 'action_type' => $actionType,
-                'status' => 'failed',
+                'status' => 'skipped',
                 'article_id' => $article->id,
-                'message' => $exception->getMessage(),
+                'message' => 'Bỏ qua lưu từ khóa ngữ nghĩa — '.$exception->getMessage(),
             ];
         }
 
@@ -1921,6 +2099,16 @@ final class TaskWorkflowTestRunner
         }
 
         try {
+            $variables = is_array($media->prompt_variables) ? $media->prompt_variables : [];
+            if (PromptPostProcessing::fromVariablesSnapshot($variables) === null) {
+                $variables = PromptPostProcessing::attachSnapshotToVariables(
+                    $variables,
+                    PromptPostProcessing::fromPrompt($prompt),
+                );
+                $media->update(['prompt_variables' => $variables]);
+                $media = $media->fresh() ?? $media;
+            }
+
             $result = app(PromptPostProcessingApplyService::class)->applyIfConfigured($media, $prompt);
         } catch (\Throwable $exception) {
             logger()->warning(sprintf(

@@ -74,7 +74,7 @@ final class ArticleInternalLinkSuggestionService
         array $internalLinks,
         array $externalLinks = [],
     ): array {
-        $article->loadMissing('site', 'articleMetas', 'headings');
+        $article->loadMissing('site', 'articleMetas');
         $siteDomain = SeoLinkMapLinkTypeClassifier::normalizeDomainHost((string) ($article->site?->domain ?? ''));
         $validationContext = [
             'site_domain' => $siteDomain,
@@ -123,7 +123,6 @@ final class ArticleInternalLinkSuggestionService
         $priority = array_values(array_filter([
             (string) $focusKeyword,
             ...$this->secondaryKeywordsAppearingInContent($article, $plainText),
-            ...$this->outlineHeadingPhrases($article),
         ]));
 
         $fallbackItems = $this->contentKeywordFallback->supplement(
@@ -285,7 +284,7 @@ final class ArticleInternalLinkSuggestionService
             return $this->candidatesCache[$cacheKey];
         }
 
-        $article->loadMissing('site', 'articleMetas', 'headings');
+        $article->loadMissing('site', 'articleMetas');
         $siteDomain = SeoLinkMapLinkTypeClassifier::normalizeDomainHost((string) ($article->site?->domain ?? ''));
         $currentUrls = $this->currentArticleUrls($article);
         $validationContext = [
@@ -482,7 +481,6 @@ final class ArticleInternalLinkSuggestionService
             $priorityPhrases = array_values(array_filter([
                 (string) $focusKeyword,
                 ...$this->secondaryKeywordsAppearingInContent($article, $plainText),
-                ...$this->outlineHeadingPhrases($article),
             ]));
 
             $fallbackItems = $this->contentKeywordFallback->supplement(
@@ -553,24 +551,6 @@ final class ArticleInternalLinkSuggestionService
         $this->candidatesCache[$cacheKey] = $result;
 
         return $result;
-    }
-
-    /**
-     * @return list<string>
-     */
-    private function outlineHeadingPhrases(SeoArticle $article): array
-    {
-        $article->loadMissing('headings');
-        $out = [];
-        foreach ($article->headings ?? [] as $heading) {
-            $text = trim((string) ($heading->heading_text ?? ''));
-            if ($text === '' || LinkSuggestionStopPhraseFilter::isStopPhrase($text)) {
-                continue;
-            }
-            $out[] = $text;
-        }
-
-        return $out;
     }
 
     /**

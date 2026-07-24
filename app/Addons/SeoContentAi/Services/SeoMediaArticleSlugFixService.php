@@ -6,14 +6,17 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
+use App\Support\RuntimeLogger;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Throwable;
 
 /**
  * Fix local media slugs for an article: disk + media row + article URL references.
+ *
+ * Canonical entry for "Fix slug all" (local). See docs/article-editor/image-slug-rename.md
+ * — không vá riêng rename PHP; luôn trả exact rename map cho frontend update editor state.
  */
 final class SeoMediaArticleSlugFixService
 {
@@ -27,6 +30,8 @@ final class SeoMediaArticleSlugFixService
      * @return array{
      *     success: bool,
      *     message: string,
+     *     renamed: list<array<string, mixed>>,
+     *     failed: list<array<string, mixed>>,
      *     replacements: list<array<string, mixed>>,
      *     article_updated: bool,
      *     media_updated: bool,
@@ -45,6 +50,8 @@ final class SeoMediaArticleSlugFixService
             return [
                 'success' => false,
                 'message' => 'Không có ảnh local hợp lệ để đổi slug.',
+                'renamed' => [],
+                'failed' => [],
                 'replacements' => [],
                 'article_updated' => false,
                 'media_updated' => false,
@@ -123,6 +130,9 @@ final class SeoMediaArticleSlugFixService
 
                         $replacements[] = [
                             'media_id' => (int) $renamed->id,
+                            'image_id' => (int) $renamed->id,
+                            'old_filename' => basename($state['old_path']),
+                            'new_filename' => basename($newPath),
                             'old_url' => $state['old_url'],
                             'new_url' => $newUrl,
                             'old_path' => $state['old_path'],
@@ -168,7 +178,7 @@ final class SeoMediaArticleSlugFixService
                 }
             });
         } catch (Throwable $e) {
-            Log::error('seo_media_article_slug_fix.failed', [
+            RuntimeLogger::error('seo_media_article_slug_fix.failed', [
                 'article_id' => (int) $article->id,
                 'site_id' => (int) ($article->site_id ?? 0),
                 'error' => $e->getMessage(),
@@ -182,6 +192,8 @@ final class SeoMediaArticleSlugFixService
             return [
                 'success' => false,
                 'message' => $e->getMessage() !== '' ? $e->getMessage() : 'Không đổi được slug ảnh.',
+                'renamed' => [],
+                'failed' => $skipped,
                 'replacements' => [],
                 'article_updated' => false,
                 'media_updated' => false,
@@ -208,7 +220,7 @@ final class SeoMediaArticleSlugFixService
             $message .= ' Bỏ qua '.$skippedCount.' ảnh thiếu/lỗi.';
         }
 
-        Log::info('seo_media_article_slug_fix.completed', [
+        RuntimeLogger::info('seo_media_article_slug_fix.completed', [
             'article_id' => (int) $article->id,
             'site_id' => (int) ($article->site_id ?? 0),
             'replacement_count' => count($replacements),
@@ -216,10 +228,27 @@ final class SeoMediaArticleSlugFixService
             'remaining_old_refs' => $remaining,
         ]);
 
+        $renamed = array_map(static function (array $row): array {
+            return [
+                'image_id' => (int) ($row['image_id'] ?? $row['media_id'] ?? 0),
+                'old_filename' => (string) ($row['old_filename'] ?? basename((string) ($row['old_path'] ?? ''))),
+                'new_filename' => (string) ($row['new_filename'] ?? basename((string) ($row['new_path'] ?? ''))),
+                'old_url' => (string) ($row['old_url'] ?? ''),
+                'new_url' => (string) ($row['new_url'] ?? ''),
+                'old_path' => (string) ($row['old_path'] ?? ''),
+                'new_path' => (string) ($row['new_path'] ?? ''),
+                'old_slug' => (string) ($row['old_slug'] ?? ''),
+                'new_slug' => (string) ($row['new_slug'] ?? ''),
+                'media_id' => (int) ($row['media_id'] ?? $row['image_id'] ?? 0),
+            ];
+        }, $replacements);
+
         // Tất cả bị skip vẫn success — client tiếp tục, không dừng cả batch.
         return [
             'success' => true,
             'message' => $message,
+            'renamed' => $renamed,
+            'failed' => $skipped,
             'replacements' => $replacements,
             'article_updated' => $urlMap !== [],
             'media_updated' => $replacements !== [],
@@ -246,6 +275,9 @@ final class SeoMediaArticleSlugFixService
 
         $replacement = [
             'media_id' => (int) $renamed->id,
+            'image_id' => (int) $renamed->id,
+            'old_filename' => basename($oldPath),
+            'new_filename' => basename($newPath),
             'old_url' => $oldUrl,
             'new_url' => $newUrl,
             'old_path' => $oldPath,

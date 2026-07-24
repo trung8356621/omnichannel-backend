@@ -74,7 +74,21 @@ function matchesSearch(item, query) {
     return (item.keywords ?? []).some((keyword) => keyword.includes(q) || q.includes(keyword));
 }
 
-export function createSeoAssistantNavigator() {
+function isProductPostType(postType) {
+    const normalized = String(postType ?? '').trim().toLowerCase();
+
+    return normalized === 'product' || normalized === 'e-commerce';
+}
+
+/**
+ * @param {{ postType?: string, supportsProductGallery?: boolean }} [initial]
+ */
+export function createSeoAssistantNavigator(initial = {}) {
+    const initialPostType = String(initial?.postType ?? 'article').trim() || 'article';
+    const initialSupportsGallery = initial?.supportsProductGallery !== undefined
+        ? Boolean(initial.supportsProductGallery)
+        : isProductPostType(initialPostType);
+
     return {
         chips: [],
         searchCatalog: [],
@@ -85,6 +99,8 @@ export function createSeoAssistantNavigator() {
         // Exclusive accordion from first paint — never stack every assistant panel.
         panelFilterActive: true,
         badges: {},
+        editorPostType: initialPostType,
+        supportsProductGalleryUi: initialSupportsGallery,
 
         get filteredSearchResults() {
             const query = this.searchQuery;
@@ -130,9 +146,31 @@ export function createSeoAssistantNavigator() {
                 window.dispatchEvent(new CustomEvent('seo-assistant-open-publishing'));
             };
 
+            this._onPostTypeChanged = (event) => {
+                const nextType = String(event?.detail?.postType ?? event?.detail?.post_type ?? '').trim();
+                if (nextType === '') {
+                    return;
+                }
+
+                this.applyEditorPostType(nextType);
+            };
+
             window.addEventListener('seo-assistant-navigator-badges', this._onBadgeUpdate);
             window.addEventListener('seo-assistant-switch-panel', this._onSwitchPanel);
             window.addEventListener('seo-sidebar-open-publish-tab', this._onOpenPublishing);
+            window.addEventListener('seo-publish-post-type-changed', this._onPostTypeChanged);
+        },
+
+        applyEditorPostType(postType) {
+            const nextType = String(postType ?? '').trim() || 'article';
+            const nextSupports = isProductPostType(nextType);
+            if (this.editorPostType === nextType && this.supportsProductGalleryUi === nextSupports) {
+                return;
+            }
+
+            this.editorPostType = nextType;
+            this.supportsProductGalleryUi = nextSupports;
+            this.discoverWidgets({ preservePanel: this.activePanel });
         },
 
         destroyWorkspace() {
@@ -148,20 +186,41 @@ export function createSeoAssistantNavigator() {
                 window.removeEventListener('seo-sidebar-open-publish-tab', this._onOpenPublishing);
             }
 
+            if (this._onPostTypeChanged) {
+                window.removeEventListener('seo-publish-post-type-changed', this._onPostTypeChanged);
+            }
+
             this._badgeRefreshRaf && cancelAnimationFrame(this._badgeRefreshRaf);
             this._badgeRefreshRaf = null;
             this._badgeObserver?.disconnect();
             this._badgeObserver = null;
         },
 
-        discoverWidgets() {
+        slotAllowedForPostType(element) {
+            const requiresProduct = element.dataset.assistantRequiresProduct === '1';
+            const requiresNonProduct = element.dataset.assistantRequiresNonProduct === '1';
+
+            if (requiresProduct && !this.supportsProductGalleryUi) {
+                return false;
+            }
+
+            if (requiresNonProduct && this.supportsProductGalleryUi) {
+                return false;
+            }
+
+            return true;
+        },
+
+        discoverWidgets({ preservePanel = null } = {}) {
             const host = this.$el;
             if (!host) {
                 return;
             }
 
             const slots = Array.from(host.querySelectorAll('[data-assistant-widget]')).filter(
-                (element) => element.dataset.assistantWidgetId && !element.dataset.assistantRegisterOnly,
+                (element) => element.dataset.assistantWidgetId
+                    && !element.dataset.assistantRegisterOnly
+                    && this.slotAllowedForPostType(element),
             );
 
             const chips = slots.map((element, index) => ({
@@ -195,14 +254,18 @@ export function createSeoAssistantNavigator() {
 
             this.chips = chips;
             this.searchCatalog = buildSearchCatalog(chips);
-            const defaultId = chips[0]?.id ?? '';
             this.panelFilterActive = true;
-            this.activePanel = defaultId;
-            if (defaultId) {
+
+            const preferred = preservePanel && chips.some((chip) => chip.id === preservePanel)
+                ? preservePanel
+                : (chips[0]?.id ?? '');
+            this.activePanel = preferred;
+
+            if (preferred) {
                 // Sync React mount gate with Alpine exclusive default (seo / first chip).
                 window.dispatchEvent(
                     new CustomEvent('seo-assistant-switch-panel', {
-                        detail: { panel: defaultId, source: 'discover' },
+                        detail: { panel: preferred, source: preservePanel ? 'post-type' : 'discover' },
                     }),
                 );
             }

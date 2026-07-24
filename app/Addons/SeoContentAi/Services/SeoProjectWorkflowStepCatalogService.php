@@ -117,6 +117,62 @@ final class SeoProjectWorkflowStepCatalogService
         ));
     }
 
+    /**
+     * Node prompt đầu tiên theo kind (outline|content|…).
+     */
+    public function firstPromptNodeIdForKind(SeoProjectTask $projectTask, string $kind): ?string
+    {
+        $kind = $this->normalizeRerunKind($kind);
+        foreach ($this->listRerunnableSteps($projectTask) as $step) {
+            if (($step['kind'] ?? '') === $kind) {
+                return (string) $step['node_id'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Prompt node ids từ kind bắt đầu trở đi.
+     *
+     * @return list<string>
+     */
+    public function promptNodeIdsFromKindInclusive(SeoProjectTask $projectTask, string $kind): array
+    {
+        $kind = $this->normalizeRerunKind($kind);
+        $startRank = $this->kindRank($kind);
+        $ids = [];
+        foreach ($this->listRerunnableSteps($projectTask) as $step) {
+            $stepKind = (string) ($step['kind'] ?? 'prompt');
+            if ($this->kindRank($stepKind) < $startRank) {
+                continue;
+            }
+            $ids[] = (string) $step['node_id'];
+        }
+
+        return $this->orderNodeIdsByDependency($projectTask, $ids);
+    }
+
+    public function normalizeRerunKind(string $kind): string
+    {
+        $kind = trim(mb_strtolower($kind));
+
+        return match ($kind) {
+            'article', 'content' => 'content',
+            'outline', 'dan_y', 'dàn ý' => 'outline',
+            default => $kind,
+        };
+    }
+
+    public function kindRank(string $kind): int
+    {
+        return match ($this->normalizeRerunKind($kind)) {
+            'outline' => 0,
+            'content' => 1,
+            default => 2,
+        };
+    }
+
     public function resolveSeoTask(SeoProjectTask $projectTask): ?SeoTask
     {
         $isContentRewrite = (string) $projectTask->type === SeoProjectTask::TYPE_REWRITE
@@ -171,14 +227,15 @@ final class SeoProjectWorkflowStepCatalogService
         }
 
         return match (true) {
+            // Content trước outline: title kiểu «Viết bài theo dàn ý» chứa «dàn ý» nhưng là bước article.
+            str_contains($haystack, 'viết bài') || str_contains($haystack, 'viet bai')
+                || str_contains($haystack, 'nội dung') || str_contains($haystack, 'noi dung')
+                || str_contains($haystack, 'content') || str_contains($haystack, 'article') => 'content',
             str_contains($haystack, 'outline') || str_contains($haystack, 'dàn ý') || str_contains($haystack, 'dan y') => 'outline',
             str_contains($haystack, 'faq') || str_contains($haystack, 'hỏi đáp') || str_contains($haystack, 'hoi dap') => 'faq',
             str_contains($haystack, 'meta title') || str_contains($haystack, 'seo title') => 'meta_title',
             str_contains($haystack, 'meta description') || str_contains($haystack, 'meta desc') => 'meta_description',
             str_contains($haystack, 'slug') => 'slug',
-            str_contains($haystack, 'nội dung') || str_contains($haystack, 'noi dung')
-                || str_contains($haystack, 'content') || str_contains($haystack, 'viết bài')
-                || str_contains($haystack, 'viet bai') || str_contains($haystack, 'article') => 'content',
             default => 'prompt',
         };
     }

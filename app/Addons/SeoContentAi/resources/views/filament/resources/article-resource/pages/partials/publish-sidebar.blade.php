@@ -270,6 +270,8 @@
                     window.dispatchEvent(new CustomEvent('seo-publish-post-type-changed', {
                         detail: { postType: this.postType },
                     }));
+                    // Update Livewire articlePostType only (skipRender) — no WP sync.
+                    void this.pushToWire();
                 },
 
                 applyStatus() {
@@ -401,47 +403,6 @@
     x-data="seoPublishBoxData(@js($publishBoxInitial), @js($publishBoxLabels))"
 >
         <div class="wp-publish-meta space-y-2">
-            @if (\App\Addons\SeoContentAi\Support\SeoAccessControl::canAccessManagerFeatures())
-                <div class="text-xs" x-data="{ markdownImportOpen: false, markdownImportDraft: '' }">
-                    <span class="text-gray-500 dark:text-gray-400">Markdown import:</span>
-                    <button
-                        type="button"
-                        x-on:click="markdownImportOpen = !markdownImportOpen"
-                        class="ml-1 text-sky-600 hover:underline"
-                    >
-                        <span x-show="!markdownImportOpen">Import nhanh</span>
-                        <span x-show="markdownImportOpen" x-cloak>Ẩn</span>
-                    </button>
-                    <div class="mt-2 space-y-2" x-show="markdownImportOpen" x-cloak>
-                            <textarea
-                                x-model="markdownImportDraft"
-                                rows="8"
-                                class="w-full rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-800 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
-                                placeholder="Dán markdown AI vào đây để convert sang HTML editor..."
-                            ></textarea>
-                            <div class="flex items-center gap-2">
-                                <button
-                                    type="button"
-                                    x-on:click="$wire.submitMarkdownImportFromSidebar(markdownImportDraft).then(() => { markdownImportDraft = ''; markdownImportOpen = false; })"
-                                    wire:loading.attr="disabled"
-                                    wire:target="submitMarkdownImportFromSidebar"
-                                    class="text-sky-600 hover:underline disabled:opacity-50"
-                                >
-                                    <span wire:loading.remove wire:target="submitMarkdownImportFromSidebar">Import markdown</span>
-                                    <span wire:loading wire:target="submitMarkdownImportFromSidebar">Đang import…</span>
-                                </button>
-                                <button
-                                    type="button"
-                                    x-on:click="markdownImportOpen = false"
-                                    class="text-gray-500 hover:underline"
-                                >
-                                    Hủy
-                                </button>
-                            </div>
-                    </div>
-                </div>
-            @endif
-
             @if ($record->wp_post_id)
                 <div class="text-xs">
                     <span class="text-gray-500 dark:text-gray-400">WP ID:</span>

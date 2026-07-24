@@ -285,8 +285,10 @@ final class ArticleEditorMediaAiService
      *     prompt_name: string,
      *     post_processing: array{
      *         split_enabled: bool,
+     *         split_grid_size: int,
      *         split_rows: int,
      *         split_columns: int,
+     *         expected_panels: int,
      *         resize_enabled: bool,
      *         resize_width: int|null,
      *         resize_height: int|null,
@@ -941,9 +943,9 @@ final class ArticleEditorMediaAiService
     }
 
     /**
-     * @param  array<string, string>  $variables
+     * @param  array<string, mixed>  $variables
      * @param  array{source: string, prompt: SeoPrompt, task_id: int|null, tool_type: string, media_target: string}  $config
-     * @return array<string, string>
+     * @return array<string, mixed>
      */
     private function attachEditorExecutionVariables(array $variables, array $config): array
     {
@@ -953,6 +955,14 @@ final class ArticleEditorMediaAiService
         $taskId = $config['task_id'] ?? null;
         if (is_int($taskId) && $taskId > 0) {
             $variables[SeoCreateArticleSettingsService::EDITOR_VAR_WORKFLOW_TASK_ID] = (string) $taskId;
+        }
+
+        $prompt = $config['prompt'] ?? null;
+        if ($prompt instanceof SeoPrompt && ImageToolType::fromMixed($config['tool_type'] ?? 'default')->isImagePipeline()) {
+            $variables = PromptPostProcessing::attachSnapshotToVariables(
+                $variables,
+                PromptPostProcessing::fromPrompt($prompt),
+            );
         }
 
         return $variables;

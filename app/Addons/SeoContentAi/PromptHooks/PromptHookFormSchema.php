@@ -31,8 +31,16 @@ final class PromptHookFormSchema
             Forms\Components\Section::make(__('seo-content-ai::filament.prompt.hook_section'))
                 ->description(__('seo-content-ai::filament.prompt.hook_section_description'))
                 ->schema([
+                    Forms\Components\Placeholder::make('hook_quick_split_runtime_note')
+                        ->label('')
+                        ->content(__('seo-content-ai::filament.prompt.hook_quick_split_note'))
+                        ->visible(fn (Get $get): bool => ImageToolType::fromMixed($get('tools') ?? 'default')->isImagePipeline()
+                            && (bool) $get('settings.post_processing.split_enabled'))
+                        ->extraAttributes(['class' => 'text-sm text-gray-600 dark:text-gray-400']),
+
                     Forms\Components\Select::make('hook_key')
                         ->label(__('seo-content-ai::filament.prompt.hook'))
+                        ->helperText(__('seo-content-ai::filament.prompt.hook_helper'))
                         ->options(fn (PromptHookEditorCatalog $catalog): array => array_merge(
                             ['' => (string) __('seo-content-ai::prompt_hooks.none')],
                             $catalog->selectOptions(),

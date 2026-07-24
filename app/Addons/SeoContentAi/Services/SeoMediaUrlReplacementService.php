@@ -178,13 +178,26 @@ final class SeoMediaUrlReplacementService
 
         foreach ($article->articleMetas as $meta) {
             $key = (string) ($meta->meta_key ?? '');
-            if (! in_array($key, $metaKeys, true)) {
-                continue;
-            }
-
             $raw = (string) ($meta->meta_value ?? '');
             if ($raw === '') {
                 continue;
+            }
+
+            // Featured/gallery luôn; meta khác chỉ khi chứa URL cũ (tránh rewrite mù).
+            $mustCheck = in_array($key, $metaKeys, true);
+            if (! $mustCheck) {
+                $haystackLower = mb_strtolower($raw);
+                $touchesOld = false;
+                foreach (array_keys($urlMap) as $oldUrl) {
+                    $needle = mb_strtolower((string) $oldUrl);
+                    if ($needle !== '' && str_contains($haystackLower, $needle)) {
+                        $touchesOld = true;
+                        break;
+                    }
+                }
+                if (! $touchesOld) {
+                    continue;
+                }
             }
 
             $next = $this->replaceInText($raw, $urlMap);

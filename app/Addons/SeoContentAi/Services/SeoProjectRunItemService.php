@@ -109,6 +109,8 @@ final class SeoProjectRunItemService
     {
         $action = $this->resolveAction($task);
         $version = $this->buildOperationVersion($task, $action);
+        // Key unique toàn bảng — bắt buộc gắn run_id, nếu không rerun/run mới cùng task sẽ duplicate.
+        $version = sprintf('%s#run:%d', $version, (int) $run->id);
         $idempotencyKey = $this->idempotencyKeys->generate((int) $task->id, $action->value, $version);
         $snapshot = $this->buildInputSnapshot($project, $task);
 
@@ -368,9 +370,10 @@ final class SeoProjectRunItemService
             }
 
             // Force retry: gắn attempt vào version để idempotency key không trùng lần success trước.
+            // Luôn salt run_id — unique constraint là global trên idempotency_key.
             $operationVersion = $forceRetry
-                ? sprintf('%s#attempt:%d', $version, max(1, $attempt))
-                : $version;
+                ? sprintf('%s#run:%d#attempt:%d', $version, (int) $run->id, max(1, $attempt))
+                : sprintf('%s#run:%d', $version, (int) $run->id);
             $idempotencyKey = $this->idempotencyKeys->generate((int) $task->id, $action->value, $operationVersion);
 
             $runItem->fill([

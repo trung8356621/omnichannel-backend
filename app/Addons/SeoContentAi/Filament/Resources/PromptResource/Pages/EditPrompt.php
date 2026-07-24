@@ -119,7 +119,11 @@ class EditPrompt extends SeoEditRecord
                 : [];
         }
 
-        $data['settings'] = PromptPostProcessing::mergeIntoSettings($settings, $postProcessing);
+        $data['settings'] = PromptPostProcessing::mergeIntoSettings(
+            $settings,
+            $postProcessing,
+            (int) ($this->record->id ?? 0) ?: null,
+        );
 
         return PromptHookFormSchema::normalizeForSave($data);
     }

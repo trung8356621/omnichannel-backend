@@ -146,6 +146,86 @@
     border-bottom-color: rgb(var(--primary-600));
 }
 
+/* Sync queue tab — nổi bật khi còn item, badge số đếm to rõ */
+.seo-internal-tabs a.seo-internal-tabs__queue {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-weight: 600;
+}
+
+.seo-internal-tabs a.seo-internal-tabs__queue.has-queue-items {
+    color: rgb(180 83 9);
+    background: rgb(255 247 237);
+    border-radius: 0.5rem 0.5rem 0 0;
+    border-bottom-color: rgb(245 158 11);
+}
+
+.dark .seo-internal-tabs a.seo-internal-tabs__queue.has-queue-items {
+    color: rgb(253 186 116);
+    background: rgb(154 52 18 / 22%);
+    border-bottom-color: rgb(245 158 11);
+}
+
+.seo-internal-tabs a.seo-internal-tabs__queue.is-active.has-queue-items {
+    color: rgb(154 52 18);
+    border-bottom-color: rgb(217 119 6);
+    border-bottom-width: 3px;
+}
+
+.dark .seo-internal-tabs a.seo-internal-tabs__queue.is-active.has-queue-items {
+    color: rgb(254 215 170);
+    border-bottom-color: rgb(251 191 36);
+}
+
+.seo-internal-tabs__queue-badge {
+    display: inline-flex;
+    min-width: 1.5rem;
+    height: 1.5rem;
+    padding: 0 0.45rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px;
+    background: rgb(245 158 11);
+    color: #fff;
+    font-size: 0.8125rem;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    box-shadow: 0 0 0 2px rgb(255 247 237), 0 1px 3px rgb(180 83 9 / 35%);
+    animation: seo-queue-badge-pulse 1.6s ease-in-out infinite;
+}
+
+.dark .seo-internal-tabs__queue-badge {
+    background: rgb(245 158 11);
+    box-shadow: 0 0 0 2px rgb(67 20 7), 0 1px 4px rgb(0 0 0 / 45%);
+}
+
+.seo-internal-tabs a.seo-internal-tabs__queue.is-active .seo-internal-tabs__queue-badge {
+    background: rgb(217 119 6);
+    font-size: 0.875rem;
+    min-width: 1.65rem;
+    height: 1.65rem;
+}
+
+@keyframes seo-queue-badge-pulse {
+    0%,
+    100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 2px rgb(255 247 237), 0 1px 3px rgb(180 83 9 / 35%);
+    }
+    50% {
+        transform: scale(1.08);
+        box-shadow: 0 0 0 3px rgb(254 243 199), 0 2px 8px rgb(180 83 9 / 45%);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .seo-internal-tabs__queue-badge {
+        animation: none;
+    }
+}
+
 .seo-rank-list {
     list-style: none;
     margin: 0;

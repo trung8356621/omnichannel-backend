@@ -79,6 +79,7 @@ import {
     removeProductAlbumItem,
 } from '../utils/articleProductAlbumStorage';
 import { clearFeaturedImageStorage, saveFeaturedImage } from '../utils/articleFeaturedImageStorage';
+import { clearArticleMediaPickerCache } from '../utils/articleMediaPickerCache';
 import GenerateImageModal from './GenerateImageModal';
 import EditorBusyOverlay from './EditorBusyOverlay';
 import {
@@ -87,13 +88,14 @@ import {
     applyQuickFixAltTitleToBlocks,
     applyQuickFixSlugToBlock,
     applyQuickFixSlugToBlocks,
+    applyRenameMapToFeaturedImageStorage,
     assignInArticleQuickFixIndices,
     buildAltTitleMetaUpdatePayload,
+    buildExactRenameUrlMap,
     buildMergedEditorImagesForPicker,
     buildQuickFixIndexByBlockId,
     collectImagesFromBlocks,
     filterSupplementalDuplicatesOfBlockRows,
-    hasNonWordPressArticleImages,
     computeQuickFixAltTitleSupplementalOutcome,
     computeQuickFixSlugSupplementalOutcome,
     executeSeoMediaSlugRenamesTwoPhase,
@@ -2153,7 +2155,7 @@ export default function SeoArticleEditor({
     connectionHash = '',
     expectedUpdatedAt = '',
     expectedContentHash = '',
-    supportsProductGallery = false,
+    supportsProductGallery: supportsProductGalleryProp = false,
     productCategoryOptions = [],
     initialProductGallery = [],
     initialFaqs = [],
@@ -2165,6 +2167,7 @@ export default function SeoArticleEditor({
     initialGalleryDescription = '',
     perfDebug = false,
 }) {
+    const [supportsProductGallery, setSupportsProductGallery] = useState(() => Boolean(supportsProductGalleryProp));
     const historyStep = editorSettings?.history_step ?? 20;
     const connectionHashRef = useRef(connectionHash);
     connectionHashRef.current = connectionHash;
@@ -2357,7 +2360,7 @@ export default function SeoArticleEditor({
     const [virtualReviews, setVirtualReviews] = useState(() =>
         Array.isArray(initialVirtualReviews) ? initialVirtualReviews : [],
     );
-    const isProductPost = String(initialPostType ?? '').trim() === 'product' || Boolean(supportsProductGallery);
+    const isProductPost = supportsProductGallery;
     const showReviewsTab = editorSettings?.show_reviews_tab !== false;
     const canQuickCreateReviews = editorSettings?.can_quick_create_reviews === true;
     const showConfigureReviewsLink = editorSettings?.show_configure_reviews_link === true;
@@ -4497,15 +4500,55 @@ export default function SeoArticleEditor({
         pendingLocalRenameQueueRef.current = [];
         pendingQuickFixKeywordRef.current = '';
 
+        // Deactivate TipTap trước khi patch — tránh flush HTML cũ đè URL mới.
+        if (!tempMergeRef.current) {
+            blockFlushRef.current = null;
+        }
+        setActiveBlockId(null);
+        setGlobalEditor(null);
+
         const nextBlocks = finalizeBlocksAfterWpRename(blocksRef.current, wpRenamed, localResults);
         blocksRef.current = nextBlocks;
         setBlocks(nextBlocks);
+
+        // Sync TipTap document thật (không chỉ DOM) cho mọi editor còn sống.
+        nextBlocks.forEach((block) => {
+            if (String(block?.type ?? '') === 'image') {
+                return;
+            }
+            const editor = blockEditorsRef.current.get(block.id);
+            if (!editor || editor.isDestroyed) {
+                return;
+            }
+            const nextHtml = String(block.content ?? '').trim() || '<p></p>';
+            try {
+                editor.commands.setContent(nextHtml, { emitUpdate: false });
+            } catch {
+                // ignore destroyed/race
+            }
+        });
+
         setSupplementalImages((prev) =>
             resetSupplementalImagesAfterSlugRename(prev, nextBlocks, wpRenamed, localResults),
         );
+
+        const urlMap = buildExactRenameUrlMap(wpRenamed, localResults);
+        if (articleId && Object.keys(urlMap).length > 0) {
+            syncProductAlbumUrlsFromBlockImages(articleId, nextBlocks, wpRenamed, localResults);
+            applyRenameMapToFeaturedImageStorage(articleId, wpRenamed, localResults);
+        }
+
+        const siteIdForCache = Number(siteIdRef.current ?? 0) || 0;
+        if (siteIdForCache > 0) {
+            clearArticleMediaPickerCache(siteIdForCache);
+        }
+
         setImagesReloadKey((k) => k + 1);
+        queueMicrotask(() => publishEditorImagesCatalogRef.current?.(true));
         scheduleAutosave();
-    }, [scheduleAutosave]);
+
+        return { nextBlocks, wpRenamed, localResults, urlMap };
+    }, [articleId, scheduleAutosave, setGlobalEditor]);
 
     const waitForWordPressSlugRenameFinished = useCallback((batchCount = 1) => {
         const total = Number(batchCount);
@@ -4532,11 +4575,11 @@ export default function SeoArticleEditor({
         });
     }, []);
 
-    const finalizeSlugRenameSideEffects = useCallback(() => {
+    const finalizeSlugRenameSideEffects = useCallback((wpRenamed = [], localResults = []) => {
         const currentBlocks = blocksRef.current;
 
         if (supportsProductGallery && articleId) {
-            syncProductAlbumUrlsFromBlockImages(articleId, currentBlocks);
+            syncProductAlbumUrlsFromBlockImages(articleId, currentBlocks, wpRenamed, localResults);
             const album = loadProductAlbum(articleId);
             if (album.length > 0) {
                 saveFeaturedImage(articleId, {
@@ -4552,6 +4595,11 @@ export default function SeoArticleEditor({
                     }),
                 );
             }
+        }
+
+        const siteIdForCache = Number(siteIdRef.current ?? 0) || 0;
+        if (siteIdForCache > 0) {
+            clearArticleMediaPickerCache(siteIdForCache);
         }
 
         setImagesReloadKey((key) => key + 1);
@@ -4806,19 +4854,20 @@ export default function SeoArticleEditor({
             try {
                 slugRenameManagedByBatchRef.current = true;
 
-                // Chỉ save trước khi có ảnh không phải thuần WordPress.
-                const needsSaveBeforeFix = hasNonWordPressArticleImages([
-                    ...collectImagesFromBlocks(blocksRef.current),
-                    ...(sourceRows ?? []),
-                ]);
-                if (needsSaveBeforeFix) {
-                    window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết trước khi sửa slug…');
+                // Always save trước rename — tránh rename song song với editor dirty / body stale.
+                // Docs: docs/article-editor/image-slug-rename.md
+                window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết trước khi sửa slug…');
+                try {
                     await saveCurrentArticleFromEditor({
                         reason: 'before_fix_slug_all',
                         siteId: Number(siteIdRef.current ?? 0) || 0,
                         keepOverlay: true,
                         silentNotification: true,
                     });
+                } catch (saveError) {
+                    throw new Error(
+                        String(saveError?.message ?? t('editor_try_again_later')),
+                    );
                 }
 
                 window.__seoArticleHeavyActionOverlay?.setStatusMessage?.(
@@ -4852,20 +4901,32 @@ export default function SeoArticleEditor({
                         })),
                     );
                     localSkipped = Number(localFixResult?.skipped_count ?? 0) || 0;
-                    localFixed = Array.isArray(localFixResult?.replacements)
-                        ? localFixResult.replacements.length
+                    const renamedList = Array.isArray(localFixResult?.renamed)
+                        ? localFixResult.renamed
+                        : (Array.isArray(localFixResult?.replacements) ? localFixResult.replacements : []);
+                    localFixed = renamedList.length > 0
+                        ? renamedList.length
                         : Math.max(0, totalLocalRenames - localSkipped);
                 }
 
-                // Chỉ patch slug/URL trên state hiện tại — không reload/rebuild từ response cũ.
+                // Patch editor document/state từ exact rename map — không đoán URL / không chỉ sửa DOM.
                 skipNextAutosave.current = true;
                 pendingLocalRenameQueueRef.current = [...(mergedPreview.localRenameQueue ?? [])];
+                const apiReplacements = Array.isArray(localFixResult?.renamed) && localFixResult.renamed.length > 0
+                    ? localFixResult.renamed.map((row) => ({
+                        media_id: Number(row?.image_id ?? row?.media_id ?? 0) || null,
+                        old_url: String(row?.old_url ?? '').trim(),
+                        new_url: String(row?.new_url ?? '').trim(),
+                        old_slug: String(row?.old_filename ?? row?.old_slug ?? '').replace(/\.[^.]+$/, ''),
+                        new_slug: String(row?.new_slug ?? row?.new_filename ?? '').replace(/\.[^.]+$/, ''),
+                    }))
+                    : (localFixResult?.replacements ?? []);
                 pendingLocalRenameResultsRef.current = mapArticleSlugFixReplacementsToLocalResults(
-                    localFixResult?.replacements,
+                    apiReplacements,
                     mergedPreview.localRenameQueue ?? [],
                 );
-                applySlugRenameFinished(wpDetail ?? { success: true, renamed: [] });
-                finalizeSlugRenameSideEffects();
+                const applied = applySlugRenameFinished(wpDetail ?? { success: true, renamed: [] });
+                finalizeSlugRenameSideEffects(applied?.wpRenamed ?? [], applied?.localResults ?? []);
 
                 cancelLocalDraftSave();
                 window.__seoCancelArticleDraftAutosave?.();
@@ -4883,6 +4944,23 @@ export default function SeoArticleEditor({
                     base_content_hash: hashAfterFix,
                     version: hashAfterFix,
                 }));
+
+                // Persist URL mới lần nữa — tránh save sau đó ghi đè body server bằng state cũ.
+                window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu URL ảnh mới…');
+                try {
+                    await saveCurrentArticleFromEditor({
+                        reason: 'after_fix_slug_all',
+                        siteId: Number(siteIdRef.current ?? 0) || 0,
+                        keepOverlay: true,
+                        silentNotification: true,
+                    });
+                } catch (afterSaveError) {
+                    notifyEditor(
+                        t('editor_quick_fix_slug_all_failed_title'),
+                        String(afterSaveError?.message ?? t('editor_try_again_later')),
+                        'warning',
+                    );
+                }
 
                 const wpRenamedCount = Array.isArray(wpDetail?.renamed) ? wpDetail.renamed.length : 0;
                 const totalDone = Math.max(wpRenamedCount, totalWpRenames) + localFixed;
@@ -8221,7 +8299,10 @@ export default function SeoArticleEditor({
                 return;
             }
 
+            const normalized = nextType.toLowerCase();
+            const nextSupportsGallery = normalized === 'product' || normalized === 'e-commerce';
             setArticleType(nextType);
+            setSupportsProductGallery(nextSupportsGallery);
             requestAnalyze();
         };
 
@@ -9948,15 +10029,40 @@ export default function SeoArticleEditor({
         const onRemoved = (event) => {
             const detail = event.detail ?? {};
             const url = String(detail.url || '').trim();
-            if (!url) {
+            const urlKey = url ? normalizeImageSrcKey(url) : '';
+            const seoId = Number(detail.seo_media_id ?? detail.seoMediaId ?? 0);
+            const wpId = Number(detail.wp_attachment_id ?? detail.wpAttachmentId ?? 0);
+            if (!urlKey && seoId <= 0 && wpId <= 0) {
                 return;
             }
 
             setSupplementalImages((prev) =>
-                (Array.isArray(prev) ? prev : []).filter(
-                    (row) => String(row?.src || '').trim() !== url,
-                ),
+                (Array.isArray(prev) ? prev : []).filter((row) => {
+                    const rowSeo = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
+                    if (seoId > 0 && rowSeo > 0 && seoId === rowSeo) {
+                        return false;
+                    }
+                    const rowWp = Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0);
+                    if (wpId > 0 && rowWp > 0 && wpId === rowWp) {
+                        return false;
+                    }
+                    if (!urlKey) {
+                        return true;
+                    }
+                    const candidates = [
+                        row?.src,
+                        row?.localSrc,
+                        row?.local_src,
+                        row?.wpSrc,
+                        row?.wp_url,
+                    ];
+                    return !candidates.some(
+                        (candidate) => normalizeImageSrcKey(String(candidate || '').trim()) === urlKey,
+                    );
+                }),
             );
+            setImagesReloadKey((key) => key + 1);
+            queueMicrotask(() => publishEditorImagesCatalogRef.current?.(true));
         };
 
         window.addEventListener('article-media-selected', onSelected);

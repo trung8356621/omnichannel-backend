@@ -40,8 +40,18 @@ final class WpSyncJobStatusAndLeaseContractTest extends TestCase
         self::assertSame(120, ArticleWpSyncLeaseService::LEASE_SECONDS);
         self::assertSame(20, ArticleWpSyncLeaseService::HEARTBEAT_INTERVAL_SECONDS);
         self::assertSame('idle', ArticleWpSyncLeaseService::ARTICLE_IDLE);
+        self::assertSame(3, ArticleWpSyncLeaseService::MAX_STALE_AUTO_RETRIES);
         self::assertTrue(method_exists(ArticleWpSyncLeaseService::class, 'recoverOrphanWpSyncQueueMetas'));
         self::assertTrue(method_exists(ArticleWpSyncLeaseService::class, 'healArticleOrphanMeta'));
+        self::assertTrue(method_exists(ArticleWpSyncLeaseService::class, 'markStale'));
+
+        $leaseSource = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/ArticleWpSyncLeaseService.php',
+        );
+        self::assertStringContainsString('maybeAutoRetryAfterStale', $leaseSource);
+        self::assertStringContainsString('stale_auto_retries', $leaseSource);
+        self::assertStringContainsString('ManualWordPressSyncJob::dispatch', $leaseSource);
+        self::assertStringContainsString('autoRetry: false', $leaseSource);
     }
 
     public function test_manual_job_requires_sync_job_id_constructor_arg(): void

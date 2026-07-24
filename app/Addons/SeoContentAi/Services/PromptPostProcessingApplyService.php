@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Support\PromptPostProcessing;
+use App\Addons\SeoContentAi\Support\QuickSplitCanvasValidator;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Intervention\Image\Format;
@@ -23,7 +24,7 @@ final class PromptPostProcessingApplyService
 
     public function applyIfConfigured(SeoMedia $media, SeoPrompt $prompt): PromptPostProcessingApplyResult
     {
-        $config = PromptPostProcessing::fromPrompt($prompt);
+        $config = PromptPostProcessing::resolveFromMediaOrPrompt($media, $prompt);
 
         if (! PromptPostProcessing::isActive($config)) {
             return PromptPostProcessingApplyResult::skipped($media);
@@ -73,8 +74,10 @@ final class PromptPostProcessingApplyService
     /**
      * @param  array{
      *     split_enabled: bool,
+     *     split_grid_size: int,
      *     split_rows: int,
      *     split_columns: int,
+     *     expected_panels: int,
      *     resize_enabled: bool,
      *     resize_width: int|null,
      *     resize_height: int|null,
@@ -84,23 +87,40 @@ final class PromptPostProcessingApplyService
     {
         $absolutePath = $this->resolveAbsolutePath($media);
         if ($absolutePath === null) {
-            return PromptPostProcessingApplyResult::failed($media, 'Không tìm thấy file ảnh để tách lưới.');
+            return PromptPostProcessingApplyResult::failed(
+                $media,
+                'Không tìm thấy file ảnh để tách lưới.',
+                'QUICK_SPLIT_SOURCE_MISSING',
+            );
         }
 
-        $rows = $config['split_rows'];
-        $cols = $config['split_columns'];
+        $gridSize = (int) $config['split_grid_size'];
+        $rows = $gridSize;
+        $cols = $gridSize;
+        $expectedPanels = $gridSize * $gridSize;
 
         $sourceBinary = file_get_contents($absolutePath);
         if (! is_string($sourceBinary) || $sourceBinary === '') {
-            return PromptPostProcessingApplyResult::failed($media, 'Không đọc được file ảnh để tách lưới.');
+            return PromptPostProcessingApplyResult::failed(
+                $media,
+                'Không đọc được file ảnh để tách lưới.',
+                'QUICK_SPLIT_SOURCE_UNREADABLE',
+            );
         }
 
         $source = Image::decodeBinary($sourceBinary);
         $origWidth = $source->width();
         $origHeight = $source->height();
 
-        if ($origWidth < 2 || $origHeight < 2) {
-            return PromptPostProcessingApplyResult::failed($media, 'Ảnh quá nhỏ để tách lưới.');
+        $validation = QuickSplitCanvasValidator::validate($origWidth, $origHeight, $gridSize);
+        if ($validation !== null) {
+            $this->logSplitFailure($media, $prompt, $config, $origWidth, $origHeight, $validation['code']);
+
+            return PromptPostProcessingApplyResult::failed(
+                $media,
+                $validation['message'],
+                $validation['code'],
+            );
         }
 
         $baseSlug = trim((string) ($media->slug ?? ''));
@@ -113,22 +133,16 @@ final class PromptPostProcessingApplyService
 
         $siteId = (int) ($media->site_id ?? 0) > 0 ? (int) $media->site_id : null;
         $article = $this->resolveArticle($media);
-        $cellWidth = intdiv($origWidth, $cols);
-        $cellHeight = intdiv($origHeight, $rows);
+        $cellWidth = QuickSplitCanvasValidator::cellSize($origWidth, $gridSize);
+        $cellHeight = $cellWidth;
         $pieces = [];
 
         for ($row = 0; $row < $rows; $row++) {
             for ($col = 0; $col < $cols; $col++) {
                 $x = $col * $cellWidth;
                 $y = $row * $cellHeight;
-                $width = $col === $cols - 1 ? ($origWidth - $x) : $cellWidth;
-                $height = $row === $rows - 1 ? ($origHeight - $y) : $cellHeight;
 
-                if ($width < 1 || $height < 1) {
-                    continue;
-                }
-
-                $pieceImage = Image::decodeBinary($sourceBinary)->crop($width, $height, $x, $y);
+                $pieceImage = Image::decodeBinary($sourceBinary)->crop($cellWidth, $cellHeight, $x, $y);
                 $binary = (string) $pieceImage->encodeUsingFormat(Format::PNG);
 
                 if ($config['resize_enabled']) {
@@ -143,6 +157,7 @@ final class PromptPostProcessingApplyService
                         return PromptPostProcessingApplyResult::failed(
                             $media,
                             (string) ($resized['message'] ?? 'Không resize được ảnh con.'),
+                            'QUICK_SPLIT_RESIZE_FAILED',
                         );
                     }
 
@@ -156,8 +171,16 @@ final class PromptPostProcessingApplyService
             }
         }
 
-        if ($pieces === []) {
-            return PromptPostProcessingApplyResult::failed($media, 'Không tạo được ảnh con từ lưới.');
+        if (count($pieces) !== $expectedPanels) {
+            foreach ($pieces as $piece) {
+                $this->deletePieceMedia($piece);
+            }
+
+            return PromptPostProcessingApplyResult::failed(
+                $media,
+                sprintf('Không tạo đủ %d ảnh con từ lưới %d×%d.', $expectedPanels, $gridSize, $gridSize),
+                'QUICK_SPLIT_INCOMPLETE_PIECES',
+            );
         }
 
         $this->persistSplitPiecesOnSource($media, $pieces);
@@ -172,6 +195,43 @@ final class PromptPostProcessingApplyService
         );
 
         return PromptPostProcessingApplyResult::applied($pieces[0], $pieces, $message);
+    }
+
+    /**
+     * @param  array{
+     *     split_enabled: bool,
+     *     split_grid_size: int,
+     *     split_rows: int,
+     *     split_columns: int,
+     *     expected_panels: int,
+     *     resize_enabled: bool,
+     *     resize_width: int|null,
+     *     resize_height: int|null,
+     * }  $config
+     */
+    private function logSplitFailure(
+        SeoMedia $media,
+        SeoPrompt $prompt,
+        array $config,
+        int $width,
+        int $height,
+        string $code,
+    ): void {
+        $context = [
+            'seo_media_id' => (int) $media->id,
+            'prompt_id' => (int) $prompt->id,
+            'grid_size' => (int) $config['split_grid_size'],
+            'expected_panels' => (int) $config['expected_panels'],
+            'source_width' => $width,
+            'source_height' => $height,
+            'error_code' => $code,
+        ];
+
+        try {
+            \Illuminate\Support\Facades\Log::warning('seo.prompt.quick_split.failed', $context);
+        } catch (\Throwable) {
+            // ignore
+        }
     }
 
     /**
@@ -594,6 +654,7 @@ final class PromptPostProcessingApplyResult
         public readonly SeoMedia $primary,
         public readonly array $pieces = [],
         public readonly ?string $message = null,
+        public readonly ?string $errorCode = null,
     ) {}
 
     public static function skipped(SeoMedia $media): self
@@ -609,9 +670,9 @@ final class PromptPostProcessingApplyResult
         return new self(true, $primary, $pieces, $message);
     }
 
-    public static function failed(SeoMedia $media, string $message): self
+    public static function failed(SeoMedia $media, string $message, ?string $errorCode = null): self
     {
-        return new self(false, $media, [], $message);
+        return new self(false, $media, [], $message, $errorCode);
     }
 
     /**

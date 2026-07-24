@@ -1,6 +1,6 @@
 /**
  * Di chuyển Filament header actions vào More menu (secondary group).
- * Thứ tự More: History / View WP (Blade) | Debug → Restore → Prompts/Assign | Delete
+ * Thứ tự More: History / View WP (Blade) | Rerun → Restore → Prompts/Assign | Delete
  */
 
 function actionFingerprint(element) {
@@ -8,8 +8,8 @@ function actionFingerprint(element) {
         return '';
     }
 
-    if (element.hasAttribute('data-seo-debug-md-import')) {
-        return 'debug-md-import';
+    if (element.hasAttribute('data-seo-pipeline-rerun')) {
+        return 'pipeline-rerun';
     }
 
     if (element.hasAttribute('data-seo-shortcuts-wrap') || element.closest?.('[data-seo-shortcuts-below]')) {
@@ -85,7 +85,7 @@ function isPersistentToolbarChild(child) {
         || child.hasAttribute('data-seo-page-actions-more')
         || child.classList.contains('seo-editor-page-actions__divider')
         || child.hasAttribute('data-seo-shortcuts-wrap')
-        || child.hasAttribute('data-seo-debug-md-import')
+        || child.hasAttribute('data-seo-pipeline-rerun')
         || child.hasAttribute('data-seo-delete-action-wrap')
         || child.hasAttribute('data-seo-restore-action-wrap')
         || child.classList.contains('seo-editor-delete-action')
@@ -190,7 +190,7 @@ function clearMovedHeaderActionsFromSlot() {
         if (
             child.hasAttribute('data-seo-restore-action-wrap')
             || child.classList.contains('seo-editor-restore-action')
-            || child.hasAttribute('data-seo-debug-md-import')
+            || child.hasAttribute('data-seo-pipeline-rerun')
         ) {
             return;
         }
@@ -237,7 +237,7 @@ function normalizeToolbarLayout() {
 
         if (
             child.matches('.fi-btn, a.fi-btn, .fi-icon-btn, .seo-editor-toolbar-btn, .seo-editor-menu-item')
-            || child.hasAttribute('data-seo-debug-md-import')
+            || child.hasAttribute('data-seo-pipeline-rerun')
             || child.hasAttribute('data-seo-restore-action-wrap')
         ) {
             secondary?.appendChild(child);
@@ -252,13 +252,13 @@ function normalizeToolbarLayout() {
     dedupeHostChildren(secondary);
     compactToolbarButtons(morePanel ?? slot);
 
-    const debugButton = secondary?.querySelector('[data-seo-debug-md-import]');
+    const rerunButton = secondary?.querySelector('[data-seo-pipeline-rerun]');
     const restoreAction = findRestoreAction(secondary);
     const middleButtons = secondary
-        ? [...secondary.children].filter((child) => child !== debugButton && child !== restoreAction)
+        ? [...secondary.children].filter((child) => child !== rerunButton && child !== restoreAction)
         : [];
 
-    [debugButton, restoreAction, ...middleButtons]
+    [rerunButton, restoreAction, ...middleButtons]
         .filter(Boolean)
         .forEach((child) => secondary.appendChild(child));
 }

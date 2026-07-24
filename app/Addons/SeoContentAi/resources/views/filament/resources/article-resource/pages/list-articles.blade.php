@@ -31,14 +31,18 @@
         >
             {{ __('seo-content-ai::filament.article_list.tab_categories') }}
         </a>
+        @php($syncQueueBadge = $this->getSyncQueueBadgeCount())
         <a
             href="{{ $this->getContentTabUrl(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE) }}"
-            @class(['is-active' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE])
+            @class([
+                'seo-internal-tabs__queue',
+                'is-active' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE,
+                'has-queue-items' => $syncQueueBadge > 0,
+            ])
         >
             {{ __('seo-content-ai::filament.article_list.tab_queue') }}
-            @php($syncQueueBadge = $this->getSyncQueueBadgeCount())
             @if ($syncQueueBadge > 0)
-                <span class="ml-1 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-warning-500 px-1.5 text-[11px] font-semibold text-white">{{ $syncQueueBadge }}</span>
+                <span class="seo-internal-tabs__queue-badge" aria-label="{{ $syncQueueBadge }}">{{ $syncQueueBadge }}</span>
             @endif
         </a>
         <a

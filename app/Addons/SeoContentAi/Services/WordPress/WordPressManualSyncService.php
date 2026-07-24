@@ -14,9 +14,12 @@ use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\User;
+use App\Support\RuntimeLogger;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Throwable;
 
 /**
  * Manual WordPress UI entry → domain sync (no Automation Rule / AvailabilityGate).
@@ -189,8 +192,8 @@ final class WordPressManualSyncService
         }
 
         $lockKey = 'manual-wp-sync:'.(int) $article->id;
-        $lock = Cache::lock($lockKey, 120);
-        if (! $lock->get()) {
+        [$lock, $acquired] = $this->acquireEnqueueLock($lockKey, 120);
+        if (! $acquired) {
             // isActive() tự clear meta mồ côi (pending không có job).
             if ($this->syncQueue->isActive($article)) {
                 return $this->deduplicated($this->syncQueue->activeOperation($article) ?? [], $article);
@@ -281,12 +284,78 @@ final class WordPressManualSyncService
                 ],
             ];
         } finally {
-            try {
-                $lock->release();
-            } catch (\Throwable) {
-                // lock may already be released
+            if ($lock instanceof Lock) {
+                try {
+                    $lock->release();
+                } catch (Throwable) {
+                    // lock may already be released
+                }
             }
         }
+    }
+
+    /**
+     * Prefer database locks. File driver can throw intermittent
+     * "Failed to open stream: No such file or directory" on nested hash dirs
+     * (permission / cache:clear race). DB lease still serializes enqueue when
+     * cache lock cannot be acquired safely.
+     *
+     * @return array{0: ?Lock, 1: bool} [lock, acquired]
+     */
+    private function acquireEnqueueLock(string $lockKey, int $seconds): array
+    {
+        $stores = $this->enqueueLockStores();
+
+        foreach ($stores as $storeName) {
+            for ($attempt = 1; $attempt <= 2; $attempt++) {
+                try {
+                    $lock = Cache::store($storeName)->lock($lockKey, $seconds);
+                    if ($lock->get()) {
+                        return [$lock, true];
+                    }
+
+                    return [null, false];
+                } catch (Throwable $e) {
+                    RuntimeLogger::warning('manual_wordpress_sync.lock_failed', [
+                        'lock_key' => $lockKey,
+                        'store' => $storeName,
+                        'attempt' => $attempt,
+                        'exception' => $e::class,
+                        'message' => $e->getMessage(),
+                    ]);
+
+                    if ($attempt < 2) {
+                        usleep(50_000);
+                    }
+                }
+            }
+        }
+
+        // Continue without cache lock — ArticleWpSyncLeaseService::enqueue uses DB lockForUpdate.
+        return [null, true];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function enqueueLockStores(): array
+    {
+        $stores = [];
+        $default = (string) config('cache.default', 'database');
+
+        if (is_array(config('cache.stores.database'))) {
+            $stores[] = 'database';
+        }
+
+        if ($default !== '' && $default !== 'database') {
+            $stores[] = $default;
+        }
+
+        if ($stores === []) {
+            $stores[] = $default !== '' ? $default : 'file';
+        }
+
+        return array_values(array_unique($stores));
     }
 
     /**

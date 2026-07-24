@@ -103,6 +103,26 @@ window.addEventListener('seo-editor-slug-updated', (event) => {
     });
 });
 
+window.addEventListener('seo-article-pipeline-rerun-completed', (event) => {
+    const articleId = Number(event?.detail?.articleId ?? 0);
+    if (!Number.isFinite(articleId) || articleId <= 0) {
+        return;
+    }
+
+    let siteId = 0;
+    try {
+        const meta = document.getElementById('seo-article-meta')?.textContent;
+        siteId = Number(meta ? JSON.parse(meta)?.site_id : 0) || 0;
+    } catch (_error) {
+        siteId = 0;
+    }
+
+    clearArticleLocalState(articleId, siteId);
+    window.setTimeout(() => {
+        window.location.reload();
+    }, 150);
+});
+
 window.normalizeArticleSlug = normalizeArticleSlug;
 window.__seoClearArticleLocalState = clearArticleLocalState;
 window.__seoWpCategoryStorage = {

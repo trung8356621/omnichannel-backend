@@ -127,9 +127,9 @@ resources/js/
 │   ├── ArticleImagesTab.jsx
 │   ├── GenerateImageModal.jsx
 │   ├── ArticleFaqEditor.jsx
-| `keywordReviewApi.js` | `utils/keywordReviewApi.js` | API đánh giá/khôi phục keyword (`POST /api/seo/keywords/{id}/review`, `reason_id` hoặc `custom_reason_text`) |
+| `keywordReviewApi.js` | `utils/keywordReviewApi.js` | `ensureKeywordForReview` (`POST /api/seo/keywords/ensure-for-review`); review/restore (`POST /api/seo/keywords/{id}/review|restore`, `reason_id` hoặc `custom_reason_text`) |
 | `keywordReviewReasonUtils.js` | `utils/keywordReviewReasonUtils.js` | Xếp hạng/lọc lý do + recent reason (`sessionStorage`) cho popover |
-| `KeywordReviewPopover.jsx` | `components/KeywordReviewPopover.jsx` | Popover inline cạnh dòng gợi ý: 2 nút warning/danger, combobox lý do, submit ngay (không modal) |
+| `KeywordReviewPopover.jsx` | `components/KeywordReviewPopover.jsx` | Popover inline cạnh dòng gợi ý: 2 nút warning/danger; `ArticleLinksSidebar.openReviewPopover` đảm bảo `keyword_id` (ensure nếu thiếu) trước khi mở |
 │   ├── ArticleAiChatPanel.jsx
 │   ├── MediaLibraryTools.jsx       # (chỉ qua orphan entry)
 │   ├── ImageWatermarkEditor.jsx    # Canvas WM đơn giản (modal cũ)
@@ -222,6 +222,7 @@ flowchart TB
 |--------|--------|
 | `searchInternalLinkArticles` | `LinkEditBubble.jsx` — popup «Tìm bài viết (cùng domain)»; cùng `ArticleInternalLinkSearchService` tái dụng bởi content-keyword fallback |
 | `POST .../editor/links/suggestions` | `ArticleLinksSidebar.jsx` — «Tạo gợi ý liên kết» (`mode=full`) / «Tạo gợi ý bổ sung» (`mode=fallback`); HTML qua event `seo-editor-document-html-request` ← `SeoArticleEditor` |
+| `POST /api/seo/keywords/ensure-for-review` | `ArticleLinksSidebar.openReviewPopover` khi suggestion thiếu `keyword_id` (fallback phrase) — trước `KeywordReviewPopover` |
 | `mountAction('assignKeywordAnchorToContentProject')` | `LinkEditBubble.jsx` — `anchorPhrase` từ text bôi đen editor (không lấy ô search) |
 | `persistProductAlbumFromClient` | `articleProductAlbumStorage.js` |
 | `renameAttachmentSlugsOnWordPress` | `SeoArticleEditor.jsx` |

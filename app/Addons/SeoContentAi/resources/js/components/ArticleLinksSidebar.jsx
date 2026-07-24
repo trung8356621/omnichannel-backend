@@ -27,6 +27,7 @@ import {
     saveExcludedLinkSuggestions,
 } from '../utils/articleExcludedLinkSuggestionsStorage';
 import { csrfToken, seoArticleApiFetch } from '../utils/seoArticleApi';
+import { ensureKeywordForReview } from '../utils/keywordReviewApi';
 import {
     normalizeLinksPayload,
     readCoreArticleIdentity,
@@ -945,10 +946,75 @@ export default function ArticleLinksSidebar({
         });
     };
 
-    const openReviewPopover = (item, itemKey, severity, anchorEl) => {
-        const keywordId = Number(item?.keyword_id ?? 0);
+    const openReviewPopover = async (item, itemKey, severity, anchorEl) => {
         const text = String(item?.text ?? '').trim();
-        if (keywordId <= 0 || text === '' || !(anchorEl instanceof HTMLElement)) {
+        if (text === '' || !(anchorEl instanceof HTMLElement)) {
+            return;
+        }
+
+        let keywordId = Number(item?.keyword_id ?? 0);
+        if (keywordId <= 0) {
+            const { siteId } = articleMetaRef.current;
+            if (siteId <= 0) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('keyword_review_missing_keyword_title'),
+                            body: t('keyword_review_missing_keyword_body'),
+                            status: 'warning',
+                        },
+                    }),
+                );
+                return;
+            }
+
+            setReviewLoadingKey(itemKey);
+            try {
+                const ensured = await ensureKeywordForReview({
+                    phrase: text,
+                    site_id: siteId,
+                    target_url: item?.href ?? item?.target_url ?? null,
+                    target_article_id: item?.target_article_id ?? null,
+                });
+                keywordId = Number(ensured.id ?? 0);
+                if (keywordId > 0) {
+                    const labelKey = normalizeLinkLabel(text);
+                    const patchList = (list) => (Array.isArray(list) ? list.map((row) => (
+                        normalizeLinkLabel(row?.text) === labelKey
+                            ? { ...row, keyword_id: keywordId }
+                            : row
+                    )) : list);
+                    keywordCatalogRef.current = patchList(keywordCatalogRef.current);
+                    stableSuggestionsRef.current = patchList(stableSuggestionsRef.current);
+                    stableExternalSuggestionsRef.current = patchList(stableExternalSuggestionsRef.current);
+                    setCatalogVersion((value) => value + 1);
+                }
+            } catch (error) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('keyword_review_missing_keyword_title'),
+                            body: String(error?.message ?? t('keyword_review_missing_keyword_body')),
+                            status: 'danger',
+                        },
+                    }),
+                );
+                return;
+            } finally {
+                setReviewLoadingKey('');
+            }
+        }
+
+        if (keywordId <= 0) {
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('keyword_review_missing_keyword_title'),
+                        body: t('keyword_review_missing_keyword_body'),
+                        status: 'warning',
+                    },
+                }),
+            );
             return;
         }
 

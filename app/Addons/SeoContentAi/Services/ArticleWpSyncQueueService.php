@@ -118,7 +118,8 @@ final class ArticleWpSyncQueueService
                 $this->lease->markStale($job, 'Active lease expired on isActive check');
                 $this->lease->releaseArticleCacheLocks((int) $article->id);
 
-                return false;
+                // Auto-retry có thể đã enqueue job mới — coi là vẫn active.
+                return $this->lease->activeJobForArticle((int) $article->id) instanceof SeoArticleWpSyncJob;
             }
 
             return true;
@@ -139,6 +140,12 @@ final class ArticleWpSyncQueueService
         if ($job instanceof SeoArticleWpSyncJob && $this->lease->isLeaseExpired($job)) {
             $this->lease->markStale($job, 'Active lease expired on activeOperation poll');
             $this->lease->releaseArticleCacheLocks((int) $article->id);
+
+            $retried = $this->lease->activeJobForArticle((int) $article->id);
+            if ($retried instanceof SeoArticleWpSyncJob) {
+                return $this->lease->toOperationPayload($retried);
+            }
+
             $job = $job->fresh();
 
             return $job instanceof SeoArticleWpSyncJob

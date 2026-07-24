@@ -21,7 +21,7 @@
 |-----|----------|----------------|
 | Bài viết | `ListArticles::TAB_POSTS` (`posts`) | `type` post/product; **`is_reviewed = 0`**; **loại `skip_seo_audit`** |
 | Danh mục | `TAB_CATEGORIES` (`categories`) | `type` category/product_category; **`is_reviewed = 0`**; **loại `skip_seo_audit`** |
-| Hàng đợi WP | `TAB_QUEUE` (`queue`) | Meta `wp_sync_queue`; **`is_reviewed = 0`**; **loại `skip_seo_audit`** |
+| Hàng đợi WP | `TAB_QUEUE` (`queue`) | Meta `wp_sync_queue`; **`is_reviewed = 0`**; **loại `skip_seo_audit`**; badge `getSyncQueueBadgeCount()` + CSS `seo-internal-tabs__queue` / `__queue-badge` (amber + pulse khi count > 0; `domain-overview.css`) |
 | Đã duyệt | `TAB_REVIEWED` (`reviewed`) | `is_reviewed = 1` + `reviewed_at` not null — partial `reviewed-articles-tab.blade.php`; **loại `skip_seo_audit`** |
 | Bỏ qua | `TAB_SKIPPED` (`skipped`) | Chỉ bài có `article_meta.skip_seo_audit=1` (ẩn khỏi các tab kia + SEO Audit) |
 
@@ -55,6 +55,8 @@
 **Paste Ctrl+V ảnh:** `processClipboardImagePaste` → `uploadSeoMediaFromFile` (`source=clipboard`) → server slug random `paste-{hex}` (tránh `image.png` cache). `ImageBlockEditor.applyUploadedImageToBlock` xóa `wpAttachmentId`/`wpSrc` cũ khi paste local mới (tránh rename WP bằng ID stale). `shouldRenameSlugOnWordPress` / `isImageReadyForWpSlugFix` chỉ tin ID qua `resolveImageRefIds` — không fallback `rawWp`. Chi tiết: [MAP_SEO_MEDIA.md](MAP_SEO_MEDIA.md), [MAP_SEO_WP.md](MAP_SEO_WP.md) §rename.
 
 **Featured image sidebar:** `articleFeaturedImageStorage.saveFeaturedImage()` lưu localStorage rồi dispatch `seo-featured-image-updated`; Alpine trong `edit-article.blade.php` nhận `onFeaturedImageUpdated()` để cập nhật `featuredImageDraft` ngay (không chờ reload). Clear vẫn dùng `seo-featured-image-cleared`.
+
+**Đổi `post_type` (Article tab, không sync WP ngay):** `publish-sidebar` `applyPostType()` → event `seo-publish-post-type-changed` + `pushToWire()` (`EditArticle::applyPublishBoxFromClient`, `skipRender`). UI Featured/Album/Reviews **không** phụ thuộc `@if supportsProductGallery()` SSR: luôn render cả panel ảnh đại diện + album + Reviews; Alpine `supportsProductGalleryUi` + `data-assistant-requires-(non-)product` gate chip/panel. `seoAssistantNavigator.applyEditorPostType()` rediscover dock. React `SeoArticleEditor` giữ `supportsProductGallery` state theo event (Make Featured / Reviews / distribute gallery).
 
 
 **Luồng bootstrap (không REST lúc mở trang):**
@@ -217,7 +219,8 @@ Blade **chỉ** embed `#seo-article-core-bootstrap` = `EditArticle::getEditorCor
 | Symbol / path | Vai trò |
 |---------------|---------|
 | `config/logging.php` → `channels.web_app` | `daily`, path `web-app.log`, `WEB_APP_LOG_LEVEL` / `WEB_APP_LOG_DAYS` |
-| `App\Support\RuntimeLogger` | HTTP → `web_app`; console → default; `error`/`warning`/`info`/`debug`/`report`; không fallback sang `laravel.log` |
+| `App\Support\RuntimeLogger` | HTTP → `web_app` (thiếu channel → `null`, tránh LogManager EMERGENCY); console → default/`stack`; `error`/`warning`/`info`/`debug`/`report`; không fallback sang `laravel.log` |
+| `AppServiceProvider::boot` | HTTP chỉ set `logging.default=web_app` khi `logging.channels.web_app` đã có (stale `config:cache` thì bỏ qua) |
 | `bootstrap/app.php` `withExceptions` | HTTP: `RuntimeLogger::report` rồi `return false` (chặn default log) |
 | `ArticleEditorSyncController` | SEO meta catch → `RuntimeLogger::report` |
 | `ArticleEditorLazyPayloadController` | editor meta catch → `RuntimeLogger::report` |
@@ -262,6 +265,7 @@ WEB_APP_LOG_DAYS=14
 | FAQ entry point                  | Shortcode / Edit FAQ → `article-editor:module-open` `{ module:'faq' }`. Compat: `seo-faq-panel-activate`. **Không** assistant tag FAQ; **không** accordion FAQ trong Links. Runtime FAQ = Vite `public/build` (`FaqModule` + `article-editor`); source JSX alone không đủ |
 | Existing links scanner           | Pre-refactor `extractLinksFromBlocks` (`articleLinkScroll.js`) → `existingLinkScanner.scanExistingLinksCompat` + debounce 750ms + `seo-editor-links-rescan-request`. Source = editor blocks, không DB body |
 | Save conflict / force overwrite  | `ArticleContentConflictGuard`: `updated_at` lệch nhưng `expected_content_hash` khớp body → cho qua. `SeoAccessControl::canForceArticleContentOverwrite()` — `actualRole` rank > `content_manager` (Owner/Admin map manager). `UpdateArticleContentAction` bỏ conflict khi force. `ArticleEditorSyncController::save` ghi content trước, `bundleApply` sau |
+| Lần cuối lưu (Content Project Run) | `articles.last_manual_saved_at` / `last_synced_at` (`ArticleLastSavedTimestampService`). Manual: Save REST `origin=article_editor` + Livewire `persistArticleLocal`. Sync: sau WP push/pull thành công (`WordPressArticleSyncService`, `SyncDomainContentService`, `WordPressArticleContentService::fetchFromWordPress`). **Không** đụng `updated_at`; automation / queue sync chưa xong không ghi |
 | Article Information author       | `publish-sidebar.blade.php`: Author từ `articles.user_id`; badge «Bạn» nếu trùng auth. Core bootstrap: `authorName` / `authorUserId` / `authorIsCurrentUser` |
 | SEO keyword in meta              | `seoAnalyzer.js` + `SeoScoringEngine`: lowercase keyword trước so `meta_description` (`keyword_missing_in_meta`) |
 | Page action bar (Edit Article)   | Cùng partial sticky header — **không** còn action bar trùng trong content. More = History, Prompts, Assign/Open project, Restore, Debug MD, Delete (+ Preview/Approve compact ≤1024px). `getHeaderActions()` trống; `articleEditorHeaderActions.js` dedupe |
@@ -306,7 +310,7 @@ sequenceDiagram
 
 | Nút                       | Phạm vi                                            | Hành vi                                                                                                                                                                                                                                                                                                                                               |
 | ------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fix slug all**          | Ảnh trong block (không Except) + supplemental-only | Lock overlay + autosave. Flag `hasNonWordPressArticleImages` → nếu có ảnh không thuần WP thì `await saveCurrentArticleFromEditor` trước fix. WP: `renameAttachmentSlugsOnWordPress` (Livewire) + rewrite body/meta. Local: `POST .../fix-media-slugs` → `SeoMediaArticleSlugFixService` (`$article->refresh()`). Sau fix: `applySlugRenameFinished` patch URL trên block hiện tại — **không** reload wipe ảnh. |
+| **Fix slug all**          | Ảnh trong block (không Except) + supplemental-only | **Canonical:** [docs/article-editor/image-slug-rename.md](article-editor/image-slug-rename.md). Luôn `saveCurrentArticleFromEditor` trước + sau. WP: `renameAttachmentSlugsOnWordPress` + rewrite. Local: `POST .../fix-media-slugs` → `SeoMediaArticleSlugFixService` trả `renamed[]` exact map. Client: `applySlugRenameFinished` rewrite **mọi block HTML + TipTap setContent** + invalidate picker/gallery/Images; `clearDraft` + synced snapshot. Không chỉ rename PHP / không chỉ DOM `img.src`. |
 | **Fix slug** (1 ảnh)      | Một dòng                                           | Ảnh local đổi slug local ngay; ảnh WP confirm rồi `renameAttachmentSlugsOnWordPress` (toast Filament). Không gate “phải Sync WP trước” trên ảnh local. |
 | **Fix alt/title all**     | Ảnh không Except                                   | `alt`+`title`=focus keyword. **Gộp batch:** 1 `updateSeoMediaMeta(items)` + tối đa 1 `updateAttachmentMetaOnWordPress` (chỉ WP chưa sync qua SEO media) → **1 toast** tổng (không spam từng ảnh). |
 | **Fix alt/title** (1 ảnh) | Một dòng                                           | Confirm rồi patch block/supplemental + `pushAltTitleMetaToStores` (1 toast). |
@@ -392,7 +396,7 @@ Cache trang (không search): `articleMediaPickerCache.js` → `localStorage`. Bo
 | Tab «Trong bài» (picker)     | Alpine lắng `seo-editor-images-catalog` → cập nhật `pickerCatalog` nếu modal đang mở                                                  |
 
 
-**Product Album Gallery:** Blade có secondary Alpine component `seoProductAlbumBoxData` (drag-reorder album). Multi-select with shift+click range (`galleryPickerSelectedKeys`). `confirmGallerySelectionFromPicker` → save to album.
+**Product Album Gallery:** Blade secondary Alpine `seoProductAlbumBoxData` (drag-reorder). Multi-select shift+click (`galleryPickerSelectedKeys`). `confirmGallerySelectionFromPicker` → album. Hiện khi `supportsProductGalleryUi` (live `post_type=product`); article → panel Featured Image thay album (xem mục Featured image sidebar / đổi post_type).
 
 **Polylang Widget:** Blade include `seo-polylang-widget` (line 1145). Livewire methods: `quickTranslateLinkedArticle`, `importMissingTranslation`, `requestTranslationGeneration`.
 
@@ -405,8 +409,8 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 | Thành phần | File | Vai trò |
 |------------|------|---------|
 | Host + slots | `edit-article.blade.php` | `.seo-assistant-host` — mỗi widget có `data-assistant-widget`, `data-assistant-widget-id`, `data-assistant-tab-label` |
-| Navigator | `seoAssistantNavigator.js` | `discoverWidgets()`, `switchPanel()`, search, badge; **không** scroll-to-widget |
-| Links filter | `ArticleLinksSidebar.jsx` | `linkSectionFilter` qua event `seo-assistant-link-section` (`links` / `faq` / `cta` / `all`). Gợi ý keyword: 2 nút **Cảnh báo** / **Nguy hiểm** → `KeywordReviewPopover.jsx` → `POST /api/seo/keywords/{id}/review` (`KeywordReviewController`, `source=article_suggestion`, không bắt buộc link map). Keyword `review_status` warning/danger bị loại khỏi gợi ý server (`ArticleInternalLinkSuggestionService`). **Gợi ý Links:** `POST` suggestions + HTML live editor; primary = keyword catalog + `KeywordLinkTargetResolver` + `ArticleLinkSuggestionCandidateRetriever`; nếu internal hợp lệ &lt; target → `ArticleLinkSuggestionContentKeywordFallback` (phrase từ content/heading/strong, search = `ArticleInternalLinkSearchService` như popup cùng domain). Stop phrase chung `LinkSuggestionStopPhraseFilter` (`config/seo-content-ai.php` `link_suggestions.stop_phrases` — vd. «liên hệ»). Score 0–100 (`LinkSuggestionScoreScale`). Debug: `LINK_SUGGESTION_DEBUG` → log `[LINK_FALLBACK_DEBUG]` + `suggestion_debug`. Internal chỉ URL cùng `site_id`/domain (`suggested_internal_links` + catalog); external/wiki → External; `tel`/`mailto`/số ĐT/email trần không đếm external (`articleLinkSuggestionFilter.js`). Domain catalog không merge vào gợi ý internal. |
+| Navigator | `seoAssistantNavigator.js` | `discoverWidgets({ preservePanel })`, `applyEditorPostType()`, `switchPanel()`, search, badge; nghe `seo-publish-post-type-changed`; **không** scroll-to-widget |
+| Links filter | `ArticleLinksSidebar.jsx` | `linkSectionFilter` qua event `seo-assistant-link-section` (`links` / `faq` / `cta` / `all`). Gợi ý keyword: 2 nút **Cảnh báo** / **Nguy hiểm** (`Mark needs optimization` / `Mark ineffective`) → `openReviewPopover` → `KeywordReviewPopover.jsx` → `POST /api/seo/keywords/{id}/review` (`KeywordReviewController`, `source=article_suggestion`, không bắt buộc link map). Thiếu `keyword_id` (thường fallback phrase chưa có catalog): `POST /api/seo/keywords/ensure-for-review` (`ensureForReview`, upsert `TYPE_SUGGEST` + site meta) rồi mở popover — không silent return. Fallback resolve `keyword_id` nếu phrase đã có (`ArticleLinkSuggestionContentKeywordFallback::resolveKeywordIdForPhrase`). Keyword `review_status` warning/danger bị loại khỏi gợi ý server (`ArticleInternalLinkSuggestionService`). **Gợi ý Links:** `POST` suggestions + HTML live editor; primary = keyword catalog + `KeywordLinkTargetResolver` + `ArticleLinkSuggestionCandidateRetriever`; nếu internal hợp lệ &lt; target → content-keyword fallback (phrase highlight/noun; search = `ArticleInternalLinkSearchService`). Stop phrase chung `LinkSuggestionStopPhraseFilter`. Score 0–100 (`LinkSuggestionScoreScale`). Debug: `LINK_SUGGESTION_DEBUG` → `[LINK_FALLBACK_DEBUG]` + `suggestion_debug`. Internal chỉ URL cùng `site_id`/domain; external/wiki → External; `tel`/`mailto` không đếm external (`articleLinkSuggestionFilter.js`). |
 | Keywords dictionary tabs | `ListKeywords.php` + `KeywordResource::getReviewedDictionaryQuery()` | Thẻ **Cần tối ưu** / **Không hiệu quả** lọc `review_status` warning/danger; scope site qua `forSite` hoặc `keyword_review_histories.article_id` (keyword đánh dấu từ editor chưa có link map vẫn hiện). |
 | Portals React | `SeoArticleEditor.jsx` | `createPortal` → `#seo-article-seo-assistant-root`, `#seo-article-image-assistant-root`, `#seo-article-links-root`, … |
 
@@ -437,6 +441,7 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 | `seo-assistant-link-section` | `seoAssistantNavigator` | `ArticleLinksSidebar` filter section |
 | `seo-assistant-widget-control` | `seoAssistantNavigator` | React widgets (`set-collapsed`) |
 | `seo-sidebar-open-publish-tab` | Widget xuất bản / shortcut | Mở panel Publishing |
+| `seo-publish-post-type-changed` | `publish-sidebar` `applyPostType()` | Navigator (đổi Featured/Album/Reviews), `SeoArticleEditor` (`supportsProductGallery` state), categories |
 
 **Lưu ý perf:** badge chỉ cập nhật qua event — không dùng `MutationObserver` + `characterData` trên subtree sidebar (gây freeze khi React SEO render).
 
@@ -464,10 +469,10 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 
 | Thành phần | File | Hành vi |
 |------------|------|---------|
-| Lease SoT | `seo_article_wp_sync_jobs` + `ArticleWpSyncLeaseService` | Claim TX ngắn → `processing` + `locked_until` (+2m); heartbeat qua `WpSyncLeaseHeartbeat` / `WordPressGateway`; terminal: `completed`/`failed`/`cancelled`/`stale`; article `wp_sync_status`/`wp_sync_job_id` |
-| Queue meta (projection) | `ArticleWpSyncQueueService` (`article_meta.wp_sync_queue`) | Mirror lease; heal orphan pending/processing không có lease / lease hết hạn / pending không còn row `jobs` |
-| Manual job | `ManualWordPressSyncJob` | Queue `seo` + `syncJobId`; claim → heartbeat → complete/fail; `failed()` nhả lease |
-| Watchdog | `seo:wordpress-sync-lease-watchdog` (`WordpressSyncLeaseWatchdogCommand`) | Schedule mỗi phút; `--article=` / `--force`; stale lease + orphan meta + `cache_locks` |
+| Lease SoT | `seo_article_wp_sync_jobs` + `ArticleWpSyncLeaseService` | Claim TX ngắn → `processing` + `locked_until` (+2m); heartbeat qua `WpSyncLeaseHeartbeat` / `WordPressGateway`; terminal: `completed`/`failed`/`cancelled`/`stale`; article `wp_sync_status`/`wp_sync_job_id`; **`markStale` → `maybeAutoRetryAfterStale`** (max `MAX_STALE_AUTO_RETRIES=3`, settings `stale_auto_retries`; force unlock tắt retry) |
+| Queue meta (projection) | `ArticleWpSyncQueueService` (`article_meta.wp_sync_queue`) | Mirror lease; heal orphan pending/processing không có lease / lease hết hạn / pending không còn row `jobs`; `isActive` sau stale-auto-retry coi job mới là active |
+| Manual job | `ManualWordPressSyncJob` | Queue `seo` + `syncJobId`; claim → heartbeat → complete/fail; `failed()` nhả lease; source `stale_auto_retry` khi watchdog/heal tự enqueue |
+| Watchdog | `seo:wordpress-sync-lease-watchdog` (`WordpressSyncLeaseWatchdogCommand`) | Schedule mỗi phút; `--article=` / `--force` (không auto-retry); stale lease + orphan meta + `cache_locks` |
 | Enqueue | `WordPressManualSyncService` | `Cache::lock` + `isActive` (force-stale expired); dedupe theo `request_id` |
 | API | `ArticleEditorSyncController::syncWp` | Save trước → enqueue; `queued: true`; overlay giữ + poll |
 | Operation UI | `articleOperationTracker.js` + `finishArticleSyncFromApi` | Poll `operation-status`; attempt/worker/elapsed; Retry khi failed/stale |
@@ -476,7 +481,7 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 | Widget Xuất bản | `publish-sidebar.blade.php` | Bỏ UI lên lịch; icon sync chỉ mở tab Publish (`seo-sidebar-open-publish-tab`). **Article Information** hiện Author (`articles.user_id`) + badge «Bạn» nếu trùng auth |
 | Shortcut | `Ctrl+Shift+S` | `seo-publish-tab-request-sync` → tab Publish + queue sync |
 | Submenu Articles | `ListArticleSyncQueue` (`/seo/{connection_hash}/articles/queue`) | Sidebar **Articles → Hàng đợi** |
-| Tab nhanh list | `ListArticles::TAB_QUEUE` (`?tab=queue`) | Chỉ pending / processing / failed; `is_reviewed = 0` |
+| Tab nhanh list | `ListArticles::TAB_QUEUE` (`?tab=queue`) | Unfinished: pending/processing/failed/stale; `is_reviewed = 0`; badge count + CSS nổi bật (`seo-internal-tabs__queue-badge`) |
 | Queue table | `ArticleResource::queueTable()` | Cột: tiêu đề, domain, trạng thái, queued/started/finished, lỗi; filter trạng thái; retry / cancel / edit |
 
 **Luồng lease + meta (`wp_sync_queue`):**
@@ -488,7 +493,7 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 | `completed` | Đồng bộ xong (meta giữ lại để theo dõi) |
 | `failed` | Lỗi — Retry / queue list |
 | `cancelled` | User Reset/Cancel — article idle |
-| `stale` | Watchdog / heal: worker chết, pending không có `jobs` row, orphan meta |
+| `stale` | Watchdog / heal: worker chết, pending không có `jobs` row, orphan meta; **tự enqueue lại tối đa 3 lần** (`stale_auto_retries`); hết → error `(auto-retry exhausted n/3)` |
 
 **Client sau enqueue:** `finishArticleSyncFromApi` — **giữ** overlay (`persistUntilUnload`), poll `operation-status`, reload khi terminal (trừ failed giữ Retry). Event `article-wordpress-sync-queued` (không unlock).
 

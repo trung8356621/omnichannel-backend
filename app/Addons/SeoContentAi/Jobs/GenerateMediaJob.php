@@ -20,6 +20,7 @@ use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Support\ImageToolType;
+use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -98,8 +99,10 @@ class GenerateMediaJob implements ShouldQueue
         }
 
         try {
-            $mediaSource = (string) ($this->variables[SeoCreateArticleSettingsService::EDITOR_VAR_MEDIA_SOURCE] ?? SeoCreateArticleSettingsService::SOURCE_PROMPT);
-            $workflowTaskId = (int) ($this->variables[SeoCreateArticleSettingsService::EDITOR_VAR_WORKFLOW_TASK_ID] ?? 0);
+            $runVariables = $this->ensureQuickSplitSnapshot($media, $prompt, $this->variables);
+
+            $mediaSource = (string) ($runVariables[SeoCreateArticleSettingsService::EDITOR_VAR_MEDIA_SOURCE] ?? SeoCreateArticleSettingsService::SOURCE_PROMPT);
+            $workflowTaskId = (int) ($runVariables[SeoCreateArticleSettingsService::EDITOR_VAR_WORKFLOW_TASK_ID] ?? 0);
             $articleId = (int) ($media->firstArticleId() ?? 0);
             $article = $articleId > 0 ? SeoArticle::query()->find($articleId) : null;
 
@@ -121,7 +124,7 @@ class GenerateMediaJob implements ShouldQueue
                     $media,
                     fn () => $promptRunner->run(
                         $prompt,
-                        $this->variables,
+                        $runVariables,
                         isTaskMode: false,
                         runFullDependentChain: $this->runFullDependentChain,
                     ),
@@ -175,12 +178,17 @@ class GenerateMediaJob implements ShouldQueue
             if (ImageToolType::fromMixed($this->toolType)->isImagePipeline() && $media instanceof SeoMedia) {
                 try {
                     $postResult = $postProcessing->applyIfConfigured($media, $prompt);
+                    $variables = is_array($media->prompt_variables) ? $media->prompt_variables : [];
                     if ($postResult->applied && count($postResult->pieces) > 0) {
-                        $variables = is_array($media->prompt_variables) ? $media->prompt_variables : [];
                         $variables['post_processing_piece_ids'] = array_values(array_map(
                             static fn (SeoMedia $piece): int => (int) $piece->id,
                             $postResult->pieces,
                         ));
+                        unset($variables['quick_split_error'], $variables['quick_split_error_code']);
+                        $media->update(['prompt_variables' => $variables]);
+                    } elseif ($postResult->errorCode !== null || filled($postResult->message)) {
+                        $variables['quick_split_error'] = (string) $postResult->message;
+                        $variables['quick_split_error_code'] = (string) ($postResult->errorCode ?? 'QUICK_SPLIT_FAILED');
                         $media->update(['prompt_variables' => $variables]);
                     }
                 } catch (Throwable $postProcessingException) {
@@ -310,6 +318,38 @@ class GenerateMediaJob implements ShouldQueue
         $variables['_editor_run_snapshot'] = json_encode($snapshot, JSON_UNESCAPED_UNICODE);
 
         return $variables;
+    }
+
+    /**
+     * Freeze Quick Split config at run start so splitter uses dispatch-time grid, not later prompt edits.
+     *
+     * @param  array<string, mixed>  $variables
+     * @return array<string, mixed>
+     */
+    private function ensureQuickSplitSnapshot(SeoMedia $media, SeoPrompt $prompt, array $variables): array
+    {
+        if (! ImageToolType::fromMixed($this->toolType)->isImagePipeline()) {
+            return $variables;
+        }
+
+        $mediaVariables = is_array($media->prompt_variables) ? $media->prompt_variables : [];
+        $merged = array_merge($mediaVariables, $variables);
+
+        if (PromptPostProcessing::fromVariablesSnapshot($merged) === null) {
+            $merged = PromptPostProcessing::attachSnapshotToVariables(
+                $merged,
+                PromptPostProcessing::fromPrompt($prompt),
+            );
+        }
+
+        $existing = $mediaVariables[PromptPostProcessing::SNAPSHOT_VARIABLE_KEY] ?? null;
+        $next = $merged[PromptPostProcessing::SNAPSHOT_VARIABLE_KEY] ?? null;
+        if ($existing === null && $next !== null) {
+            $media->update(['prompt_variables' => $merged]);
+            $media->refresh();
+        }
+
+        return $merged;
     }
 
     private function persistProductGalleryLinkIfNeeded(SeoMedia $media): void

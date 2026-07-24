@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Enums\WpSyncJobStatus;
+use App\Addons\SeoContentAi\Jobs\ManualWordPressSyncJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoArticleWpSyncJob;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
@@ -26,6 +27,9 @@ final class ArticleWpSyncLeaseService
     public const HEARTBEAT_INTERVAL_SECONDS = 20;
 
     public const ARTICLE_IDLE = 'idle';
+
+    /** Stale (heartbeat lost / orphan pending) — tự enqueue lại tối đa N lần. */
+    public const MAX_STALE_AUTO_RETRIES = 3;
 
     public function __construct(
         private readonly SeoDatabaseConnectionService $databaseConnection,
@@ -237,9 +241,17 @@ final class ArticleWpSyncLeaseService
         return $this->finalize($job, WpSyncJobStatus::Cancelled, $reason);
     }
 
-    public function markStale(SeoArticleWpSyncJob $job, string $reason = 'Worker heartbeat expired'): SeoArticleWpSyncJob
-    {
-        return $this->finalize($job, WpSyncJobStatus::Stale, $reason);
+    public function markStale(
+        SeoArticleWpSyncJob $job,
+        string $reason = 'Worker heartbeat expired',
+        bool $autoRetry = true,
+    ): SeoArticleWpSyncJob {
+        $finalized = $this->finalize($job, WpSyncJobStatus::Stale, $reason);
+        if ($autoRetry) {
+            $this->maybeAutoRetryAfterStale($finalized, $reason);
+        }
+
+        return $finalized;
     }
 
     /**
@@ -563,7 +575,7 @@ final class ArticleWpSyncLeaseService
 
         foreach ($activeJobs as $job) {
             if ($job instanceof SeoArticleWpSyncJob) {
-                $this->markStale($job, $reason);
+                $this->markStale($job, $reason, autoRetry: false);
             }
         }
 
@@ -658,9 +670,13 @@ final class ArticleWpSyncLeaseService
             $active = $this->activeJobForArticle($articleId);
             if ($active instanceof SeoArticleWpSyncJob) {
                 if ($force || $this->isLeaseExpired($active)) {
-                    $this->markStale($active, $force
-                        ? 'Force unlock stuck sync'
-                        : 'Lease expired while meta still active');
+                    $this->markStale(
+                        $active,
+                        $force
+                            ? 'Force unlock stuck sync'
+                            : 'Lease expired while meta still active',
+                        autoRetry: ! $force,
+                    );
                     $this->releaseArticleCacheLocks($articleId);
                     $count++;
                     continue;
@@ -720,6 +736,11 @@ final class ArticleWpSyncLeaseService
 
             $this->markStale($active, 'Lease expired on read heal');
             $this->releaseArticleCacheLocks((int) $article->id);
+
+            $retried = $this->activeJobForArticle((int) $article->id);
+            if ($retried instanceof SeoArticleWpSyncJob) {
+                return $this->toOperationPayload($retried);
+            }
 
             return $this->toOperationPayload($active->fresh() ?? $active);
         }
@@ -825,6 +846,107 @@ final class ArticleWpSyncLeaseService
             'heartbeat_at' => $now,
             'locked_until' => $now->copy()->addSeconds(self::LEASE_SECONDS),
         ])->save();
+    }
+
+    /**
+     * Sau stale: enqueue lại ManualWordPressSyncJob nếu chưa vượt MAX_STALE_AUTO_RETRIES.
+     * Đếm qua settings.stale_auto_retries (0 = lần stale đầu → retry #1).
+     */
+    private function maybeAutoRetryAfterStale(SeoArticleWpSyncJob $staleJob, string $reason): void
+    {
+        $settings = is_array($staleJob->settings) ? $staleJob->settings : [];
+        $retryCount = max(0, (int) ($settings['stale_auto_retries'] ?? 0));
+        if ($retryCount >= self::MAX_STALE_AUTO_RETRIES) {
+            Log::warning('wordpress.sync_lease.stale_auto_retry_exhausted', [
+                'article_id' => (int) $staleJob->article_id,
+                'stale_job_id' => (int) $staleJob->id,
+                'retries' => $retryCount,
+                'max' => self::MAX_STALE_AUTO_RETRIES,
+                'reason' => $reason,
+            ]);
+
+            $exhaustedMsg = trim($reason.' (auto-retry exhausted '.$retryCount.'/'.self::MAX_STALE_AUTO_RETRIES.')');
+            if ((string) ($staleJob->error_message ?? '') !== $exhaustedMsg) {
+                $staleJob->forceFill(['error_message' => $exhaustedMsg])->save();
+                $article = SeoArticle::query()->find((int) $staleJob->article_id);
+                if ($article instanceof SeoArticle) {
+                    $this->projectMeta($article, $staleJob->fresh() ?? $staleJob);
+                }
+            }
+
+            return;
+        }
+
+        $article = SeoArticle::query()->find((int) $staleJob->article_id);
+        if (! $article instanceof SeoArticle) {
+            return;
+        }
+
+        if ($this->activeJobForArticle((int) $article->id) instanceof SeoArticleWpSyncJob) {
+            return;
+        }
+
+        $nextRetry = $retryCount + 1;
+        $requestId = (string) Str::uuid();
+        $correlationId = trim((string) ($staleJob->correlation_id ?? ''));
+        if ($correlationId === '') {
+            $correlationId = (string) Str::uuid();
+        }
+
+        $nextSettings = array_merge($settings, [
+            'stale_auto_retries' => $nextRetry,
+            'stale_auto_retry_of' => (int) $staleJob->id,
+            'stale_auto_retry_reason' => $reason,
+        ]);
+        $auditMeta = is_array($staleJob->audit_meta) ? $staleJob->audit_meta : [];
+        $auditMeta['stale_auto_retry'] = $nextRetry;
+        $auditMeta['stale_auto_retry_of'] = (int) $staleJob->id;
+        $auditMeta['stale_auto_retry_reason'] = $reason;
+
+        try {
+            $newJob = $this->enqueue(
+                article: $article,
+                source: 'stale_auto_retry',
+                initiatedBy: (int) ($staleJob->initiated_by ?? 0),
+                requestId: $requestId,
+                correlationId: $correlationId,
+                settings: $nextSettings,
+                auditMeta: $auditMeta,
+            );
+
+            if ((string) $newJob->request_id !== $requestId) {
+                return;
+            }
+
+            ManualWordPressSyncJob::dispatch(
+                articleId: (int) $article->id,
+                userId: max(0, (int) ($staleJob->initiated_by ?? 0)),
+                source: 'stale_auto_retry',
+                requestId: $requestId,
+                correlationId: $correlationId,
+                domainId: (int) ($article->site_id ?? $staleJob->site_id ?? 0),
+                requestedAt: now()->toIso8601String(),
+                syncJobId: (int) $newJob->id,
+                settings: $nextSettings,
+                auditMeta: $auditMeta,
+            )->afterCommit();
+
+            Log::info('wordpress.sync_lease.stale_auto_retried', [
+                'article_id' => (int) $article->id,
+                'stale_job_id' => (int) $staleJob->id,
+                'new_job_id' => (int) $newJob->id,
+                'retry' => $nextRetry,
+                'max' => self::MAX_STALE_AUTO_RETRIES,
+                'reason' => $reason,
+            ]);
+        } catch (Throwable $e) {
+            Log::warning('wordpress.sync_lease.stale_auto_retry_failed', [
+                'article_id' => (int) $staleJob->article_id,
+                'stale_job_id' => (int) $staleJob->id,
+                'retry' => $nextRetry,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

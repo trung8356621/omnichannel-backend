@@ -44,6 +44,13 @@ final class ArticleEditorOperationController extends Controller
         ]);
     }
 
+    /**
+     * Batch local media slug fix for article editor "Fix slug all".
+     *
+     * Canonical flow (save → rename+rewrite → rename map → editor apply → invalidate → save):
+     * @see docs/article-editor/image-slug-rename.md
+     * Do not add a second rename pipeline in Livewire/JS — use SeoMediaArticleSlugFixService.
+     */
     public function fixMediaSlugs(Request $request, SeoArticle $article): JsonResponse
     {
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);

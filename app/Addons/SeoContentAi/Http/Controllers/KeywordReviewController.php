@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\Enums\KeywordReviewStatus;
 use App\Addons\SeoContentAi\Http\Requests\KeywordReviewRequest;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\KeywordPersistenceService;
 use App\Addons\SeoContentAi\Services\KeywordReviewReasonService;
 use App\Addons\SeoContentAi\Services\KeywordReviewService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -23,6 +24,7 @@ final class KeywordReviewController extends Controller
     public function __construct(
         private readonly KeywordReviewService $reviewService,
         private readonly KeywordReviewReasonService $reasonService,
+        private readonly KeywordPersistenceService $keywordPersistence,
     ) {}
 
     public function reasons(Request $request): JsonResponse
@@ -47,6 +49,55 @@ final class KeywordReviewController extends Controller
             'reasons' => $reasons,
             'can_override_severity' => SeoAccessControl::canOverrideKeywordReviewSeverity(),
         ]);
+    }
+
+    public function ensureForReview(Request $request): JsonResponse
+    {
+        abort_unless(SeoAccessControl::canReviewKeywords(), 403);
+
+        $validated = $request->validate([
+            'phrase' => ['required', 'string', 'max:255'],
+            'site_id' => ['required', 'integer', 'min:1'],
+            'target_url' => ['nullable', 'string', 'max:2048'],
+            'target_article_id' => ['nullable', 'integer', 'min:1'],
+        ]);
+
+        $siteId = (int) $validated['site_id'];
+        abort_unless(SeoAccessControl::canAccessSite($siteId), 403);
+
+        try {
+            $targetUrl = isset($validated['target_url']) ? trim((string) $validated['target_url']) : '';
+            $targetArticleId = (int) ($validated['target_article_id'] ?? 0);
+
+            $keyword = $this->keywordPersistence->upsert(
+                (string) $validated['phrase'],
+                Keyword::TYPE_SUGGEST,
+                $siteId,
+                $targetUrl !== '' ? $targetUrl : null,
+                targetArticleId: $targetArticleId > 0 ? $targetArticleId : null,
+            );
+
+            if (! $keyword instanceof Keyword) {
+                return response()->json([
+                    'success' => false,
+                    'message' => __('seo-content-ai::filament.keyword_review.access_denied'),
+                ], 422);
+            }
+
+            $this->reviewService->assertKeywordAccessible($keyword);
+
+            return response()->json([
+                'success' => true,
+                'keyword' => $this->serializeKeyword($keyword),
+            ]);
+        } catch (Throwable $exception) {
+            RuntimeLogger::report($exception);
+
+            return response()->json([
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ], 422);
+        }
     }
 
     public function review(KeywordReviewRequest $request, Keyword $keyword): JsonResponse

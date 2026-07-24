@@ -622,6 +622,13 @@ class TestPrompt extends Page implements HasForms
             return;
         }
 
+        $variables = is_array($media->prompt_variables) ? $media->prompt_variables : [];
+        if (PromptPostProcessing::fromVariablesSnapshot($variables) === null) {
+            $variables = PromptPostProcessing::attachSnapshotToVariables($variables, $config);
+            $media->update(['prompt_variables' => $variables]);
+            $media = $media->fresh() ?? $media;
+        }
+
         try {
             $result = app(PromptPostProcessingApplyService::class)
                 ->applyIfConfigured($media, $this->getPrompt());
@@ -838,6 +845,81 @@ class TestPrompt extends Page implements HasForms
         } catch (\Throwable) {
             $this->compiledPreview = null;
         }
+    }
+
+    /**
+     * @return array{
+     *     output_mode: string,
+     *     quick_split_enabled: bool,
+     *     grid_size: int,
+     *     grid: string|null,
+     *     expected_children: int,
+     *     snapshot_source: string,
+     * }|null
+     */
+    public function imageOutputModeMetaForView(): ?array
+    {
+        if (! $this->isImageToolPrompt()) {
+            return null;
+        }
+
+        if ($this->selectedResultId !== null) {
+            $result = PromptResult::query()
+                ->where('prompt_id', $this->getPrompt()->id)
+                ->find($this->selectedResultId);
+
+            if ($result instanceof PromptResult) {
+                $snapshot = is_array($result->input_snapshot) ? $result->input_snapshot : [];
+                $meta = $snapshot['image_output_mode'] ?? null;
+                if (is_array($meta) && isset($meta['output_mode'])) {
+                    return [
+                        'output_mode' => (string) $meta['output_mode'],
+                        'quick_split_enabled' => (bool) ($meta['quick_split_enabled'] ?? false),
+                        'grid_size' => (int) ($meta['grid_size'] ?? 0),
+                        'grid' => isset($meta['grid']) ? (is_string($meta['grid']) ? $meta['grid'] : null) : null,
+                        'expected_children' => (int) ($meta['expected_children'] ?? 0),
+                        'snapshot_source' => (string) ($meta['snapshot_source'] ?? 'generation_snapshot'),
+                    ];
+                }
+
+                $compiled = (string) ($snapshot['compiled_prompt'] ?? '');
+                if ($compiled !== '') {
+                    return $this->inferImageOutputModeFromCompiled($compiled, 'generation_snapshot');
+                }
+            }
+        }
+
+        $config = PromptPostProcessing::fromPrompt($this->getPrompt());
+
+        return app(\App\Addons\SeoContentAi\Services\ImageOutputModePromptInjector::class)
+            ->auditMeta($config, 'live_preview');
+    }
+
+    /**
+     * @return array{
+     *     output_mode: string,
+     *     quick_split_enabled: bool,
+     *     grid_size: int,
+     *     grid: string|null,
+     *     expected_children: int,
+     *     snapshot_source: string,
+     * }
+     */
+    private function inferImageOutputModeFromCompiled(string $compiled, string $source): array
+    {
+        $enabled = str_contains($compiled, 'MODE=SQUARE_SPRITE_SHEET');
+        $grid = PromptPostProcessing::GRID_SIZE_DEFAULT;
+        if (preg_match('/GRID_ROWS=(\d+)/', $compiled, $match)) {
+            $grid = PromptPostProcessing::clampGridSize((int) $match[1]);
+        }
+
+        $config = PromptPostProcessing::normalize([
+            'split_enabled' => $enabled,
+            'split_grid_size' => $grid,
+        ]);
+
+        return app(\App\Addons\SeoContentAi\Services\ImageOutputModePromptInjector::class)
+            ->auditMeta($config, $source);
     }
 
     protected function applyChainStateFromResult(PromptResult $result): void

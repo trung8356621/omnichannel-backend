@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\LinkSuggestionScoreScale;
 use App\Addons\SeoContentAi\Support\LinkSuggestionStopPhraseFilter;
@@ -20,6 +21,9 @@ final class ArticleLinkSuggestionContentKeywordFallback
 {
     /** @var array<string, mixed> */
     private array $lastDebug = [];
+
+    /** @var array<string, int> */
+    private array $phraseKeywordIdCache = [];
 
     public function __construct(
         private readonly ArticleLinkSuggestionContentPhraseExtractor $phraseExtractor,
@@ -121,6 +125,7 @@ final class ArticleLinkSuggestionContentKeywordFallback
             return [];
         }
 
+        $this->phraseKeywordIdCache = [];
         $needed = max(1, $target - $primaryCount);
         if ($forceRun && $primaryCount >= $target) {
             $needed = max(1, (int) config('seo-content-ai.link_suggestions.fallback_phrase_limit', 10));
@@ -257,9 +262,11 @@ final class ArticleLinkSuggestionContentKeywordFallback
                     continue;
                 }
 
+                $keywordId = $this->resolveKeywordIdForPhrase($phrase, $siteId);
+
                 $item = [
                     'text' => $phrase,
-                    'keyword_id' => null,
+                    'keyword_id' => $keywordId,
                     'href' => $href,
                     'target_url' => $href,
                     'target_article_id' => $targetId,
@@ -326,6 +333,38 @@ final class ArticleLinkSuggestionContentKeywordFallback
         $this->logDebug('done', $this->lastDebug);
 
         return $added;
+    }
+
+    private function resolveKeywordIdForPhrase(string $phrase, int $siteId): ?int
+    {
+        if ($siteId <= 0) {
+            return null;
+        }
+
+        $prepared = Keyword::preparePhraseForStorage($phrase);
+        if ($prepared === '') {
+            return null;
+        }
+
+        $cacheKey = mb_strtolower($prepared);
+        if (isset($this->phraseKeywordIdCache[$cacheKey])) {
+            return $this->phraseKeywordIdCache[$cacheKey];
+        }
+
+        $keyword = Keyword::query()
+            ->whereRaw('phrase COLLATE utf8mb4_unicode_ci = ?', [$prepared])
+            ->first();
+
+        if (! $keyword instanceof Keyword) {
+            return null;
+        }
+
+        $keywordId = (int) $keyword->id;
+        if ($keywordId > 0) {
+            $this->phraseKeywordIdCache[$cacheKey] = $keywordId;
+        }
+
+        return $keywordId > 0 ? $keywordId : null;
     }
 
     /**

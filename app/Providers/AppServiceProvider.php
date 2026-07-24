@@ -45,7 +45,8 @@ class AppServiceProvider extends ServiceProvider
     {
         // HTTP/PHP-FPM → web_app only. Cron/queue giữ LOG_CHANNEL (laravel.log).
         // Phải set TRƯỚC mọi logger()/Log:: — tránh Permission denied trên laravel.log root-owned.
-        if (! $this->app->runningInConsole()) {
+        // Skip when channel missing (stale config:cache) — else LogManager EMERGENCY spam.
+        if (! $this->app->runningInConsole() && is_array(config('logging.channels.web_app'))) {
             config(['logging.default' => 'web_app']);
         }
 

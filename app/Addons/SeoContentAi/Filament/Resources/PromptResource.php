@@ -205,30 +205,93 @@ class PromptResource extends SeoPanelResource
      */
     public static function postProcessingFormSchema(): array
     {
+        $gridMin = \App\Addons\SeoContentAi\Support\PromptPostProcessing::GRID_SIZE_MIN;
+        $gridMax = \App\Addons\SeoContentAi\Support\PromptPostProcessing::GRID_SIZE_MAX;
+        $gridDefault = \App\Addons\SeoContentAi\Support\PromptPostProcessing::GRID_SIZE_DEFAULT;
+
         return [
             Forms\Components\View::make('seo-content-ai::filament.forms.prompt-post-processing-styles'),
             Forms\Components\Fieldset::make(__('seo-content-ai::filament.prompt.post_processing.quick_split'))
                 ->schema([
                     Forms\Components\Toggle::make('settings.post_processing.split_enabled')
                         ->label(__('seo-content-ai::filament.prompt.post_processing.split_enable'))
-                        ->inline(false),
-                    Forms\Components\Grid::make(2)
+                        ->inline(false)
+                        ->live(),
+                    Forms\Components\TextInput::make('settings.post_processing.split_grid_size')
+                        ->label(__('seo-content-ai::filament.prompt.post_processing.grid_size'))
+                        ->helperText(__('seo-content-ai::filament.prompt.post_processing.grid_size_helper'))
+                        ->numeric()
+                        ->integer()
+                        ->minValue($gridMin)
+                        ->maxValue($gridMax)
+                        ->default($gridDefault)
+                        ->required(fn (Get $get): bool => (bool) $get('settings.post_processing.split_enabled'))
+                        ->visible(fn (Get $get): bool => (bool) $get('settings.post_processing.split_enabled'))
+                        ->live(),
+                    Forms\Components\Placeholder::make('split_grid_preview')
+                        ->label('')
+                        ->visible(fn (Get $get): bool => (bool) $get('settings.post_processing.split_enabled'))
+                        ->content(function (Get $get) use ($gridDefault): string {
+                            $raw = $get('settings.post_processing.split_grid_size');
+                            $n = is_numeric($raw) ? (int) $raw : $gridDefault;
+                            $n = \App\Addons\SeoContentAi\Support\PromptPostProcessing::clampGridSize(
+                                $n > 0 ? $n : $gridDefault,
+                            );
+                            $panels = $n * $n;
+
+                            return __("seo-content-ai::filament.prompt.post_processing.grid_preview", [
+                                'n' => $n,
+                                'panels' => $panels,
+                            ]);
+                        }),
+                    Forms\Components\Section::make(__('seo-content-ai::filament.prompt.post_processing.runtime_title'))
+                        ->description(__('seo-content-ai::filament.prompt.post_processing.runtime_helper'))
                         ->schema([
-                            Forms\Components\TextInput::make('settings.post_processing.split_rows')
-                                ->label(__('seo-content-ai::filament.media_tools.split_rows'))
-                                ->numeric()
-                                ->minValue(1)
-                                ->maxValue(12)
-                                ->default(3)
-                                ->required(),
-                            Forms\Components\TextInput::make('settings.post_processing.split_columns')
-                                ->label(__('seo-content-ai::filament.media_tools.split_columns'))
-                                ->numeric()
-                                ->minValue(1)
-                                ->maxValue(12)
-                                ->default(2)
-                                ->required(),
-                        ]),
+                            Forms\Components\View::make('seo-content-ai::filament.forms.runtime-image-output-mode-preview')
+                                ->viewData(function (Get $get): array {
+                                    $config = \App\Addons\SeoContentAi\Support\PromptPostProcessing::normalize([
+                                        'split_enabled' => $get('settings.post_processing.split_enabled'),
+                                        'split_grid_size' => $get('settings.post_processing.split_grid_size'),
+                                        'resize_enabled' => $get('settings.post_processing.resize_enabled'),
+                                        'resize_width' => $get('settings.post_processing.resize_width'),
+                                        'resize_height' => $get('settings.post_processing.resize_height'),
+                                    ]);
+                                    $injector = app(\App\Addons\SeoContentAi\Services\ImageOutputModePromptInjector::class);
+
+                                    return [
+                                        'config' => $config,
+                                        'summary' => $injector->summarize($config),
+                                        'block' => $injector->buildBlock($config),
+                                    ];
+                                }),
+                        ])
+                        ->compact()
+                        ->collapsible(false),
+                    Forms\Components\Placeholder::make('manual_grid_warning')
+                        ->label('')
+                        ->visible(function (Get $get): bool {
+                            $text = trim((string) ($get('markdown_content') ?? ''));
+                            $enabled = (bool) $get('settings.post_processing.split_enabled');
+                            $raw = $get('settings.post_processing.split_grid_size');
+                            $n = is_numeric($raw)
+                                ? \App\Addons\SeoContentAi\Support\PromptPostProcessing::clampGridSize((int) $raw)
+                                : \App\Addons\SeoContentAi\Support\PromptPostProcessing::GRID_SIZE_DEFAULT;
+                            $warnings = \App\Addons\SeoContentAi\Support\PromptManualGridWarning::detect($text, $enabled, $n);
+
+                            return $warnings !== [];
+                        })
+                        ->content(function (Get $get): string {
+                            $text = trim((string) ($get('markdown_content') ?? ''));
+                            $enabled = (bool) $get('settings.post_processing.split_enabled');
+                            $raw = $get('settings.post_processing.split_grid_size');
+                            $n = is_numeric($raw)
+                                ? \App\Addons\SeoContentAi\Support\PromptPostProcessing::clampGridSize((int) $raw)
+                                : \App\Addons\SeoContentAi\Support\PromptPostProcessing::GRID_SIZE_DEFAULT;
+                            $warnings = \App\Addons\SeoContentAi\Support\PromptManualGridWarning::detect($text, $enabled, $n);
+
+                            return implode("\n", $warnings);
+                        })
+                        ->extraAttributes(['class' => 'text-warning-600 dark:text-warning-400']),
                     Forms\Components\Placeholder::make('split_hint')
                         ->label('')
                         ->content(__('seo-content-ai::filament.prompt.post_processing.split_hint')),
@@ -237,7 +300,8 @@ class PromptResource extends SeoPanelResource
                 ->schema([
                     Forms\Components\Toggle::make('settings.post_processing.resize_enabled')
                         ->label(__('seo-content-ai::filament.prompt.post_processing.resize_enable'))
-                        ->inline(false),
+                        ->inline(false)
+                        ->live(),
                     Forms\Components\Grid::make(2)
                         ->schema([
                             Forms\Components\TextInput::make('settings.post_processing.resize_width')

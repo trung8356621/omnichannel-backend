@@ -5805,6 +5805,11 @@
     color: #94a3b8;
 }
 
+.wp-article-links-group {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
 .wp-article-links-group + .wp-article-links-group {
     margin-top: 0.85rem;
     padding-top: 0.75rem;

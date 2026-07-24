@@ -176,8 +176,17 @@ Layout 2 cột (4 + 8):
 **Cột phải (8): Nội dung**
 - `content` (MarkdownEditor) — nội dung prompt, có thể chứa biến `{{variable_name}}`
 - **Post-Processing** (chỉ visible khi tool=image):
-  - Quick split: enabled + rows + columns
-  - Quick resize: enabled + width + height
+  - Quick split: `split_enabled` + **một** `split_grid_size` (N×N; legacy `split_rows`/`split_columns` normalize về square)
+  - Quick resize: enabled + width + height (chỉ sau split thành công)
+  - **Runtime Image Output Mode** (UI): preview + full block từ `ImageOutputModePromptInjector::buildBlock()` — không phải Manual Prompt Hook, không lưu vào template
+  - Manual Prompt Hook dropdown (`PromptHookFormSchema`) độc lập; Quick Split không cần chọn Hook
+
+| Symbol | Path | Vai trò |
+|--------|------|---------|
+| `PromptPostProcessing` | `Support/PromptPostProcessing.php` | Normalize `split_grid_size`, snapshot `quick_split` vào variables |
+| `ImageOutputModePromptInjector` | `Services/ImageOutputModePromptInjector.php` | Inject idempotent `[IMAGE_OUTPUT_MODE_*]`; `buildBlock` / `summarize` / `auditMeta` |
+| `QuickSplitCanvasValidator` | `Support/QuickSplitCanvasValidator.php` | Validate canvas vuông chia hết trước split |
+| `PromptManualGridWarning` | `Support/PromptManualGridWarning.php` | Soft warning template vs grid_size |
 
 ### 3.3 Variables System
 
@@ -349,11 +358,13 @@ Engine AI trung tâm, 1181 dòng. **Dependencies:**
 | `runWithCompiledPrompt()` | Chạy với prompt đã compile sẵn |
 | `runDirectImagePreview()` | Image tool (+ optional sub_task): compile parts → `executeImage` **không** chạy planner text Flash |
 | `runChainStepOutput()` | Chạy 1 bước trong chain (dùng cho ImageGenerationChainService) |
-| `compilePrompt()` | Compile prompt từ parts + variables |
+| `compilePrompt()` | Compile parts + variables; **image pipeline** prepend Runtime Image Output Mode via `ImageOutputModePromptInjector` (snapshot `quick_split` nếu có) |
 | `callProvider()` | Router cuối: gemini → `callGemini()`, claude → `callClaude()`, image → `MediaGenerationService` |
 | `callGemini()` | Gọi Gemini API với retry model/version |
 | `callClaude()` | Delegate sang `AiExecutionService::executeClaude()` |
 | `executeWithModelRouting()` | Gọi `AiModelRouterService::executeWithFailover()` |
+
+**Run audit:** `PromptResult.input_snapshot` lưu `compiled_prompt` + `image_output_mode` (`auditMeta`: mode / grid / expected_children / `generation_snapshot`). Test Prompt hiển thị template vs final từ snapshot, không rebuild từ form.
 
 **Image path parity:** `GenerateMediaJob` và `TaskWorkflowTestRunner` (tool image/`image_typography`) dùng `runFullDependentChain=false` → cùng pipeline Test Prompt / Editor. Không ép `modelOverride` category Flash lên image node.
 

@@ -59,7 +59,7 @@ final class ArticleLinkSuggestionRuntimeWiringTest extends TestCase
 
         self::assertStringContainsString('LinkSuggestionStopPhraseFilter::isStopPhrase', $body);
         self::assertStringContainsString('shouldRun($primaryValidInternal)', $body);
-        self::assertStringContainsString('outlineHeadingPhrases', $body);
+        self::assertStringNotContainsString('outlineHeadingPhrases', $body);
         self::assertStringContainsString('[LINK_FALLBACK_DEBUG]', $body);
     }
 
@@ -73,13 +73,13 @@ final class ArticleLinkSuggestionRuntimeWiringTest extends TestCase
         self::assertStringContainsString('shouldRun($primaryValidInternal)', $collect);
     }
 
-    public function test_extractor_pulls_strong_and_heading_from_real_html_shape(): void
+    public function test_extractor_pulls_strong_before_heading_from_real_html_shape(): void
     {
         $extractor = new ArticleLinkSuggestionContentPhraseExtractor;
         $html = <<<'HTML'
-            <h2>Balo laptop thời trang học đường</h2>
+            <h2>Các dòng balo thời trang học đường</h2>
             <p>Sản phẩm dùng <strong>ngăn chống sốc</strong> và <strong>chống thấm nước</strong>.</p>
-            <p>Phù hợp <strong>thiết bị học tập</strong> và <strong>máy tính xách tay</strong>.</p>
+            <p>Phù hợp <em>thiết bị học tập</em> và <mark>máy tính xách tay</mark>.</p>
             <p>Vui lòng <a href="/contact">liên hệ</a> nếu cần.</p>
             HTML;
 
@@ -87,12 +87,15 @@ final class ArticleLinkSuggestionRuntimeWiringTest extends TestCase
         $texts = array_map(static fn (array $row): string => mb_strtolower($row['phrase']), $phrases);
 
         self::assertNotContains('liên hệ', $texts);
+        self::assertNotContains('các dòng balo thời trang học đường', $texts);
+        self::assertNotSame([], $phrases);
+        self::assertContains($phrases[0]['source'], ['strong', 'mark', 'em', 'entity', 'noun_phrase']);
         self::assertTrue(
             in_array('ngăn chống sốc', $texts, true)
             || in_array('chống thấm nước', $texts, true)
-            || in_array('balo laptop thời trang học đường', $texts, true)
-            || in_array('thiết bị học tập', $texts, true),
-            'Expected content phrases, got: '.implode(' | ', $texts),
+            || in_array('thiết bị học tập', $texts, true)
+            || in_array('máy tính xách tay', $texts, true),
+            'Expected highlight phrases, got: '.implode(' | ', $texts),
         );
     }
 

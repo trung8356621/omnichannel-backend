@@ -2,15 +2,15 @@
     @vite('app/Addons/SeoContentAi/resources/css/media-library.css')
 
     <div class="seo-prompt-test-layout">
-        {{-- Cột 1: Prompt raw (chưa thay biến) --}}
+        {{-- Cột 1: Prompt template --}}
         <div class="seo-prompt-test-col seo-prompt-test-col--prompt">
-            <x-filament::section heading="Prompt">
+            <x-filament::section :heading="__('seo-content-ai::filament.prompt_test.template_heading')">
                 <p class="seo-prompt-test-col__hint">
                     @if ($this->usesStepByStepChain())
                         Mẫu prompt cha từ cấu hình đã lưu — giữ nguyên <code>@verbatim{{biến}}@endverbatim</code>, thay bằng tay trước khi chạy.
                         <code>@verbatim{{PARENT_RESULT}}@endverbatim</code> do hệ thống gán khi chạy prompt con.
                     @else
-                        Mẫu prompt raw từ cấu hình đã lưu. Thay <code>@verbatim{{biến}}@endverbatim</code> bằng tay rồi bấm «Chạy thử».
+                        {{ __('seo-content-ai::filament.prompt_test.template_hint') }}
                     @endif
                 </p>
 
@@ -20,7 +20,7 @@
                         class="seo-prompt-test-editor"
                         rows="22"
                         spellcheck="false"
-                        placeholder="Prompt raw — còn placeholder @verbatim{{biến}}@endverbatim…"
+                        placeholder="Prompt template — còn placeholder @verbatim{{biến}}@endverbatim…"
                     ></textarea>
 
                     <div class="seo-prompt-test-col__actions">
@@ -40,11 +40,11 @@
             </x-filament::section>
         </div>
 
-        {{-- Cột 2: Prompt đã ghép (biến đã thay) --}}
+        {{-- Cột 2: Final prompt gửi provider --}}
         <div class="seo-prompt-test-col seo-prompt-test-col--merged">
-            <x-filament::section heading="Prompt đã ghép">
+            <x-filament::section :heading="__('seo-content-ai::filament.prompt_test.final_heading')">
                 <x-slot name="description">
-                    Tự động ghép biến site mặc định. Chọn lịch sử sẽ hiển thị prompt đã gửi AI ở đây — cột Prompt raw không đổi.
+                    {{ __('seo-content-ai::filament.prompt_test.final_hint') }}
                 </x-slot>
 
                 <div class="seo-prompt-test-col__actions seo-prompt-test-col__actions--top">
@@ -55,12 +55,32 @@
                         icon="heroicon-o-arrow-left"
                         wire:click="copyMergedPreviewToEditable"
                     >
-                        Dùng bản ghép để chạy
+                        Dùng bản final để chạy
                     </x-filament::button>
                 </div>
 
+                @if ($this->isImageToolPrompt() && ($meta = $this->imageOutputModeMetaForView()))
+                    <div class="seo-runtime-output-mode__card rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/40 p-3 mb-3 text-sm">
+                        <div class="font-medium mb-2">{{ __('seo-content-ai::filament.prompt_test.output_mode_meta_heading') }}</div>
+                        <ul class="list-none m-0 p-0 space-y-1 text-gray-700 dark:text-gray-300">
+                            <li>- Output mode: {{ $meta['output_mode'] }}</li>
+                            <li>- Quick Split: {{ ! empty($meta['quick_split_enabled']) ? 'Enabled' : 'Disabled' }}</li>
+                            @if (! empty($meta['grid']))
+                                <li>- Grid: {{ $meta['grid'] }}</li>
+                            @endif
+                            <li>- Expected children: {{ $meta['expected_children'] }}</li>
+                            <li>- Snapshot source: {{ $meta['snapshot_source'] }}</li>
+                        </ul>
+                    </div>
+                @endif
+
                 @if (filled($compiledPreview))
-                    <div class="seo-prompt-test-readonly">{{ $compiledPreview }}</div>
+                    <div class="seo-prompt-test-readonly font-mono text-xs whitespace-pre-wrap">{{ $compiledPreview }}</div>
+                    @if ($this->isImageToolPrompt() && ! str_contains((string) $compiledPreview, '[IMAGE_OUTPUT_MODE_BEGIN]'))
+                        <p class="mt-2 text-sm text-warning-600 dark:text-warning-400">
+                            Final prompt thiếu marker IMAGE_OUTPUT_MODE — bấm «Làm mới xem trước» trên header.
+                        </p>
+                    @endif
                 @else
                     <p class="seo-prompt-test-col__empty">
                         Chưa có nội dung. Bấm «Làm mới xem trước» trên header hoặc «Chạy thử».

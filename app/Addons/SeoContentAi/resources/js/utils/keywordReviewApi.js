@@ -19,6 +19,51 @@ export async function fetchKeywordReviewReasons() {
 }
 
 /**
+ * @param {{
+ *   phrase: string,
+ *   site_id: number,
+ *   target_url?: string|null,
+ *   target_article_id?: number|null,
+ * }} payload
+ * @returns {Promise<{ id: number, phrase: string }>}
+ */
+export async function ensureKeywordForReview(payload) {
+    const body = {
+        phrase: String(payload.phrase ?? '').trim(),
+        site_id: Number(payload.site_id ?? 0),
+    };
+
+    if (payload.target_url != null && String(payload.target_url).trim() !== '') {
+        body.target_url = String(payload.target_url).trim();
+    }
+
+    if (payload.target_article_id != null && Number(payload.target_article_id) > 0) {
+        body.target_article_id = Number(payload.target_article_id);
+    }
+
+    const { response, data } = await seoArticleApiFetch('/api/seo/keywords/ensure-for-review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+
+    if (!response.ok || data?.success !== true) {
+        throw new Error(data?.message ?? 'Unable to prepare keyword for review.');
+    }
+
+    const keyword = data.keyword ?? null;
+    const id = Number(keyword?.id ?? 0);
+    if (id <= 0) {
+        throw new Error(data?.message ?? 'Unable to prepare keyword for review.');
+    }
+
+    return {
+        id,
+        phrase: String(keyword?.phrase ?? body.phrase),
+    };
+}
+
+/**
  * @param {number} keywordId
  * @param {{
  *   reason_id?: number|null,

@@ -226,7 +226,9 @@ flowchart TB
 | Tối ưu + upload | `Services/SeoImageOptimizationService.php` | `processUpload`/`processBinary` → `processOriginalBytes` (transactional); `prepareWordPressUploadFile`, `ensureLocalWebpCopy`, `ensureLocalWebpUnderMaxBytes`, `validateConvertedImage`; log `SEO_MEDIA_WEBP_*` / `SEO_MEDIA_SOURCE_DECODE_FAILED` |
 | Resize thủ công | `Services/SeoMediaResizeService.php` | `resizeLocal` (ghi đè file `public`), `resizeBinary` (in-memory / workflow) |
 | Media Library UI | `Services/SeoMediaLibraryImageActionService.php` | Quick resize → `resizeLocal` |
-| Post-processing | `Services/PromptPostProcessingApplyService.php` | Resize ảnh AI / block → `resizeBinary` hoặc `resizeLocal` |
+| Post-processing | `Services/PromptPostProcessingApplyService.php` | Quick Split N×N từ snapshot `quick_split` + `QuickSplitCanvasValidator`; fail-safe giữ ảnh gốc; resize child sau split |
+| Runtime output mode | `Services/ImageOutputModePromptInjector.php` | Block `[IMAGE_OUTPUT_MODE_*]` khi compile image prompt (không DB Hook) |
+| Config normalize | `Support/PromptPostProcessing.php` | `split_grid_size` (legacy rows/cols → square) |
 | Sync WP | `Services/WordPressLocalMediaSyncService.php` | `syncHtml`, `syncMedia`, `syncWebpBackfillMediaForArticle`, `prepareWordPressUploadFile` trước khi push attachment |
 
 ### Chiến lược định dạng
@@ -283,7 +285,7 @@ Pipeline: Support/SeoImagePipeline.php + Support/SeoImageResizeMath.php.
 Driver: app/Support/ImageDriverResolver.php (imagick/gd, env IMAGE_DRIVER).
 Model/Query: Models/SeoMedia.php + Models/SeoMediaBuilder.php (meta routing).
 Frontend: seoMediaApi.js, components/ArticleImagesTab.jsx, ImageBlockEditor.jsx, `utils/brokenImageGuard.js` (404 → placeholder tĩnh, không retry), `resolveArticleImageRemoveTarget` (disable Xóa khi ảnh stale không khớp).
-Article Editor slug fix: `POST /api/seo/articles/{id}/fix-media-slugs` — batch rename + rewrite `article.body`/meta (`SeoMediaArticleSlugFixService`). Single rename (`rename`/`rename-by-url`) nhận `article_id` → rewrite article refs. **WP Fix slug:** `renameAttachmentSlugsOnWordPress` cũng rewrite Laravel refs qua `SeoMediaUrlReplacementService` (stem + `-WxH`). Fix slug all: rewrite server + `clearDraft` + full page reload.
+Article Editor slug fix: `POST /api/seo/articles/{id}/fix-media-slugs` — batch rename + rewrite `article.body`/meta (`SeoMediaArticleSlugFixService`) trả `renamed[]` exact map. Single rename (`rename`/`rename-by-url`) nhận `article_id` → rewrite article refs. **WP Fix slug:** `renameAttachmentSlugsOnWordPress` cũng rewrite Laravel refs qua `SeoMediaUrlReplacementService` (stem + `-WxH`). **Fix slug all** (editor): save → rename → apply map vào TipTap/blocks → invalidate Gallery/Images/picker → save lại — chi tiết [docs/article-editor/image-slug-rename.md](article-editor/image-slug-rename.md). Không full page reload.
 Watermark batch: POST /api/seo/watermark/* → SeoWatermarkController.
 Image Optimization Settings: SeoImageOptimizationSetting model + ImageOptimizationSettings page.
 AI Image Processing: ImageProcessingPage.php + /api/seo/media/prepare-editor.
@@ -386,7 +388,7 @@ Filament page riêng cho AI image enhancement (magic eraser, background removal,
 | `TypographyValidationService` | Vision scoring qua `VisionValidationModelRouter`; log `validation_model` |
 | `GeminiMediaGenerationService` | `generateImageBinary` = render binary; `generateImage` = persist qua `PromptMediaStorageService::storeBinaryMedia` (gắn placeholder) |
 | `TypographyPipelineService` | Chọn winner → **một** lần `storeBinaryMedia` vào job placeholder |
-| `GenerateMediaJob` | Skip nếu media đã `failed` hoặc `completed`; nhánh `source=workflow` vs `prompt` |
+| `GenerateMediaJob` | Skip nếu media đã `failed` hoặc `completed`; nhánh `source=workflow` vs `prompt`; freeze snapshot `quick_split` lúc chạy; apply post-processing + `quick_split_error*` khi fail |
 
 ### ImageOptimizationSettings (`/seo/settings/image-optimization`)
 

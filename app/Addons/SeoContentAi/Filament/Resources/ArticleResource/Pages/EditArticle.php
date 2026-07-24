@@ -38,6 +38,7 @@ use App\Addons\SeoContentAi\Services\ArticleInternalLinkSearchService;
 use App\Addons\SeoContentAi\Services\ArticleKeywordLinkReconcileService;
 use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;
 use App\Addons\SeoContentAi\Services\ArticlePendingInternalLinkService;
+use App\Addons\SeoContentAi\Services\ArticlePipelineRerunService;
 use App\Addons\SeoContentAi\Services\ArticlePolylangSyncService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
 use App\Addons\SeoContentAi\Services\ArticleQuickPostReviewService;
@@ -197,6 +198,16 @@ class EditArticle extends SeoEditRecord
 
     public string $editorPreparingMessage = '';
 
+    public bool $pipelineRerunBusy = false;
+
+    public bool $pipelineRerunWatching = false;
+
+    public ?string $pipelineRerunStatus = null;
+
+    public ?string $pipelineRerunUrl = null;
+
+    public ?string $pipelineRerunMessage = null;
+
     public function mount(int|string $record): void
     {
         parent::mount($record);
@@ -274,6 +285,7 @@ class EditArticle extends SeoEditRecord
         }
 
         $perf->stop('edit_article_mount');
+        $this->refreshPipelineRerunStatus();
         $perf->logSummary('edit_article_mount', ['article_id' => (int) $this->record->getKey()]);
     }
 
@@ -3341,115 +3353,90 @@ class EditArticle extends SeoEditRecord
         return $html;
     }
 
-    public function importMarkdownDebug(string $markdown): void
+    public function queueArticlePipelineRerun(string $from = 'outline'): void
     {
         abort_unless(SeoAccessControl::canAccessManagerFeatures(), 403);
 
-        $markdown = trim($markdown);
-        if ($markdown === '') {
+        $this->pipelineRerunWatching = true;
+        $this->pipelineRerunBusy = true;
+        $this->pipelineRerunStatus = ArticlePipelineRerunService::STATUS_RUNNING;
+        $this->dispatch('close-article-pipeline-rerun-modal');
+
+        $result = app(ArticlePipelineRerunService::class)->queue(
+            $this->record,
+            $from,
+            auth()->id() !== null ? (int) auth()->id() : null,
+        );
+
+        $this->pipelineRerunUrl = isset($result['run_url']) ? (string) $result['run_url'] : null;
+        $this->pipelineRerunMessage = (string) ($result['message'] ?? '');
+        $this->pipelineRerunStatus = isset($result['status'])
+            ? (string) $result['status']
+            : ArticlePipelineRerunService::STATUS_FAILED;
+
+        $this->pipelineRerunWatching = false;
+        $this->pipelineRerunBusy = false;
+
+        if (! ($result['success'] ?? false)) {
             Notification::make()
-                ->title('Markdown trống')
-                ->body('Vui lòng nhập nội dung markdown để import.')
-                ->warning()
+                ->title('Không thể chạy lại quy trình')
+                ->body((string) ($result['message'] ?? 'Yêu cầu bị từ chối.'))
+                ->danger()
                 ->send();
 
             return;
         }
-
-        $import = app(ArticleContentFaqService::class)->convertMarkdownImport($markdown);
-        if ($import['html'] === '') {
-            Notification::make()
-                ->title('Không thể convert markdown')
-                ->body('Nội dung markdown không hợp lệ hoặc rỗng sau khi xử lý.')
-                ->warning()
-                ->send();
-
-            return;
-        }
-
-        $siteId = (int) ($this->record->site_id ?? 0);
-        $cta = app(ArticleCtaPlaceholderService::class)->applyForPublish(
-            $siteId > 0 ? $siteId : null,
-            $import['html'],
-            $import['faqs'],
-        );
-        $html = $cta['html'];
-
-        $faqCount = 0;
-        if ($cta['faqs'] !== []) {
-            $faqCount = app(ArticleFaqEditorService::class)->saveFromEditor($this->record, $cta['faqs']);
-        }
-
-        $h1Title = trim((string) ($import['h1_title'] ?? ''));
-        if ($h1Title !== '') {
-            $this->articleTitle = $h1Title;
-        }
-
-        $metaDescription = trim((string) ($import['meta_description'] ?? ''));
-        if ($metaDescription !== '') {
-            $this->seoMetaDescription = $metaDescription;
-        }
-
-        $this->bootstrapEditorHtml = $html;
-        $this->persistArticleLocalSilent($html);
-
-        if ($h1Title !== '' || $metaDescription !== '') {
-            $this->persistSeoMetaFields();
-        }
-
-        app(SeoAnalyzerService::class)->analyze($this->record->fresh());
-
-        $slug = Str::slug($this->articleSlug);
-        $seoResult = app(SeoAnalyzerService::class)->analyzePreview(
-            $this->record->fresh(),
-            $html,
-            trim($this->articleTitle),
-            $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
-            trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
-        );
-        $this->dispatch('seo-analyze-result', result: $seoResult);
-
-        $this->dispatch(
-            'article-faqs-extracted',
-            faqs: app(ArticleFaqEditorService::class)->payloadForArticle($this->record->fresh()),
-            editorHtml: $html,
-        );
-
-        $importBody = 'Nội dung markdown đã convert sang HTML và cập nhật vào editor.';
-        if ($h1Title !== '') {
-            $importBody .= ' H1 đã gán làm tiêu đề bài + tiêu đề SEO.';
-        }
-        if ($faqCount > 0) {
-            $importBody .= sprintf(' Đã tách %d FAQ vào panel và chèn shortcode [omi_faq].', $faqCount);
-        }
-
-        $addedBlankCta = $cta['added_blank_types'] ?? [];
-        if ($addedBlankCta !== []) {
-            $importBody .= ' CTA thiếu trên domain (đã thêm biến trắng): '
-                .implode(', ', array_map(static fn (string $t): string => "[{$t}]", $addedBlankCta))
-                .'.';
-        } elseif ($siteId > 0 && app(ArticleCtaPlaceholderService::class)->detectPlaceholderTypes($markdown) !== []) {
-            $importBody .= ' Đã thay placeholder CTA bằng giá trị domain (nếu có).';
-        }
-
-        $seoPayload = app(ArticleEditorSeoPayloadService::class)->forArticle($this->record->fresh());
-        $this->js(sprintf(
-            'window.dispatchEvent(new CustomEvent("seo-editor-seo-payload-updated", { detail: %s }))',
-            json_encode($seoPayload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-        ));
 
         Notification::make()
-            ->title('Đã import markdown debug')
-            ->body($importBody)
+            ->title('Chạy lại quy trình thành công')
+            ->body((string) ($this->pipelineRerunMessage ?: 'Đã áp dụng kết quả mới. Đang tải lại editor…'))
             ->success()
+            ->persistent()
             ->send();
+
+        $this->record->refresh();
+        $this->record->load('articleMetas');
+        $this->hydrateArticleState();
+        $articleId = (int) $this->record->id;
+        $this->js(sprintf(
+            'window.dispatchEvent(new CustomEvent("seo-article-pipeline-rerun-completed", { detail: { articleId: %d } }))',
+            $articleId,
+        ));
     }
 
-    public function submitMarkdownImportFromSidebar(string $markdown = ''): void
+    public function refreshPipelineRerunStatus(): void
     {
-        abort_unless(SeoAccessControl::canAccessManagerFeatures(), 403);
+        if (! $this->record instanceof SeoArticle) {
+            return;
+        }
 
-        $this->importMarkdownDebug($markdown);
+        $service = app(ArticlePipelineRerunService::class);
+        $article = $this->record->fresh() ?? $this->record;
+        $payload = $service->statusPayload($article);
+
+        // Meta queued/running còn sót từ lần trước (request đứt) → không khóa nút, đánh dấu failed.
+        if (
+            ! $this->pipelineRerunWatching
+            && in_array($payload['status'] ?? null, [
+                ArticlePipelineRerunService::STATUS_QUEUED,
+                ArticlePipelineRerunService::STATUS_RUNNING,
+            ], true)
+        ) {
+            $service->writeRerunMeta($article, array_merge($service->readRerunMeta($article), [
+                'status' => ArticlePipelineRerunService::STATUS_FAILED,
+                'failed_at' => now()->toIso8601String(),
+                'message' => (string) ($payload['message'] ?? 'Rerun trước đó bị gián đoạn.'),
+            ]));
+            $service->abandonStaleActiveRuns((int) $article->id);
+            $payload = $service->statusPayload($article->fresh() ?? $article);
+        }
+
+        $this->pipelineRerunStatus = $payload['status'];
+        $this->pipelineRerunUrl = $payload['run_url'];
+        $this->pipelineRerunMessage = $payload['message'];
+        // Sync mode: không giữ busy từ meta — tránh nút disable + wire:poll giật UI.
+        $this->pipelineRerunBusy = false;
+        $this->pipelineRerunWatching = false;
     }
 
     public function importMarkdownFaqDebug(string $markdown): void
@@ -4339,8 +4326,10 @@ class EditArticle extends SeoEditRecord
      *     prompt_name: string,
      *     post_processing: array{
      *         split_enabled: bool,
+     *         split_grid_size: int,
      *         split_rows: int,
      *         split_columns: int,
+     *         expected_panels: int,
      *         resize_enabled: bool,
      *         resize_width: int|null,
      *         resize_height: int|null,

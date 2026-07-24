@@ -19,10 +19,26 @@ final class RuntimeLogger
     public static function channel(): LoggerInterface
     {
         if (app()->runningInConsole()) {
-            return Log::channel((string) config('logging.default', 'stack'));
+            $default = (string) config('logging.default', 'stack');
+
+            return self::safeChannel($default, 'stack');
         }
 
-        return Log::channel('web_app');
+        // Stale config:cache without web_app → LogManager emergency → laravel.log.
+        return self::safeChannel('web_app', 'null');
+    }
+
+    private static function safeChannel(string $preferred, string $fallback): LoggerInterface
+    {
+        if (is_array(config('logging.channels.'.$preferred))) {
+            return Log::channel($preferred);
+        }
+
+        if (is_array(config('logging.channels.'.$fallback))) {
+            return Log::channel($fallback);
+        }
+
+        return Log::channel('null');
     }
 
     /**

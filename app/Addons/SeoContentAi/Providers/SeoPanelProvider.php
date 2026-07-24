@@ -442,6 +442,8 @@ class SeoPanelProvider extends PanelProvider
             ->group(function (): void {
                 Route::get('/review-reasons', [KeywordReviewController::class, 'reasons'])
                     ->name('seo.keywords.review-reasons');
+                Route::post('/ensure-for-review', [KeywordReviewController::class, 'ensureForReview'])
+                    ->name('seo.keywords.ensure-for-review');
                 Route::post('/{keyword}/review', [KeywordReviewController::class, 'review'])
                     ->whereNumber('keyword')
                     ->name('seo.keywords.review');

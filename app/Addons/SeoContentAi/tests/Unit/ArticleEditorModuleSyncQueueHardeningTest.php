@@ -130,6 +130,10 @@ final class ArticleEditorModuleSyncQueueHardeningTest extends TestCase
         self::assertStringContainsString('->afterCommit()', $service);
         self::assertStringContainsString("'already_queued' => false", $service);
         self::assertStringContainsString("'already_queued' => true", $service);
+        self::assertStringContainsString('acquireEnqueueLock', $service);
+        self::assertStringContainsString('enqueueLockStores', $service);
+        self::assertStringContainsString("Cache::store(\$storeName)->lock", $service);
+        self::assertStringContainsString('manual_wordpress_sync.lock_failed', $service);
     }
 
     public function test_sync_controller_sets_close_editor_on_success(): void
@@ -169,6 +173,8 @@ final class ArticleEditorModuleSyncQueueHardeningTest extends TestCase
         self::assertStringContainsString('function getSyncQueueBadgeCount', $pageSource);
         self::assertStringContainsString('applyContentTabScope($query, self::TAB_QUEUE)', $pageSource);
         self::assertStringContainsString('getSyncQueueBadgeCount()', $bladeSource);
+        self::assertStringContainsString('seo-internal-tabs__queue-badge', $bladeSource);
+        self::assertStringContainsString('seo-internal-tabs__queue', $bladeSource);
         self::assertStringContainsString('wire:poll.15s', $bladeSource);
     }
 }

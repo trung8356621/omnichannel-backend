@@ -110,7 +110,7 @@ flowchart TB
 - A disabled rule blocks future automatic executions, not an explicit manual user sync and not necessarily an execution already mid-flight before disable (pending/processing get `cancellation_requested_at`).
 - Content Project and Article completion never dispatch WordPress jobs directly.
 - WordPress automation jobs use `automation-external` (action) / `automation-critical` (rule bootstrap). Legacy manual queue job uses `seo` — not `default`.
-- Manual entry: `WordPressManualSyncService` → `ArticleWpSyncLeaseService::enqueue` (`seo_article_wp_sync_jobs` + meta `wp_sync_queue`) → `ManualWordPressSyncJob` (queue `seo`, `syncJobId`) → claim/heartbeat → `ArticleWordPressBusinessSequence`. **Không** cần Automation Rule. `Cache::lock` + `isActive` (force-stale expired). Terminal: complete/fail/cancel/stale. Watchdog `seo:wordpress-sync-lease-watchdog`. Idempotency create: WP meta `_teamvia_article_id` / `_teamvia_sync_key` + `GET .../posts/find-by-article`. **Editor UX sau enqueue:** `finishArticleSyncFromApi` / `exitEditorAfterWordpressSyncQueued` — đóng tab hoặc `location.replace` Sync Queue ngay; **không** poll Elapsed trên Edit Article. Controller `POST .../sync-wp` (`queued` + `close_editor`), EditArticle sync button.
+- Manual entry: `WordPressManualSyncService` → `ArticleWpSyncLeaseService::enqueue` (`seo_article_wp_sync_jobs` + meta `wp_sync_queue`) → `ManualWordPressSyncJob` (queue `seo`, `syncJobId`) → claim/heartbeat → `ArticleWordPressBusinessSequence`. **Không** cần Automation Rule. Enqueue lock: `acquireEnqueueLock` ưu tiên `Cache::store('database')` (`cache_locks`), retry; file-driver `fopen` fail không chặn enqueue (DB `lockForUpdate` vẫn serialize) + log `manual_wordpress_sync.lock_failed`. `isActive` (force-stale expired; sau auto-retry coi job mới active). Terminal: complete/fail/cancel/stale. **`markStale` auto-retry tối đa 3** (`MAX_STALE_AUTO_RETRIES`, settings `stale_auto_retries`, source `stale_auto_retry`); force unlock/`--force` tắt. Watchdog `seo:wordpress-sync-lease-watchdog`. Idempotency create: WP meta `_teamvia_article_id` / `_teamvia_sync_key` + `GET .../posts/find-by-article`. **Editor UX sau enqueue:** `finishArticleSyncFromApi` / `exitEditorAfterWordpressSyncQueued` — đóng tab hoặc `location.replace` Sync Queue ngay; **không** poll Elapsed trên Edit Article. Controller `POST .../sync-wp` (`queued` + `close_editor`), EditArticle sync button.
 - `ArticleScheduleReconcileService` = Laravel status only — **no** WordPress API.
 - System cron `ScheduledArticlePublishRunner` = due scheduled posts already linked (`wp_post_id>0`); not `article.completed`.
 
@@ -279,7 +279,8 @@ Widget quản lý release của WP plugin `omi-seo-ai-bridge`:
 ```
 Hub: Services/WordPressArticleSyncService.php → syncForArticle() / createForArticle (find-by-article idempotent).
 Lease: Services/ArticleWpSyncLeaseService.php + Models/SeoArticleWpSyncJob.php; meta projection ArticleWpSyncQueueService.php (`QUEUE_NAME=seo`).
-Jobs: Jobs/ManualWordPressSyncJob.php (queue `seo`); legacy SyncArticleToWordPressFromQueueJob disabled.
+  Stale auto-retry: markStale → maybeAutoRetryAfterStale (MAX_STALE_AUTO_RETRIES=3, settings.stale_auto_retries); force unlock tắt.
+Jobs: Jobs/ManualWordPressSyncJob.php (queue `seo`); source `stale_auto_retry` khi tự enqueue.
 Watchdog: Console/WordpressSyncLeaseWatchdogCommand.php (`seo:wordpress-sync-lease-watchdog`).
 HTTP: Services/WordPressArticleContentService.php (buildEditorSyncUrl); Gateway getJson/postJson + WpSyncLeaseHeartbeat.
 Media: Services/WordPressLocalMediaSyncService.php, ArticleMediaLocalService.php.
