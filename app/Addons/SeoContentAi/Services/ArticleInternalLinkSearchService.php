@@ -15,12 +15,14 @@ final class ArticleInternalLinkSearchService
     public function __construct(
         private readonly WordPressArticleContentService $wordPressContent,
         private readonly WordPressPermalinkBuilder $permalinkBuilder,
+        private readonly ArticleLinkSuggestionCandidateRetriever $candidateRetriever,
     ) {}
 
     /**
      * Tìm bài cùng site để chèn link nội bộ nhanh trong editor.
+     * Ưu tiên relevance score (title/slug/keyword/heading), không sort theo updated_at thuần.
      *
-     * @return list<array{id: int, title: string, url: string, label: string}>
+     * @return list<array{id: int, title: string, url: string, label: string, score?: int, match_reason?: string}>
      */
     public function search(int $siteId, int $excludeArticleId, string $query, int $limit = 15): array
     {
@@ -35,22 +37,42 @@ final class ArticleInternalLinkSearchService
 
         $limit = max(1, min(30, $limit));
 
+        $current = SeoArticle::query()
+            ->where('site_id', $siteId)
+            ->whereKey($excludeArticleId)
+            ->first(['id', 'site_id', 'title', 'slug']);
+
+        if ($current instanceof SeoArticle) {
+            $ranked = $this->candidateRetriever->searchRanked($current, $query, $limit);
+            if ($ranked !== []) {
+                return array_map(static function (array $row): array {
+                    return [
+                        'id' => (int) $row['id'],
+                        'title' => (string) $row['title'],
+                        'url' => (string) $row['url'],
+                        'label' => sprintf('#%d · %s', $row['id'], $row['title']),
+                        'score' => (int) ($row['score'] ?? 0),
+                        'match_reason' => (string) ($row['match_reason'] ?? ''),
+                    ];
+                }, $ranked);
+            }
+        }
+
+        // Fallback hẹp: title LIKE + exclude current (khi index rank không có kết quả).
+        $escaped = str_replace(['%', '_'], ['\\%', '\\_'], $query);
         $builder = ArticleResource::getEloquentQuery()
             ->with(['site', 'articleMetas'])
             ->where('site_id', $siteId)
-            ->where('id', '!=', $excludeArticleId);
-
-        if ($query !== '') {
-            $escaped = str_replace(['%', '_'], ['\\%', '\\_'], $query);
-
-            $builder->where(function (Builder $inner) use ($query, $escaped): void {
-                $inner->where('title', 'like', '%'.$escaped.'%');
+            ->where('id', '!=', $excludeArticleId)
+            ->whereNull('content_archived_at')
+            ->where(function (Builder $inner) use ($query, $escaped): void {
+                $inner->where('title', 'like', '%'.$escaped.'%')
+                    ->orWhere('slug', 'like', '%'.$escaped.'%');
 
                 if (ctype_digit($query)) {
                     $inner->orWhere('id', (int) $query);
                 }
             });
-        }
 
         return $builder
             ->orderByDesc('updated_at')

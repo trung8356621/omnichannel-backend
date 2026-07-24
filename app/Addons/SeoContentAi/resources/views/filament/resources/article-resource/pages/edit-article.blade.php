@@ -137,8 +137,8 @@
                         message: 'Đang lưu nội dung — vui lòng chờ…',
                     },
                     sync: {
-                        title: 'Đang đồng bộ với WordPress',
-                        message: 'Đang đồng bộ với WordPress — vui lòng chờ…',
+                        title: 'Đang đưa vào hàng đợi WordPress',
+                        message: 'Đang lưu và xếp hàng đồng bộ — tab sẽ tự đóng khi xong…',
                     },
                     restore: {
                         title: 'Đang đồng bộ từ WordPress',
@@ -317,18 +317,14 @@
             if (status !== 'queued' && status !== 'processing') {
                 return;
             }
-            const title = status === 'processing'
-                ? 'Đang đồng bộ bài viết lên WordPress'
-                : 'Đang chờ đồng bộ WordPress';
-            const message = status === 'processing'
-                ? 'Hệ thống đang xử lý nội dung và hình ảnh. Trang sẽ tự tải lại khi hoàn tất.'
-                : 'Yêu cầu đã được đưa vào hàng đợi. Vui lòng không chỉnh sửa bài viết trong lúc đồng bộ.';
-            window.__seoArticleHeavyActionOverlay?.show('sync', {
-                persistUntilUnload: true,
-                title,
-                message,
-            });
-            window.__seoArticleAutosaveLock?.set?.('article-operation', true);
+            // WP sync đang chạy — không khóa editor chờ; chuyển Sync Queue.
+            window.__SEO_EDITOR_EXITING__ = true;
+            window.__seoArticleOperationTracker?.stop?.();
+            const url = typeof window.__SEO_ARTICLES_SYNC_QUEUE_URL__ === 'string'
+                && window.__SEO_ARTICLES_SYNC_QUEUE_URL__.trim() !== ''
+                ? window.__SEO_ARTICLES_SYNC_QUEUE_URL__.trim()
+                : '/seo/articles?tab=queue';
+            window.location.replace(url);
         })();
 </script>
 @endonce
@@ -373,10 +369,12 @@
             init() {
                 this.syncFeaturedImageDraft();
                 this.loadPickerCustomTabs();
+                if (window.__SEO_EDITOR_EXITING__) {
+                    return;
+                }
                 const activeOp = window.__SEO_ACTIVE_ARTICLE_OPERATION__;
                 if (activeOp && typeof activeOp === 'object') {
-                    this.syncPageLocked = true;
-                    this.heavyPageAction = 'sync';
+                    // Tracker sẽ redirect Sync Queue cho WP sync queued/processing.
                     window.__seoArticleOperationTracker?.apply?.(this.articleId, activeOp);
                     return;
                 }
@@ -1804,6 +1802,16 @@
                     data-status="saved"
                     aria-live="polite"
                 ></span>
+                <button
+                    type="button"
+                    class="seo-article-editor-sticky-header__draft-alert"
+                    data-seo-sticky-draft-alert
+                    hidden
+                    title="Có nháp chưa lưu — bấm để chọn lại"
+                    aria-label="Có nháp chưa lưu — bấm để chọn lại"
+                >
+                    !
+                </button>
             </div>
             <div class="seo-article-editor-sticky-header__right">
                 @include('seo-content-ai::filament.resources.article-resource.pages.partials.article-editor-shortcuts-slot')
@@ -2724,8 +2732,12 @@
                 (function () {
                     function mountDebugMarkdownHeaderButton() {
                         const slot = document.querySelector('[data-seo-page-actions-slot]');
-                        const host = slot?.querySelector('[data-seo-page-actions-secondary]') ?? slot;
-                        if (!host || host.querySelector('[data-seo-debug-md-import]')) {
+                        if (!slot || slot.querySelector('[data-seo-debug-md-import]')) {
+                            return;
+                        }
+
+                        const host = slot.querySelector('[data-seo-page-actions-secondary]') ?? slot;
+                        if (!host) {
                             return;
                         }
 

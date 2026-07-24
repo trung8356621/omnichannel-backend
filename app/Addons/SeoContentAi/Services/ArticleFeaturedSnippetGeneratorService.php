@@ -9,7 +9,6 @@ use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
-use App\Addons\SeoContentAi\Support\SimpleMarkdownHtmlConverter;
 use Illuminate\Support\Str;
 
 /**
@@ -23,7 +22,7 @@ final class ArticleFeaturedSnippetGeneratorService
         private readonly SeoPromptSettingsService $promptSettings,
         private readonly SeoAnalyzerService $seoAnalyzer,
         private readonly PromptRunnerService $promptRunner,
-        private readonly SimpleMarkdownHtmlConverter $markdownConverter,
+        private readonly ArticleMarkdownToHtmlService $markdownHtml,
         private readonly SiteDomainPromptContextService $sitePromptContext,
         private readonly PromptResultLinkService $promptResultLinks,
     ) {}
@@ -75,7 +74,7 @@ final class ArticleFeaturedSnippetGeneratorService
             );
         }
 
-        $html = trim($this->markdownConverter->toHtml($output));
+        $html = trim($this->markdownHtml->toHtml($output));
         if ($html === '') {
             throw new \InvalidArgumentException(
                 'Không chuyển được kết quả Featured Snippet sang HTML cho editor.',

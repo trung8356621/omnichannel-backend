@@ -35,7 +35,15 @@ final class PromptHookDefinition
         public readonly array $metadata = [],
         public readonly string $manifestPath = '',
         public readonly bool $strictTemplateVariables = true,
+        public readonly ?string $outputContract = null,
     ) {}
+
+    public function outputContractKey(): ?string
+    {
+        $key = trim((string) ($this->outputContract ?? ''));
+
+        return $key !== '' ? $key : null;
+    }
 
     public function cacheKey(): string
     {

@@ -28,7 +28,7 @@ final class ArticleEditorSeoPayloadService
         $violations = SeoRuleViolationsResolver::forArticle($article);
         $score = SeoRuleViolationsResolver::scoreForArticle($article);
         $extractedLinks = $article->resolveExtractedLinks();
-        $bodyHtml = (string) ($article->body ?? '');
+        $bodyHtml = app(SeoAnalyzerService::class)->resolveScoringContentForArticle($article);
         $internalLinks = $extractedLinks['internal'] ?? [];
         $externalLinks = $extractedLinks['external'] ?? [];
         // Phase 2 perf: one collectCandidates() pass instead of 4 (suggest/suggestCatalog/

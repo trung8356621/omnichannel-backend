@@ -54,6 +54,10 @@ function elapsedLabel(startedAtIso) {
  * @param {{ stage?: string, error_message?: string, attempts?: number, worker_id?: string, started_at?: string, queued_at?: string }} [extra]
  */
 export function showArticleOperationOverlay(status, operation = 'wordpress_sync', extra = {}) {
+    if (window.__SEO_EDITOR_EXITING__) {
+        return;
+    }
+
     const overlay = window.__seoArticleHeavyActionOverlay;
     if (!overlay?.show) {
         return;
@@ -215,6 +219,65 @@ export function stopArticleOperationPolling() {
         clearInterval(pollTimer);
         pollTimer = null;
     }
+    pollStartedAt = 0;
+}
+
+function resolveSyncQueueExitUrl() {
+    const configured = typeof window.__SEO_ARTICLES_SYNC_QUEUE_URL__ === 'string'
+        ? window.__SEO_ARTICLES_SYNC_QUEUE_URL__.trim()
+        : '';
+
+    return configured !== '' ? configured : '/seo/articles?tab=queue';
+}
+
+function isWordpressSyncOperationType(type) {
+    const normalized = String(type || '').trim();
+
+    return normalized === 'wordpress_sync'
+        || normalized.includes('wordpress')
+        || normalized.includes('wp_sync');
+}
+
+/**
+ * Enqueue WP sync xong — đóng editor ngay, không poll/elapsed.
+ */
+export function exitEditorAfterWordpressSyncQueued() {
+    window.__SEO_EDITOR_EXITING__ = true;
+    stopArticleOperationPolling();
+    reloadScheduled = true;
+
+    if (window.__seoArticleHeavyActionOverlay) {
+        window.__seoArticleHeavyActionOverlay.persistUntilUnload = false;
+        window.__seoArticleHeavyActionOverlay.locked = false;
+    }
+    window.__seoArticleHeavyActionOverlay?.hide?.();
+    setArticleAutosaveLock('article-operation', false);
+    setArticleAutosaveLock('article-heavy-action', false);
+
+    const url = resolveSyncQueueExitUrl();
+    try {
+        window.close();
+    } catch {
+        // ignore
+    }
+
+    try {
+        if (!window.closed) {
+            window.location.replace(url);
+        }
+    } catch {
+        window.location.href = url;
+    }
+
+    window.setTimeout(() => {
+        try {
+            if (!window.closed) {
+                window.location.replace(url);
+            }
+        } catch {
+            window.location.href = url;
+        }
+    }, 50);
 }
 
 /**
@@ -273,6 +336,12 @@ function unlockOverlayClient() {
  * @param {{ allowTerminalReload?: boolean }} [options]
  */
 export function applyArticleOperationState(articleId, operation, options = {}) {
+    if (window.__SEO_EDITOR_EXITING__) {
+        stopArticleOperationPolling();
+
+        return;
+    }
+
     const op = operation && typeof operation === 'object' ? operation : null;
     if (!op) {
         return;
@@ -286,6 +355,16 @@ export function applyArticleOperationState(articleId, operation, options = {}) {
             : status === 'completed' ? 'success'
                 : status;
     const allowTerminalReload = options.allowTerminalReload !== false;
+
+    // WP sync queued/processing: thoát editor ngay — không đếm Elapsed.
+    if (
+        isWordpressSyncOperationType(type)
+        && (publicStatus === 'queued' || publicStatus === 'processing')
+    ) {
+        exitEditorAfterWordpressSyncQueued();
+
+        return;
+    }
 
     if (publicStatus === 'queued' || publicStatus === 'processing') {
         showArticleOperationOverlay(publicStatus, type, {
@@ -336,6 +415,10 @@ export function applyArticleOperationState(articleId, operation, options = {}) {
  * @param {number} articleId
  */
 export function startArticleOperationPolling(articleId) {
+    if (window.__SEO_EDITOR_EXITING__) {
+        return;
+    }
+
     const id = Number(articleId) || 0;
     if (id <= 0) {
         return;
@@ -349,7 +432,7 @@ export function startArticleOperationPolling(articleId) {
     }
 
     const tick = async () => {
-        if (reloadScheduled || trackedArticleId !== id) {
+        if (window.__SEO_EDITOR_EXITING__ || reloadScheduled || trackedArticleId !== id) {
             stopArticleOperationPolling();
 
             return;
@@ -378,7 +461,14 @@ export function startArticleOperationPolling(articleId) {
             lastOperation = op;
             const status = String(op.status || '').trim();
             if (status === 'queued' || status === 'processing') {
-                showArticleOperationOverlay(status, String(op.type || 'wordpress_sync'), {
+                const type = String(op.type || 'wordpress_sync');
+                if (isWordpressSyncOperationType(type)) {
+                    exitEditorAfterWordpressSyncQueued();
+
+                    return;
+                }
+
+                showArticleOperationOverlay(status, type, {
                     stage: String(op.stage || ''),
                     error_message: String(op.error_message || ''),
                     attempts: Number(op.attempts || 0),
@@ -415,6 +505,10 @@ export function startArticleOperationPolling(articleId) {
  * @param {number} articleId
  */
 export async function bootstrapArticleOperationLock(articleId) {
+    if (window.__SEO_EDITOR_EXITING__) {
+        return;
+    }
+
     const id = Number(articleId) || 0;
     if (id <= 0) {
         return;
@@ -455,6 +549,7 @@ export function installArticleOperationTracker() {
         bootstrap: bootstrapArticleOperationLock,
         stop: stopArticleOperationPolling,
         show: showArticleOperationOverlay,
+        exitAfterQueued: exitEditorAfterWordpressSyncQueued,
     };
 
     const bootId = Number(window.__SEO_ACTIVE_ARTICLE_OPERATION__?.article_id || 0);

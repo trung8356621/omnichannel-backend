@@ -107,6 +107,12 @@
                     window.addEventListener('article-wordpress-sync-lock', lockPage);
                     window.addEventListener('article-wordpress-sync-unlock', unlockPage);
                     window.addEventListener('article-wordpress-sync-queued', () => {
+                        // Editor đang thoát sau enqueue — không khóa lại UI.
+                        if (window.__SEO_EDITOR_EXITING__) {
+                            this.syncInFlight = false;
+                            this.pageActionLocked = false;
+                            return;
+                        }
                         this.syncInFlight = true;
                         this.pageActionLocked = true;
                     });

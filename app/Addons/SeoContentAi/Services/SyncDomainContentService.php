@@ -1283,6 +1283,7 @@ class SyncDomainContentService
         app(WordPressArticleSyncService::class)->applyMultilingualFromSyncPayload($article, $site, $item);
 
         $syncFlags->clearAll($article);
+        app(ArticleLastSavedTimestampService::class)->touchSynced($article);
 
         if (array_key_exists($type, $synced)) {
             $synced[$type]++;

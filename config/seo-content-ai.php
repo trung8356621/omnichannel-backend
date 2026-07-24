@@ -130,4 +130,76 @@ return [
 
     /** Log Article Editor mount/SEO bootstrap timings (no body/tokens). */
     'article_editor_perf_debug' => (bool) env('ARTICLE_EDITOR_PERF_DEBUG', false),
+
+    /**
+     * Edit Article — «Tạo gợi ý liên kết» (internal/external).
+     * Không hardcode limit rải rác trong service.
+     */
+    'link_suggestions' => [
+        'max_internal_links' => (int) env('SEO_LINK_SUGGESTIONS_MAX_INTERNAL_LINKS', 10),
+        'max_display_internal' => (int) env('SEO_LINK_SUGGESTIONS_MAX_DISPLAY_INTERNAL', 10),
+        'max_display_external' => (int) env('SEO_LINK_SUGGESTIONS_MAX_DISPLAY_EXTERNAL', 10),
+        /** Candidates trước ranking (mỗi anchor). */
+        'max_candidates' => (int) env('SEO_LINK_SUGGESTIONS_MAX_CANDIDATES', 50),
+        /** Top candidates gửi AI nếu sau này bật AI ranker. */
+        'max_ai_candidates' => (int) env('SEO_LINK_SUGGESTIONS_MAX_AI_CANDIDATES', 20),
+        'min_accept_score' => (int) env('SEO_LINK_SUGGESTIONS_MIN_ACCEPT_SCORE', 40),
+        'min_term_length' => (int) env('SEO_LINK_SUGGESTIONS_MIN_TERM_LENGTH', 3),
+        'max_search_terms_per_anchor' => (int) env('SEO_LINK_SUGGESTIONS_MAX_TERMS', 12),
+        'max_context_chars' => (int) env('SEO_LINK_SUGGESTIONS_MAX_CONTEXT_CHARS', 280),
+
+        /**
+         * Content-keyword fallback khi primary internal suggestions < target.
+         * Deterministic — tái dụng ArticleInternalLinkSearchService (popup cùng domain).
+         */
+        'target_internal_suggestions' => (int) env('SEO_LINK_SUGGESTIONS_TARGET_INTERNAL', 5),
+        'fallback_enabled' => (bool) env('SEO_LINK_SUGGESTIONS_FALLBACK_ENABLED', true),
+        'fallback_candidate_limit' => (int) env('SEO_LINK_SUGGESTIONS_FALLBACK_CANDIDATE_LIMIT', 20),
+        'fallback_phrase_limit' => (int) env('SEO_LINK_SUGGESTIONS_FALLBACK_PHRASE_LIMIT', 10),
+        'fallback_min_score' => (int) env('SEO_LINK_SUGGESTIONS_FALLBACK_MIN_SCORE', 55),
+        'fallback_min_words' => (int) env('SEO_LINK_SUGGESTIONS_FALLBACK_MIN_WORDS', 2),
+        'fallback_max_words' => (int) env('SEO_LINK_SUGGESTIONS_FALLBACK_MAX_WORDS', 5),
+        'fallback_repeated_ngram_min_count' => (int) env('SEO_LINK_SUGGESTIONS_FALLBACK_NGRAM_MIN', 2),
+
+        /** Runtime debug — log [LINK_FALLBACK_DEBUG] + meta trong JSON response. */
+        'debug' => (bool) env('LINK_SUGGESTION_DEBUG', false),
+
+        /**
+         * Stop phrases chung (primary + fallback). Không phân biệt hoa thường.
+         * Keyword-only / CTA kiểu «liên hệ» không được thành Internal suggestion.
+         */
+        'stop_phrases' => [
+            'lien he',
+            'liên hệ',
+            'tai day',
+            'tại đây',
+            'xem them',
+            'xem thêm',
+            'logo',
+            'san pham',
+            'sản phẩm',
+            'dich vu',
+            'dịch vụ',
+            'chat luong',
+            'chất lượng',
+            'uy tin',
+            'uy tín',
+            'gia tot',
+            'giá tốt',
+            'khach hang',
+            'khách hàng',
+            'thong tin',
+            'thông tin',
+            'bai viet',
+            'bài viết',
+            'click here',
+            'read more',
+            'learn more',
+            'contact',
+            'here',
+        ],
+
+        /** @deprecated Dùng stop_phrases — giữ alias để không phá config cũ. */
+        'fallback_stop_phrases' => null,
+    ],
 ];

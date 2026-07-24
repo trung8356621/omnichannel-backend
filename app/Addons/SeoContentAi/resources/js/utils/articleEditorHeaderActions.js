@@ -275,6 +275,7 @@ export function mountFilamentHeaderActionsToToolbar() {
 
     if (headerActions.childElementCount === 0) {
         normalizeToolbarLayout();
+        window.dispatchEvent(new CustomEvent('seo-article-editor-header-actions-mounted'));
 
         return secondary.childElementCount > 0 || slot.querySelector('[data-seo-page-actions-primary]') !== null;
     }

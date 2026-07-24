@@ -41,6 +41,19 @@ final class ArticleMarkdownToHtmlService
     }
 
     /**
+     * Legacy only — không gọi trong production import/convert path.
+     */
+    public function promoteOrphanH3HeadingsToH2(string $markdown): string
+    {
+        return $this->converter->promoteOrphanH3HeadingsToH2($markdown);
+    }
+
+    public function toFeaturedSnippetEditorHtml(string $markdown): string
+    {
+        return $this->converter->toFeaturedSnippetEditorHtml($markdown);
+    }
+
+    /**
      * @return array{html: string, meta_description: string|null}
      */
     public function convertWithMetadata(string $markdown): array

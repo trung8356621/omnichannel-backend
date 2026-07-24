@@ -126,6 +126,7 @@ final class PromptHookRuntimeEngine
             ],
             'request_fingerprint' => $request->fingerprint(),
             'validation_status' => 'ok',
+            'output_contracts' => $request->metadata['output_contracts'] ?? [],
             'api_key' => 'should-redact',
             'retry_owner' => $providerResponse->meta['retry_owner'] ?? 'PromptRunner/AiModelRouter',
         ]);
@@ -142,6 +143,7 @@ final class PromptHookRuntimeEngine
                 'locale_code' => $locale['locale_code'],
                 'prompt_result_id' => $providerResponse->meta['prompt_result_id'] ?? null,
                 'usage_source' => $providerResponse->usageSource,
+                'output_contracts' => $request->metadata['output_contracts'] ?? [],
             ],
         );
     }

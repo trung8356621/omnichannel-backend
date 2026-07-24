@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\PromptHooks;
 
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\PromptHooks\Contracts\PromptOutputContractCatalog;
+use App\Addons\SeoContentAi\PromptHooks\Contracts\PromptOutputContractResolver;
 use App\Addons\SeoContentAi\PromptHooks\Data\PromptHookDefinition;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
 
@@ -14,6 +16,7 @@ use App\Addons\SeoContentAi\Services\PromptRunnerService;
  * Order:
  * 1. Base = PromptRunnerService::compilePrompt (markdown + {{variables}})
  * 2. Hook template from locale (before_prompt | after_prompt)
+ * 3. Output contract (if definition.output_contract set)
  *
  * Variables include:
  * - Each expose_to_prompt field
@@ -22,15 +25,31 @@ use App\Addons\SeoContentAi\Services\PromptRunnerService;
  */
 final class PromptHookPromptAssembler
 {
+    private ?PromptOutputContractResolver $contractResolver;
+
     public function __construct(
         private readonly PromptRunnerService $promptRunner,
         private readonly PromptHookTemplateRenderer $templateRenderer,
-    ) {}
+        ?PromptOutputContractResolver $contractResolver = null,
+    ) {
+        $this->contractResolver = $contractResolver;
+    }
+
+    private function contracts(): PromptOutputContractResolver
+    {
+        return $this->contractResolver ??= new PromptOutputContractResolver(
+            new PromptOutputContractCatalog(PromptOutputContractCatalog::defaultDirectory()),
+        );
+    }
 
     /**
      * @param  array<string, mixed>  $exposedInput
      * @param  array<string, mixed>  $resolvedSettings
-     * @return array{final_prompt: string, variables: array<string, string>}
+     * @return array{
+     *     final_prompt: string,
+     *     variables: array<string, string>,
+     *     output_contracts: list<array{key: string, version: string}>
+     * }
      */
     public function assemble(
         PromptHookDefinition $definition,
@@ -49,9 +68,19 @@ final class PromptHookPromptAssembler
                 : trim($base)."\n\n".trim($hookTemplate);
         }
 
+        $contractKey = null;
+        if (isset($definition->output['contract'])) {
+            $contractKey = trim((string) $definition->output['contract']);
+        } elseif (isset($definition->output['output_contract'])) {
+            $contractKey = trim((string) $definition->output['output_contract']);
+        }
+
+        $appended = $this->contracts()->appendToPrompt($final, $contractKey !== '' ? $contractKey : null);
+
         return [
-            'final_prompt' => trim($final),
+            'final_prompt' => $appended['prompt'],
             'variables' => $variables,
+            'output_contracts' => $appended['contracts'],
         ];
     }
 

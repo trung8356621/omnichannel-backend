@@ -400,7 +400,7 @@ final class SeoProjectWorkflowRunService
         }
 
         $projectSiteId = (int) ($project->site_id ?? 0);
-        $itemRow = $this->runOneTask($project, $run, $task, $projectSiteId);
+        $itemRow = $this->runOneTask($project, $run, $task, $projectSiteId, forceRetry: true);
         $itemRow['task_id'] = $taskId;
         $itemRow['retry_task_id'] = $taskId;
 
@@ -471,7 +471,13 @@ final class SeoProjectWorkflowRunService
     /**
      * @return array<string, mixed>
      */
-    private function runOneTask(SeoProject $project, SeoProjectRun $run, SeoProjectTask $task, int $projectSiteId): array
+    private function runOneTask(
+        SeoProject $project,
+        SeoProjectRun $run,
+        SeoProjectTask $task,
+        int $projectSiteId,
+        bool $forceRetry = false,
+    ): array
     {
         $action = $this->runItemService->resolveAction($task);
 
@@ -483,7 +489,12 @@ final class SeoProjectWorkflowRunService
             return $row;
         }
 
-        $claim = $this->runItemService->claimForExecution($run, (int) $task->id, $action);
+        $claim = $this->runItemService->claimForExecution(
+            $run,
+            (int) $task->id,
+            $action,
+            forceRetry: $forceRetry,
+        );
         $runItem = $claim['run_item'];
         $task = $claim['task'] ?? $task;
 

@@ -82,6 +82,7 @@ final class ArticleContentFaqService
         ) {
             $cleaned = rtrim($cleaned)."\n\n".WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER;
         }
+        // CommonMark render as-is — không promote ###→## (legacy heading do Prompt Hook contract xử lý).
         $converted = $this->markdownHtml->convertWithMetadata($cleaned);
         $html = $this->ensureEditorPlaceholderMarkup($converted['html']);
         $h1FromHtml = $this->extractLeadingH1FromHtml($html);

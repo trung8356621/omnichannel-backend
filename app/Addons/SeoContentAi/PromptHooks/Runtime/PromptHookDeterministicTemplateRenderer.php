@@ -5,10 +5,27 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\PromptHooks\Runtime;
 
 use App\Addons\SeoContentAi\PromptHooks\Canonical\PromptHookDefinition;
+use App\Addons\SeoContentAi\PromptHooks\Contracts\PromptOutputContractCatalog;
+use App\Addons\SeoContentAi\PromptHooks\Contracts\PromptOutputContractResolver;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\TemplateRenderFailed;
 
 final class PromptHookDeterministicTemplateRenderer
 {
+    private ?PromptOutputContractResolver $contractResolver;
+
+    public function __construct(
+        ?PromptOutputContractResolver $contractResolver = null,
+    ) {
+        $this->contractResolver = $contractResolver;
+    }
+
+    private function contracts(): PromptOutputContractResolver
+    {
+        return $this->contractResolver ??= new PromptOutputContractResolver(
+            new PromptOutputContractCatalog(PromptOutputContractCatalog::defaultDirectory()),
+        );
+    }
+
     /**
      * @param  array<string, mixed>  $variables
      * @param  array{locale_code: string, language_name: string}  $locale
@@ -37,6 +54,11 @@ final class PromptHookDeterministicTemplateRenderer
                 );
             }
 
+            $appended = $this->contracts()->appendToPrompt($legacy, $definition->outputContractKey());
+            $metadata['output_contracts'] = $appended['contracts'];
+            // SoT for PromptRunnerProviderAdapter::compileRequest — must include contract.
+            $metadata['legacy_compiled_prompt'] = $appended['prompt'];
+
             $meta = [];
             foreach (array_keys($vars) as $key) {
                 $meta[(string) $key] = in_array((string) $key, $definition->sensitiveInputFields, true)
@@ -46,7 +68,7 @@ final class PromptHookDeterministicTemplateRenderer
 
             return new RenderedPromptRequest(
                 system: '',
-                messages: [['role' => 'user', 'content' => $legacy]],
+                messages: [['role' => 'user', 'content' => $appended['prompt']]],
                 model: $definition->model,
                 modelSettings: $modelSettings,
                 localeCode: $locale['locale_code'],
@@ -64,6 +86,10 @@ final class PromptHookDeterministicTemplateRenderer
             // Locale template key without body — still valid if user empty and system set.
             $user = $this->renderString('{{keyword}}{{title}}', $vars, $definition, allowPartial: true);
         }
+
+        $appended = $this->contracts()->appendToPrompt($user, $definition->outputContractKey());
+        $user = $appended['prompt'];
+        $metadata['output_contracts'] = $appended['contracts'];
 
         $messages = [['role' => 'user', 'content' => $user]];
         $examples = $definition->template['examples'] ?? null;

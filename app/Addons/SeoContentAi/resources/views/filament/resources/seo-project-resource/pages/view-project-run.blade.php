@@ -33,7 +33,8 @@
                 top: auto;
                 right: 0;
                 z-index: 60;
-                min-width: 11rem;
+                min-width: 16rem;
+                max-width: 22rem;
                 overflow: hidden;
                 border-radius: 0.5rem;
                 background: #fff;
@@ -144,18 +145,6 @@
                         <span>{{ __('seo-content-ai::filament.projects.run_sync_all') }}</span>
                     </button>
                 @endif
-                @if ($this->canRerunAllItems())
-                    <button
-                        type="button"
-                        class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-primary-500 dark:hover:bg-primary-400"
-                        x-cloak
-                        x-show="!$store.seoRunQueue.isRunning"
-                        x-on:click.stop="openRerunSettingsModal()"
-                    >
-                        <x-filament::icon icon="heroicon-o-arrow-path" class="h-4 w-4" />
-                        <span>{{ __('seo-content-ai::filament.projects.run_rerun_all') }}</span>
-                    </button>
-                @endif
                 <button
                     type="button"
                     class="seo-run-stop-button inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
@@ -170,18 +159,63 @@
                 </button>
             </div>
 
+            <div
+                class="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-sm dark:border-primary-500/30 dark:bg-primary-500/10"
+                x-cloak
+                x-show="selectedTaskIds.length > 0"
+            >
+                <span class="font-medium text-primary-800 dark:text-primary-200" x-text="bulkSelectedLabel()"></span>
+                <div class="relative" x-data="{ open: false }">
+                    <button
+                        type="button"
+                        class="inline-flex items-center gap-1 rounded-md bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 ring-1 ring-gray-300 hover:bg-gray-50 dark:bg-gray-900 dark:text-gray-200 dark:ring-gray-600"
+                        @click="open = !open"
+                    >
+                        <span x-text="config.labels?.bulkPickPrompt ?? 'Chọn prompt'"></span>
+                        <span x-text="selectedNodeIds.length ? '(' + selectedNodeIds.length + ')' : ''"></span>
+                    </button>
+                    <div
+                        x-show="open"
+                        x-cloak
+                        @click.outside="open = false"
+                        class="absolute left-0 z-40 mt-1 max-h-64 w-64 overflow-auto rounded-md border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-900"
+                    >
+                        <template x-for="step in (config.workflowSteps || [])" :key="step.node_id">
+                            <label class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-white/5">
+                                <input type="checkbox" class="rounded border-gray-300 text-primary-600" :value="step.node_id" x-model="selectedNodeIds">
+                                <span x-text="step.label"></span>
+                            </label>
+                        </template>
+                    </div>
+                </div>
+                <button
+                    type="button"
+                    class="inline-flex items-center rounded-md bg-primary-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-primary-500 disabled:opacity-50"
+                    x-bind:disabled="selectedNodeIds.length === 0 || bulkBusy"
+                    x-on:click="openBulkConfirm()"
+                    x-text="config.labels?.bulkExecute ?? 'Thực hiện'"
+                ></button>
+            </div>
+
             <div class="seo-run-items-wrap overflow-visible">
                 <table class="w-full table-fixed text-left text-sm">
                     <thead class="border-b border-gray-200 text-xs uppercase text-gray-500 dark:border-gray-700 dark:text-gray-400">
                         <tr>
+                            <th class="w-10 px-2 py-2">
+                                <input
+                                    type="checkbox"
+                                    class="rounded border-gray-300 text-primary-600"
+                                    x-bind:checked="allVisibleSelected()"
+                                    x-on:change="toggleSelectAll($event.target.checked)"
+                                >
+                            </th>
                             <th class="w-10 px-3 py-2">#</th>
                             <th class="w-36 px-3 py-2">{{ __('seo-content-ai::filament.projects.article_type') }}</th>
-                            <th class="w-28 px-3 py-2">{{ __('seo-content-ai::filament.article_list.post_type') }}</th>
                             <th class="px-3 py-2">{{ __('seo-content-ai::filament.projects.keyword') }}</th>
                             <th class="w-28 px-3 py-2">{{ __('seo-content-ai::filament.projects.run_item_status') }}</th>
-                            <th class="w-48 px-3 py-2">{{ __('seo-content-ai::filament.projects.run_item_message') }}</th>
-                            <th class="w-28 px-3 py-2">{{ __('seo-content-ai::filament.projects.run_item_date') }}</th>
-                            <th class="w-36 px-3 py-2">{{ __('seo-content-ai::filament.projects.run_item_last_run') }}</th>
+                            <th class="w-32 px-3 py-2">{{ __('seo-content-ai::filament.projects.run_item_last_saved') }}</th>
+                            <th class="w-40 px-3 py-2">{{ __('seo-content-ai::filament.projects.run_item_message') }}</th>
+                            <th class="w-32 px-3 py-2">{{ __('seo-content-ai::filament.projects.run_item_run_at') }}</th>
                             <th class="w-24 px-2 py-2 text-right">{{ __('seo-content-ai::filament.projects.run_item_actions') }}</th>
                         </tr>
                     </thead>
@@ -208,11 +242,20 @@
                                 @endif
                                 data-run-item-status="{{ $itemStatus }}"
                             >
+                                <td class="px-2 py-3">
+                                    @if ($taskId > 0 && $taskExists && ! $this->itemIsImproveType($item))
+                                        <input
+                                            type="checkbox"
+                                            class="rounded border-gray-300 text-primary-600"
+                                            value="{{ $taskId }}"
+                                            x-model.number="selectedTaskIds"
+                                        >
+                                    @endif
+                                </td>
                                 <td class="px-3 py-3 text-gray-600 dark:text-gray-300">{{ $index + 1 }}</td>
                                 <td class="px-3 py-3">
                                     {{ $this->itemTypeLabel($item) }}
                                 </td>
-                                <td class="px-3 py-3">{{ $this->postTypeLabel($item['post_type'] ?? null) }}</td>
                                 <td class="px-3 py-3 font-medium text-gray-950 dark:text-white">
                                     <div class="min-w-0 wrap-break-word">
                                         @if (! $taskExists)
@@ -286,42 +329,45 @@
                                             {{ __('seo-content-ai::filament.projects.run_item_failed') }}
                                         </span>
                                     @endif
-                                </td>
-                                <td class="px-3 py-3 text-gray-600 dark:text-gray-300 wrap-break-word" data-run-message>
-                                    @if ($itemStatus === 'failed')
-                                        <p class="font-medium text-danger-600 dark:text-danger-400">
-                                            {{ $this->displayItemError($item) }}
-                                        </p>
-                                        @if ($this->isDebugMode() && ! empty($item['error_class']))
-                                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                                {{ $item['error_class'] }}
-                                            </p>
-                                        @endif
-                                        @if ($this->isDebugMode() && (! empty($item['failed_step']['title']) || ! empty($item['failed_step']['prompt_name'])))
-                                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                                {{ __('seo-content-ai::filament.projects.run_failed_step', [
-                                                    'step' => trim(implode(' — ', array_filter([
-                                                        $item['failed_step']['title'] ?? null,
-                                                        $item['failed_step']['prompt_name'] ?? null,
-                                                    ]))),
-                                                ]) }}
-                                            </p>
-                                        @endif
-                                        @if ($this->isDebugMode() && ! empty($item['error_trace']))
-                                            <pre class="mt-2 max-h-48 overflow-auto rounded-md bg-gray-950 p-2 text-xs text-gray-100">{{ $item['error_trace'] }}</pre>
-                                        @endif
-                                    @elseif ($itemStatus === 'pending')
-                                        <span class="text-warning-700 dark:text-warning-400">
-                                            {{ __('seo-content-ai::filament.projects.run_item_pending_hint') }}
-                                        </span>
-                                    @elseif ($itemStatus === 'manual')
-                                        {{ $item['message'] ?? __('seo-content-ai::filament.projects.run_item_manual_hint') }}
-                                    @else
-                                        {{ $item['message'] ?? '' }}
-                                    @endif
+                                    @php
+                                        $busySteps = collect($item['workflow_steps'] ?? [])
+                                            ->filter(static fn (array $step): bool => (bool) ($step['busy'] ?? false))
+                                            ->values();
+                                    @endphp
+                                    @foreach ($busySteps as $busyStep)
+                                        <div class="mt-1 text-[11px] text-warning-700 dark:text-warning-400">
+                                            {{ $busyStep['label'] ?? '' }}: Đang chạy
+                                        </div>
+                                    @endforeach
                                 </td>
                                 <td class="px-3 py-3 text-gray-600 dark:text-gray-300">
-                                    {{ $this->itemRunDate($item) }}
+                                    <div title="{{ $item['last_saved_source_label'] ?? '' }}">
+                                        <div>{{ $item['last_saved_display'] ?? '—' }}</div>
+                                        @if (! empty($item['last_saved_source_label']))
+                                            <div class="text-[11px] text-gray-400">{{ $item['last_saved_source_label'] }}</div>
+                                        @endif
+                                    </div>
+                                </td>
+                                <td class="max-w-[10rem] px-3 py-3 text-gray-600 dark:text-gray-300" data-run-message>
+                                    @php
+                                        $noteText = '';
+                                        if ($itemStatus === 'failed') {
+                                            $noteText = $this->displayItemError($item);
+                                        } elseif ($itemStatus === 'pending') {
+                                            $noteText = __('seo-content-ai::filament.projects.run_item_pending_hint');
+                                        } elseif ($itemStatus === 'manual') {
+                                            $noteText = (string) ($item['message'] ?? __('seo-content-ai::filament.projects.run_item_manual_hint'));
+                                        } else {
+                                            $noteText = (string) ($item['message'] ?? '');
+                                        }
+                                    @endphp
+                                    <div class="line-clamp-2 wrap-break-word" title="{{ $noteText }}">
+                                        @if ($itemStatus === 'failed')
+                                            <span class="font-medium text-danger-600 dark:text-danger-400">{{ $noteText }}</span>
+                                        @else
+                                            {{ $noteText }}
+                                        @endif
+                                    </div>
                                 </td>
                                 <td class="px-3 py-3 text-gray-600 dark:text-gray-300" data-run-last-run>
                                     {{ $this->itemLastRunAt($item) }}
@@ -330,14 +376,13 @@
                                     @php
                                         $canArchiveItem = $this->canArchiveRunItem($item);
                                         $stepsUrl = $this->itemStepsUrl($item);
-                                        $showRetrySuccess = $canRetry && ! $isReviewed && $itemStatus === 'success'
-                                            && ! $this->itemIsImproveType($item);
-                                        $showRetryOther = $canRetry && ! $isReviewed
-                                            && in_array($itemStatus, ['failed', 'pending'], true)
-                                            && ! $this->itemIsImproveType($item);
                                         $showMarkFixed = $itemStatus === 'failed' && $articleId > 0 && $taskExists
                                             && ! $this->itemIsImproveType($item);
-                                        $hasRowActions = $canArchiveItem || filled($stepsUrl) || $showRetrySuccess || $showRetryOther || $showMarkFixed;
+                                        $showFirstRun = $canRetry && ! $isReviewed && $itemStatus === 'pending'
+                                            && ! $this->itemIsImproveType($item);
+                                        $hasRowActions = $canArchiveItem || filled($stepsUrl) || $showMarkFixed || $showFirstRun
+                                            || ($canRetry && ! $isReviewed && ! $this->itemIsImproveType($item)
+                                                && is_array($item['workflow_steps'] ?? null) && ($item['workflow_steps'] ?? []) !== []);
                                     @endphp
 
                                     @if (($taskId > 0 || filled($stepsUrl)) && $hasRowActions)
@@ -391,38 +436,7 @@
                                                     </button>
                                                 @endif
 
-                                                @if ($stepsUrl)
-                                                    <a
-                                                        href="{{ $stepsUrl }}"
-                                                        target="_blank"
-                                                        rel="noopener"
-                                                        class="seo-run-actions-dropdown__item"
-                                                        @click="open = false"
-                                                    >
-                                                        {{ __('seo-content-ai::filament.projects.run_view_steps') }}
-                                                    </a>
-                                                @endif
-
-                                                @if ($showRetrySuccess)
-                                                    <button
-                                                        type="button"
-                                                        class="seo-run-actions-dropdown__item"
-                                                        @click="
-                                                            open = false;
-                                                            const root = $el.closest('[data-seo-run-queue]');
-                                                            const queue = root ? Alpine.$data(root) : null;
-                                                            if (! queue || typeof queue.runSingleTask !== 'function') {
-                                                                window.alert('Queue UI chưa sẵn sàng — Ctrl+F5 rồi thử lại.');
-                                                                return;
-                                                            }
-                                                            queue.runSingleTask({{ $taskId }}, {
-                                                                confirm: @js(__('seo-content-ai::filament.projects.run_retry_item_confirm')),
-                                                            });
-                                                        "
-                                                    >
-                                                        {{ __('seo-content-ai::filament.projects.run_retry_item') }}
-                                                    </button>
-                                                @elseif ($showRetryOther)
+                                                @if ($showFirstRun)
                                                     <button
                                                         type="button"
                                                         class="seo-run-actions-dropdown__item"
@@ -437,10 +451,62 @@
                                                             queue.runSingleTask({{ $taskId }});
                                                         "
                                                     >
-                                                        {{ $itemStatus === 'pending'
-                                                            ? __('seo-content-ai::filament.projects.run_run_item')
-                                                            : __('seo-content-ai::filament.projects.run_retry_item') }}
+                                                        {{ __('seo-content-ai::filament.projects.run_run_item') }}
                                                     </button>
+                                                @endif
+
+                                                @if ($stepsUrl)
+                                                    <a
+                                                        href="{{ $stepsUrl }}"
+                                                        target="_blank"
+                                                        rel="noopener"
+                                                        class="seo-run-actions-dropdown__item"
+                                                        @click="open = false"
+                                                    >
+                                                        {{ __('seo-content-ai::filament.projects.run_view_steps') }}
+                                                    </a>
+                                                @endif
+
+                                                @php
+                                                    $workflowSteps = is_array($item['workflow_steps'] ?? null) ? $item['workflow_steps'] : [];
+                                                    $showStepRetry = $canRetry && ! $isReviewed && ! $this->itemIsImproveType($item)
+                                                        && $workflowSteps !== [];
+                                                @endphp
+                                                @if ($showStepRetry)
+                                                    <div class="border-t border-gray-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:border-gray-700">
+                                                        {{ __('seo-content-ai::filament.projects.run_retry_item') }}
+                                                    </div>
+                                                    @foreach ($workflowSteps as $step)
+                                                        @php
+                                                            $stepBusy = (bool) ($step['busy'] ?? false);
+                                                            $stepLabel = (string) ($step['label'] ?? $step['title'] ?? '');
+                                                            $stepMeta = $stepBusy
+                                                                ? 'Đang chạy'
+                                                                : (filled($step['last_finished_at'] ?? null) ? 'Lần cuối: '.$step['last_finished_at'] : '');
+                                                        @endphp
+                                                        <button
+                                                            type="button"
+                                                            class="seo-run-actions-dropdown__item"
+                                                            @disabled($stepBusy)
+                                                            @click="
+                                                                open = false;
+                                                                const root = $el.closest('[data-seo-run-queue]');
+                                                                const queue = root ? Alpine.$data(root) : null;
+                                                                if (! queue || typeof queue.retryWorkflowStep !== 'function') {
+                                                                    window.alert('Queue UI chưa sẵn sàng — Ctrl+F5 rồi thử lại.');
+                                                                    return;
+                                                                }
+                                                                queue.retryWorkflowStep({{ $taskId }}, @js($step['node_id']));
+                                                            "
+                                                        >
+                                                            <span class="flex items-center justify-between gap-3">
+                                                                <span>{{ $stepLabel }}</span>
+                                                                @if ($stepMeta !== '')
+                                                                    <span class="text-[11px] font-normal text-gray-400">{{ $stepMeta }}</span>
+                                                                @endif
+                                                            </span>
+                                                        </button>
+                                                    @endforeach
                                                 @endif
 
                                                 @if ($showMarkFixed)
@@ -475,65 +541,54 @@
             </div>
         </x-filament::section>
 
-        {{-- Run settings modal (rerun all) --}}
+        {{-- Bulk retry confirm modal --}}
         <div
-            x-show="runSettingsOpen"
+            x-show="bulkConfirmOpen"
             x-cloak
             x-transition.opacity.duration.150ms
             class="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6"
             style="display: none;"
             role="dialog"
             aria-modal="true"
-            aria-labelledby="seo-run-settings-title"
+            aria-labelledby="seo-bulk-retry-title"
         >
             <div
                 class="absolute inset-0 bg-gray-950/60 dark:bg-gray-950/75"
-                x-on:click="runSettingsOpen = false"
+                x-on:click="bulkConfirmOpen = false"
             ></div>
             <div
                 class="relative z-10 w-full max-w-md overflow-hidden rounded-xl bg-white shadow-xl ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10"
                 x-on:click.stop
-                x-on:keydown.escape.window="runSettingsOpen = false"
+                x-on:keydown.escape.window="bulkConfirmOpen = false"
             >
                 <div class="border-b border-gray-200 px-6 py-4 dark:border-white/10">
                     <h3
-                        id="seo-run-settings-title"
+                        id="seo-bulk-retry-title"
                         class="text-base font-semibold text-gray-950 dark:text-white"
-                        x-text="config.labels?.runSettingsHeading ?? 'Run settings'"
+                        x-text="config.labels?.bulkConfirmHeading ?? 'Xác nhận chạy lại prompt'"
                     ></h3>
                 </div>
-                <div class="px-6 py-5">
-                    <label class="flex cursor-pointer items-start gap-3">
-                        <input
-                            type="checkbox"
-                            class="mt-0.5 rounded border-gray-300 text-primary-600 shadow-sm focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
-                            x-model="generatePostImages"
-                        >
-                        <span class="min-w-0">
-                            <span
-                                class="block text-sm font-medium text-gray-950 dark:text-white"
-                                x-text="config.labels?.runSettingsGeneratePostImages ?? ''"
-                            ></span>
-                            <span
-                                class="mt-1 block text-sm leading-5 text-gray-500 dark:text-gray-400"
-                                x-text="config.labels?.runSettingsGeneratePostImagesHelp ?? ''"
-                            ></span>
-                        </span>
-                    </label>
+                <div class="space-y-3 px-6 py-5">
+                    <p class="text-sm leading-6 text-gray-600 dark:text-gray-300" x-text="bulkConfirmText()"></p>
+                    <ul class="list-disc space-y-1 pl-5 text-sm text-gray-700 dark:text-gray-200">
+                        <template x-for="label in selectedStepLabels()" :key="label">
+                            <li x-text="label"></li>
+                        </template>
+                    </ul>
                 </div>
                 <div class="flex items-center justify-end gap-3 border-t border-gray-200 bg-gray-50 px-6 py-4 dark:border-white/10 dark:bg-white/5">
                     <button
                         type="button"
                         class="fi-btn relative grid-flow-col items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-gray-700 outline-none transition duration-75 hover:bg-gray-100 focus-visible:ring-2 dark:text-gray-200 dark:hover:bg-white/5"
-                        x-on:click="runSettingsOpen = false"
-                        x-text="config.labels?.runSettingsCancel ?? 'Cancel'"
+                        x-on:click="bulkConfirmOpen = false"
+                        x-text="config.labels?.runSettingsCancel ?? 'Hủy'"
                     ></button>
                     <button
                         type="button"
-                        class="fi-btn relative grid-flow-col items-center justify-center gap-1.5 rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white shadow-sm outline-none transition duration-75 hover:bg-primary-500 focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-70 dark:bg-primary-500 dark:hover:bg-primary-400"
-                        x-bind:disabled="runSettingsSubmitting"
-                        x-on:click="confirmRerunSettings()"
-                        x-text="config.labels?.runSettingsStart ?? 'Start run'"
+                        class="fi-btn relative grid-flow-col items-center justify-center gap-1.5 rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white shadow-sm outline-none transition duration-75 hover:bg-primary-500 focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-70"
+                        x-bind:disabled="bulkBusy"
+                        x-on:click="confirmBulkRetry()"
+                        x-text="config.labels?.bulkExecute ?? 'Thực hiện'"
                     ></button>
                 </div>
             </div>

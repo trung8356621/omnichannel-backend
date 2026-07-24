@@ -160,6 +160,8 @@
     ]
   },
 
+  "output_contract": "markdown.article",
+
   "template": {
     "source": "legacy_prompt_content",
     "system": null,

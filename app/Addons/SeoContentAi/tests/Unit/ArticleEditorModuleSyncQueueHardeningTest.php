@@ -150,7 +150,13 @@ final class ArticleEditorModuleSyncQueueHardeningTest extends TestCase
         self::assertStringContainsString('closeEditorTabOrRedirectToSyncQueue', $api);
         self::assertStringContainsString('prepareEditorExitAfterSyncEnqueue', $api);
         self::assertStringContainsString('window.close()', $api);
+        self::assertStringContainsString('location.replace', $api);
+        self::assertStringContainsString('exitAfterQueued', $api);
         self::assertStringNotContainsString('__seoArticleOperationTracker?.poll?.(articleId)', $api);
+
+        $tracker = $this->js('utils/articleOperationTracker.js');
+        self::assertStringContainsString('exitEditorAfterWordpressSyncQueued', $tracker);
+        self::assertStringContainsString('__SEO_EDITOR_EXITING__', $tracker);
     }
 
     public function test_list_articles_exposes_sync_queue_badge_count(): void

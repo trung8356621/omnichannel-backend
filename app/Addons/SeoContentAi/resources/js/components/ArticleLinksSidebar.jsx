@@ -65,10 +65,11 @@ async function fetchEditorLinksBase(articleId, signal) {
 
 /**
  * Keyword suggestion catalogs — only after explicit Generate Suggestions.
+ * Sends live editor HTML when available (articles.body often empty after WP sync).
  * @param {number} articleId
- * @param {AbortSignal} [signal]
+ * @param {{ content?: string, mode?: 'full'|'fallback', existingInternal?: unknown[], signal?: AbortSignal }} [options]
  */
-async function fetchEditorLinksSuggestions(articleId, signal) {
+async function fetchEditorLinksSuggestions(articleId, options = {}) {
     const id = Number(articleId ?? 0);
     if (!Number.isFinite(id) || id <= 0) {
         throw new Error('Invalid article id');
@@ -78,13 +79,22 @@ async function fetchEditorLinksSuggestions(articleId, signal) {
         window.__SEO_EDITOR_LAZY_ENDPOINTS__?.linksSuggestions
         || `/api/seo/articles/${id}/editor/links/suggestions`;
 
+    const mode = options.mode === 'fallback' ? 'fallback' : 'full';
+    const body = {
+        mode,
+        content: typeof options.content === 'string' ? options.content : '',
+        existing_internal: Array.isArray(options.existingInternal) ? options.existingInternal : [],
+    };
+
     const { response, data } = await seoArticleApiFetch(url, {
-        method: 'GET',
-        signal,
+        method: 'POST',
+        signal: options.signal,
         headers: {
             Accept: 'application/json',
+            'Content-Type': 'application/json',
             ...(csrfToken() ? { 'X-CSRF-TOKEN': csrfToken() } : {}),
         },
+        body: JSON.stringify(body),
     });
 
     if (!response.ok || data?.success === false) {
@@ -92,6 +102,30 @@ async function fetchEditorLinksSuggestions(articleId, signal) {
     }
 
     return normalizeLinksPayload(data);
+}
+
+/**
+ * Ask SeoArticleEditor for merged HTML of all blocks (sync via custom event).
+ * @returns {Promise<string>}
+ */
+function requestEditorDocumentHtml() {
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (html) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            window.removeEventListener('seo-editor-document-html', onHtml);
+            resolve(typeof html === 'string' ? html : '');
+        };
+        const onHtml = (event) => {
+            finish(event?.detail?.html ?? '');
+        };
+        window.addEventListener('seo-editor-document-html', onHtml);
+        window.dispatchEvent(new CustomEvent('seo-editor-document-html-request'));
+        window.setTimeout(() => finish(''), 400);
+    });
 }
 
 /**
@@ -494,6 +528,7 @@ function InternalLinksSection({
     excludedCount = 0,
     onClearExcluded,
     onGenerateSuggestions,
+    onGenerateFallbackSuggestions,
     suggestionsLoading = false,
     reviewLoadingKey = '',
     reviewPopoverItemKey = '',
@@ -540,17 +575,30 @@ function InternalLinksSection({
                 <p className="wp-article-links-empty">{t('links_internal_empty')}</p>
             )}
             {showGenerate ? (
-                <button
-                    type="button"
-                    className="wp-article-links-clear-excluded-btn"
-                    disabled={suggestionsLoading}
-                    onClick={onGenerateSuggestions}
-                >
-                    {suggestionsLoading ? <Loader2 size={13} className="animate-spin" aria-hidden /> : <RotateCcw size={13} aria-hidden />}
-                    {suggestionsLoading
-                        ? t('links_suggestions_loading')
-                        : t('links_generate_suggestions')}
-                </button>
+                <div className="wp-article-links-generate-row" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    <button
+                        type="button"
+                        className="wp-article-links-clear-excluded-btn"
+                        disabled={suggestionsLoading}
+                        onClick={onGenerateSuggestions}
+                    >
+                        {suggestionsLoading ? <Loader2 size={13} className="animate-spin" aria-hidden /> : <RotateCcw size={13} aria-hidden />}
+                        {suggestionsLoading
+                            ? t('links_suggestions_loading')
+                            : t('links_generate_suggestions')}
+                    </button>
+                    {typeof onGenerateFallbackSuggestions === 'function' ? (
+                        <button
+                            type="button"
+                            className="wp-article-links-clear-excluded-btn"
+                            disabled={suggestionsLoading}
+                            onClick={onGenerateFallbackSuggestions}
+                            title={t('links_generate_fallback_hint')}
+                        >
+                            {t('links_generate_fallback')}
+                        </button>
+                    ) : null}
+                </div>
             ) : null}
             {showSuggestions || showExcludedClear ? (
                 <div className="wp-article-links-suggestions-head">
@@ -794,7 +842,38 @@ export default function ArticleLinksSidebar({
     }, []);
 
     const [suggestionsLoading, setSuggestionsLoading] = useState(false);
-    const loadLinkSuggestions = async () => {
+    const applySuggestionPayload = (payload, source) => {
+        if (payload?.suggestionDebug && typeof window !== 'undefined') {
+            // eslint-disable-next-line no-console
+            console.info('[LINK_FALLBACK_DEBUG]', {
+                source,
+                contentSource: payload.contentSource,
+                debug: payload.suggestionDebug,
+            });
+        }
+        const empty =
+            payload.suggestedInternalLinks.length === 0
+            && payload.suggestedExternalLinks.length === 0
+            && payload.suggestedInternalLinksCatalog.length === 0
+            && payload.suggestedExternalLinksCatalog.length === 0;
+        setSuggestionsEmpty(empty);
+        window.dispatchEvent(
+            new CustomEvent('seo-editor-links-updated', {
+                detail: {
+                    source,
+                    suggested_internal: payload.suggestedInternalLinks,
+                    suggested_internal_links_catalog: payload.suggestedInternalLinksCatalog,
+                    suggested_external_links: payload.suggestedExternalLinks,
+                    suggested_external_links_catalog: payload.suggestedExternalLinksCatalog,
+                    domain_link_list: payload.domainLinkList,
+                    domain_link_list_catalog: payload.domainLinkListCatalog,
+                    domain_cta_list: payload.domainCtaList,
+                },
+            }),
+        );
+    };
+
+    const loadLinkSuggestions = async (mode = 'full') => {
         const { articleId } = articleMetaRef.current;
         if (suggestionsLoading) {
             return;
@@ -806,30 +885,19 @@ export default function ArticleLinksSidebar({
         setSuggestionsError(null);
         setSuggestionsEmpty(false);
         try {
-            const payload = await fetchEditorLinksSuggestions(articleId, controller.signal);
+            const content = await requestEditorDocumentHtml();
+            const payload = await fetchEditorLinksSuggestions(articleId, {
+                content,
+                mode: mode === 'fallback' ? 'fallback' : 'full',
+                existingInternal: mode === 'fallback' ? (suggestedInternalRef.current ?? []) : [],
+                signal: controller.signal,
+            });
             if (controller.signal.aborted) {
                 return;
             }
-            const empty =
-                payload.suggestedInternalLinks.length === 0
-                && payload.suggestedExternalLinks.length === 0
-                && payload.suggestedInternalLinksCatalog.length === 0
-                && payload.suggestedExternalLinksCatalog.length === 0;
-            setSuggestionsEmpty(empty);
-            window.dispatchEvent(
-                new CustomEvent('seo-editor-links-updated', {
-                    detail: {
-                        source: 'links-suggestions',
-                        // Keep client existing links — suggestions only.
-                        suggested_internal: payload.suggestedInternalLinks,
-                        suggested_internal_links_catalog: payload.suggestedInternalLinksCatalog,
-                        suggested_external_links: payload.suggestedExternalLinks,
-                        suggested_external_links_catalog: payload.suggestedExternalLinksCatalog,
-                        domain_link_list: payload.domainLinkList,
-                        domain_link_list_catalog: payload.domainLinkListCatalog,
-                        domain_cta_list: payload.domainCtaList,
-                    },
-                }),
+            applySuggestionPayload(
+                payload,
+                mode === 'fallback' ? 'links-suggestions-fallback' : 'links-suggestions',
             );
         } catch (error) {
             if (error?.name === 'AbortError' || controller.signal.aborted) {
@@ -1298,6 +1366,9 @@ export default function ArticleLinksSidebar({
         });
     }, [internal, external, excludedSuggestionLabels, reviewedKeywordIds, articlePlainText, catalogVersion]);
 
+    const suggestedInternalRef = useRef(suggestedInternal);
+    suggestedInternalRef.current = suggestedInternal;
+
     const suggestedExternal = useMemo(() => {
         const plain = articlePlainText.trim();
         const fromKeywords = partitionSuggestionCatalogBySite(
@@ -1623,7 +1694,8 @@ export default function ArticleLinksSidebar({
                         hiddenRowKeys={hiddenRowKeys}
                         excludedCount={excludedSuggestionLabels.size}
                         onClearExcluded={clearExcludedSuggestions}
-                        onGenerateSuggestions={loadLinkSuggestions}
+                        onGenerateSuggestions={() => loadLinkSuggestions('full')}
+                        onGenerateFallbackSuggestions={() => loadLinkSuggestions('fallback')}
                         suggestionsLoading={suggestionsLoading}
                         onKeywordClick={(item, index, itemKey) =>
                             scrollToKeyword(item, 'internal', index, itemKey)

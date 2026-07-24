@@ -24,6 +24,7 @@ use App\Http\Controllers\Controller;
 use App\Services\SeoEngineService;
 use App\Support\RuntimeLogger;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 
 /**
  * Phase 2 lazy bootstrap endpoints — everything the initial editor render no
@@ -172,15 +173,42 @@ final class ArticleEditorLazyPayloadController extends Controller
         ]);
     }
 
-    public function linksSuggestions(SeoArticle $article): JsonResponse
+    public function linksSuggestions(SeoArticle $article, Request $request): JsonResponse
     {
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
+        $submitted = $this->submittedEditorContent($request);
+        $mode = strtolower(trim((string) $request->input('mode', 'full')));
+        $service = app(ArticleEditorLinksPayloadService::class);
+
+        if ($mode === 'fallback') {
+            $existing = $request->input('existing_internal', []);
+            if (! is_array($existing)) {
+                $existing = [];
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $service->withFallbackOnly($article, $submitted, $existing),
+            ]);
+        }
+
         return response()->json([
             'success' => true,
-            'data' => app(ArticleEditorLinksPayloadService::class)
-                ->withSuggestions($article, (string) ($article->body ?? '')),
+            'data' => $service->withSuggestions($article, $submitted),
         ]);
+    }
+
+    private function submittedEditorContent(Request $request): ?string
+    {
+        $content = $request->input('content');
+        if (! is_string($content)) {
+            return null;
+        }
+
+        $content = trim($content);
+
+        return $content !== '' ? $content : null;
     }
 
     /**

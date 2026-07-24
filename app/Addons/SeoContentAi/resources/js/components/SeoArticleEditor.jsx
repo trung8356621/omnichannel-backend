@@ -93,6 +93,7 @@ import {
     buildQuickFixIndexByBlockId,
     collectImagesFromBlocks,
     filterSupplementalDuplicatesOfBlockRows,
+    hasNonWordPressArticleImages,
     computeQuickFixAltTitleSupplementalOutcome,
     computeQuickFixSlugSupplementalOutcome,
     executeSeoMediaSlugRenamesTwoPhase,
@@ -136,6 +137,7 @@ import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { useArticleEditorHistory } from '../hooks/useArticleEditorHistory';
 import {
     clearDraft,
+    draftOffersManualChoice,
     hashContent,
     isDraftPersistenceEnabled,
     loadDraft,
@@ -149,6 +151,10 @@ import {
     getEditorConflictTokens,
     setEditorConflictTokens,
 } from '../utils/articleEditorApi';
+import {
+    ARTICLE_EDITOR_DRAFT_ALERT_EVENT,
+    ARTICLE_EDITOR_OPEN_DRAFT_CHOICE_EVENT,
+} from '../utils/articleEditorStickyHeader';
 import {
     buildClientOutlineTree,
     extractOutlineHeadingFromBlock,
@@ -3595,7 +3601,10 @@ export default function SeoArticleEditor({
         };
     }, [undo, redo, canUndo, canRedo, requestAnalyze]);
 
-    // Hydrate: tự chọn local/server theo hash + timestamp — không hiện modal draft.
+    // Hydrate: tự chọn bản gần nhất; nếu local≠server thì hiện nút ! trên sticky header để mở modal chọn lại.
+    const [draftRestoreOffer, setDraftRestoreOffer] = useState(null);
+    const [draftChoiceModalOpen, setDraftChoiceModalOpen] = useState(false);
+
     useEffect(() => {
         if (!articleId) return;
         if (loadedArticleIdRef.current === articleId) return;
@@ -3617,14 +3626,16 @@ export default function SeoArticleEditor({
 
         analyzedBlocksRef.current = null;
 
-        const decision = resolveLocalDraftDecision(draft, {
+        const serverState = {
             content_hash: serverBodyHash || serverContentHash,
             expected_content_hash: serverContentHash,
             site_id: scope.siteId,
             updated_at: expectedUpdatedAt || null,
             content: initialHtml,
             version: serverContentHash,
-        });
+        };
+        const decision = resolveLocalDraftDecision(draft, serverState);
+        const canManualChoose = draftOffersManualChoice(draft, serverState);
 
         if (decision === 'restore_local' && draft) {
             const restoredBlocks = enrichBlocksWithPostImages(
@@ -3662,9 +3673,93 @@ export default function SeoArticleEditor({
             );
         }
 
+        if (canManualChoose && draft) {
+            setDraftRestoreOffer({ draft, serverBlocks });
+            setDraftChoiceModalOpen(false);
+        } else {
+            setDraftRestoreOffer(null);
+            setDraftChoiceModalOpen(false);
+        }
+
         setActiveBlockId(null);
         setGlobalEditor(null);
     }, [articleId, initialHtml, initialPostImages, expectedUpdatedAt, expectedContentHash, clearTempMerge, draftScope, withDraftSite, cancelLocalDraftSave, initialSeo]);
+
+    useEffect(() => {
+        window.dispatchEvent(
+            new CustomEvent(ARTICLE_EDITOR_DRAFT_ALERT_EVENT, {
+                detail: {
+                    visible: Boolean(draftRestoreOffer),
+                    title: t('editor_draft_choice_button_hint'),
+                },
+            }),
+        );
+
+        return () => {
+            window.dispatchEvent(
+                new CustomEvent(ARTICLE_EDITOR_DRAFT_ALERT_EVENT, {
+                    detail: { visible: false },
+                }),
+            );
+        };
+    }, [draftRestoreOffer]);
+
+    useEffect(() => {
+        const onOpenDraftChoice = () => {
+            if (!draftRestoreOffer) {
+                return;
+            }
+            setDraftChoiceModalOpen(true);
+        };
+
+        window.addEventListener(ARTICLE_EDITOR_OPEN_DRAFT_CHOICE_EVENT, onOpenDraftChoice);
+
+        return () => {
+            window.removeEventListener(ARTICLE_EDITOR_OPEN_DRAFT_CHOICE_EVENT, onOpenDraftChoice);
+        };
+    }, [draftRestoreOffer]);
+
+    const applyDraftRestore = useCallback(() => {
+        if (!draftRestoreOffer) return;
+        const restoredBlocks = enrichBlocksWithPostImages(
+            parseHtmlToBlocks(stripLeadingH1FromHtml(String(draftRestoreOffer.draft?.content ?? ''))),
+            postImagesRef.current,
+        );
+        setBlocks(restoredBlocks);
+        setDraftChoiceModalOpen(false);
+        setDraftRestoreOffer(null);
+        setSeoStale(true);
+    }, [draftRestoreOffer]);
+
+    const discardDraftRestore = useCallback(() => {
+        clearDraft(articleId, connectionHashRef.current, draftScope());
+        if (draftRestoreOffer?.serverBlocks) {
+            setBlocks(draftRestoreOffer.serverBlocks);
+            writeSyncedLocalSnapshot(articleId, connectionHashRef.current, withDraftSite({
+                content: exportBlocksToHtml(draftRestoreOffer.serverBlocks),
+                base_updated_at: expectedUpdatedAt || null,
+                base_content_hash: String(expectedContentHash ?? '').trim(),
+                version: String(expectedContentHash ?? '').trim(),
+            }));
+        }
+        setDraftChoiceModalOpen(false);
+        setDraftRestoreOffer(null);
+    }, [articleId, draftRestoreOffer, draftScope, expectedUpdatedAt, expectedContentHash, withDraftSite]);
+
+    const keepServerOverDraft = useCallback(() => {
+        clearDraft(articleId, connectionHashRef.current, draftScope());
+        if (draftRestoreOffer?.serverBlocks) {
+            setBlocks(draftRestoreOffer.serverBlocks);
+            writeSyncedLocalSnapshot(articleId, connectionHashRef.current, withDraftSite({
+                content: exportBlocksToHtml(draftRestoreOffer.serverBlocks),
+                base_updated_at: expectedUpdatedAt || null,
+                base_content_hash: String(expectedContentHash ?? '').trim(),
+                version: String(expectedContentHash ?? '').trim(),
+            }));
+        }
+        setDraftChoiceModalOpen(false);
+        setDraftRestoreOffer(null);
+    }, [articleId, draftRestoreOffer, draftScope, expectedUpdatedAt, expectedContentHash, withDraftSite]);
 
     useEffect(() => {
         if (!initialSeo || hasHydratedSeoFromServerRef.current) {
@@ -4711,14 +4806,20 @@ export default function SeoArticleEditor({
             try {
                 slugRenameManagedByBatchRef.current = true;
 
-                // Bắt buộc save article hiện tại trước — tránh fix trên body server thiếu ảnh.
-                window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết trước khi sửa slug…');
-                await saveCurrentArticleFromEditor({
-                    reason: 'before_fix_slug_all',
-                    siteId: Number(siteIdRef.current ?? 0) || 0,
-                    keepOverlay: true,
-                    silentNotification: true,
-                });
+                // Chỉ save trước khi có ảnh không phải thuần WordPress.
+                const needsSaveBeforeFix = hasNonWordPressArticleImages([
+                    ...collectImagesFromBlocks(blocksRef.current),
+                    ...(sourceRows ?? []),
+                ]);
+                if (needsSaveBeforeFix) {
+                    window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết trước khi sửa slug…');
+                    await saveCurrentArticleFromEditor({
+                        reason: 'before_fix_slug_all',
+                        siteId: Number(siteIdRef.current ?? 0) || 0,
+                        keepOverlay: true,
+                        silentNotification: true,
+                    });
+                }
 
                 window.__seoArticleHeavyActionOverlay?.setStatusMessage?.(
                     'Đang sửa slug ảnh…',
@@ -5997,11 +6098,23 @@ export default function SeoArticleEditor({
             scrollToFeaturedSnippetTable();
         };
 
+        const onDocumentHtmlRequest = () => {
+            const html = typeof getExportHtml === 'function'
+                ? getExportHtml()
+                : exportBlocksToHtml(blocksRef.current);
+            window.dispatchEvent(
+                new CustomEvent('seo-editor-document-html', {
+                    detail: { html: String(html ?? ''), articleId },
+                }),
+            );
+        };
+
         window.addEventListener('seo-editor-scroll-to-link', onScrollToLink);
         window.addEventListener('seo-editor-insert-suggested-link', onInsertSuggestedLink);
         window.addEventListener('seo-editor-insert-cta-link', onInsertCtaLink);
         window.addEventListener('seo-editor-remove-internal-link', onRemoveInternalLink);
         window.addEventListener('seo-editor-scroll-to-featured-snippet-table', onScrollToFeaturedSnippetTable);
+        window.addEventListener('seo-editor-document-html-request', onDocumentHtmlRequest);
 
         return () => {
             window.removeEventListener('seo-editor-scroll-to-link', onScrollToLink);
@@ -6009,8 +6122,9 @@ export default function SeoArticleEditor({
             window.removeEventListener('seo-editor-insert-cta-link', onInsertCtaLink);
             window.removeEventListener('seo-editor-remove-internal-link', onRemoveInternalLink);
             window.removeEventListener('seo-editor-scroll-to-featured-snippet-table', onScrollToFeaturedSnippetTable);
+            window.removeEventListener('seo-editor-document-html-request', onDocumentHtmlRequest);
         };
-    }, [scrollToExtractedLink, insertSuggestedLinkIntoContent, insertCtaLinkIntoContent, removeInternalLinkFromContent, scrollToFeaturedSnippetTable]);
+    }, [scrollToExtractedLink, insertSuggestedLinkIntoContent, insertCtaLinkIntoContent, removeInternalLinkFromContent, scrollToFeaturedSnippetTable, getExportHtml, articleId]);
 
     const clearMediaPolling = useCallback((mediaId) => {
         const timer = mediaPollTimersRef.current.get(mediaId);
@@ -10695,6 +10809,42 @@ export default function SeoArticleEditor({
                       assistantPortalRoots.reviews,
                   )
                 : null}
+
+            {draftChoiceModalOpen && draftRestoreOffer ? (
+                <div className="seo-draft-restore-overlay" role="dialog" aria-modal="true">
+                    <div className="seo-draft-restore-modal">
+                        <h3 className="seo-draft-restore-modal__title">
+                            {t('editor_draft_restore_title')}
+                        </h3>
+                        <p className="seo-draft-restore-modal__body">
+                            {t('editor_draft_restore_body')}
+                        </p>
+                        <div className="seo-draft-restore-modal__actions">
+                            <button
+                                type="button"
+                                className="seo-draft-restore-modal__btn seo-draft-restore-modal__btn--primary"
+                                onClick={applyDraftRestore}
+                            >
+                                {t('editor_draft_restore_action_restore')}
+                            </button>
+                            <button
+                                type="button"
+                                className="seo-draft-restore-modal__btn"
+                                onClick={keepServerOverDraft}
+                            >
+                                {t('editor_draft_restore_action_keep_server')}
+                            </button>
+                            <button
+                                type="button"
+                                className="seo-draft-restore-modal__btn seo-draft-restore-modal__btn--danger"
+                                onClick={discardDraftRestore}
+                            >
+                                {t('editor_draft_restore_action_discard')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }

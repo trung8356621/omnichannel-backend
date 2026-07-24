@@ -15,6 +15,7 @@ use App\Addons\SeoContentAi\Automation\Support\ActionSupport;
 use App\Addons\SeoContentAi\Automation\Support\ArticleContentConflictGuard;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleEditorPersistService;
+use App\Addons\SeoContentAi\Services\ArticleLastSavedTimestampService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Illuminate\Support\Facades\DB;
@@ -27,6 +28,7 @@ final class UpdateArticleContentAction implements BusinessAction
     public function __construct(
         private readonly ArticleEditorPersistService $persistService,
         private readonly ArticleContentConflictGuard $conflictGuard,
+        private readonly ArticleLastSavedTimestampService $lastSavedTimestamps,
     ) {}
 
     public static function definition(): ActionDefinition
@@ -139,6 +141,13 @@ final class UpdateArticleContentAction implements BusinessAction
         }
 
         $fresh = $article->fresh();
+        if (
+            $fresh instanceof SeoArticle
+            && $this->lastSavedTimestamps->shouldTouchManualFromOrigin($context->origin)
+        ) {
+            $this->lastSavedTimestamps->touchManualSaved($fresh);
+            $fresh = $fresh->fresh() ?? $fresh;
+        }
 
         return ActionResult::success(
             output: [

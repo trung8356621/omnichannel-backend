@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoLinkMapLinkTypeClassifier;
+use App\Addons\SeoContentAi\Support\SeoSuggestionUrlNormalizer;
 use App\Models\Site;
 use Illuminate\Support\Collection;
 
@@ -265,15 +266,22 @@ final class KeywordLinkTargetResolver
         $siteDomain = SeoLinkMapLinkTypeClassifier::normalizeDomainHost(
             (string) ($currentArticle->site?->domain ?? ''),
         );
-        $currentPermalink = $this->normalizeUrlForCompare(
+        $currentPermalink = SeoSuggestionUrlNormalizer::normalize(
             $this->resolveArticlePublicUrl($currentArticle) ?? '',
         );
 
-        $urls = $keyword->linkMaps()
-            ->whereHas('sourceArticle', static fn ($query) => $query->where('site_id', $siteId))
-            ->with(['targetArticle:id,site_id,title,slug', 'sourceArticle:id,site_id'])
-            ->orderBy('seo_link_maps.id')
-            ->get()
+        if ($keyword->relationLoaded('linkMaps')) {
+            // Eager load đã whereHas sourceArticle theo site — dùng collection, tránh N+1.
+            $maps = $keyword->linkMaps->sortBy('id')->values();
+        } else {
+            $maps = $keyword->linkMaps()
+                ->whereHas('sourceArticle', static fn ($query) => $query->where('site_id', $siteId))
+                ->with(['targetArticle:id,site_id,title,slug', 'sourceArticle:id,site_id'])
+                ->orderBy('seo_link_maps.id')
+                ->get();
+        }
+
+        $urls = $maps
             ->map(fn (SeoLinkMap $map): string => $this->resolveLinkMapDestinationUrl($map, $siteId))
             ->filter(static fn (string $url): bool => trim($url) !== '');
 
@@ -283,7 +291,7 @@ final class KeywordLinkTargetResolver
                 continue;
             }
 
-            if ($currentPermalink !== '' && $this->normalizeUrlForCompare($trimmed) === $currentPermalink) {
+            if ($currentPermalink !== '' && SeoSuggestionUrlNormalizer::normalize($trimmed) === $currentPermalink) {
                 continue;
             }
 
@@ -387,7 +395,7 @@ final class KeywordLinkTargetResolver
             return null;
         }
 
-        $normalizedTarget = $this->normalizeUrlForCompare($url);
+        $normalizedTarget = SeoSuggestionUrlNormalizer::normalize($url);
         if ($normalizedTarget === '') {
             return null;
         }
@@ -425,7 +433,7 @@ final class KeywordLinkTargetResolver
             }
 
             $permalink = $this->resolveArticlePublicUrl($candidate);
-            if ($permalink !== null && $this->normalizeUrlForCompare($permalink) === $normalizedTarget) {
+            if ($permalink !== null && SeoSuggestionUrlNormalizer::normalize($permalink) === $normalizedTarget) {
                 return $candidate;
             }
         }
@@ -444,16 +452,6 @@ final class KeywordLinkTargetResolver
         }
 
         return (string) (preg_replace('/\.html?$/i', '', $slug) ?? $slug);
-    }
-
-    private function normalizeUrlForCompare(string $url): string
-    {
-        $trimmed = trim($url);
-        if ($trimmed === '') {
-            return '';
-        }
-
-        return rtrim(strtolower($trimmed), '/');
     }
 
     private function resolveLinkMapDestinationUrl(SeoLinkMap $map, int $siteId): string

@@ -75,9 +75,14 @@ function installArticleEditorPageBodyClass() {
 }
 
 queueMicrotask(() => {
+    if (window.__SEO_EDITOR_EXITING__) {
+        return;
+    }
+
     const activeOp = window.__SEO_ACTIVE_ARTICLE_OPERATION__;
     const articleId = Number(activeOp?.article_id ?? 0);
     if (activeOp && typeof activeOp === 'object' && articleId > 0) {
+        // WP sync queued/processing → tracker redirect Sync Queue (không Elapsed).
         window.__seoArticleOperationTracker?.apply?.(articleId, activeOp);
 
         return;
@@ -174,6 +179,7 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
             const apiPayload = buildArticleEditorApiPayload(editorBundle, wire);
             const result = await syncArticleToWordPressViaApi(articleId, apiPayload);
             finishArticleEditorApiAction(result, articleId, siteId, 'sync');
+            return;
         } else {
             window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết…');
             try {
@@ -265,6 +271,7 @@ async function runArticleEditorApiAction(action, wire, editorDetail = {}) {
             );
             const result = await syncArticleToWordPressViaApi(articleId, apiPayload);
             finishArticleEditorApiAction(result, articleId, siteId, 'sync');
+            return;
         } else {
             window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết…');
             try {

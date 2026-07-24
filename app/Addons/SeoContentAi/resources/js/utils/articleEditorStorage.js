@@ -649,6 +649,56 @@ export function resolveLocalDraftDecision(draft, server) {
 }
 
 /**
+ * True khi local draft và server khác thật — đủ điều kiện hiện nút ! / modal chọn lại
+ * (kể cả khi hệ thống đã tự chọn bản gần nhất).
+ *
+ * @param {ReturnType<typeof loadDraft>} draft
+ * @param {{ content_hash?: string, expected_content_hash?: string, site_id?: number, updated_at?: string|null, content?: string|null }} server
+ * @returns {boolean}
+ */
+export function draftOffersManualChoice(draft, server) {
+    if (!draft || typeof draft !== 'object') {
+        return false;
+    }
+
+    if (draft.synced === true) {
+        return false;
+    }
+
+    const dirtyFields = Array.isArray(draft.dirty_fields) ? draft.dirty_fields : [];
+    if (dirtyFields.length === 0 || !dirtyFields.includes('content')) {
+        return false;
+    }
+
+    const draftContent = String(draft.content ?? '');
+    if (draftContent.trim() === '') {
+        return false;
+    }
+
+    const draftSiteId = Math.max(0, Number(draft.site_id ?? 0) || 0);
+    const serverSiteId = Math.max(0, Number(server?.site_id ?? 0) || 0);
+    if (draftSiteId > 0 && serverSiteId > 0 && draftSiteId !== serverSiteId) {
+        return false;
+    }
+
+    const serverContent = server?.content != null ? String(server.content) : '';
+    if (contentsMeaningfullyEqual(draftContent, serverContent)) {
+        return false;
+    }
+
+    const draftContentHash = String(draft.content_hash ?? '').trim() || hashContent(draftContent);
+    const serverContentHash = String(server?.content_hash ?? '').trim()
+        || String(server?.expected_content_hash ?? '').trim()
+        || hashContent(serverContent);
+
+    if (draftContentHash !== '' && serverContentHash !== '' && draftContentHash === serverContentHash) {
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * @deprecated Dùng resolveLocalDraftDecision — giữ tương thích test/call cũ.
  * @param {ReturnType<typeof loadDraft>} draft
  * @param {{ content_hash?: string, expected_content_hash?: string, site_id?: number, updated_at?: string|null, content?: string|null }} server

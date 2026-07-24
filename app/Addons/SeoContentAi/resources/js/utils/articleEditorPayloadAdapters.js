@@ -248,6 +248,10 @@ export function normalizeLinksPayload(payload) {
             ? src.suggested_external_links_catalog
             : [],
         canGenerateSuggestions: src.can_generate_suggestions !== false,
+        contentSource: typeof src.content_source === 'string' ? src.content_source : '',
+        suggestionDebug: src.suggestion_debug && typeof src.suggestion_debug === 'object'
+            ? src.suggestion_debug
+            : null,
     };
 }
 

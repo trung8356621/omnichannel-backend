@@ -900,7 +900,40 @@ MD;
         $faqs = $parser->parseFaqsFromContent($markdown);
 
         $this->assertCount(1, $faqs);
-        $this->assertStringContainsString('ship COD', $faqs[0]['question']);
+        $this->assertSame('Có ship COD không?', $faqs[0]['question']);
+    }
+
+    public function test_remove_faq_does_not_strip_article_h3_outline_as_standalone_faq(): void
+    {
+        $parser = $this->parser();
+
+        $markdown = <<<'MD'
+## Giới thiệu
+
+Đoạn mở đầu túi gym.
+
+### Lý do chọn túi thể thao
+
+Nội dung section dài về lý do chọn túi.
+
+### Cách bảo quản
+
+Hướng dẫn bảo quản chi tiết.
+
+## Kết luận
+
+Tóm tắt bài viết.
+MD;
+
+        $this->assertFalse($parser->shouldParseMarkdownAsStandaloneFaqSection($markdown));
+
+        $stripped = $parser->removeFaqAndAppendShortcodeFromContent($markdown);
+
+        $this->assertStringContainsString('### Lý do chọn túi thể thao', $stripped);
+        $this->assertStringContainsString('Nội dung section dài về lý do chọn túi.', $stripped);
+        $this->assertStringContainsString('### Cách bảo quản', $stripped);
+        $this->assertStringContainsString('## Kết luận', $stripped);
+        $this->assertStringContainsString('Tóm tắt bài viết.', $stripped);
     }
 
     public function test_normal_question_heading_outside_faq_is_not_extracted(): void

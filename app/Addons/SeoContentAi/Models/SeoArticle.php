@@ -41,6 +41,8 @@ class SeoArticle extends Model
         'content_archived_at' => 'datetime',
         'content_archived_by' => 'integer',
         'published_at' => 'datetime',
+        'last_manual_saved_at' => 'datetime',
+        'last_synced_at' => 'datetime',
     ];
 
     public function updateTimestamps()

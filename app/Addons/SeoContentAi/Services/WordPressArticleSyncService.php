@@ -882,6 +882,7 @@ final class WordPressArticleSyncService
             $article->update(['body' => null]);
         }
         app(ArticleWordPressSyncFlagService::class)->clearAll($article);
+        app(ArticleLastSavedTimestampService::class)->touchSynced($article);
         $this->timestampService->sync($article, $decoded);
 
         if ((string) ($article->status ?? '') === 'scheduled') {

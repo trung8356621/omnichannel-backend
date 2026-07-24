@@ -32,6 +32,10 @@ function registerSeoProjectRunQueue() {
         removedTaskIds: [],
         runSettingsOpen: false,
         syncAllOpen: false,
+        bulkConfirmOpen: false,
+        bulkBusy: false,
+        selectedTaskIds: [],
+        selectedNodeIds: [],
         generatePostImages: Boolean(config?.runSettings?.generate_post_images ?? false),
         runSettingsSubmitting: false,
         syncAllBusy: false,
@@ -188,72 +192,144 @@ function registerSeoProjectRunQueue() {
 
             tbody.insertBefore(row, tbody.firstChild);
             tbody.querySelectorAll('tr[data-run-task-id]').forEach((tr, index) => {
-                const indexCell = tr.querySelector('td');
+                const cells = tr.querySelectorAll('td');
+                const indexCell = cells[1] ?? cells[0];
                 if (indexCell) {
                     indexCell.textContent = String(index + 1);
                 }
             });
         },
 
-        startRerunAllQueue() {
-            this.openRerunSettingsModal();
+        visibleTaskIds() {
+            return Array.from(this.$el.querySelectorAll('tr[data-run-task-id]'))
+                .map((row) => Number(row.getAttribute('data-run-task-id')))
+                .filter((id) => id > 0);
         },
 
-        openRerunSettingsModal() {
-            const taskIds = Array.isArray(this.config.rerunAllTaskIds)
-                ? this.config.rerunAllTaskIds.map((id) => Number(id)).filter((id) => id > 0)
-                : [];
+        allVisibleSelected() {
+            const visible = this.visibleTaskIds();
+            if (visible.length === 0) {
+                return false;
+            }
 
-            if (taskIds.length === 0) {
+            return visible.every((id) => this.selectedTaskIds.includes(id));
+        },
+
+        toggleSelectAll(checked) {
+            const visible = this.visibleTaskIds();
+            if (checked) {
+                this.selectedTaskIds = Array.from(new Set([...this.selectedTaskIds, ...visible]));
+            } else {
+                this.selectedTaskIds = this.selectedTaskIds.filter((id) => ! visible.includes(id));
+            }
+        },
+
+        bulkSelectedLabel() {
+            const template = this.config.labels?.bulkSelected ?? 'Đã chọn :count bài';
+
+            return template.replace(':count', String(this.selectedTaskIds.length));
+        },
+
+        selectedStepLabels() {
+            const steps = Array.isArray(this.config.workflowSteps) ? this.config.workflowSteps : [];
+            return steps
+                .filter((step) => this.selectedNodeIds.includes(step.node_id))
+                .map((step) => step.label || step.title || step.node_id);
+        },
+
+        bulkConfirmText() {
+            const template = this.config.labels?.bulkConfirmBody
+                ?? 'Bạn sắp tạo lại :steps công đoạn cho :articles bài. Tổng số task sẽ được tạo: :total.';
+            const steps = this.selectedNodeIds.length;
+            const articles = this.selectedTaskIds.length;
+
+            return template
+                .replace(':steps', String(steps))
+                .replace(':articles', String(articles))
+                .replace(':total', String(steps * articles));
+        },
+
+        openBulkConfirm() {
+            if (this.selectedTaskIds.length === 0 || this.selectedNodeIds.length === 0) {
+                return;
+            }
+            this.bulkConfirmOpen = true;
+        },
+
+        async confirmBulkRetry() {
+            const wire = this.resolveWire();
+            if (! wire?.bulkRetryWorkflowSteps) {
+                window.alert('Không kết nối được Livewire (bulkRetryWorkflowSteps). Hard refresh (Ctrl+F5).');
                 return;
             }
 
-            this.generatePostImages = Boolean(this.config?.runSettings?.generate_post_images ?? false);
-            this.runSettingsOpen = true;
+            this.bulkBusy = true;
+            try {
+                const response = await wire.bulkRetryWorkflowSteps(
+                    this.selectedTaskIds,
+                    this.selectedNodeIds,
+                );
+                window.alert(response?.message ?? 'Đã xử lý bulk retry.');
+                this.bulkConfirmOpen = false;
+                this.selectedTaskIds = [];
+                this.selectedNodeIds = [];
+                window.location.reload();
+            } catch (error) {
+                window.alert(error?.message ? String(error.message) : 'Bulk retry thất bại.');
+            } finally {
+                this.bulkBusy = false;
+            }
         },
 
-        async confirmRerunSettings() {
-            const taskIds = Array.isArray(this.config.rerunAllTaskIds)
-                ? this.config.rerunAllTaskIds.map((id) => Number(id)).filter((id) => id > 0)
-                : [];
-
-            if (taskIds.length === 0) {
-                this.runSettingsOpen = false;
-
+        async retryWorkflowStep(taskId, nodeId) {
+            const id = Number(taskId);
+            const node = String(nodeId ?? '').trim();
+            if (id <= 0 || node === '') {
                 return;
             }
 
             const wire = this.resolveWire();
-            if (! wire?.updateRunSettingsForRerun) {
-                window.alert('Không kết nối được Livewire để lưu Run settings.');
-
+            if (! wire?.retryWorkflowStep) {
+                window.alert('Không kết nối được Livewire (retryWorkflowStep). Hard refresh (Ctrl+F5).');
                 return;
             }
 
-            this.runSettingsSubmitting = true;
+            const store = Alpine.store('seoRunQueue');
+            if (store.isRunning) {
+                window.alert('Đang có queue chạy — bấm Dừng hoặc đợi xong.');
+                return;
+            }
+
+            store.setRunning(true);
+            store.currentTaskId = id;
+            this.markRowRunning(id);
 
             try {
-                const response = await wire.updateRunSettingsForRerun({
-                    generate_post_images: this.generatePostImages === true,
-                });
-
-                if (response?.settings) {
-                    this.config.runSettings = response.settings;
+                const response = await wire.retryWorkflowStep(id, node);
+                if (response?.success) {
+                    window.alert(response.message || 'Đã chạy lại prompt.');
+                    window.location.reload();
+                } else {
+                    window.alert(response?.message || 'Không chạy được prompt.');
                 }
-
-                this.runSettingsOpen = false;
-
-                await this.startQueue(taskIds, {
-                    partial: false,
-                    refresh: true,
-                    preserveActions: false,
-                });
             } catch (error) {
-                const message = error?.message ? String(error.message) : 'Không lưu được Run settings.';
-                window.alert(message);
+                window.alert(error?.message ? String(error.message) : 'Lỗi khi chạy lại prompt.');
             } finally {
-                this.runSettingsSubmitting = false;
+                store.currentTaskId = null;
+                store.reset();
             }
+        },
+
+        startRerunAllQueue() {
+            // Entry «Chạy lại toàn bộ» đã gỡ.
+        },
+
+        openRerunSettingsModal() {
+            // no-op — dùng bulk/per-prompt thay thế
+        },
+
+        async confirmRerunSettings() {
+            this.runSettingsOpen = false;
         },
 
         openSyncAllConfirm() {
@@ -381,6 +457,8 @@ function registerSeoProjectRunQueue() {
                 if (component?.call) {
                     return {
                         runItemQueued: (taskId, markCompleted = false) => component.call('runItemQueued', taskId, markCompleted),
+                        retryWorkflowStep: (taskId, nodeId) => component.call('retryWorkflowStep', taskId, nodeId),
+                        bulkRetryWorkflowSteps: (taskIds, nodeIds) => component.call('bulkRetryWorkflowSteps', taskIds, nodeIds),
                         beginRunQueue: () => component.call('beginRunQueue'),
                         finalizePartialQueue: () => component.call('finalizePartialQueue'),
                         completeRunQueue: (stopped) => component.call('completeRunQueue', stopped),
@@ -406,6 +484,8 @@ function registerSeoProjectRunQueue() {
             if (this.$wire?.runItemQueued) {
                 return {
                     runItemQueued: (taskId, markCompleted = false) => this.$wire.runItemQueued(taskId, markCompleted),
+                    retryWorkflowStep: (taskId, nodeId) => this.$wire.retryWorkflowStep(taskId, nodeId),
+                    bulkRetryWorkflowSteps: (taskIds, nodeIds) => this.$wire.bulkRetryWorkflowSteps(taskIds, nodeIds),
                     beginRunQueue: () => this.$wire.beginRunQueue(),
                     finalizePartialQueue: () => this.$wire.finalizePartialQueue(),
                     completeRunQueue: (stopped) => this.$wire.completeRunQueue(stopped),

@@ -674,6 +674,44 @@ export function isImageReadyForWpSlugFix(row) {
 }
 
 /**
+ * True nếu có ít nhất 1 ảnh không phải thuần WordPress (local / Laravel / chưa gắn WP).
+ * Dùng để quyết định: phải save article trước khi Fix slug all.
+ *
+ * @param {Array<Record<string, unknown>>|null|undefined} rows
+ * @returns {boolean}
+ */
+export function hasNonWordPressArticleImages(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+
+    return list.some((row) => {
+        if (!row) {
+            return false;
+        }
+
+        const src = String(row.src ?? '').trim();
+        const localSrc = String(row.localSrc ?? row.local_src ?? '').trim();
+        const { wpAttachmentId, seoMediaId, isLocal } = resolveImageRefIds(row);
+        const hasImageSignal = src !== ''
+            || localSrc !== ''
+            || seoMediaId > 0
+            || Number(row.seo_media_id ?? 0) > 0
+            || Number(row.wpAttachmentId ?? row.wp_attachment_id ?? 0) > 0;
+
+        if (!hasImageSignal) {
+            return false;
+        }
+
+        const pureWordPress = wpAttachmentId > 0
+            && hasTrustedWordPressUrl(row)
+            && !isLocal
+            && !isLocalSeoMediaSrc(src)
+            && !isLocalSeoMediaSrc(localSrc);
+
+        return !pureWordPress;
+    });
+}
+
+/**
  * Còn ảnh trong bài (có blockId) chưa gắn URL WP thật → bắt Sync WP trước Fix slug.
  */
 export function imagesNeedWpSyncBeforeFixSlug(rows) {

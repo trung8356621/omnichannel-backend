@@ -13,12 +13,15 @@ use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ArticleEditorReadinessService;
+use App\Addons\SeoContentAi\Services\ArticleLastSavedTimestampService;
 use App\Addons\SeoContentAi\Services\ArticleReviewService;
 use App\Addons\SeoContentAi\Services\Exceptions\ArticleReviewException;
 use App\Addons\SeoContentAi\Services\SeoProjectRunItemService;
 use App\Addons\SeoContentAi\Services\SeoProjectRunItemsReader;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskLifecycleService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
+use App\Addons\SeoContentAi\Services\SeoProjectWorkflowStepCatalogService;
+use App\Addons\SeoContentAi\Services\SeoProjectWorkflowStepRetryService;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectRunBulkSyncService;
 use App\Addons\SeoContentAi\Support\ContentProjectRunSettings;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -89,56 +92,165 @@ class ViewSeoProjectRun extends Page
     }
 
     /**
+     * @deprecated Entry «Chạy lại toàn bộ» đã gỡ — giữ method rỗng để compat bootstrap cũ.
+     *
      * @return list<int>
      */
     public function getRerunAllTaskIds(): array
     {
-        if ($this->projectRun === null) {
-            return [];
-        }
-
-        if (! SeoAccessControl::canRetryProjectRunItem($this->projectRun->project)) {
-            return [];
-        }
-
-        $taskIds = [];
-
-        foreach ($this->getAllItems() as $item) {
-            if ($this->itemIsImproveType($item)) {
-                continue;
-            }
-
-            if ((bool) ($item['article_is_reviewed'] ?? false)) {
-                continue;
-            }
-
-            $taskId = (int) ($item['task_id'] ?? 0);
-            if ($taskId <= 0) {
-                continue;
-            }
-
-            if (! (bool) ($item['task_exists'] ?? true)) {
-                continue;
-            }
-
-            if (! $this->canRetryRunItem($item)) {
-                continue;
-            }
-
-            $status = (string) ($item['status'] ?? '');
-            if (! in_array($status, ['success', 'failed', 'pending'], true)) {
-                continue;
-            }
-
-            $taskIds[] = $taskId;
-        }
-
-        return array_values(array_unique($taskIds));
+        return [];
     }
 
     public function canRerunAllItems(): bool
     {
-        return $this->getRerunAllTaskIds() !== [];
+        return false;
+    }
+
+    /**
+     * Prompt/node có thể chạy lại (bulk + per-row menu).
+     *
+     * @return list<array{node_id: string, label: string, kind: string, title: string}>
+     */
+    public function getBulkWorkflowSteps(): array
+    {
+        if ($this->projectRun?->project === null) {
+            return [];
+        }
+
+        $catalog = app(SeoProjectWorkflowStepCatalogService::class);
+        $byNode = [];
+
+        foreach ($this->projectRun->project->tasks ?? [] as $task) {
+            if (! $task instanceof SeoProjectTask) {
+                continue;
+            }
+            if (SeoProjectTask::isManualRunType((string) $task->type)) {
+                continue;
+            }
+
+            foreach ($catalog->listRerunnableSteps($task) as $step) {
+                $byNode[$step['node_id']] = [
+                    'node_id' => $step['node_id'],
+                    'label' => $step['label'],
+                    'kind' => $step['kind'],
+                    'title' => $step['title'],
+                ];
+            }
+        }
+
+        return array_values($byNode);
+    }
+
+    public function canRetryWorkflowSteps(): bool
+    {
+        return $this->projectRun !== null
+            && SeoAccessControl::canRetryProjectRunItem($this->projectRun->project);
+    }
+
+    /**
+     * @return array{success: bool, message: string, item?: array<string, mixed>}
+     */
+    public function retryWorkflowStep(int $taskId, string $nodeId): array
+    {
+        if ($this->projectRun === null) {
+            $this->skipRender();
+
+            return ['success' => false, 'message' => 'Run không tồn tại.'];
+        }
+
+        abort_unless(
+            SeoAccessControl::canRetryProjectRunItem($this->projectRun->project),
+            403,
+        );
+
+        try {
+            $result = app(SeoProjectWorkflowStepRetryService::class)->retryOne(
+                $this->projectRun,
+                $this->projectRun->project,
+                $taskId,
+                $nodeId,
+            );
+            $this->projectRun->refresh()->loadMissing(['project.site', 'user', 'project.tasks']);
+            $this->skipRender();
+
+            return [
+                'success' => (bool) ($result['success'] ?? false),
+                'message' => (string) ($result['message'] ?? ''),
+                'item' => is_array($result['item'] ?? null) ? $result['item'] : null,
+            ];
+        } catch (\Throwable $exception) {
+            RuntimeLogger::report($exception, [
+                'endpoint' => 'seo.project_run.retry_workflow_step',
+                'run_id' => (int) $this->projectRun->id,
+                'task_id' => $taskId,
+                'node_id' => $nodeId,
+            ]);
+            $this->skipRender();
+
+            return [
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * @param  list<int|string>  $taskIds
+     * @param  list<string>  $nodeIds
+     * @return array{success: bool, message: string, created: int, skipped: int, failed: int}
+     */
+    public function bulkRetryWorkflowSteps(array $taskIds, array $nodeIds): array
+    {
+        if ($this->projectRun === null) {
+            $this->skipRender();
+
+            return [
+                'success' => false,
+                'message' => 'Run không tồn tại.',
+                'created' => 0,
+                'skipped' => 0,
+                'failed' => 0,
+            ];
+        }
+
+        abort_unless(
+            SeoAccessControl::canRetryProjectRunItem($this->projectRun->project),
+            403,
+        );
+
+        try {
+            $bulk = app(SeoProjectWorkflowStepRetryService::class)->enqueueBulk(
+                $this->projectRun,
+                $this->projectRun->project,
+                $taskIds,
+                $nodeIds,
+                executeImmediately: true,
+            );
+            $this->projectRun->refresh()->loadMissing(['project.site', 'user', 'project.tasks']);
+            $this->skipRender();
+
+            return [
+                'success' => ($bulk['failed'] ?? 0) === 0 && ($bulk['created'] ?? 0) > 0,
+                'message' => (string) ($bulk['message'] ?? ''),
+                'created' => (int) ($bulk['created'] ?? 0),
+                'skipped' => (int) ($bulk['skipped'] ?? 0),
+                'failed' => (int) ($bulk['failed'] ?? 0),
+            ];
+        } catch (\Throwable $exception) {
+            RuntimeLogger::report($exception, [
+                'endpoint' => 'seo.project_run.bulk_retry_workflow_steps',
+                'run_id' => (int) $this->projectRun->id,
+            ]);
+            $this->skipRender();
+
+            return [
+                'success' => false,
+                'message' => $exception->getMessage(),
+                'created' => 0,
+                'skipped' => 0,
+                'failed' => 0,
+            ];
+        }
     }
 
     /**
@@ -211,8 +323,10 @@ class ViewSeoProjectRun extends Page
             'livewireId' => $this->getId(),
             'runStatus' => (string) ($this->projectRun?->status ?? ''),
             'taskIds' => $this->getQueueTaskIds(),
-            'rerunAllTaskIds' => $this->getRerunAllTaskIds(),
-            'canRerunAll' => $this->canRerunAllItems(),
+            'rerunAllTaskIds' => [],
+            'canRerunAll' => false,
+            'canRetryWorkflowSteps' => $this->canRetryWorkflowSteps(),
+            'workflowSteps' => $this->getBulkWorkflowSteps(),
             'canSyncAll' => $this->canSyncAllItems(),
             'runSettings' => ContentProjectRunSettings::fromRun($this->projectRun)->toArray(),
             'autorun' => request()->boolean('autorun'),
@@ -222,9 +336,12 @@ class ViewSeoProjectRun extends Page
                 'failed' => __('seo-content-ai::filament.projects.run_item_failed'),
                 'pending' => __('seo-content-ai::filament.projects.run_item_pending'),
                 'archiveConfirm' => __('seo-content-ai::filament.projects.archive_item_confirm'),
-                'rerunAll' => __('seo-content-ai::filament.projects.run_rerun_all'),
-                'rerunAllConfirm' => __('seo-content-ai::filament.projects.run_rerun_all_confirm'),
-                'rerunAllRunning' => __('seo-content-ai::filament.projects.run_rerun_all_running'),
+                'bulkSelected' => 'Đã chọn :count bài',
+                'bulkPickPrompt' => 'Chọn prompt',
+                'bulkExecute' => 'Thực hiện',
+                'bulkConfirmHeading' => 'Xác nhận chạy lại prompt',
+                'bulkConfirmBody' => 'Bạn sắp tạo lại :steps công đoạn cho :articles bài. Tổng số task sẽ được tạo: :total.',
+                'bulkArchive' => __('seo-content-ai::filament.projects.archive_item'),
                 'runSettingsHeading' => __('seo-content-ai::filament.projects.run_settings_heading'),
                 'runSettingsGeneratePostImages' => __('seo-content-ai::filament.projects.run_settings_generate_post_images'),
                 'runSettingsGeneratePostImagesHelp' => __('seo-content-ai::filament.projects.run_settings_generate_post_images_help'),
@@ -352,7 +469,11 @@ class ViewSeoProjectRun extends Page
         $items = app(SeoProjectRunItemsDisplayPresenter::class)->consolidate($this->getResultItems());
 
         $enriched = array_map(
-            fn (array $item): array => $this->enrichItemRewriteMeta($this->enrichItemArticleLink($item)),
+            fn (array $item): array => $this->enrichItemWorkflowSteps(
+                $this->enrichItemLastSaved(
+                    $this->enrichItemRewriteMeta($this->enrichItemArticleLink($item))
+                )
+            ),
             $items,
         );
 
@@ -507,7 +628,7 @@ class ViewSeoProjectRun extends Page
 
         if ($articleId > 0) {
             $article = SeoArticle::query()
-                ->select(['id', 'is_reviewed'])
+                ->select(['id', 'is_reviewed', 'last_manual_saved_at', 'last_synced_at'])
                 ->whereKey($articleId)
                 ->first();
 
@@ -521,6 +642,8 @@ class ViewSeoProjectRun extends Page
                 $item['article_editor_preparing_message'] = app(ArticleEditorReadinessService::class)->userMessage($readiness);
             }
             $item['article_is_reviewed'] = (bool) ($article?->is_reviewed ?? false);
+            $item['last_manual_saved_at'] = $article?->last_manual_saved_at?->toIso8601String();
+            $item['last_synced_at'] = $article?->last_synced_at?->toIso8601String();
 
             return $item;
         }
@@ -533,7 +656,7 @@ class ViewSeoProjectRun extends Page
         $resolvedId = $this->resolveArticleIdForSource($source);
         if ($resolvedId > 0) {
             $article = SeoArticle::query()
-                ->select(['id', 'is_reviewed'])
+                ->select(['id', 'is_reviewed', 'last_manual_saved_at', 'last_synced_at'])
                 ->whereKey($resolvedId)
                 ->first();
 
@@ -550,7 +673,53 @@ class ViewSeoProjectRun extends Page
                 $item['article_editor_preparing_message'] = app(ArticleEditorReadinessService::class)->userMessage($readiness);
             }
             $item['article_is_reviewed'] = (bool) ($article?->is_reviewed ?? false);
+            $item['last_manual_saved_at'] = $article?->last_manual_saved_at?->toIso8601String();
+            $item['last_synced_at'] = $article?->last_synced_at?->toIso8601String();
         }
+
+        return $item;
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     * @return array<string, mixed>
+     */
+    private function enrichItemLastSaved(array $item): array
+    {
+        $resolved = app(ArticleLastSavedTimestampService::class)->resolve([
+            'last_manual_saved_at' => $item['last_manual_saved_at'] ?? null,
+            'last_synced_at' => $item['last_synced_at'] ?? null,
+        ]);
+
+        $item['last_saved_display'] = $resolved['display'];
+        $item['last_saved_source'] = $resolved['source'];
+        $item['last_saved_source_label'] = $resolved['source_label'];
+
+        return $item;
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     * @return array<string, mixed>
+     */
+    private function enrichItemWorkflowSteps(array $item): array
+    {
+        $taskId = (int) ($item['task_id'] ?? 0);
+        if ($taskId <= 0 || $this->projectRun === null || $this->itemIsImproveType($item)) {
+            $item['workflow_steps'] = [];
+
+            return $item;
+        }
+
+        $task = SeoProjectTask::query()->whereKey($taskId)->first();
+        if (! $task instanceof SeoProjectTask) {
+            $item['workflow_steps'] = [];
+
+            return $item;
+        }
+
+        $item['workflow_steps'] = app(SeoProjectWorkflowStepRetryService::class)
+            ->stepsForTask($this->projectRun, $task);
 
         return $item;
     }
@@ -830,11 +999,13 @@ class ViewSeoProjectRun extends Page
             $this->projectRun->refresh()->loadMissing(['project.site', 'user', 'project.tasks']);
 
             $enriched = $this->enrichItemRewriteMeta($this->enrichItemArticleLink($item));
+            $itemStatus = (string) ($enriched['status'] ?? '');
+            $isSuccess = $itemStatus === 'success';
 
             \Illuminate\Support\Facades\Log::info('seo.project_run.runItemQueued.done', [
                 'run_id' => (int) $this->projectRun->id,
                 'task_id' => $taskId,
-                'item_status' => (string) ($enriched['status'] ?? ''),
+                'item_status' => $itemStatus,
                 'last_run_at' => (string) ($enriched['last_run_at'] ?? ''),
                 'message' => (string) ($enriched['message'] ?? ''),
                 'debug' => $enriched['debug'] ?? null,
@@ -842,9 +1013,12 @@ class ViewSeoProjectRun extends Page
             ]);
 
             return [
-                'success' => true,
+                'success' => $isSuccess,
                 'item' => $enriched,
                 'displayError' => $formatter->displayMessage($item),
+                'message' => $isSuccess
+                    ? (string) ($enriched['message'] ?? '')
+                    : $formatter->displayMessage($item),
                 'stats' => $this->getRunStatsPayload(),
             ];
         } catch (\Throwable $exception) {

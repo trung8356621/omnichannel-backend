@@ -220,7 +220,8 @@ flowchart TB
 
 | Method | Caller |
 |--------|--------|
-| `searchInternalLinkArticles` | `LinkEditBubble.jsx` |
+| `searchInternalLinkArticles` | `LinkEditBubble.jsx` — popup «Tìm bài viết (cùng domain)»; cùng `ArticleInternalLinkSearchService` tái dụng bởi content-keyword fallback |
+| `POST .../editor/links/suggestions` | `ArticleLinksSidebar.jsx` — «Tạo gợi ý liên kết» (`mode=full`) / «Tạo gợi ý bổ sung» (`mode=fallback`); HTML qua event `seo-editor-document-html-request` ← `SeoArticleEditor` |
 | `mountAction('assignKeywordAnchorToContentProject')` | `LinkEditBubble.jsx` — `anchorPhrase` từ text bôi đen editor (không lấy ô search) |
 | `persistProductAlbumFromClient` | `articleProductAlbumStorage.js` |
 | `renameAttachmentSlugsOnWordPress` | `SeoArticleEditor.jsx` |

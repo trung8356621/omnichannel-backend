@@ -6,13 +6,12 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Exceptions\FaqManualExtractException;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Support\SimpleMarkdownHtmlConverter;
 
 final class ArticleFaqManualExtractService
 {
     public function __construct(
         private readonly WorkflowParserService $workflowParser,
-        private readonly SimpleMarkdownHtmlConverter $markdownHtml,
+        private readonly ArticleMarkdownToHtmlService $markdownHtml,
         private readonly ArticleFaqEditorService $faqEditor,
         private readonly ArticleContentFaqService $contentFaq,
         private readonly ArticleFaqExtractDebugService $extractDebug,

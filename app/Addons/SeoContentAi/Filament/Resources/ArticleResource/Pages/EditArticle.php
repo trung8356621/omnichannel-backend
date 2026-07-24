@@ -45,6 +45,7 @@ use App\Addons\SeoContentAi\Services\ArticleQuickTranslateService;
 use App\Addons\SeoContentAi\Services\ArticleReviewService;
 use App\Addons\SeoContentAi\Services\ArticleScheduleReconcileService;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
+use App\Addons\SeoContentAi\Services\ArticleLastSavedTimestampService;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Services\EditorImageTaskResolverService;
 use App\Addons\SeoContentAi\Services\Exceptions\ArticleReviewException;
@@ -254,23 +255,12 @@ class EditArticle extends SeoEditRecord
                 ArticleWpSyncQueueService::STATUS_PROCESSING,
             ], true)
         ) {
-            $this->articleHeavyActionBusy = true;
-            $this->articleHeavyAction = 'sync';
-            $status = (string) ($activeOp['status'] ?? 'queued');
-            $title = $status === 'processing'
-                ? 'Đang đồng bộ bài viết lên WordPress'
-                : 'Đang chờ đồng bộ WordPress';
-            $message = $status === 'processing'
-                ? 'Hệ thống đang xử lý nội dung và hình ảnh. Trang sẽ tự tải lại khi hoàn tất.'
-                : 'Yêu cầu đã được đưa vào hàng đợi. Vui lòng không chỉnh sửa bài viết trong lúc đồng bộ.';
+            // Không giữ editor chờ worker — chuyển sang Sync Queue ngay.
+            $queueUrl = ArticleResource::getUrl('index').'?tab=queue';
             $this->js(
-                'window.__seoArticleHeavyActionOverlay?.show("sync", {'
-                .'persistUntilUnload: true,'
-                .'title: '.json_encode($title).','
-                .'message: '.json_encode($message)
-                .'});'
-                .'window.__seoArticleAutosaveLock?.set("article-operation", true);'
-                .'window.__seoArticleOperationTracker?.poll?.('.((int) $this->record->getKey()).');'
+                'window.__SEO_EDITOR_EXITING__=true;'
+                .'window.__seoArticleOperationTracker?.stop?.();'
+                .'window.location.replace('.json_encode($queueUrl).');'
             );
         }
 
@@ -3078,6 +3068,7 @@ class EditArticle extends SeoEditRecord
             app(ArticlePostImagesService::class)->syncFromHtml($this->record, $html);
             $this->record->refresh();
             app(ArticleWordPressSyncFlagService::class)->markLocalEditPending($this->record);
+            app(ArticleLastSavedTimestampService::class)->touchManualSaved($this->record);
 
             $this->captureArticleRevisionAfterSave($html);
 

@@ -171,9 +171,14 @@ final class SeoProjectRunItemService
      *     article_id: int|null
      * }
      */
-    public function claimForExecution(SeoProjectRun $run, int $taskId, SeoProjectRunAction $action): array
+    public function claimForExecution(
+        SeoProjectRun $run,
+        int $taskId,
+        SeoProjectRunAction $action,
+        bool $forceRetry = false,
+    ): array
     {
-        return DB::connection('omi_seo_ai')->transaction(function () use ($run, $taskId, $action): array {
+        return DB::connection('omi_seo_ai')->transaction(function () use ($run, $taskId, $action, $forceRetry): array {
             /** @var SeoProjectTask|null $task */
             $task = SeoProjectTask::withTrashed()
                 ->whereKey($taskId)
@@ -302,7 +307,8 @@ final class SeoProjectRunItemService
             }
 
             if (
-                $action === SeoProjectRunAction::ArticleCreate
+                ! $forceRetry
+                && $action === SeoProjectRunAction::ArticleCreate
                 && $relation['article_id'] !== null
                 && $relation['article_id'] > 0
             ) {
@@ -325,7 +331,9 @@ final class SeoProjectRunItemService
             }
 
             $status = (string) $runItem->status;
-            if ($status === SeoProjectRunItemStatus::Success->value) {
+            // Idempotent skip chỉ cho lần claim thường. «Chạy lại» ($forceRetry) phải claim lại
+            // kể cả khi run item đã success — nếu không UI xanh ~1s mà AI không chạy.
+            if ($status === SeoProjectRunItemStatus::Success->value && ! $forceRetry) {
                 return [
                     'outcome' => 'already_processed',
                     'run_item' => $runItem,
@@ -348,14 +356,22 @@ final class SeoProjectRunItemService
             }
 
             $version = $this->buildOperationVersion($task, $action);
-            $idempotencyKey = $this->idempotencyKeys->generate((int) $task->id, $action->value, $version);
             $attempt = (int) $runItem->attempt;
             if (
-                $status === SeoProjectRunItemStatus::Failed->value
+                $forceRetry
+                || $status === SeoProjectRunItemStatus::Failed->value
                 || $status === SeoProjectRunItemStatus::Processing->value
+                || $status === SeoProjectRunItemStatus::Success->value
+                || $status === SeoProjectRunItemStatus::Skipped->value
             ) {
                 $attempt++;
             }
+
+            // Force retry: gắn attempt vào version để idempotency key không trùng lần success trước.
+            $operationVersion = $forceRetry
+                ? sprintf('%s#attempt:%d', $version, max(1, $attempt))
+                : $version;
+            $idempotencyKey = $this->idempotencyKeys->generate((int) $task->id, $action->value, $operationVersion);
 
             $runItem->fill([
                 'status' => SeoProjectRunItemStatus::Processing->value,
@@ -427,7 +443,7 @@ final class SeoProjectRunItemService
         ?array $outputSnapshot = null,
         bool $lock = true,
     ): SeoProjectRunItem {
-        $apply = function () use ($runItem, $articleId, $message, $outputSnapshot): SeoProjectRunItem {
+        $apply = function () use ($runItem, $articleId, $message, $outputSnapshot, $lock): SeoProjectRunItem {
             $item = $lock
                 ? SeoProjectRunItem::query()->whereKey((int) $runItem->id)->lockForUpdate()->first()
                 : $runItem;

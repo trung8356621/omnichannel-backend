@@ -1636,17 +1636,29 @@ class WorkflowParserService
         }
 
         $text = $this->faqItemHeadingText($line);
-        if ($this->looksLikeNumberedOutlineItem($text)) {
+        if ($text === '' || $this->looksLikeNumberedOutlineItem($text)) {
             return false;
         }
 
-        if (preg_match('/^#{3,6}\s+/u', $line) === 1) {
+        $plain = trim(str_replace(['**', '*'], '', $text));
+
+        // «1. Câu hỏi có dấu ?» — FAQ standalone (không phải mục dàn ý 1. … không dấu ?)
+        if (preg_match('/^\d+[\.\)]\s+.+\?/u', $plain) === 1) {
             return true;
         }
 
-        $level = $this->lineHeadingLevel($line);
+        if ($this->looksLikeFaqItemHeading($text)) {
+            return true;
+        }
 
-        return $level !== null && $level >= 3;
+        // H3/H4 chỉ khi giống câu hỏi (có ?) — KHÔNG nuốt mọi ### dàn ý bài viết
+        // (bug cũ: mọi #{3,6} = FAQ → standalone strip chỉ còn intro).
+        $level = $this->lineHeadingLevel($line);
+        if ($level !== null && $level >= 3 && str_ends_with($plain, '?')) {
+            return true;
+        }
+
+        return $this->isFaqQuestionLine($line) || $this->isFaqQuestionLine($plain);
     }
 
     private function faqItemHeadingText(string $line): string

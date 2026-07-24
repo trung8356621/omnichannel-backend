@@ -297,6 +297,7 @@ final class PromptHookFormSchema
             __('seo-content-ai::filament.prompt.hook_contract_optional').': '
                 .($optional !== [] ? implode(', ', $optional) : '—'),
             __('seo-content-ai::filament.prompt.hook_contract_output').': '.$definition->outputSchema->type,
+            'output_contract: '.($definition->outputContractKey() ?? '—'),
             __('seo-content-ai::filament.prompt.hook_contract_capability').': '.($definition->model->capability ?? 'text'),
             'version: '.$definition->version->toString(),
             'status: '.$definition->status->value,

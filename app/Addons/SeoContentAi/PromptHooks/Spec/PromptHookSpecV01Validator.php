@@ -169,6 +169,13 @@ final class PromptHookSpecV01Validator
             }
         }
 
+        if (array_key_exists('output_contract', $spec)) {
+            $contract = $spec['output_contract'];
+            if ($contract !== null && (! is_string($contract) || preg_match(self::KEY_PATTERN, trim($contract)) !== 1)) {
+                $errors[] = 'output_contract must be null or contract key (module.resource style)';
+            }
+        }
+
         return $errors;
     }
 

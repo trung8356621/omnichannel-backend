@@ -732,50 +732,74 @@ export function prepareEditorExitAfterSyncEnqueue(articleId, siteId) {
 
 /**
  * Close current tab after enqueue; fallback redirect to Articles Sync queue tab.
+ * Không chờ window.close() (browser thường chặn) — navigate ngay nếu tab còn mở.
  */
 export function closeEditorTabOrRedirectToSyncQueue() {
+    const url = resolveSyncQueueListUrl();
+
     try {
         window.close();
     } catch {
-        // Some browsers throw; fall through to redirect check.
+        // Some browsers throw; fall through to redirect.
     }
 
-    window.setTimeout(() => {
+    // Navigate ngay — đừng để user ngồi nhìn overlay "vui lòng chờ".
+    try {
         if (!window.closed) {
-            window.location.href = resolveSyncQueueListUrl();
+            window.location.replace(url);
         }
-    }, 300);
+    } catch {
+        window.location.href = url;
+    }
+
+    // Safety net nếu close/replace bị browser trì hoãn.
+    window.setTimeout(() => {
+        try {
+            if (!window.closed) {
+                window.location.replace(url);
+            }
+        } catch {
+            window.location.href = url;
+        }
+    }, 50);
 }
 
 /**
- * Hoàn tất Sync WP — enqueue thành công: toast, clear draft, đóng tab (không poll worker).
+ * Hoàn tất Sync WP — enqueue thành công: clear draft, đóng tab ngay (không poll worker).
  *
  * @param {{ reload?: boolean, clear_local_state?: boolean, queued?: boolean, close_editor?: boolean, notification?: Record<string, string>, operation?: object, notificationShown?: boolean }} result
  * @param {number} articleId
  * @param {number} siteId
  */
 export function finishArticleSyncFromApi(result, articleId, siteId) {
-    if (result.notification && result.notificationShown !== true) {
-        showArticleEditorFilamentToast(result.notification);
-    }
-
     if (result.queued) {
-        // Enqueue xong — đóng loading overlay ngay, không chờ worker.
+        // Quan trọng: đặt EXITING + navigate TRƯỚC Livewire cancel.
+        // Nếu gọi Livewire trước, Alpine init lại → bootstrap thấy job queued → overlay Elapsed.
+        window.__SEO_EDITOR_EXITING__ = true;
+        window.__seoArticleOperationTracker?.stop?.();
+        prepareEditorExitAfterSyncEnqueue(articleId, siteId);
+
         if (window.__seoArticleHeavyActionOverlay) {
             window.__seoArticleHeavyActionOverlay.persistUntilUnload = false;
+            window.__seoArticleHeavyActionOverlay.locked = false;
         }
         window.__seoArticleHeavyActionOverlay?.hide?.();
-        window.__seoEndArticleHeavyActionClient?.();
-        resetEditArticleHeavyActionBusyOnWire();
 
-        prepareEditorExitAfterSyncEnqueue(articleId, siteId);
         window.dispatchEvent(new CustomEvent('article-wordpress-sync-queued', { detail: result }));
 
         if (result.close_editor !== false) {
-            closeEditorTabOrRedirectToSyncQueue();
+            if (typeof window.__seoArticleOperationTracker?.exitAfterQueued === 'function') {
+                window.__seoArticleOperationTracker.exitAfterQueued();
+            } else {
+                closeEditorTabOrRedirectToSyncQueue();
+            }
         }
 
         return;
+    }
+
+    if (result.notification && result.notificationShown !== true) {
+        showArticleEditorFilamentToast(result.notification);
     }
 
     if (result.reload) {

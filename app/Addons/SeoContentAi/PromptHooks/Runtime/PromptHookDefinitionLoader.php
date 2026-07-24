@@ -221,6 +221,9 @@ final class PromptHookDefinitionLoader
             metadata: is_array($data['metadata'] ?? null) ? $data['metadata'] : [],
             manifestPath: $path,
             strictTemplateVariables: (bool) ($data['strict_template_variables'] ?? true),
+            outputContract: isset($data['output_contract'])
+                ? trim((string) $data['output_contract'])
+                : null,
         );
     }
 

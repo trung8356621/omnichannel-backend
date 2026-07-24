@@ -104,6 +104,22 @@ final class TaskTestContext
         );
     }
 
+    public function withArticle(?SeoArticle $article, bool $isNewArticle = false, ?string $matchedBy = null): self
+    {
+        return new self(
+            article: $article,
+            isNewArticle: $isNewArticle,
+            matchedBy: $matchedBy ?? $this->matchedBy,
+            variables: $this->variables,
+            summary: $this->summary,
+            siteId: $this->siteId,
+            postType: $this->postType,
+            projectTaskType: $this->projectTaskType,
+            rewriteMode: $this->rewriteMode,
+            rewriteNotes: $this->rewriteNotes,
+        );
+    }
+
     /**
      * @return array<string, mixed>
      */

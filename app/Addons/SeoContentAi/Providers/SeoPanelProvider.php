@@ -392,6 +392,9 @@ class SeoPanelProvider extends PanelProvider
                 Route::get('/{article}/editor/links/suggestions', [ArticleEditorLazyPayloadController::class, 'linksSuggestions'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.links-suggestions');
+                Route::post('/{article}/editor/links/suggestions', [ArticleEditorLazyPayloadController::class, 'linksSuggestions'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.links-suggestions.post');
                 Route::get('/{article}/editor/settings', [ArticleEditorLazyPayloadController::class, 'settings'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.settings');

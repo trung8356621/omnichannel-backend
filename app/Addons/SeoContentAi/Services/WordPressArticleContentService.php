@@ -319,6 +319,7 @@ class WordPressArticleContentService
             }
 
             $this->persistFetchedMeta($article, $post, $taxonomy !== null, $importFaqs, $forceSeoImport);
+            app(ArticleLastSavedTimestampService::class)->touchSynced($article);
 
             return $post;
         } catch (Throwable $e) {
