@@ -168,12 +168,23 @@ final class SeoIssueProjectTaskAssignmentService
                     if (SeoProjectTask::isNewArticleType($normalizedTaskType)) {
                         $payload['post_type'] = SeoProjectTask::POST_TYPE_ARTICLE;
                         $payload['article_id'] = null;
+                        $payload['keyword'] = $sourceContent;
+                        $payload['title'] = null;
                     } else {
                         $payload['article_id'] = (int) $record->id;
+                        $focusKeyword = trim((string) ($this->analyzer->resolveFocusKeywordForArticle($record) ?? ''));
+                        $articleTitle = $this->resolveArticleProjectSourceContent($record);
+                        $payload['keyword'] = $focusKeyword !== '' ? $focusKeyword : $articleTitle;
+                        $payload['title'] = $articleTitle !== '' ? $articleTitle : null;
+                        $payload['source_content'] = $articleTitle;
                     }
 
                     if ($normalizedTaskType === SeoProjectTask::TYPE_REWRITE) {
-                        $payload['rewrite_mode'] = $normalizedRewriteMode;
+                        $payload['rewrite_mode'] = SeoProjectTask::REWRITE_MODE_CONTENT;
+                        $payload['rewrite_notes'] = $normalizedRewriteNotes;
+                    }
+
+                    if ($normalizedTaskType === SeoProjectTask::TYPE_IMPROVE) {
                         $payload['rewrite_notes'] = $normalizedRewriteNotes;
                     }
 
@@ -233,16 +244,9 @@ final class SeoIssueProjectTaskAssignmentService
 
     public function normalizeAssignTaskType(mixed $value): string
     {
-        $type = trim((string) $value);
-
-        return in_array($type, [
-            SeoProjectTask::TYPE_REWRITE,
-            SeoProjectTask::TYPE_NEW_KEYWORD,
-            SeoProjectTask::TYPE_NEW_TITLE,
-            SeoProjectTask::TYPE_IMPROVE,
-        ], true)
-            ? $type
-            : SeoProjectTask::TYPE_REWRITE;
+        return SeoProjectTask::normalizeType($value !== null && trim((string) $value) !== ''
+            ? $value
+            : SeoProjectTask::TYPE_REWRITE);
     }
 
     public function articleIsContentArchived(SeoArticle $article): bool

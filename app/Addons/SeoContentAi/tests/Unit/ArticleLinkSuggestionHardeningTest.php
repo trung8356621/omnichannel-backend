@@ -9,7 +9,7 @@ use App\Addons\SeoContentAi\Services\ArticleLinkSuggestionCandidateRetriever;
 use App\Addons\SeoContentAi\Services\ArticleLinkSuggestionSearchTermsBuilder;
 use App\Addons\SeoContentAi\Support\LinkSuggestionValidator;
 use App\Addons\SeoContentAi\Support\SeoSuggestionUrlNormalizer;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 use ReflectionClass;
 use ReflectionMethod;
 

@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 use App\Addons\SeoContentAi\Enums\ArticleReviewActionType;
 use App\Addons\SeoContentAi\Enums\ArticleReviewStatus;
 use App\Addons\SeoContentAi\Exceptions\FaqManualExtractException;
+use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsWorkflows;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
@@ -4378,8 +4379,26 @@ class EditArticle extends SeoEditRecord
                 $loaiSanPhamCustom,
             );
         } catch (\Throwable $exception) {
-            $message = $exception->getMessage();
-            $this->dispatch('article-ai-media-failed', type: 'image', message: $message);
+            $presented = $exception instanceof PromptRunException
+                ? [
+                    'user_message' => $exception->userMessage(),
+                    'technical_details' => $exception->technicalDetails(),
+                    'classification' => $exception->classification(),
+                    'retryable' => $exception->isRetryable(),
+                ]
+                : \App\Addons\SeoContentAi\Support\ImagenProviderErrorClassifier::present($exception->getMessage());
+
+            $message = (string) $presented['user_message'];
+            $technical = (string) $presented['technical_details'];
+
+            $this->dispatch(
+                'article-ai-media-failed',
+                type: 'image',
+                message: $message,
+                technicalDetails: $technical,
+                classification: $presented['classification'] ?? null,
+                retryable: (bool) ($presented['retryable'] ?? false),
+            );
 
             Notification::make()
                 ->title(__('seo-content-ai::common.generate_image_failed'))
@@ -4390,6 +4409,9 @@ class EditArticle extends SeoEditRecord
             return [
                 'ok' => false,
                 'message' => $message,
+                'technical_details' => $technical,
+                'classification' => $presented['classification'] ?? null,
+                'retryable' => (bool) ($presented['retryable'] ?? false),
             ];
         }
 

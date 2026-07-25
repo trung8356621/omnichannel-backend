@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Models;
 
+use App\Addons\SeoContentAi\Enums\SeoProjectRunItemKind;
+use App\Addons\SeoContentAi\Support\SeoProjectRunItemClassifier;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -47,5 +50,45 @@ class SeoProjectRunItem extends Model
     public function article(): BelongsTo
     {
         return $this->belongsTo(SeoArticle::class, 'article_id');
+    }
+
+    public function kind(): SeoProjectRunItemKind
+    {
+        return SeoProjectRunItemClassifier::classify(
+            $this->action !== null ? (string) $this->action : null
+        );
+    }
+
+    /**
+     * Article pipeline rows (SeoProjectRunAction.*) — counters / dispatch / finalize gate.
+     *
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeArticleExecution(Builder $query): Builder
+    {
+        return $query->whereIn('action', SeoProjectRunItemClassifier::articleActionValues());
+    }
+
+    /**
+     * Workflow step retry rows (action LIKE step:%).
+     *
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeWorkflowStep(Builder $query): Builder
+    {
+        return $query->where('action', 'like', SeoProjectRunItemClassifier::STEP_ACTION_PREFIX.'%');
+    }
+
+    /**
+     * Step + helper/control — không phải article execution.
+     *
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeHelperOrControl(Builder $query): Builder
+    {
+        return $query->whereNotIn('action', SeoProjectRunItemClassifier::articleActionValues());
     }
 }

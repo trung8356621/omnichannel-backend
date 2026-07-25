@@ -87,6 +87,16 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
         $this->app->singleton(\App\Addons\SeoContentAi\Services\PromptResultAttachService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\PromptHookExecutionService::class);
 
+        $this->app->singleton(\App\Addons\SeoContentAi\Support\RunEngine\ContentProjectRunStatusMapper::class);
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\RunEngine\ContentProjectRunEventPublisher::class,
+            \App\Addons\SeoContentAi\Services\RunEngine\LoggingContentProjectRunEventPublisher::class,
+        );
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\RunEngine\RunCancellationGuard::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\RunEngine\ContentProjectTaskExecutionService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\RunEngine\ContentProjectArticleRunner::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\RunEngine\ContentProjectRunEngine::class);
+
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Contracts\AutomationEventDispatcher::class, \App\Addons\SeoContentAi\Automation\BusinessHook\Events\BridgingAutomationEventDispatcher::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Support\SensitivePayloadRedactor::class);
 
@@ -216,6 +226,8 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 \App\Addons\SeoContentAi\Console\DiagnoseContentProjectArchiveCommand::class,
                 \App\Addons\SeoContentAi\Console\DiagnoseContentProjectSyncCommand::class,
                 \App\Addons\SeoContentAi\Console\DiagnoseContentProjectCommand::class,
+                \App\Addons\SeoContentAi\Console\ContentProjectRunStatusCommand::class,
+                \App\Addons\SeoContentAi\Console\ContentProjectRunRecoverCommand::class,
                 \App\Addons\SeoContentAi\Console\RepairContentProjectCommand::class,
                 \App\Addons\SeoContentAi\Console\RepairContentProjectMonthDriftCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationListEventsCommand::class,

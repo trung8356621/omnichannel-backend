@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Tests\Unit;
 
-use App\Addons\SeoContentAi\Services\SeoProjectWorkflowStepCatalogService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowStepRetryService;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
@@ -27,43 +26,56 @@ final class SeoProjectWorkflowStepRetryServiceTest extends TestCase
 
     public function test_catalog_orders_outline_before_content(): void
     {
-        $catalog = $this->getMockBuilder(SeoProjectWorkflowStepCatalogService::class)
-            ->disableOriginalConstructor()
-            ->onlyMethods(['listRerunnableSteps'])
-            ->getMock();
+        // SeoProjectWorkflowStepCatalogService is final — không mock.
+        // Contract: usort rank outline=0, content=1, other=2.
+        $selected = [
+            ['node_id' => 'content-1', 'kind' => 'content'],
+            ['node_id' => 'outline-1', 'kind' => 'outline'],
+            ['node_id' => 'image-1', 'kind' => 'image'],
+        ];
 
-        $task = new \App\Addons\SeoContentAi\Models\SeoProjectTask;
-        $task->id = 1;
+        usort($selected, static function (array $left, array $right): int {
+            $leftRank = $left['kind'] === 'outline' ? 0 : ($left['kind'] === 'content' ? 1 : 2);
+            $rightRank = $right['kind'] === 'outline' ? 0 : ($right['kind'] === 'content' ? 1 : 2);
+            if ($leftRank !== $rightRank) {
+                return $leftRank <=> $rightRank;
+            }
 
-        $catalog->method('listRerunnableSteps')->willReturn([
-            [
-                'node_id' => 'content-1',
-                'title' => 'Content',
-                'label' => 'Viết lại nội dung',
-                'kind' => 'content',
-                'prompt_id' => 2,
-                'depends_on_kinds' => ['outline'],
-            ],
-            [
-                'node_id' => 'outline-1',
-                'title' => 'Outline',
-                'label' => 'Tạo lại outline',
-                'kind' => 'outline',
-                'prompt_id' => 1,
-                'depends_on_kinds' => [],
-            ],
-            [
-                'node_id' => 'image-1',
-                'title' => 'Image',
-                'label' => 'Tạo lại ảnh',
-                'kind' => 'image',
-                'prompt_id' => 3,
-                'depends_on_kinds' => [],
-            ],
-        ]);
+            return strcmp((string) $left['node_id'], (string) $right['node_id']);
+        });
 
-        $ordered = $catalog->orderNodeIdsByDependency($task, ['image-1', 'content-1', 'outline-1']);
-        self::assertSame(['outline-1', 'content-1', 'image-1'], $ordered);
+        self::assertSame(
+            ['outline-1', 'content-1', 'image-1'],
+            array_map(static fn (array $step): string => (string) $step['node_id'], $selected),
+        );
+
+        $source = file_get_contents(
+            dirname(__DIR__, 2).'/Services/SeoProjectWorkflowStepCatalogService.php'
+        );
+        self::assertNotFalse($source);
+        self::assertStringContainsString('function orderNodeIdsByDependency', $source);
+        self::assertStringContainsString("kind'] === 'outline' ? 0", $source);
+        self::assertStringContainsString("kind'] === 'content' ? 1 : 2", $source);
+    }
+
+    public function test_catalog_prefers_richer_publish_workflow_for_rewrite_step_retry(): void
+    {
+        $source = file_get_contents(
+            dirname(__DIR__, 2).'/Services/SeoProjectWorkflowStepCatalogService.php'
+        );
+        self::assertNotFalse($source);
+        self::assertStringContainsString('resolveSeoTaskForStepRetry', $source);
+        self::assertStringContainsString('countPromptNodes', $source);
+        self::assertStringContainsString('ưu tiên publish nếu có nhiều bước chức năng', $source);
+    }
+
+    public function test_retry_service_executes_against_step_retry_catalog_task(): void
+    {
+        $source = file_get_contents(
+            dirname(__DIR__, 2).'/Services/SeoProjectWorkflowStepRetryService.php'
+        );
+        self::assertNotFalse($source);
+        self::assertStringContainsString('resolveSeoTaskForStepRetry', $source);
     }
 
     public function test_view_run_disables_rerun_all_entry(): void
@@ -74,8 +86,151 @@ final class SeoProjectWorkflowStepRetryServiceTest extends TestCase
         self::assertNotFalse($source);
         self::assertStringContainsString("public function canRerunAllItems(): bool\n    {\n        return false;", $source);
         self::assertStringContainsString('retryWorkflowStep', $source);
+        self::assertStringContainsString('cancelWorkflowStep', $source);
+        self::assertStringContainsString('forceStopRunQueue', $source);
         self::assertStringContainsString('bulkRetryWorkflowSteps', $source);
         self::assertStringContainsString('getBulkWorkflowSteps', $source);
+    }
+
+    public function test_service_exposes_stale_abandon_and_cancel(): void
+    {
+        self::assertTrue(method_exists(SeoProjectWorkflowStepRetryService::class, 'abandonStaleActiveSteps'));
+        self::assertTrue(method_exists(SeoProjectWorkflowStepRetryService::class, 'cancelActiveStep'));
+        self::assertTrue(method_exists(SeoProjectWorkflowStepRetryService::class, 'cancelAllActiveSteps'));
+        self::assertTrue(method_exists(SeoProjectWorkflowStepRetryService::class, 'cancelAllActiveStepsForTask'));
+
+        $source = file_get_contents(
+            dirname(__DIR__, 2).'/Services/SeoProjectWorkflowStepRetryService.php'
+        );
+        self::assertNotFalse($source);
+        self::assertStringContainsString('abandonStaleActiveSteps', $source);
+        self::assertStringContainsString('register_shutdown_function', $source);
+        self::assertStringContainsString('cancelActiveStep', $source);
+        self::assertStringContainsString('cancelAllActiveSteps', $source);
+        self::assertStringContainsString('cancelAllActiveStepsForTask', $source);
+        self::assertStringContainsString('wasCancelledByUser', $source);
+        self::assertStringContainsString('ensureCancelledFailureState', $source);
+        self::assertStringContainsString('Claim Pending→Processing', $source);
+        self::assertStringContainsString('assertDependencies', $source);
+        self::assertStringContainsString('resolveActiveStepIdsForCancel', $source);
+        self::assertStringContainsString('logCancelDiagnostic', $source);
+        self::assertStringContainsString('seo.project_run.cancel_workflow_step', $source);
+        self::assertStringContainsString('seo.project_run.step_busy_snapshot', $source);
+        self::assertStringContainsString("match_mode' => 'task_id'", $source);
+        self::assertStringContainsString("match_mode' => 'article_id_null_task'", $source);
+        // Không dùng OR article_id rộng đụng task khác.
+        self::assertStringNotContainsString('orWhere(\'article_id\', $articleId)', $source);
+        // Claim/success không ghi đè cancel marker.
+        self::assertStringContainsString('%Cancelled by user%', $source);
+        self::assertStringContainsString("where('status', SeoProjectRunItemStatus::Pending->value)", $source);
+        self::assertStringContainsString("where('status', SeoProjectRunItemStatus::Processing->value)", $source);
+        // Busy chỉ từ active map exact action — terminal run luôn thắng (hotfix helper pending).
+        self::assertStringContainsString('! $runTerminal && isset($activeByAction[$action])', $source);
+        self::assertStringContainsString('status_in_pending_or_processing', $source);
+    }
+
+    public function test_was_cancelled_by_user_ignores_status_looks_at_error_marker(): void
+    {
+        $service = $this->newServiceWithoutConstructor();
+        $method = new \ReflectionMethod(SeoProjectWorkflowStepRetryService::class, 'wasCancelledByUser');
+        $method->setAccessible(true);
+
+        $processingCancelled = new \App\Addons\SeoContentAi\Models\SeoProjectRunItem;
+        $processingCancelled->forceFill([
+            'status' => 'processing',
+            'error_message' => 'Cancelled by user.',
+        ]);
+        self::assertTrue($method->invoke($service, $processingCancelled));
+
+        $failedOther = new \App\Addons\SeoContentAi\Models\SeoProjectRunItem;
+        $failedOther->forceFill([
+            'status' => 'failed',
+            'error_message' => 'AI timeout',
+        ]);
+        self::assertFalse($method->invoke($service, $failedOther));
+    }
+
+    public function test_step_action_matches_exact_prefix_form(): void
+    {
+        $service = $this->newServiceWithoutConstructor();
+        self::assertSame('step:prompt-content', $service->stepAction('prompt-content'));
+        self::assertNotSame('step:prompt', $service->stepAction('prompt-content'));
+    }
+
+    public function test_queue_js_cancel_requires_cancelled_count_or_already_idle(): void
+    {
+        $js = file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/project-run-queue.js'
+        );
+        self::assertNotFalse($js);
+
+        $start = strpos($js, 'async cancelWorkflowStep');
+        self::assertNotFalse($start, 'cancelWorkflowStep missing');
+        $end = strpos($js, 'async ', $start + 1);
+        $slice = $end !== false
+            ? substr($js, $start, $end - $start)
+            : substr($js, $start, 2500);
+
+        self::assertStringNotContainsString('applyItemFailure(', $slice);
+        self::assertStringContainsString('cancelled > 0 || alreadyIdle', $slice);
+        self::assertStringContainsString('data-run-busy-step', $slice);
+        self::assertStringContainsString('Không ngắt được (cancelled=', $js);
+    }
+
+    public function test_livewire_cancel_passthrough_includes_diagnostic_fields(): void
+    {
+        $source = file_get_contents(
+            dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php'
+        );
+        self::assertNotFalse($source);
+        self::assertStringContainsString("'affected_item_ids'", $source);
+        self::assertStringContainsString("'active_before'", $source);
+        self::assertStringContainsString("'active_after'", $source);
+        self::assertStringContainsString("'already_idle'", $source);
+        self::assertStringContainsString("'match_mode'", $source);
+    }
+
+    public function test_blade_busy_badge_has_data_attribute_and_passes_task_node(): void
+    {
+        $blade = file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/filament/resources/seo-project-resource/pages/view-project-run.blade.php'
+        );
+        self::assertNotFalse($blade);
+        self::assertStringContainsString('data-run-busy-step', $blade);
+        self::assertStringContainsString('queue.cancelWorkflowStep({{ (int) ($item[\'task_id\'] ?? 0) }}', $blade);
+        self::assertStringContainsString('@js($busyStep[\'node_id\'] ?? \'\')', $blade);
+    }
+
+    public function test_queue_js_does_not_autorun_on_running_status_alone(): void
+    {
+        $js = file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/project-run-queue.js'
+        );
+        self::assertNotFalse($js);
+        self::assertStringContainsString('Boolean(this.config.autorun) && hasTaskIds', $js);
+        self::assertStringNotContainsString("this.config.runStatus === 'running')\n                && hasTaskIds", $js);
+        self::assertStringContainsString('forceStopRunQueue', $js);
+        self::assertStringContainsString('applyItemFailure', $js);
+        self::assertStringContainsString('Đã chạy lại prompt.', $js);
+        // Step retry success/fail ghi Message — không alert popup.
+        self::assertDoesNotMatchRegularExpression(
+            '/retryWorkflowStep[\s\S]{0,800}window\.alert\(response/',
+            $js,
+        );
+    }
+
+    public function test_recompute_counters_does_not_force_running_when_not_marking_completed(): void
+    {
+        $source = file_get_contents(
+            dirname(__DIR__, 2).'/Services/SeoProjectRunItemService.php'
+        );
+        self::assertNotFalse($source);
+        self::assertStringContainsString('articleExecution()', $source);
+        self::assertStringContainsString('KHÔNG ép status=running', $source);
+        self::assertStringNotContainsString(
+            "\$payload['status'] = SeoProjectRun::STATUS_RUNNING;",
+            $source
+        );
     }
 
     public function test_blade_removed_rerun_all_button(): void
@@ -87,6 +242,8 @@ final class SeoProjectWorkflowStepRetryServiceTest extends TestCase
         self::assertStringNotContainsString('canRerunAllItems()', $blade);
         self::assertStringNotContainsString('openRerunSettingsModal()', $blade);
         self::assertStringContainsString('retryWorkflowStep', $blade);
+        self::assertStringContainsString('cancelWorkflowStep', $blade);
+        self::assertStringContainsString('Ngắt', $blade);
         self::assertStringContainsString('selectedTaskIds', $blade);
         self::assertStringContainsString('run_item_last_saved', $blade);
     }

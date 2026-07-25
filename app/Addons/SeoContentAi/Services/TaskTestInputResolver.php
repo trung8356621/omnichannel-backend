@@ -24,6 +24,7 @@ final class TaskTestInputResolver
         private readonly SeoPromptSettingsService $promptSettings,
         private readonly WorkflowParserService $workflowParser,
         private readonly WordPressArticleContentService $wordPressContent,
+        private readonly ArticleGenerationInputResolver $articleGenerationInput,
     ) {}
 
     /**
@@ -66,72 +67,50 @@ final class TaskTestInputResolver
      */
     public function resolveForProjectTask(SeoProjectTask $task, ?callable $scopeArticles = null): TaskTestContext
     {
-        $keyword = trim((string) $task->source_content);
-        if ($keyword === '') {
-            throw new \InvalidArgumentException('Hạng mục dự án thiếu từ khóa / tiêu đề.');
+        $type = SeoProjectTask::normalizeType($task->type);
+        $promptInputs = SeoProjectTask::promptInputFields(
+            isset($task->keyword) ? (string) $task->keyword : null,
+            isset($task->title) ? (string) $task->title : null,
+            isset($task->secondary_description) ? (string) $task->secondary_description : null,
+        );
+        $keyword = $promptInputs['keyword'];
+        $title = $promptInputs['title'];
+        $secondaryDescription = $promptInputs['secondary_description'];
+
+        // Legacy fallback: single source_content trước khi tách keyword/title.
+        if ($keyword === '' && $title === '' && SeoProjectTask::isNewArticleType($type)) {
+            $legacy = trim((string) $task->source_content);
+            $keyword = $legacy;
         }
 
-        $galleryDescription = SeoProjectTask::isNewArticleType($task->type)
+        if (in_array($type, [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE], true)
+            && $keyword === ''
+            && $title === ''
+        ) {
+            throw new \InvalidArgumentException('Hạng mục dự án cần ít nhất Keyword hoặc Title.');
+        }
+
+        $galleryDescription = SeoProjectTask::isNewArticleType($type)
             && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
             ? trim((string) ($task->description ?? ''))
             : '';
-        $loaiSanPham = SeoProjectTask::isNewArticleType($task->type)
+        $loaiSanPham = SeoProjectTask::isNewArticleType($type)
             && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
             ? trim((string) ($task->loai_san_pham ?? ''))
             : '';
 
-        if ($task->type === SeoProjectTask::TYPE_REWRITE) {
-            $rewriteMode = SeoProjectTask::normalizeRewriteMode($task->rewrite_mode ?? null);
-
-            if ($rewriteMode === SeoProjectTask::REWRITE_MODE_CONTENT) {
-                return $this->stampProjectTaskOrigin(
+        if ($type === SeoProjectTask::TYPE_REWRITE || $type === SeoProjectTask::TYPE_IMPROVE) {
+            return $this->stampProjectTaskOrigin(
+                $this->withOptionalPromptInputs(
                     $this->withProductPromptVariables(
-                        $this->resolveRewriteByContent($task, $scopeArticles),
+                        $this->resolveExistingArticleRewrite($task, $scopeArticles, $type),
                         $galleryDescription,
                         $loaiSanPham,
                     ),
-                    $task,
-                );
-            }
-
-            $taskSiteId = (int) ($task->site_id ?? 0);
-            $articleId = (int) ($task->article_id ?? 0);
-            $rewriteContext = $this->resolve(
-                $articleId > 0 ? $articleId : null,
-                $keyword,
-                $keyword,
-                $scopeArticles,
-            )
-                ->withProjectTaskType(SeoProjectTask::TYPE_REWRITE)
-                ->withRewriteOptions(SeoProjectTask::REWRITE_MODE_KEYWORD, null);
-
-            if ($rewriteContext->isNewArticle && $taskSiteId > 0) {
-                $siteOnlyScope = static fn (Builder $builder): Builder => $builder->where('site_id', $taskSiteId);
-                $siteScopedContext = $this->resolve(
-                    $articleId > 0 ? $articleId : null,
                     $keyword,
-                    $keyword,
-                    $siteOnlyScope,
-                )
-                    ->withProjectTaskType(SeoProjectTask::TYPE_REWRITE)
-                    ->withRewriteOptions(SeoProjectTask::REWRITE_MODE_KEYWORD, null);
-
-                if (! $siteScopedContext->isNewArticle) {
-                    $rewriteContext = $siteScopedContext;
-                }
-            }
-
-            // REWRITE bắt buộc phải có bài sẵn để viết lại — TUYỆT ĐỐI không tạo bài mới.
-            if ($rewriteContext->isNewArticle || ! $rewriteContext->article instanceof SeoArticle) {
-                throw new \InvalidArgumentException(
-                    'Không tìm thấy bài viết để viết lại (task #'.(int) $task->id.', keyword: «'.$keyword.'»). '
-                    .'Hệ thống KHÔNG tạo bài mới cho hạng mục Viết lại. '
-                    .'Hãy gắn đúng bài (article_id) cho hạng mục hoặc xóa hạng mục lỗi.',
-                );
-            }
-
-            return $this->stampProjectTaskOrigin(
-                $this->withProductPromptVariables($rewriteContext, $galleryDescription, $loaiSanPham),
+                    $title,
+                    $secondaryDescription,
+                ),
                 $task,
             );
         }
@@ -140,17 +119,135 @@ final class TaskTestInputResolver
         $postType = SeoProjectTask::normalizePostType($task->post_type);
 
         return $this->stampProjectTaskOrigin(
-            $this->withProductPromptVariables(
-                $this->applyProjectPostType(
-                    $this->contextForNewArticleOnSite($keyword, $keyword, $siteId, $postType, $scopeArticles)
-                        ->withProjectTaskType($task->type),
-                    $postType,
+            $this->withOptionalPromptInputs(
+                $this->withProductPromptVariables(
+                    $this->applyProjectPostType(
+                        $this->contextForNewArticleOnSite(
+                            $title,
+                            $keyword,
+                            $siteId,
+                            $postType,
+                            $scopeArticles,
+                            copyMissingTitleKeyword: false,
+                        )->withProjectTaskType(SeoProjectTask::TYPE_CREATE),
+                        $postType,
+                    ),
+                    $galleryDescription,
+                    $loaiSanPham,
                 ),
-                $galleryDescription,
-                $loaiSanPham,
+                $keyword,
+                $title,
+                $secondaryDescription,
             ),
             $task,
         );
+    }
+
+    private function withOptionalPromptInputs(
+        TaskTestContext $context,
+        string $keyword,
+        string $title,
+        string $secondaryDescription,
+    ): TaskTestContext {
+        $variables = $context->variables;
+
+        if ($keyword !== '') {
+            $variables['focus_keyword'] = $keyword;
+            $variables['keyword'] = $keyword;
+        } else {
+            unset($variables['focus_keyword'], $variables['keyword']);
+        }
+
+        if ($title !== '') {
+            $variables['post_title'] = $title;
+            $variables['title'] = $title;
+        } else {
+            // Giữ post_title từ bài gốc (rewrite/improve); chỉ bỏ khi create không có title.
+            if ($context->isNewArticle || ! isset($variables['post_title']) || trim((string) $variables['post_title']) === '') {
+                unset($variables['post_title'], $variables['title']);
+            }
+        }
+
+        if ($secondaryDescription !== '') {
+            $variables['secondary_description'] = $secondaryDescription;
+            $variables['description'] = $secondaryDescription;
+        }
+
+        return $context->withVariables($variables);
+    }
+
+    /**
+     * @param  null|callable(Builder): void  $scopeArticles
+     */
+    private function resolveExistingArticleRewrite(
+        SeoProjectTask $task,
+        ?callable $scopeArticles,
+        string $type,
+    ): TaskTestContext {
+        $this->articleScope = $scopeArticles;
+
+        try {
+            $article = null;
+            $articleId = (int) ($task->article_id ?? 0);
+            if ($articleId > 0) {
+                $article = $this->articlesQuery()->find($articleId);
+            }
+
+            $pickerTitle = trim((string) $task->source_content);
+            if (! $article instanceof SeoArticle && $pickerTitle !== '') {
+                $article = $this->findArticleByTitle($pickerTitle);
+            }
+
+            if (! $article instanceof SeoArticle) {
+                $label = $type === SeoProjectTask::TYPE_IMPROVE ? 'cải thiện' : 'viết lại';
+                throw new \InvalidArgumentException(
+                    'Không tìm thấy bài viết để '.$label.' (task #'.(int) $task->id.'). '
+                    .'Hãy chọn đúng Target / Existing Article.',
+                );
+            }
+
+            $article->loadMissing(['articleMetas', 'site']);
+            $notes = trim((string) ($task->rewrite_notes ?? ''));
+            $context = $this->contextFromArticle($article, 'id')
+                ->withProjectTaskType($type)
+                ->withRewriteOptions(SeoProjectTask::REWRITE_MODE_CONTENT, $notes !== '' ? $notes : null);
+
+            $variables = $context->variables;
+
+            if ($type === SeoProjectTask::TYPE_IMPROVE) {
+                // Improve / editor-style: được dùng article body.
+                $html = trim($this->wordPressContent->resolveEditorHtml($article));
+                $markdown = $this->workflowParser->convertHtmlFragmentToMarkdown($html);
+                if ($markdown === '') {
+                    throw new \InvalidArgumentException(
+                        $html === ''
+                            ? 'Bài viết không có nội dung HTML để chuyển sang Markdown (kiểm tra body local, wp_post_content hoặc đồng bộ từ WordPress).'
+                            : 'Bài viết không có nội dung Markdown sau khi chuyển đổi (có thể chỉ còn shortcode hoặc khối không có chữ).',
+                    );
+                }
+                $variables['input'] = $markdown;
+                $variables['post_content'] = $markdown;
+                $variables['improve_instruction'] = $notes;
+                $variables['rewrite_instruction'] = $notes;
+                $variables['rewrite_notes'] = $notes;
+            } else {
+                // TYPE_REWRITE / «Viết lại nội dung»: raw outline artifact — cùng path first-run.
+                $variables = $this->applyArticleGenerationSource($variables, $article);
+                $variables['rewrite_instruction'] = $notes;
+                $variables['rewrite_notes'] = $notes;
+            }
+
+            $taskSiteId = (int) ($task->site_id ?? 0);
+            if ($context->siteId === null && $taskSiteId > 0) {
+                $context = $context->withSiteId($taskSiteId);
+            }
+
+            return $context
+                ->withVariables($variables)
+                ->withRewriteOptions(SeoProjectTask::REWRITE_MODE_CONTENT, $notes !== '' ? $notes : null);
+        } finally {
+            $this->articleScope = null;
+        }
     }
 
     private function stampProjectTaskOrigin(TaskTestContext $context, SeoProjectTask $task): TaskTestContext
@@ -241,24 +338,13 @@ final class TaskTestInputResolver
             }
 
             $article->loadMissing(['articleMetas', 'site']);
-            $html = trim($this->wordPressContent->resolveEditorHtml($article));
-            $markdown = $this->workflowParser->convertHtmlFragmentToMarkdown($html);
-            if ($markdown === '') {
-                throw new \InvalidArgumentException(
-                    $html === ''
-                        ? 'Bài viết không có nội dung HTML để chuyển sang Markdown (kiểm tra body local, wp_post_content hoặc đồng bộ từ WordPress).'
-                        : 'Bài viết không có nội dung Markdown sau khi chuyển đổi (có thể chỉ còn shortcode hoặc khối không có chữ).',
-                );
-            }
-
             $notes = trim((string) ($task->rewrite_notes ?? ''));
             $context = $this->contextFromArticle($article, 'id')
                 ->withProjectTaskType(SeoProjectTask::TYPE_REWRITE)
                 ->withRewriteOptions(SeoProjectTask::REWRITE_MODE_CONTENT, $notes !== '' ? $notes : null);
 
-            $variables = $context->variables;
-            $variables['input'] = $markdown;
-            $variables['post_content'] = $markdown;
+            // Legacy helper — cùng ArticleGenerationInputResolver như TYPE_REWRITE.
+            $variables = $this->applyArticleGenerationSource($context->variables, $article);
             $variables['rewrite_instruction'] = $notes;
             $variables['rewrite_notes'] = $notes;
 
@@ -316,6 +402,26 @@ final class TaskTestInputResolver
         return $query;
     }
 
+    /**
+     * @param  array<string, mixed>  $variables
+     * @return array<string, mixed>
+     */
+    private function applyArticleGenerationSource(array $variables, SeoArticle $article): array
+    {
+        $source = $this->articleGenerationInput->resolveForArticle($article);
+        $variables['input'] = $source->rawArtifact;
+        unset($variables['post_content'], $variables['existing_body'], $variables['article_content']);
+
+        return array_merge($variables, $source->toDebugVariables(), [
+            // BC keys cho initialState seed trong TaskWorkflowTestRunner.
+            'outline_id' => $source->sourceRunItemId !== null
+                ? 'run_item:'.$source->sourceRunItemId.':outline'
+                : 'article:'.(int) $article->getKey().':'.ArticleOutlineResolver::META_KEY,
+            'outline_version' => $source->artifactVersion,
+            'outline_source' => $source->sourceType,
+        ]);
+    }
+
     private function contextFromArticle(SeoArticle $article, string $matchedBy): TaskTestContext
     {
         $article->loadMissing(['articleMetas']);
@@ -370,6 +476,7 @@ final class TaskTestInputResolver
         int $siteId,
         string $postType,
         ?callable $scopeArticles = null,
+        bool $copyMissingTitleKeyword = true,
     ): TaskTestContext {
         $previousScope = $this->articleScope;
         $this->articleScope = $scopeArticles;
@@ -378,12 +485,14 @@ final class TaskTestInputResolver
             $postTitle = $title;
             $focusKeyword = $keyword;
 
-            if ($postTitle === '' && $focusKeyword !== '') {
-                $postTitle = $focusKeyword;
-            }
+            if ($copyMissingTitleKeyword) {
+                if ($postTitle === '' && $focusKeyword !== '') {
+                    $postTitle = $focusKeyword;
+                }
 
-            if ($focusKeyword === '' && $postTitle !== '') {
-                $focusKeyword = $postTitle;
+                if ($focusKeyword === '' && $postTitle !== '') {
+                    $focusKeyword = $postTitle;
+                }
             }
 
             $normalizedPostType = SeoProjectTask::normalizePostType($postType);

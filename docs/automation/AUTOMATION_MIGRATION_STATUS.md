@@ -115,7 +115,7 @@ Suites:
 - `AutomationActionBoundaryTest` — no WP outbound / no Filament Resource in Article|Project|Seo|Keyword actions
 - `AutomationDomainAssignmentServiceTest` — domain services không Filament; Action typehint service
 
-Lưu ý: `php artisan test --filter=Automation` **không** tìm thấy test nếu không chỉ path addon (`phpunit.xml` chỉ `tests/Unit|Feature`). Luôn dùng path `app/Addons/SeoContentAi/tests`.
+Lưu ý: suite SeoContentAi đã nằm trong `phpunit.xml` — `php artisan test --filter=Automation` / class name hoạt động. Vẫn nên ưu tiên path file khi debug. Xem `docs/TESTING.md` + `php artisan test:doctor`.
 
 ### Regression nhóm (môi trường local)
 

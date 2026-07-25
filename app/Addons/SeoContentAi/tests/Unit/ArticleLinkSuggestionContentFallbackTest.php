@@ -8,7 +8,7 @@ use App\Addons\SeoContentAi\Services\ArticleInternalLinkSearchService;
 use App\Addons\SeoContentAi\Services\ArticleInternalLinkSuggestionService;
 use App\Addons\SeoContentAi\Services\ArticleLinkSuggestionContentKeywordFallback;
 use App\Addons\SeoContentAi\Services\ArticleLinkSuggestionContentPhraseExtractor;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 use ReflectionClass;
 
 /**

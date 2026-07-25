@@ -141,7 +141,11 @@ final class CreateArticlesFromTaskService
      */
     public function runPublishWorkflowForContext(TaskTestContext $context, int $siteId): array
     {
-        $isContentRewrite = $context->rewriteMode === SeoProjectTask::REWRITE_MODE_CONTENT;
+        $isContentRewrite = $context->rewriteMode === SeoProjectTask::REWRITE_MODE_CONTENT
+            || in_array((string) ($context->projectTaskType ?? ''), [
+                SeoProjectTask::TYPE_REWRITE,
+                SeoProjectTask::TYPE_IMPROVE,
+            ], true);
         $taskId = $isContentRewrite
             ? ($this->settings->getRewriteArticleTaskId() ?? $this->settings->getPublishArticleTaskId())
             : $this->settings->getPublishArticleTaskId();
@@ -168,7 +172,14 @@ final class CreateArticlesFromTaskService
         $this->syncDomainLinkListKeywords($resolvedSiteId);
 
         if ($isContentRewrite) {
-            $keyword = trim((string) ($context->variables['input'] ?? ''));
+            // TYPE_REWRITE: variables.input = outline markdown — không dùng làm keyword.
+            $keyword = trim((string) ($context->variables['focus_keyword'] ?? ''));
+            if ($keyword === '') {
+                $keyword = trim((string) ($context->variables['post_title'] ?? ''));
+            }
+            if ($keyword === '' && $context->article !== null) {
+                $keyword = trim((string) ($context->article->title ?? ''));
+            }
         } else {
             $keyword = trim((string) ($context->variables['focus_keyword'] ?? ''));
             if ($keyword === '') {
@@ -176,15 +187,19 @@ final class CreateArticlesFromTaskService
             }
         }
 
-        if ($keyword === '') {
+        if ($keyword === '' && ! ($isContentRewrite && $context->article !== null)) {
             return [
                 'success' => false,
                 'article_id' => null,
                 'steps' => [],
                 'message' => $isContentRewrite
-                    ? 'Thiếu nội dung đầu vào (Markdown).'
+                    ? 'Thiếu từ khóa / tiêu đề (hoặc bài viết nguồn).'
                     : 'Thiếu từ khóa / tiêu đề.',
             ];
+        }
+
+        if ($keyword === '') {
+            $keyword = 'rewrite';
         }
 
         $steps = [];

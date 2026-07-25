@@ -9,8 +9,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class SeoProjectArchiveItem extends Model
 {
-    public const UPDATED_AT = null;
-
     protected $connection = 'omi_seo_ai';
 
     protected $table = 'seo_project_archive_items';
@@ -20,7 +18,11 @@ class SeoProjectArchiveItem extends Model
     protected $casts = [
         'seo_project_archive_id' => 'integer',
         'article_id' => 'integer',
+        'task_id' => 'integer',
+        'position' => 'integer',
+        'article_snapshot' => 'array',
         'created_at' => 'datetime',
+        'updated_at' => 'datetime',
     ];
 
     public function archive(): BelongsTo
@@ -31,5 +33,10 @@ class SeoProjectArchiveItem extends Model
     public function article(): BelongsTo
     {
         return $this->belongsTo(SeoArticle::class, 'article_id');
+    }
+
+    public function task(): BelongsTo
+    {
+        return $this->belongsTo(SeoProjectTask::class, 'task_id');
     }
 }

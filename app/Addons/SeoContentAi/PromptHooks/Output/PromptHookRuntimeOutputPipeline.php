@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\PromptHooks\Canonical\PromptHookDefinition;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\InvalidOutput;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\OutputTruncated;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\ProviderRefused;
+use App\Addons\SeoContentAi\Support\PromptTextMetrics;
 
 final class PromptHookRuntimeOutputPipeline
 {
@@ -17,10 +18,15 @@ final class PromptHookRuntimeOutputPipeline
 
     /**
      * @param  array<string, mixed>  $providerResponse
+     * @param  array<string, mixed>  $input  Validated hook input (vd. article_length)
      * @return array{type: string, raw: string, value: mixed, warnings: list<string>, sections?: array<string, string>, ports?: array<string, string>}
      */
-    public function process(PromptHookDefinition $definition, array $providerResponse, ?string $correlationId = null): array
-    {
+    public function process(
+        PromptHookDefinition $definition,
+        array $providerResponse,
+        ?string $correlationId = null,
+        array $input = [],
+    ): array {
         if (($providerResponse['refused'] ?? false) === true) {
             throw new ProviderRefused('Provider refused to generate content.');
         }
@@ -90,16 +96,8 @@ final class PromptHookRuntimeOutputPipeline
             $this->assertNoProviderPreamble($parsed);
         }
 
-        $minLength = $validation['min_length'] ?? $validation['minimum_length'] ?? null;
-        if ($minLength !== null && is_string($parsed)) {
-            if (mb_strlen($parsed) < (int) $minLength) {
-                throw new InvalidOutput('Output shorter than minimum_length.');
-            }
-        }
-        if (isset($validation['max_length']) && is_string($parsed)) {
-            if (mb_strlen($parsed) > (int) $validation['max_length']) {
-                throw new InvalidOutput('Output longer than max_length.');
-            }
+        if (is_string($parsed)) {
+            $this->assertLengthConstraints($parsed, $validation, $input, $warnings);
         }
 
         return [
@@ -108,6 +106,80 @@ final class PromptHookRuntimeOutputPipeline
             'value' => $parsed,
             'warnings' => $warnings,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $validation
+     * @param  array<string, mixed>  $input
+     * @param  list<string>  $warnings
+     */
+    private function assertLengthConstraints(
+        string $parsed,
+        array $validation,
+        array $input,
+        array &$warnings,
+    ): void {
+        $unit = strtolower(trim((string) ($validation['length_unit'] ?? 'chars')));
+        if ($unit !== 'words') {
+            $unit = 'chars';
+        }
+
+        $schemaMin = $validation['min_length'] ?? $validation['minimum_length'] ?? null;
+        $min = $schemaMin !== null ? (int) $schemaMin : null;
+
+        // Single source: runtime {article_length} từ Settings — không tự sinh % tolerance.
+        if ($unit === 'words') {
+            $articleLength = $this->resolveArticleLengthWords($input);
+            if ($articleLength !== null && $articleLength > 0) {
+                $min = $articleLength;
+            }
+        }
+
+        $measured = PromptTextMetrics::measure($parsed, $unit);
+
+        if ($min !== null && $measured < $min) {
+            // OutputTruncated → retry.on truncated của content hooks.
+            throw new OutputTruncated(
+                $unit === 'words'
+                    ? "Output shorter than article_length ({$measured} words < {$min} words)."
+                    : "Output shorter than minimum_length ({$measured} chars < {$min}).",
+            );
+        }
+
+        if (isset($validation['max_length'])) {
+            $max = (int) $validation['max_length'];
+            if ($measured > $max) {
+                throw new InvalidOutput(
+                    $unit === 'words'
+                        ? "Output longer than max_length ({$measured} words > {$max} words)."
+                        : "Output longer than max_length ({$measured} chars > {$max}).",
+                );
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     */
+    private function resolveArticleLengthWords(array $input): ?int
+    {
+        if (! array_key_exists('article_length', $input) || $input['article_length'] === null || $input['article_length'] === '') {
+            return null;
+        }
+
+        $raw = $input['article_length'];
+        if (is_int($raw)) {
+            return max(0, $raw);
+        }
+        if (is_numeric($raw)) {
+            return max(0, (int) $raw);
+        }
+
+        if (is_string($raw) && preg_match('/(\d+)/', $raw, $matches) === 1) {
+            return max(0, (int) $matches[1]);
+        }
+
+        return null;
     }
 
     private function assertNoProviderPreamble(string $value): void
@@ -128,32 +200,31 @@ final class PromptHookRuntimeOutputPipeline
             return trim($matches[1]);
         }
 
-        return $value;
+        return $trimmed;
     }
 
     private function stripWrappingQuotes(string $value): string
     {
         $trimmed = trim($value);
-        if (strlen($trimmed) >= 2) {
-            $first = $trimmed[0];
-            $last = $trimmed[strlen($trimmed) - 1];
-            if (($first === '"' && $last === '"') || ($first === "'" && $last === "'")) {
-                return trim(substr($trimmed, 1, -1));
-            }
+        if (
+            (str_starts_with($trimmed, '"') && str_ends_with($trimmed, '"'))
+            || (str_starts_with($trimmed, "'") && str_ends_with($trimmed, "'"))
+        ) {
+            return trim(mb_substr($trimmed, 1, -1));
         }
 
-        return $value;
+        return $trimmed;
     }
 
     private function firstNonEmptyLine(string $value): string
     {
-        foreach (preg_split('/\R/u', $value) ?: [] as $line) {
-            $line = trim($line);
+        foreach (preg_split('/\r\n|\r|\n/', $value) ?: [] as $line) {
+            $line = trim((string) $line);
             if ($line !== '') {
                 return $line;
             }
         }
 
-        return trim($value);
+        return '';
     }
 }

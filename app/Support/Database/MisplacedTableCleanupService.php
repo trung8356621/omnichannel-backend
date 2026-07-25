@@ -22,7 +22,7 @@ use Throwable;
  *     review_required?: bool
  * }
  */
-final class MisplacedTableCleanupService
+class MisplacedTableCleanupService
 {
     public function __construct(
         private readonly DatabaseTableOwnershipRegistry $registry,

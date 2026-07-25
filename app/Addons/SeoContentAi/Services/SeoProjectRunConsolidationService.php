@@ -406,7 +406,7 @@ final class SeoProjectRunConsolidationService
      */
     private function itemIdentityKey(array $item): string
     {
-        $type = (string) ($item['type'] ?? SeoProjectTask::TYPE_NEW_KEYWORD);
+        $type = (string) ($item['type'] ?? SeoProjectTask::TYPE_CREATE);
         $source = mb_strtolower(trim((string) ($item['source_content'] ?? '')));
         $postType = SeoProjectTask::isNewArticleType($type)
             ? SeoProjectTask::normalizePostType($item['post_type'] ?? null)

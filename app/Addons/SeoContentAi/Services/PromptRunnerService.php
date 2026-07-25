@@ -1082,7 +1082,50 @@ final class PromptRunnerService
      */
     private function sanitizeInputSnapshot(array $snapshot): array
     {
-        return Utf8Sanitizer::arrayDeep($snapshot);
+        $snapshot = Utf8Sanitizer::arrayDeep($snapshot);
+
+        return $this->withResolvedArticleLengthSnapshot($snapshot);
+    }
+
+    /**
+     * Snapshot immutable resolved_article_length từ runtime variables — không đọc lại Settings sau này.
+     *
+     * @param  array<string, mixed>  $snapshot
+     * @return array<string, mixed>
+     */
+    private function withResolvedArticleLengthSnapshot(array $snapshot): array
+    {
+        if (array_key_exists('resolved_article_length', $snapshot)
+            && is_numeric($snapshot['resolved_article_length'])
+            && (int) $snapshot['resolved_article_length'] > 0
+        ) {
+            $snapshot['resolved_article_length'] = (int) $snapshot['resolved_article_length'];
+
+            return $snapshot;
+        }
+
+        $variables = is_array($snapshot['variables'] ?? null) ? $snapshot['variables'] : [];
+        if (! array_key_exists('article_length', $variables)
+            || $variables['article_length'] === null
+            || $variables['article_length'] === ''
+        ) {
+            return $snapshot;
+        }
+
+        $raw = $variables['article_length'];
+        if (is_int($raw) || is_float($raw) || (is_string($raw) && is_numeric($raw))) {
+            $resolved = (int) $raw;
+        } elseif (is_string($raw) && preg_match('/(\d+)/', $raw, $matches) === 1) {
+            $resolved = (int) $matches[1];
+        } else {
+            return $snapshot;
+        }
+
+        if ($resolved > 0) {
+            $snapshot['resolved_article_length'] = $resolved;
+        }
+
+        return $snapshot;
     }
 
     /**

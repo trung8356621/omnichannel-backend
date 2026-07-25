@@ -14,7 +14,7 @@ use App\Addons\SeoContentAi\Jobs\DispatchScheduledProductReviewPublishJob;
 use App\Addons\SeoContentAi\Services\ProductReview\ArticleProductReviewStoreService;
 use App\Addons\SeoContentAi\Services\ProductReview\WordPressCommentReviewPayloadFactory;
 use App\Addons\SeoContentAi\Services\WordPress\SyncArticleToWordPressPipeline;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 /**
  * Product review cutover: legacy handlers noop; pipeline is sole owner.

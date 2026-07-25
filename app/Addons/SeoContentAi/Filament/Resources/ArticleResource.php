@@ -1923,20 +1923,39 @@ class ArticleResource extends SeoPanelResource
     public static function assignRewriteModeFormFields(): array
     {
         return [
-            Forms\Components\Select::make('rewrite_mode')
-                ->label(__('seo-content-ai::filament.projects.rewrite_mode'))
-                ->options(SeoProjectTask::rewriteModeOptions())
-                ->default(SeoProjectTask::REWRITE_MODE_KEYWORD)
-                ->required()
-                ->native(false)
-                ->live()
-                ->visible(fn (Get $get): bool => static::normalizeAssignTaskType($get('type')) === SeoProjectTask::TYPE_REWRITE),
-            Forms\Components\Textarea::make('rewrite_notes')
-                ->label(__('seo-content-ai::filament.projects.rewrite_notes'))
-                ->placeholder(__('seo-content-ai::filament.projects.rewrite_notes_placeholder'))
+            Forms\Components\TextInput::make('keyword')
+                ->label(__('seo-content-ai::filament.projects.keyword'))
+                ->placeholder(__('seo-content-ai::filament.projects.keyword_placeholder'))
+                ->maxLength(500)
+                ->visible(fn (Get $get): bool => in_array(
+                    static::normalizeAssignTaskType($get('type')),
+                    [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE],
+                    true,
+                )),
+            Forms\Components\TextInput::make('title')
+                ->label(__('seo-content-ai::filament.projects.title_field'))
+                ->placeholder(__('seo-content-ai::filament.projects.title_field_placeholder'))
+                ->maxLength(500)
+                ->visible(fn (Get $get): bool => in_array(
+                    static::normalizeAssignTaskType($get('type')),
+                    [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE],
+                    true,
+                )),
+            Forms\Components\Textarea::make('secondary_description')
+                ->label(__('seo-content-ai::filament.projects.secondary_description'))
+                ->placeholder(__('seo-content-ai::filament.projects.secondary_description_placeholder'))
                 ->rows(3)
-                ->visible(fn (Get $get): bool => static::normalizeAssignTaskType($get('type')) === SeoProjectTask::TYPE_REWRITE
-                    && SeoProjectTask::normalizeRewriteMode($get('rewrite_mode')) === SeoProjectTask::REWRITE_MODE_CONTENT)
+                ->visible(fn (Get $get): bool => in_array(
+                    static::normalizeAssignTaskType($get('type')),
+                    [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE],
+                    true,
+                ))
+                ->columnSpanFull(),
+            Forms\Components\Textarea::make('rewrite_notes')
+                ->label(__('seo-content-ai::filament.projects.improve_instruction'))
+                ->placeholder(__('seo-content-ai::filament.projects.improve_instruction_placeholder'))
+                ->rows(3)
+                ->visible(fn (Get $get): bool => static::normalizeAssignTaskType($get('type')) === SeoProjectTask::TYPE_IMPROVE)
                 ->columnSpanFull(),
         ];
     }
@@ -1969,16 +1988,7 @@ class ArticleResource extends SeoPanelResource
 
     public static function normalizeAssignTaskType(mixed $value): string
     {
-        $type = trim((string) $value);
-
-        return in_array($type, [
-            SeoProjectTask::TYPE_REWRITE,
-            SeoProjectTask::TYPE_NEW_KEYWORD,
-            SeoProjectTask::TYPE_NEW_TITLE,
-            SeoProjectTask::TYPE_IMPROVE,
-        ], true)
-            ? $type
-            : SeoProjectTask::TYPE_REWRITE;
+        return SeoProjectTask::normalizeType($value);
     }
 
     /**

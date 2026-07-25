@@ -19,4 +19,16 @@ final class SeoPromptSettingsArticleLengthTest extends TestCase
     {
         $this->assertSame(1000, SeoPromptSettingsService::parseArticleLengthTarget('không rõ', 1000));
     }
+
+    public function test_with_defaults_prompt_variables_expose_numeric_word_targets(): void
+    {
+        $service = SeoPromptSettingsService::withDefaults();
+        $product = $service->promptVariables('product');
+        $article = $service->promptVariables('article');
+
+        $this->assertSame('1000', $product['article_length']);
+        $this->assertSame('2000', $article['article_length']);
+        $this->assertTrue(ctype_digit($product['article_length']));
+        $this->assertTrue(ctype_digit($article['article_length']));
+    }
 }

@@ -8,7 +8,7 @@ use App\Addons\SeoContentAi\Models\ArticleMeta;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\ArticleMetaMap;
 use Illuminate\Support\Collection;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 /**
  * No DB needed: articleMetas relation is set manually via setRelation() so

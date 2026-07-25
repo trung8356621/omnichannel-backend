@@ -60,6 +60,10 @@ final class PromptHookRuntimeEngine
             $validated['previous_outputs'],
             $settings['hook'],
         );
+        $articleId = isset($validated['context']['article_id']) ? (int) $validated['context']['article_id'] : 0;
+        if ($articleId > 0 && ! isset($variables['article_id'])) {
+            $variables['article_id'] = $articleId;
+        }
 
         $metadata = [
             'prompt_id' => isset($validated['context']['prompt_id'])
@@ -107,7 +111,21 @@ final class PromptHookRuntimeEngine
         );
 
         $correlationId ??= (string) ($validated['context']['correlation_id'] ?? Str::uuid()->toString());
-        $output = $this->outputPipeline->process($definition, $pipelinePayload, $correlationId);
+        try {
+            $output = $this->outputPipeline->process(
+                $definition,
+                $pipelinePayload,
+                $correlationId,
+                is_array($validated['input'] ?? null) ? $validated['input'] : [],
+            );
+        } catch (PromptHookFailure $failure) {
+            // AI đã chạy (PromptResult tồn tại) — gắn id để workflow link /prompts dù validator fail.
+            $promptResultId = (int) ($providerResponse->meta['prompt_result_id'] ?? 0);
+            if ($promptResultId > 0) {
+                $failure->bindPromptResultId($promptResultId);
+            }
+            throw $failure;
+        }
 
         $fingerprint = $this->auditRecorder->record([
             'hook_key' => $definition->key->value,

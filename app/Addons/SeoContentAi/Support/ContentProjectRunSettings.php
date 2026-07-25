@@ -16,6 +16,7 @@ final class ContentProjectRunSettings
     public function __construct(
         public readonly bool $generatePostImages = false,
         public readonly int $settingsVersion = self::VERSION,
+        public readonly ?bool $usePhpEngine = null,
     ) {}
 
     /**
@@ -27,9 +28,18 @@ final class ContentProjectRunSettings
             return self::defaults();
         }
 
+        $usePhp = null;
+        if (array_key_exists('use_php_engine', $raw)) {
+            $usePhp = filter_var($raw['use_php_engine'], FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE);
+            if ($usePhp === null && is_bool($raw['use_php_engine'])) {
+                $usePhp = $raw['use_php_engine'];
+            }
+        }
+
         return new self(
             generatePostImages: filter_var($raw['generate_post_images'] ?? false, FILTER_VALIDATE_BOOL),
             settingsVersion: max(1, (int) ($raw['settings_version'] ?? self::VERSION)),
+            usePhpEngine: $usePhp,
         );
     }
 
@@ -49,7 +59,7 @@ final class ContentProjectRunSettings
 
     public static function defaults(): self
     {
-        return new self(generatePostImages: false, settingsVersion: self::VERSION);
+        return new self(generatePostImages: false, settingsVersion: self::VERSION, usePhpEngine: null);
     }
 
     /**
@@ -57,20 +67,36 @@ final class ContentProjectRunSettings
      */
     public static function fromUserInput(array $input): self
     {
-        return new self(
-            generatePostImages: filter_var($input['generate_post_images'] ?? false, FILTER_VALIDATE_BOOL),
-            settingsVersion: self::VERSION,
-        );
+        return self::fromArray($input);
     }
 
     /**
-     * @return array{generate_post_images: bool, settings_version: int}
+     * @return array{generate_post_images: bool, settings_version: int, use_php_engine?: bool, php_engine?: array<string, mixed>}
      */
     public function toArray(): array
     {
-        return [
+        $out = [
             'generate_post_images' => $this->generatePostImages,
             'settings_version' => $this->settingsVersion,
         ];
+        if ($this->usePhpEngine !== null) {
+            $out['use_php_engine'] = $this->usePhpEngine;
+        }
+        // Stamp sớm — bất biến sau create (Phase 1.8).
+        if ($this->usePhpEngine === true) {
+            $out['php_engine'] = [
+                'enabled' => true,
+                'use_php_engine' => true,
+                'orchestration' => 'php',
+            ];
+        } elseif ($this->usePhpEngine === false) {
+            $out['php_engine'] = [
+                'enabled' => false,
+                'use_php_engine' => false,
+                'orchestration' => 'legacy',
+            ];
+        }
+
+        return $out;
     }
 }

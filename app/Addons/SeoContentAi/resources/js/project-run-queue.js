@@ -9,9 +9,13 @@ function registerSeoProjectRunQueue() {
         isRunning: false,
         stopRequested: false,
         currentTaskId: null,
+        forceStopHandler: null,
 
         requestStop() {
             this.stopRequested = true;
+            if (typeof this.forceStopHandler === 'function') {
+                queueMicrotask(() => this.forceStopHandler());
+            }
         },
 
         reset() {
@@ -38,17 +42,42 @@ function registerSeoProjectRunQueue() {
         selectedNodeIds: [],
         generatePostImages: Boolean(config?.runSettings?.generate_post_images ?? false),
         runSettingsSubmitting: false,
+        forceStopBusy: false,
         syncAllBusy: false,
 
         init() {
+            const store = Alpine.store('seoRunQueue');
+            if (store) {
+                store.forceStopHandler = () => this.forceStopRunQueue();
+            }
+
+            // PHP engine: no JS article orchestration. Optional read-only progress poll.
+            if (Boolean(this.config.phpEngine)) {
+                this.config.autorun = false;
+                const terminal = ['completed', 'cancelled', 'failed'].includes(String(this.config.runStatus || ''));
+                if (terminal) {
+                    store?.reset();
+                    this.config.engineUiRunning = false;
+                } else if (['running', 'stopping'].includes(String(this.config.runStatus || ''))) {
+                    this.config.engineUiRunning = true;
+                }
+                const pollMs = Number(this.config.progressPollMs || 0);
+                if (pollMs > 0 && ! terminal) {
+                    this.$nextTick(() => {
+                        this.startPhpEngineProgressPoll(pollMs);
+                    });
+                }
+
+                return;
+            }
+
             const hasTaskIds = Array.isArray(this.config.taskIds) && this.config.taskIds.length > 0;
-            const shouldRun =
-                (this.config.autorun || this.config.runStatus === 'running')
-                && hasTaskIds;
+            // Chỉ autorun khi URL ?autorun=1 — KHÔNG tự chạy lại vì status=running (F5 spam).
+            const shouldRun = Boolean(this.config.autorun) && hasTaskIds;
 
             if (!shouldRun) {
                 if (
-                    (this.config.autorun || this.config.runStatus === 'running')
+                    Boolean(this.config.autorun)
                     && this.config.runStatus === 'running'
                     && !hasTaskIds
                 ) {
@@ -61,7 +90,6 @@ function registerSeoProjectRunQueue() {
             }
 
             // Tránh Alpine re-init (Livewire refresh) spawn queue thứ 2 chỉ còn vài task cuối.
-            const store = Alpine.store('seoRunQueue');
             if (store?.isRunning) {
                 return;
             }
@@ -71,7 +99,96 @@ function registerSeoProjectRunQueue() {
             });
         },
 
+        startPhpEngineProgressPoll(pollMs) {
+            const wire = this.resolveWire();
+            if (!wire?.pollRunProgress) {
+                return;
+            }
+
+            const tick = async () => {
+                if (! Boolean(this.config.phpEngine)) {
+                    return;
+                }
+
+                try {
+                    const response = await wire.pollRunProgress();
+                    if (response?.stats) {
+                        this.updateStats(response.stats);
+                    }
+                    if (response?.status) {
+                        this.config.runStatus = String(response.status);
+                    }
+                    if (typeof response?.engineUiRunning === 'boolean') {
+                        this.config.engineUiRunning = response.engineUiRunning;
+                    }
+
+                    const status = String(response?.status || this.config.runStatus || '');
+                    if (['completed', 'cancelled', 'failed'].includes(status)) {
+                        this.config.engineUiRunning = false;
+                        Alpine.store('seoRunQueue')?.reset();
+                        try {
+                            await wire.refresh();
+                        } catch (_error) {
+                            // ignore
+                        }
+
+                        return;
+                    }
+
+                    if (['running', 'stopping'].includes(status)) {
+                        this.config.engineUiRunning = true;
+                    }
+                } catch (_error) {
+                    // ignore transient poll errors
+                }
+
+                window.setTimeout(tick, pollMs);
+            };
+
+            window.setTimeout(tick, pollMs);
+        },
+
+        async forceStopRunQueue() {
+            if (this.forceStopBusy) {
+                return;
+            }
+
+            const store = Alpine.store('seoRunQueue');
+            store.stopRequested = true;
+            this.forceStopBusy = true;
+
+            const wire = this.resolveWire();
+            try {
+                if (wire?.forceStopRunQueue) {
+                    await wire.forceStopRunQueue();
+                } else if (! Boolean(this.config.phpEngine) && wire?.completeRunQueue) {
+                    await wire.completeRunQueue(true);
+                }
+                this.config.runStatus = Boolean(this.config.phpEngine) ? 'stopping' : 'completed';
+                store.reset();
+                if (! Boolean(this.config.phpEngine)) {
+                    window.location.reload();
+                } else if (wire?.refresh) {
+                    await wire.refresh();
+                }
+            } catch (error) {
+                window.alert(error?.message ? String(error.message) : 'Không dừng được run.');
+            } finally {
+                this.forceStopBusy = false;
+            }
+        },
+
+        /**
+         * @deprecated Remove after PHP engine default-on stabilization window
+         * (canary pass + failure/stop/edit verified + rollback rarely needed).
+         */
         handleStartQueue(detail = {}) {
+            if (Boolean(this.config.phpEngine)) {
+                window.alert('PHP engine đang bật — không chạy lại queue từ trình duyệt. Dùng Start trên server.');
+
+                return;
+            }
+
             const taskIds = Array.isArray(detail?.taskIds)
                 ? detail.taskIds.map((id) => Number(id)).filter((id) => id > 0)
                 : [];
@@ -100,7 +217,17 @@ function registerSeoProjectRunQueue() {
             });
         },
 
+        /**
+         * @deprecated Remove after PHP engine default-on stabilization window
+         * (canary pass + failure/stop/edit verified + rollback rarely needed).
+         */
         async runSingleTask(taskId, options = {}) {
+            if (Boolean(this.config.phpEngine)) {
+                window.alert('PHP engine đang bật — không chạy article sync từ JS.');
+
+                return;
+            }
+
             const id = Number(taskId);
             if (id <= 0) {
                 window.alert('Task ID không hợp lệ.');
@@ -306,17 +433,85 @@ function registerSeoProjectRunQueue() {
 
             try {
                 const response = await wire.retryWorkflowStep(id, node);
+                const message = String(response?.message ?? '').trim();
                 if (response?.success) {
-                    window.alert(response.message || 'Đã chạy lại prompt.');
+                    this.applyItemResult(
+                        id,
+                        {
+                            status: 'success',
+                            message: message || 'Đã chạy lại prompt.',
+                            ...(response?.item && typeof response.item === 'object' ? response.item : {}),
+                        },
+                        '',
+                        { preserveActions: true, highlight: true },
+                    );
                     window.location.reload();
                 } else {
-                    window.alert(response?.message || 'Không chạy được prompt.');
+                    this.applyItemFailure(
+                        id,
+                        message || 'Không chạy được prompt.',
+                        { preserveActions: true, highlight: true },
+                    );
                 }
             } catch (error) {
-                window.alert(error?.message ? String(error.message) : 'Lỗi khi chạy lại prompt.');
+                this.applyItemFailure(
+                    id,
+                    error?.message ? String(error.message) : 'Lỗi khi chạy lại prompt.',
+                    { preserveActions: true, highlight: true },
+                );
             } finally {
                 store.currentTaskId = null;
                 store.reset();
+            }
+        },
+
+        async cancelWorkflowStep(taskId, nodeId) {
+            const id = Number(taskId);
+            const node = String(nodeId ?? '').trim();
+            if (id <= 0) {
+                return;
+            }
+
+            const wire = this.resolveWire();
+            if (! wire?.cancelWorkflowStep) {
+                window.alert('Không kết nối được Livewire (cancelWorkflowStep). Hard refresh (Ctrl+F5).');
+                return;
+            }
+
+            try {
+                const response = await wire.cancelWorkflowStep(id, node);
+                const message = String(response?.message ?? '').trim();
+                const cancelled = Number(response?.cancelled ?? 0);
+                const alreadyIdle = response?.already_idle === true;
+                const row = this.findRow(id);
+                const messageCell = row?.querySelector('[data-run-message]');
+                if (messageCell && message) {
+                    messageCell.textContent = message;
+                }
+
+                // Chỉ bỏ busy khi server thực sự cancel (hoặc đã idle cancel trước đó).
+                // Không sơn Failed hàng chính — status hàng chính ≠ step retry.
+                if (response?.success && (cancelled > 0 || alreadyIdle)) {
+                    if (row) {
+                        row.querySelectorAll('[data-run-busy-step]').forEach((el) => el.remove());
+                    }
+                    window.location.reload();
+                    return;
+                }
+
+                if (messageCell) {
+                    messageCell.textContent = message
+                        || `Không ngắt được (cancelled=${cancelled}, active_before=${Number(response?.active_before ?? 0)}).`;
+                }
+            } catch (error) {
+                const message = error?.message
+                    ? String(error.message)
+                    : 'Lỗi khi ngắt bước.';
+                const row = this.findRow(id);
+                const messageCell = row?.querySelector('[data-run-message]');
+                if (messageCell) {
+                    messageCell.textContent = message;
+                }
             }
         },
 
@@ -391,6 +586,10 @@ function registerSeoProjectRunQueue() {
                 return;
             }
 
+            if (this.config?.canArchiveItems === false) {
+                return;
+            }
+
             const confirmMessage = String(
                 this.config.labels?.archiveConfirm
                 ?? 'Gỡ hạng mục khỏi project tháng và đưa vào kho lưu trữ domain?',
@@ -458,10 +657,12 @@ function registerSeoProjectRunQueue() {
                     return {
                         runItemQueued: (taskId, markCompleted = false) => component.call('runItemQueued', taskId, markCompleted),
                         retryWorkflowStep: (taskId, nodeId) => component.call('retryWorkflowStep', taskId, nodeId),
+                        cancelWorkflowStep: (taskId, nodeId) => component.call('cancelWorkflowStep', taskId, nodeId),
                         bulkRetryWorkflowSteps: (taskIds, nodeIds) => component.call('bulkRetryWorkflowSteps', taskIds, nodeIds),
                         beginRunQueue: () => component.call('beginRunQueue'),
                         finalizePartialQueue: () => component.call('finalizePartialQueue'),
                         completeRunQueue: (stopped) => component.call('completeRunQueue', stopped),
+                        forceStopRunQueue: () => component.call('forceStopRunQueue'),
                         archiveItem: (taskId) => component.call('archiveItem', taskId),
                         updateRunSettingsForRerun: (settings) => component.call('updateRunSettingsForRerun', settings),
                         syncAllCompleted: () => component.call('syncAllCompleted'),
@@ -485,10 +686,12 @@ function registerSeoProjectRunQueue() {
                 return {
                     runItemQueued: (taskId, markCompleted = false) => this.$wire.runItemQueued(taskId, markCompleted),
                     retryWorkflowStep: (taskId, nodeId) => this.$wire.retryWorkflowStep(taskId, nodeId),
+                    cancelWorkflowStep: (taskId, nodeId) => this.$wire.cancelWorkflowStep(taskId, nodeId),
                     bulkRetryWorkflowSteps: (taskIds, nodeIds) => this.$wire.bulkRetryWorkflowSteps(taskIds, nodeIds),
                     beginRunQueue: () => this.$wire.beginRunQueue(),
                     finalizePartialQueue: () => this.$wire.finalizePartialQueue(),
                     completeRunQueue: (stopped) => this.$wire.completeRunQueue(stopped),
+                    forceStopRunQueue: () => this.$wire.forceStopRunQueue(),
                     archiveItem: (taskId) => this.$wire.archiveItem(taskId),
                     updateRunSettingsForRerun: (settings) => this.$wire.updateRunSettingsForRerun(settings),
                     syncAllCompleted: () => this.$wire.syncAllCompleted(),
@@ -510,7 +713,16 @@ function registerSeoProjectRunQueue() {
             return null;
         },
 
+        /**
+         * @deprecated Remove after PHP engine default-on stabilization window
+         * (canary pass + failure/stop/edit verified + rollback rarely needed).
+         * JS must not orchestrate when config.phpEngine / orchestration=php.
+         */
         async processQueue() {
+            if (Boolean(this.config.phpEngine)) {
+                return;
+            }
+
             const taskIds = Array.isArray(this.config.taskIds)
                 ? this.config.taskIds.map((id) => Number(id)).filter((id) => id > 0)
                 : [];
@@ -526,7 +738,17 @@ function registerSeoProjectRunQueue() {
             });
         },
 
+        /**
+         * @deprecated Remove after PHP engine default-on stabilization window
+         * (canary pass + failure/stop/edit verified + rollback rarely needed).
+         */
         async startQueue(taskIds, options = {}) {
+            if (Boolean(this.config.phpEngine)) {
+                window.alert('PHP engine đang bật — JS không được orchestration article.');
+
+                return;
+            }
+
             const store = Alpine.store('seoRunQueue');
             const wire = this.resolveWire();
 

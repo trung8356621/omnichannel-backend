@@ -37,6 +37,7 @@ final class SeoProjectWorkflowRunService
         private readonly SeoProjectRunItemService $runItemService,
         private readonly SeoProjectTaskEventRecorder $eventRecorder,
         private readonly \App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPostRunPipeline $postRunPipeline,
+        private readonly \App\Addons\SeoContentAi\Services\RunEngine\ContentProjectTaskExecutionService $taskExecution,
     ) {}
 
     public function startRun(SeoProject $project, string $mode, ?array $settings = null): SeoProjectRun
@@ -117,7 +118,6 @@ final class SeoProjectWorkflowRunService
         $query = $project->tasks()
             ->where('status', SeoProjectTask::STATUS_PENDING)
             ->planned()
-            ->where('type', '!=', SeoProjectTask::TYPE_IMPROVE)
             ->orderBy('target_date')
             ->orderBy('id');
 
@@ -146,13 +146,7 @@ final class SeoProjectWorkflowRunService
 
         return $query
             ->get()
-            ->map(function (SeoProjectTask $task) use ($projectSiteId): array {
-                if ($task->type === SeoProjectTask::TYPE_IMPROVE) {
-                    return $this->buildImproveManualItemRow($task, $projectSiteId);
-                }
-
-                return $this->buildPendingItemRow($task);
-            })
+            ->map(fn (SeoProjectTask $task): array => $this->buildPendingItemRow($task))
             ->values()
             ->all();
     }
@@ -166,6 +160,9 @@ final class SeoProjectWorkflowRunService
             'task_id' => (int) $task->id,
             'type' => (string) $task->type,
             'source_content' => (string) $task->source_content,
+            'keyword' => $task->keyword,
+            'title' => $task->title,
+            'secondary_description' => $task->secondary_description,
             'post_type' => SeoProjectTask::isNewArticleType($task->type)
                 ? SeoProjectTask::normalizePostType($task->post_type)
                 : null,
@@ -178,10 +175,16 @@ final class SeoProjectWorkflowRunService
                     ? (string) ($task->description ?? '')
                     : null,
             'target_date' => $task->target_date?->format('Y-m-d'),
-            'rewrite_mode' => $task->type === SeoProjectTask::TYPE_REWRITE
-                ? SeoProjectTask::normalizeRewriteMode($task->rewrite_mode)
+            'rewrite_mode' => in_array(SeoProjectTask::normalizeType($task->type), [
+                SeoProjectTask::TYPE_REWRITE,
+                SeoProjectTask::TYPE_IMPROVE,
+            ], true)
+                ? SeoProjectTask::REWRITE_MODE_CONTENT
                 : null,
-            'rewrite_notes' => $task->type === SeoProjectTask::TYPE_REWRITE
+            'rewrite_notes' => in_array(SeoProjectTask::normalizeType($task->type), [
+                SeoProjectTask::TYPE_REWRITE,
+                SeoProjectTask::TYPE_IMPROVE,
+            ], true)
                 ? $task->rewrite_notes
                 : null,
             'status' => 'pending',
@@ -252,7 +255,13 @@ final class SeoProjectWorkflowRunService
 
         foreach ($tasks as $task) {
             /** @var SeoProjectTask $task */
-            $items[] = $this->runOneTask($project, $run, $task, $projectSiteId);
+            $items[] = $this->taskExecution->executeLoadedTask(
+                $project,
+                $run,
+                $task,
+                $projectSiteId,
+                forceRetry: false,
+            )->toLegacyItemRow();
         }
 
         return $this->finalizeRun($run, $items);
@@ -316,97 +325,14 @@ final class SeoProjectWorkflowRunService
      */
     public function retryTask(SeoProjectRun $run, int $taskId, bool $markCompleted = true, ?int $forcedArticleId = null): array
     {
-        @set_time_limit(0);
-
-        $run->loadMissing('project.site');
-        $project = $run->project;
-        if (! $project instanceof SeoProject) {
-            throw new \InvalidArgumentException('Không tìm thấy dự án của lần run này.');
-        }
-
-        $run->refresh();
-
-        $task = SeoProjectTask::query()
-            ->where('project_id', (int) $project->id)
-            ->whereKey($taskId)
-            ->first();
-
-        if (! $task instanceof SeoProjectTask) {
-            $action = SeoProjectRunAction::ArticleCreate;
-            $existingRunItem = $this->runItemService->findByLogicalOperation(
-                (int) $run->id,
-                $taskId,
-                $action->value,
-            );
-            // Thử tìm theo bất kỳ action nào của task_id
-            if (! $existingRunItem instanceof SeoProjectRunItem) {
-                $existingRunItem = SeoProjectRunItem::query()
-                    ->where('run_id', (int) $run->id)
-                    ->where('task_id', $taskId)
-                    ->orderByDesc('id')
-                    ->first();
-            }
-
-            if ($existingRunItem instanceof SeoProjectRunItem) {
-                $this->runItemService->markFailed(
-                    $existingRunItem,
-                    ContentProjectErrorCode::TaskNotFound,
-                    'Task không còn tồn tại — không reconstruct từ JSON.',
-                );
-                $this->runItemService->syncMirrorAndCounters($run, $markCompleted);
-
-                return [
-                    'task_id' => $taskId,
-                    'retry_task_id' => $taskId,
-                    'status' => 'failed',
-                    'message' => 'Task không còn tồn tại.',
-                    'error_code' => ContentProjectErrorCode::TaskNotFound->value,
-                    'error_detail' => 'Task không còn tồn tại — không reconstruct từ JSON.',
-                    'article_id' => $existingRunItem->article_id,
-                    'steps' => [],
-                ];
-            }
-
-            throw new \InvalidArgumentException('Không tìm thấy hạng mục #'.$taskId.' trong dự án.');
-        }
-
-        $linkedArticleId = (int) ($forcedArticleId ?? 0);
-        if ($linkedArticleId <= 0) {
-            $linkedArticleId = (int) ($task->article_id ?? 0);
-        }
-
-        if ($linkedArticleId > 0 && (int) ($task->article_id ?? 0) !== $linkedArticleId) {
-            $articleExists = SeoArticle::query()
-                ->whereKey($linkedArticleId)
-                ->where('site_id', (int) $project->site_id)
-                ->exists();
-
-            if ($articleExists) {
-                $this->taskCallerBridge->attachArticle(
-                    $task,
-                    $linkedArticleId,
-                    auth()->id() !== null ? (int) auth()->id() : null,
-                    (int) ($project->site_id ?? 0),
-                );
-                $task->refresh();
-            }
-        }
-
-        if ((string) $task->status === SeoProjectTask::STATUS_FAILED) {
-            SeoProjectTask::query()->whereKey((int) $task->id)->update([
-                'status' => SeoProjectTask::STATUS_PENDING,
-            ]);
-            $task->refresh();
-        }
-
-        $projectSiteId = (int) ($project->site_id ?? 0);
-        $itemRow = $this->runOneTask($project, $run, $task, $projectSiteId, forceRetry: true);
-        $itemRow['task_id'] = $taskId;
-        $itemRow['retry_task_id'] = $taskId;
-
-        $this->runItemService->syncMirrorAndCounters($run, $markCompleted);
-
-        return $itemRow;
+        // Thin adapter — business execution owns ContentProjectTaskExecutionService.
+        return $this->taskExecution->execute(
+            $run,
+            $taskId,
+            markCompleted: $markCompleted,
+            forcedArticleId: $forcedArticleId,
+            forceRetry: true,
+        )->toLegacyItemRow();
     }
 
     /**
@@ -469,6 +395,24 @@ final class SeoProjectWorkflowRunService
     }
 
     /**
+     * Claim → workflow provider → persist for one task.
+     * Public only for ContentProjectTaskExecutionService (Phase 1.7).
+     * Do not call from UI / Engine / Job directly.
+     *
+     * @return array<string, mixed>
+     */
+    public function runTaskPipeline(
+        SeoProject $project,
+        SeoProjectRun $run,
+        SeoProjectTask $task,
+        int $projectSiteId,
+        bool $forceRetry = false,
+    ): array
+    {
+        return $this->runOneTask($project, $run, $task, $projectSiteId, $forceRetry);
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function runOneTask(
@@ -480,14 +424,6 @@ final class SeoProjectWorkflowRunService
     ): array
     {
         $action = $this->runItemService->resolveAction($task);
-
-        if ($task->type === SeoProjectTask::TYPE_IMPROVE) {
-            $this->runItemService->prepareOperation($run, $project, $task);
-            $row = $this->buildImproveManualItemRow($task, $projectSiteId);
-            $this->runItemService->mirrorJsonSafely($run);
-
-            return $row;
-        }
 
         $claim = $this->runItemService->claimForExecution(
             $run,
@@ -616,7 +552,7 @@ final class SeoProjectWorkflowRunService
 
                 $message = $this->formatRunResultMessage((string) $result['message'], $ranAt, $stepStats);
 
-                if ($articleId > 0) {
+                if ($articleId > 0 && SeoProjectTask::normalizeType($task->type) !== SeoProjectTask::TYPE_IMPROVE) {
                     $article = SeoArticle::query()->find($articleId);
                     if ($article instanceof SeoArticle) {
                         $pipelineResult = $this->postRunPipeline->apply($task, $run, $article, $runItem);
@@ -678,6 +614,9 @@ final class SeoProjectWorkflowRunService
             }
 
             $failedArticleId = (int) ($result['article_id'] ?? 0);
+            if ($failedArticleId <= 0) {
+                $failedArticleId = (int) ($task->article_id ?? 0);
+            }
             if ($failedArticleId > 0) {
                 $this->runItemService->bindArticleAfterExternal(
                     $task,
@@ -839,7 +778,7 @@ final class SeoProjectWorkflowRunService
      */
     private function matchingTaskQuery(SeoProject $project, array $item): HasMany
     {
-        $type = (string) ($item['type'] ?? SeoProjectTask::TYPE_NEW_KEYWORD);
+        $type = (string) ($item['type'] ?? SeoProjectTask::TYPE_CREATE);
         $source = trim((string) ($item['source_content'] ?? ''));
 
         $query = $project->tasks()

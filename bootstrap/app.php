@@ -18,9 +18,32 @@ return Application::configure(basePath: dirname(__DIR__))
         \App\Addons\SeoContentAi\Console\RepairContentProjectCommand::class,
         \App\Console\Commands\CleanupMisplacedTablesCommand::class,
         \App\Console\Commands\MigrateAutomationToCoreCommand::class,
+        \App\Console\Commands\TestDoctorCommand::class,
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->redirectGuestsTo(static function (): string {
+            $request = request();
+            $path = trim((string) $request->path(), '/');
+
+            $isSeoPath = $path === 'seo' || str_starts_with($path, 'seo/');
+            $isSeoLivewire = false;
+            if ($request->is('livewire/*')) {
+                $referer = (string) $request->headers->get('referer', '');
+                $isSeoLivewire = $referer !== ''
+                    && preg_match('#/seo(?:/|$)#', parse_url($referer, PHP_URL_PATH) ?? '') === 1;
+            }
+
+            // Chỉ guest SEO (path hoặc Livewire từ trang SEO) → login SEO có hash.
+            // Không bắt mọi livewire/* — sẽ phá admin login.
+            if ($isSeoPath || $isSeoLivewire) {
+                $hash = \App\Addons\SeoContentAi\Support\SeoConnectionContext::applyUrlDefaultsFromRequest($request);
+                if ($hash !== null && Route::has('filament.seo.auth.login')) {
+                    return route('filament.seo.auth.login', ['connection_hash' => $hash]);
+                }
+
+                return url('/seo');
+            }
+
             if (Route::has('filament.admin.auth.login')) {
                 return route('filament.admin.auth.login');
             }

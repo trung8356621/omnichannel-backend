@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Addons\SeoContentAi\tests\Unit;
+namespace App\Addons\SeoContentAi\Tests\Unit;
 
 use App\Addons\SeoContentAi\Support\RankMathSeoValueNormalizer;
 use PHPUnit\Framework\TestCase;

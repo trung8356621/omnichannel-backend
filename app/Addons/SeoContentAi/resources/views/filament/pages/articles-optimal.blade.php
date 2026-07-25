@@ -151,7 +151,7 @@
             const payload = {
                 project_id: this.sidebarProjectId,
                 type: this.assignType,
-                rewrite_mode: this.rewriteMode,
+                rewrite_mode: 'content',
                 rewrite_notes: this.rewriteNotes,
                 focus_keyword: focusKeyword,
             };
@@ -557,18 +557,14 @@
                 </x-select>
             </div>
 
-            <div x-show="assignType === 'rewrite'" x-cloak>
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ __('seo-content-ai::filament.projects.rewrite_mode') }}</label>
-                <x-select x-model="rewriteMode" class="mt-1 block w-full rounded-lg border-gray-300 text-sm dark:border-white/10 dark:bg-gray-950">
-                    @foreach ($rewriteModeOptions as $value => $label)
-                        <option value="{{ $value }}">{{ $label }}</option>
-                    @endforeach
-                </x-select>
-            </div>
-
-            <div x-show="assignType === 'rewrite' && rewriteMode === 'content'" x-cloak>
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ __('seo-content-ai::filament.projects.rewrite_notes') }}</label>
-                <textarea x-model="rewriteNotes" rows="3" class="mt-1 block w-full rounded-lg border-gray-300 text-sm dark:border-white/10 dark:bg-gray-950"></textarea>
+            <div x-show="assignType === 'improve'" x-cloak>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ __('seo-content-ai::filament.projects.improve_instruction') }}</label>
+                <textarea
+                    x-model="rewriteNotes"
+                    rows="3"
+                    class="mt-1 block w-full rounded-lg border-gray-300 text-sm dark:border-white/10 dark:bg-gray-950"
+                    placeholder="{{ __('seo-content-ai::filament.projects.improve_instruction_placeholder') }}"
+                ></textarea>
             </div>
 
             <div x-show="assignNeedsKeyword" x-cloak>

@@ -381,8 +381,10 @@ flowchart LR
 | Thành phần | Vai trò |
 |------------|---------|
 | `Alpine.store('seoRunQueue')` | `isRunning`, `stopRequested`, `currentTaskId` |
-| `Alpine.data('seoProjectRunQueue')` | Queue `taskIds`, gọi `runItemQueued` / `completeRunQueue` |
+| `Alpine.data('seoProjectRunQueue')` | Queue `taskIds`, gọi `runItemQueued` / `completeRunQueue` / `retryWorkflowStep` / `cancelWorkflowStep` |
 | Livewire | `ViewSeoProjectRun` page methods |
+| `cancelWorkflowStep` | Chỉ xóa `[data-run-busy-step]` + reload khi `success && (cancelled>0 \|\| already_idle)`; không `applyItemFailure` hàng chính |
+| Busy badge | Blade `data-run-busy-step` — từ `workflow_steps[].busy` (server) |
 
 **Không** gọi REST — orchestration workflow qua Livewire. Không `$refresh` khi `seoRunQueue.isRunning`; `init()` bỏ qua nếu queue đang chạy (tránh re-init mất hàng). Chi tiết: [MAP_SEO_PROJECTS.md](MAP_SEO_PROJECTS.md).
 

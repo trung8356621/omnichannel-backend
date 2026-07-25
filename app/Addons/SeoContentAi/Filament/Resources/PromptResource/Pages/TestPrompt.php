@@ -67,6 +67,12 @@ class TestPrompt extends Page implements HasForms
 
     public ?string $errorMessage = null;
 
+    public ?string $errorTechnicalDetails = null;
+
+    public ?string $errorClassification = null;
+
+    public bool $errorRetryable = false;
+
     /** Nhãn token của lần chạy đang xem, VD: "12.450 token". */
     public ?string $tokenUsageLabel = null;
 
@@ -363,10 +369,29 @@ class TestPrompt extends Page implements HasForms
         $this->selectedResultId = null;
         $this->refreshCompiledPreview();
         $this->outputText = null;
-        $this->errorMessage = null;
+        $this->clearImageErrorState();
         $this->tokenUsageLabel = null;
         $this->lastRawModelUsed = null;
         $this->resetChainProgress();
+    }
+
+    private function clearImageErrorState(): void
+    {
+        $this->errorMessage = null;
+        $this->errorTechnicalDetails = null;
+        $this->errorClassification = null;
+        $this->errorRetryable = false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $presented
+     */
+    private function applyPresentedImageError(array $presented): void
+    {
+        $this->errorMessage = (string) ($presented['user_message'] ?? '');
+        $this->errorTechnicalDetails = (string) ($presented['technical_details'] ?? '');
+        $this->errorClassification = isset($presented['classification']) ? (string) $presented['classification'] : null;
+        $this->errorRetryable = (bool) ($presented['retryable'] ?? false);
     }
 
     protected function resetChainProgress(): void
@@ -461,7 +486,7 @@ class TestPrompt extends Page implements HasForms
         }
 
         $this->isRunning = true;
-        $this->errorMessage = null;
+        $this->clearImageErrorState();
         $this->outputText = null;
         $this->resetChainProgress();
 
@@ -577,7 +602,13 @@ class TestPrompt extends Page implements HasForms
                 return;
             }
 
-            $this->errorMessage = $exception->getMessage();
+            $this->errorMessage = $exception->userMessage();
+            $this->errorTechnicalDetails = $exception->technicalDetails();
+            $this->errorClassification = $exception->classification();
+            $this->errorRetryable = $exception->isRetryable()
+                || \App\Addons\SeoContentAi\Support\ImagenProviderErrorClassifier::isRetryableClassification(
+                    (string) ($exception->classification() ?? ''),
+                );
 
             try {
                 $this->compiledPreview = $runner->compilePrompt($this->getPrompt(), $normalized);
@@ -587,7 +618,7 @@ class TestPrompt extends Page implements HasForms
 
             Notification::make()
                 ->title('Test failed')
-                ->body($exception->getMessage())
+                ->body($exception->userMessage())
                 ->danger()
                 ->send();
 
@@ -598,6 +629,15 @@ class TestPrompt extends Page implements HasForms
                 ->first();
 
             if ($failed !== null) {
+                $audit = $exception->audit();
+                if ($audit !== []) {
+                    $snapshot = is_array($failed->input_snapshot) ? $failed->input_snapshot : [];
+                    $snapshot['imagen_provider_audit'] = $audit;
+                    $failed->update([
+                        'input_snapshot' => $snapshot,
+                        'error_message' => mb_substr($exception->technicalDetails(), 0, 2000),
+                    ]);
+                }
                 $this->applyPostProcessingOnNextSelect = false;
                 $this->selectResult((int) $failed->id);
             }
@@ -991,13 +1031,22 @@ class TestPrompt extends Page implements HasForms
 
         if ($result->status === 'completed') {
             $this->outputText = (string) ($result->output_text ?? '');
-            $this->errorMessage = null;
+            $this->clearImageErrorState();
         } elseif ($result->status === 'failed') {
             $this->outputText = null;
-            $this->errorMessage = (string) ($result->error_message ?? 'Test failed.');
+            $raw = (string) ($result->error_message ?? 'Test failed.');
+            $presented = \App\Addons\SeoContentAi\Support\ImagenProviderErrorClassifier::present($raw);
+            $audit = is_array($snapshot['imagen_provider_audit'] ?? null) ? $snapshot['imagen_provider_audit'] : [];
+            if (isset($audit['final_classification']) && is_string($audit['final_classification'])) {
+                $presented['classification'] = $audit['final_classification'];
+                $presented['retryable'] = \App\Addons\SeoContentAi\Support\ImagenProviderErrorClassifier::isRetryableClassification(
+                    $audit['final_classification'],
+                );
+            }
+            $this->applyPresentedImageError($presented);
         } else {
             $this->outputText = null;
-            $this->errorMessage = null;
+            $this->clearImageErrorState();
         }
     }
 

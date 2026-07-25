@@ -31,7 +31,10 @@ final class SeoProjectRunPreflightService
                 continue;
             }
 
-            $keyword = trim((string) $task->source_content);
+            $keyword = trim((string) ($task->keyword ?? $task->source_content ?? ''));
+            if ($keyword === '') {
+                $keyword = trim((string) ($task->title ?? ''));
+            }
             if ($keyword === '') {
                 continue;
             }

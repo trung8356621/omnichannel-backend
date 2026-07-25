@@ -21,6 +21,11 @@ class SeoProjectRun extends Model
 
     public const STATUS_RUNNING = 'running';
 
+    /** Cooperative stop in progress — DB-first; do not map to completed. */
+    public const STATUS_STOPPING = 'stopping';
+
+    public const STATUS_CANCELLED = 'cancelled';
+
     public const STATUS_COMPLETED = 'completed';
 
     public const STATUS_FAILED = 'failed';

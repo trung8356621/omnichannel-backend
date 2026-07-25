@@ -14,6 +14,7 @@ use App\Addons\SeoContentAi\PromptHooks\Exceptions\PromptHookFailure;
 use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookBinding;
 use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookExplicitBindingExecutor;
 use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookUiFailureMapper;
+use App\Addons\SeoContentAi\Support\ArticleGenerationSourceResult;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\PromptMediaPersistContext;
@@ -41,6 +42,7 @@ final class TaskWorkflowTestRunner
         private readonly SeoCreateArticleSettingsService $createArticleSettings,
         private readonly ArticleMediaLocalService $articleMediaLocal,
         private readonly PromptHookExplicitBindingExecutor $hookBindingExecutor,
+        private readonly ArticleGenerationInputResolver $articleGenerationInput,
         private readonly PromptHookUiFailureMapper $hookFailureMapper = new PromptHookUiFailureMapper,
     ) {}
 
@@ -164,7 +166,7 @@ final class TaskWorkflowTestRunner
             $outlineMarkdown = $this->seedOutlineStateFromArticle($state, $context->article);
             if ($outlineMarkdown === '') {
                 throw new \InvalidArgumentException(
-                    'Bài chưa có dàn ý (seo_article_outline). Chọn «Từ dàn ý» để tạo lại, hoặc lưu outline rồi chạy «Từ bài viết».',
+                    'Không tìm thấy outline để tạo lại bài.',
                 );
             }
         }
@@ -340,6 +342,17 @@ final class TaskWorkflowTestRunner
         $state = new WorkflowExecutionState;
         $state->article = $context->article;
 
+        // TYPE_REWRITE: input đã là raw outline artifact — seed meta (GIỮ marker, không strip).
+        if (
+            $context->projectTaskType === SeoProjectTask::TYPE_REWRITE
+            && filled($context->variables['article_generation_source'] ?? $context->variables['outline_id'] ?? null)
+        ) {
+            $outline = trim((string) ($context->variables['input'] ?? ''));
+            if ($outline !== '' && $this->articleGenerationInput->isValidArtifact($outline)) {
+                $state->meta['direct_publish_outline_markdown'] = $outline;
+            }
+        }
+
         return $state;
     }
 
@@ -369,12 +382,24 @@ final class TaskWorkflowTestRunner
             $output = (string) $step['output'];
             $state->lastPromptOutput = $output;
 
+            $outputs = is_array($step['outputs'] ?? null) ? $step['outputs'] : ['out_main' => $output];
             if ($nodeId !== '') {
-                $outputs = is_array($step['outputs'] ?? null) ? $step['outputs'] : ['out_main' => $output];
                 $state->nodeOutputs[$nodeId] = array_map(
                     static fn ($value): string => is_string($value) ? $value : (string) $value,
                     $outputs,
                 );
+            }
+
+            $outlineMarkdown = trim((string) ($step['outline_markdown'] ?? ''));
+            if ($outlineMarkdown === '' && (bool) ($step['persists_as_outline'] ?? false)) {
+                $outlineMarkdown = trim($output);
+            }
+            if ($outlineMarkdown === '') {
+                $outlineMarkdown = trim((string) ($outputs['out_outline'] ?? ''));
+            }
+            if ($outlineMarkdown !== '') {
+                // Giữ raw artifact (có marker) — không strip trước content assembler.
+                $state->meta['direct_publish_outline_markdown'] = trim($outlineMarkdown);
             }
         }
 
@@ -562,15 +587,39 @@ final class TaskWorkflowTestRunner
             }
 
             try {
-                $input = $this->resolveInputForNode($nodeId, $edges, $state);
-                if ($input === '') {
-                    $input = trim((string) ($state->meta['direct_publish_outline_markdown'] ?? ''));
-                }
-                if ($input === '') {
-                    $input = trim((string) ($state->lastPromptOutput ?? ''));
-                }
-                if ($input !== '') {
+                if ($this->isArticleContentGenerationPrompt($node, $prompt)) {
+                    $resolved = $this->resolveArticleGenerationInputForPrompt(
+                        $nodeId,
+                        $edges,
+                        $state,
+                        $context,
+                        $variables,
+                    );
+                    if ($resolved === null) {
+                        return [
+                            'node_id' => $nodeId,
+                            'type' => $type,
+                            'title' => $title,
+                            'status' => 'failed',
+                            'prompt_id' => $prompt->id,
+                            'prompt_name' => (string) $prompt->name,
+                            'message' => ArticleGenerationInputResolver::REJECT_MESSAGE,
+                        ];
+                    }
+                    $input = $resolved->rawArtifact;
                     $variables['input'] = $input;
+                    $variables = array_merge($variables, $resolved->toDebugVariables());
+                } else {
+                    $input = $this->resolveInputForNode($nodeId, $edges, $state);
+                    if ($input === '') {
+                        $input = trim((string) ($state->meta['direct_publish_outline_markdown'] ?? ''));
+                    }
+                    if ($input === '') {
+                        $input = trim((string) ($state->lastPromptOutput ?? ''));
+                    }
+                    if ($input !== '') {
+                        $variables['input'] = $input;
+                    }
                 }
 
                 $reused = $this->existingAiOutput->resolve(
@@ -584,8 +633,9 @@ final class TaskWorkflowTestRunner
                     $state->lastPromptOutput = $output;
                     $state->nodeOutputs[$nodeId] = $this->buildPromptNodeOutputs($prompt, $output, $state);
 
+                    $outlinePersistedMarkdown = '';
                     if ($reused['type'] === WorkflowExistingAiOutputService::TYPE_OUTLINE) {
-                        $state->meta['direct_publish_outline_markdown'] = $output;
+                        $outlinePersistedMarkdown = $this->captureOutlinePromptOutput($node, $prompt, $output, $state);
                     } elseif ($reused['type'] === WorkflowExistingAiOutputService::TYPE_CONTENT) {
                         $state->meta['preserve_existing_article_body'] = true;
                     }
@@ -599,6 +649,8 @@ final class TaskWorkflowTestRunner
                         'prompt_name' => (string) $prompt->name,
                         'output' => $output,
                         'outputs' => $state->nodeOutputs[$nodeId],
+                        'outline_markdown' => $outlinePersistedMarkdown !== '' ? $outlinePersistedMarkdown : null,
+                        'persists_as_outline' => $outlinePersistedMarkdown !== '',
                         'message' => $reused['message'],
                     ];
                 }
@@ -655,10 +707,13 @@ final class TaskWorkflowTestRunner
                             'execution_source' => 'explicit_hook_binding',
                             'message' => $mapped['body'],
                             'failure_category' => $mapped['category'],
+                            // AI đã chạy trước khi validator fail — giữ result_id để /prompts link được.
+                            'result_id' => $exception->promptResultId(),
                         ];
                     }
 
                     $output = trim((string) ($hookResult['output'] ?? ''));
+                    $outlinePersistedMarkdown = '';
                     if ($output !== '') {
                         $output = $this->applyPromptPostProcessing($prompt, $output);
                         $state->lastPromptOutput = $output;
@@ -670,12 +725,14 @@ final class TaskWorkflowTestRunner
                             $state,
                         );
                         $this->refreshWorkflowSeoScore($state, $output);
+                        $outlinePersistedMarkdown = $this->captureOutlinePromptOutput($node, $prompt, $output, $state);
                     }
 
                     if ($this->shouldMergeOutlineToSave($node) && trim($output) !== '') {
                         $state->meta['direct_publish_article_markdown'] = trim($output);
-                        $outlineSource = $this->cleanWorkflowOutlineMarkdown($input);
-                        if ($outlineSource !== '') {
+                        // Input của content = raw outline artifact — giữ nguyên marker.
+                        $outlineSource = trim($input);
+                        if ($outlineSource !== '' && $this->articleGenerationInput->isValidArtifact($outlineSource)) {
                             $state->meta['direct_publish_outline_markdown'] = $outlineSource;
                         }
                     }
@@ -697,6 +754,8 @@ final class TaskWorkflowTestRunner
                         'input_used' => $input !== '' ? mb_substr($input, 0, 120).(mb_strlen($input) > 120 ? '…' : '') : null,
                         'output' => $output,
                         'outputs' => $state->nodeOutputs[$nodeId] ?? [],
+                        'outline_markdown' => $outlinePersistedMarkdown !== '' ? $outlinePersistedMarkdown : null,
+                        'persists_as_outline' => $outlinePersistedMarkdown !== '',
                         'result_id' => $hookResult['prompt_result_id'],
                         'duration_ms' => $hookResult['duration_ms'],
                         'message' => 'Prompt Hook completed ('.$hookResult['hook_key'].'@'.$hookResult['hook_version'].').',
@@ -733,10 +792,12 @@ final class TaskWorkflowTestRunner
                     $output = $this->applyPromptPostProcessing($prompt, $output);
                 }
 
+                $outlinePersistedMarkdown = '';
                 if ($output !== '') {
                     $state->lastPromptOutput = $output;
                     $state->nodeOutputs[$nodeId] = $this->buildPromptNodeOutputs($prompt, $output, $state);
                     $this->refreshWorkflowSeoScore($state, $output);
+                    $outlinePersistedMarkdown = $this->captureOutlinePromptOutput($node, $prompt, $output, $state);
                 }
 
                 if (
@@ -754,12 +815,11 @@ final class TaskWorkflowTestRunner
                 if ($this->shouldMergeOutlineToSave($node) && trim($output) !== '') {
                     // «Viết bài theo dàn ý»: output đã là bài hoàn chỉnh (H1 + body + meta + FAQ)
                     //   → đẩy thẳng markdown bài viết cho action lưu vào body.
-                    // input (edge) là dàn ý gốc → giữ lại để lưu vào tab Dàn ý (seo_article_outline),
-                    //   KHÔNG để nội dung bài đè lên dàn ý.
+                    // input (edge) là raw outline artifact → giữ marker, không strip.
                     $state->meta['direct_publish_article_markdown'] = trim($output);
 
-                    $outlineSource = $this->cleanWorkflowOutlineMarkdown($input);
-                    if ($outlineSource !== '') {
+                    $outlineSource = trim($input);
+                    if ($outlineSource !== '' && $this->articleGenerationInput->isValidArtifact($outlineSource)) {
                         $state->meta['direct_publish_outline_markdown'] = $outlineSource;
                     }
                 }
@@ -781,6 +841,8 @@ final class TaskWorkflowTestRunner
                     'input_used' => $input !== '' ? mb_substr($input, 0, 120).(mb_strlen($input) > 120 ? '…' : '') : null,
                     'output' => $output,
                     'outputs' => $state->nodeOutputs[$nodeId] ?? [],
+                    'outline_markdown' => $outlinePersistedMarkdown !== '' ? $outlinePersistedMarkdown : null,
+                    'persists_as_outline' => $outlinePersistedMarkdown !== '',
                     'result_id' => $result->id,
                     'message' => $result->status === 'completed'
                         ? 'Chạy prompt thành công.'
@@ -913,7 +975,10 @@ final class TaskWorkflowTestRunner
         if ($filterType === 'parse_outline') {
             $parsedResult = $this->workflowParser->parseOutline($inputData);
             $state->setParsedOutline($parsedResult);
-            $state->meta['direct_publish_outline_markdown'] = $this->cleanWorkflowOutlineMarkdown($inputData);
+            // Giữ raw nếu là full artifact; fallback cleaned chỉ cho parse UI.
+            $state->meta['direct_publish_outline_markdown'] = $this->articleGenerationInput->isValidArtifact($inputData)
+                ? trim($inputData)
+                : $this->cleanWorkflowOutlineMarkdown($inputData);
             $this->refreshWorkflowSeoScore($state, $inputData);
             $jsonOutput = json_encode($parsedResult, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
             $state->nodeOutputs[$nodeId] = ['out_main' => $jsonOutput];
@@ -1587,6 +1652,152 @@ final class TaskWorkflowTestRunner
         return $prompt !== null && $this->promptSupportsMergeOutlineSave($prompt);
     }
 
+    /**
+     * Outline prompt (không phải «viết bài theo dàn ý»): ghi output vào state để persist seo_article_outline.
+     *
+     * @param  array<string, mixed>  $node
+     */
+    private function captureOutlinePromptOutput(
+        array $node,
+        SeoPrompt $prompt,
+        string $output,
+        WorkflowExecutionState $state,
+    ): string {
+        if ($this->shouldMergeOutlineToSave($node)) {
+            return '';
+        }
+
+        if ($this->existingAiOutput->outputType($node, $prompt) !== WorkflowExistingAiOutputService::TYPE_OUTLINE) {
+            $haystack = mb_strtolower(trim((string) ($node['title'] ?? '')).' '.trim((string) ($prompt->name ?? '')));
+            $looksLikeOutline = str_contains($haystack, 'outline')
+                || str_contains($haystack, 'dàn ý')
+                || str_contains($haystack, 'dan y');
+            $looksLikeContent = str_contains($haystack, 'viết bài')
+                || str_contains($haystack, 'viet bai')
+                || str_contains($haystack, 'nội dung')
+                || str_contains($haystack, 'noi dung');
+            if (! $looksLikeOutline || $looksLikeContent) {
+                return '';
+            }
+        }
+
+        // Prefer raw artifact (markers preserved). Fallback cleaned chỉ khi output không đúng contract.
+        $raw = trim($output);
+        if ($raw === '') {
+            return '';
+        }
+
+        $stored = $this->articleGenerationInput->isValidArtifact($raw)
+            ? $raw
+            : $this->cleanWorkflowOutlineMarkdown($raw);
+        if ($stored === '') {
+            return '';
+        }
+
+        $state->meta['direct_publish_outline_markdown'] = $stored;
+        $outputs = $state->nodeOutputs[(string) ($node['id'] ?? '')] ?? [];
+        if (is_array($outputs)) {
+            $outputs['out_outline'] = $stored;
+            $state->nodeOutputs[(string) ($node['id'] ?? '')] = $outputs;
+        }
+
+        return $stored;
+    }
+
+    /**
+     * @param  array<string, mixed>  $node
+     */
+    private function isArticleContentGenerationPrompt(array $node, SeoPrompt $prompt): bool
+    {
+        if ($this->existingAiOutput->outputType($node, $prompt) === WorkflowExistingAiOutputService::TYPE_CONTENT) {
+            return true;
+        }
+
+        if ($this->shouldMergeOutlineToSave($node)) {
+            return true;
+        }
+
+        try {
+            $binding = PromptHookBinding::tryFromPrompt($prompt);
+            $hookKey = trim((string) ($binding?->hookKey ?? ''));
+            if (str_starts_with($hookKey, 'article.content.')) {
+                return true;
+            }
+        } catch (\InvalidArgumentException) {
+            // ignore — legacy prompt without hook binding
+        }
+
+        return false;
+    }
+
+    /**
+     * Cùng resolver path first-run: edge outline artifact → state meta → context variables → article lookup.
+     *
+     * @param  list<array<string, mixed>>  $edges
+     * @param  array<string, mixed>  $variables
+     */
+    private function resolveArticleGenerationInputForPrompt(
+        string $targetNodeId,
+        array $edges,
+        WorkflowExecutionState $state,
+        TaskTestContext $context,
+        array $variables,
+    ): ?ArticleGenerationSourceResult {
+        foreach ($edges as $edge) {
+            if (! is_array($edge) || (string) ($edge['targetNode'] ?? '') !== $targetNodeId) {
+                continue;
+            }
+            $sourceNodeId = (string) ($edge['sourceNode'] ?? '');
+            $sourcePort = (string) ($edge['sourcePort'] ?? 'out_main');
+            $value = $this->resolvePortOutput($state, $sourceNodeId, $sourcePort);
+            $fromEdge = $this->articleGenerationInput->tryResolveFromRawArtifact(
+                $value,
+                ArticleGenerationSourceResult::SOURCE_WORKFLOW_EDGE,
+            );
+            if ($fromEdge instanceof ArticleGenerationSourceResult) {
+                $state->meta['direct_publish_outline_markdown'] = $fromEdge->rawArtifact;
+
+                return $fromEdge;
+            }
+        }
+
+        $fromMeta = $this->articleGenerationInput->tryResolveFromRawArtifact(
+            trim((string) ($state->meta['direct_publish_outline_markdown'] ?? '')),
+            ArticleGenerationSourceResult::SOURCE_STATE_META,
+        );
+        if ($fromMeta instanceof ArticleGenerationSourceResult) {
+            return $fromMeta;
+        }
+
+        $fromVars = $this->articleGenerationInput->tryResolveFromRawArtifact(
+            trim((string) ($variables['input'] ?? '')),
+            (string) ($variables['article_generation_source'] ?? ArticleGenerationSourceResult::SOURCE_RAW_ARTIFACT),
+            isset($variables['source_run_id']) ? (int) $variables['source_run_id'] : null,
+            isset($variables['source_run_item_id']) ? (int) $variables['source_run_item_id'] : null,
+            isset($variables['source_prompt_result_id']) ? (int) $variables['source_prompt_result_id'] : null,
+        );
+        if ($fromVars instanceof ArticleGenerationSourceResult) {
+            $state->meta['direct_publish_outline_markdown'] = $fromVars->rawArtifact;
+
+            return $fromVars;
+        }
+
+        $article = $state->article ?? $context->article;
+        if ($article instanceof SeoArticle) {
+            try {
+                $fromArticle = $this->articleGenerationInput->resolveForArticle($article);
+
+                $state->meta['direct_publish_outline_markdown'] = $fromArticle->rawArtifact;
+
+                return $fromArticle;
+            } catch (\InvalidArgumentException) {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
     private function promptSupportsMergeOutlineSave(SeoPrompt $prompt): bool
     {
         $name = mb_strtolower(trim((string) $prompt->name));
@@ -1723,7 +1934,9 @@ final class TaskWorkflowTestRunner
     private function shouldReuseExistingAiOutput(TaskTestContext $context): bool
     {
         // Viết lại / có rewriteMode → luôn gọi AI lại (tránh OK giả vì reuse body/dàn ý cũ).
-        if ($context->projectTaskType === SeoProjectTask::TYPE_REWRITE) {
+        if ($context->projectTaskType === SeoProjectTask::TYPE_REWRITE
+            || $context->projectTaskType === SeoProjectTask::TYPE_IMPROVE
+        ) {
             return false;
         }
 

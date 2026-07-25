@@ -229,14 +229,31 @@ final class MarkdownSectionsOutputParser
             );
         }
 
-        if (isset($validation['min_length']) && mb_strlen($content) < (int) $validation['min_length']) {
-            throw new InvalidSectionOutput(
-                $this->contextMessage($hookKey, $hookVersion, $sectionKey, '', '', $correlationId, 'Section shorter than min_length.'),
-                $hookKey,
-                $hookVersion,
-                $sectionKey,
-                $correlationId,
-            );
+        if (isset($validation['min_length'])) {
+            $unit = strtolower(trim((string) ($validation['length_unit'] ?? 'chars')));
+            if ($unit !== 'words') {
+                $unit = 'chars';
+            }
+            $measured = \App\Addons\SeoContentAi\Support\PromptTextMetrics::measure($content, $unit);
+            if ($measured < (int) $validation['min_length']) {
+                throw new InvalidSectionOutput(
+                    $this->contextMessage(
+                        $hookKey,
+                        $hookVersion,
+                        $sectionKey,
+                        '',
+                        '',
+                        $correlationId,
+                        $unit === 'words'
+                            ? 'Section shorter than min_length (words).'
+                            : 'Section shorter than min_length.',
+                    ),
+                    $hookKey,
+                    $hookVersion,
+                    $sectionKey,
+                    $correlationId,
+                );
+            }
         }
     }
 

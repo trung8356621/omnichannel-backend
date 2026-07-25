@@ -1,0 +1,597 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Services;
+
+use App\Addons\SeoContentAi\Enums\ArticleReviewStatus;
+use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoProject;
+use App\Addons\SeoContentAi\Models\SeoProjectArchive;
+use App\Addons\SeoContentAi\Models\SeoProjectArchiveItem;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
+use App\Models\User;
+use App\Support\RuntimeLogger;
+use Carbon\Carbon;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use RuntimeException;
+
+/**
+ * Lưu trữ / khôi phục cả Content Project (monthly) — không đụng task/article lifecycle.
+ */
+final class ArchiveContentProjectService
+{
+    public function __construct(
+        private readonly ArticlePostImagesService $postImages,
+        private readonly ArticleLastSavedTimestampService $lastSavedTimestamps,
+        private readonly WordPressPermalinkBuilder $permalinkBuilder,
+    ) {}
+
+    /**
+     * @return array{
+     *     project_id: int,
+     *     project_name: string,
+     *     domain_id: int|null,
+     *     domain_name: string,
+     *     owner_id: int|null,
+     *     owner_name: string,
+     *     month: int|null,
+     *     year: int|null,
+     *     total_articles: int,
+     *     completed_articles: int,
+     *     approved_articles: int,
+     *     synced_articles: int,
+     *     failed_articles: int,
+     *     incomplete_articles: int,
+     *     unapproved_articles: int,
+     *     unsynced_articles: int,
+     *     average_seo_score: float|null,
+     *     created_at: string|null,
+     * }
+     */
+    public function buildSummary(SeoProject $project): array
+    {
+        $project->loadMissing(['site', 'user']);
+
+        $tasks = $this->articleTasksForProject($project);
+        $stats = $this->aggregateTaskStats($tasks);
+
+        $monthCarbon = $this->resolveProjectMonth($project);
+
+        return [
+            'project_id' => (int) $project->getKey(),
+            'project_name' => (string) ($project->name ?? ''),
+            'domain_id' => $this->nullablePositiveInt($project->site_id),
+            'domain_name' => $this->resolveDomainName($project),
+            'owner_id' => $this->nullablePositiveInt($project->user_id),
+            'owner_name' => $this->resolveOwnerName($project->user),
+            'month' => $monthCarbon?->month,
+            'year' => $monthCarbon?->year,
+            'total_articles' => $stats['total_articles'],
+            'completed_articles' => $stats['completed_articles'],
+            'approved_articles' => $stats['approved_articles'],
+            'synced_articles' => $stats['synced_articles'],
+            'failed_articles' => $stats['failed_articles'],
+            'incomplete_articles' => max(0, $stats['total_articles'] - $stats['completed_articles']),
+            'unapproved_articles' => max(0, $stats['total_articles'] - $stats['approved_articles']),
+            'unsynced_articles' => max(0, $stats['total_articles'] - $stats['synced_articles']),
+            'average_seo_score' => $stats['average_seo_score'],
+            'created_at' => $this->toIso8601($project->created_at),
+        ];
+    }
+
+    public function previewStats(SeoProject $project): array
+    {
+        return $this->buildSummary($project);
+    }
+
+    public function getCurrentArchive(SeoProject $project): ?SeoProjectArchive
+    {
+        $projectId = (int) $project->getKey();
+        if ($projectId <= 0) {
+            return null;
+        }
+
+        $archive = SeoProjectArchive::query()
+            ->where('project_id', $projectId)
+            ->whereNull('restored_at')
+            ->orderByDesc('id')
+            ->first();
+
+        return $archive instanceof SeoProjectArchive ? $archive : null;
+    }
+
+    public function archive(SeoProject $project, int $userId, ?string $note = null): SeoProjectArchive
+    {
+        $this->assertValidUserId($userId);
+
+        if ($project->isArchive()) {
+            throw new RuntimeException(__('seo-content-ai::filament.projects.archive_source_is_archive'));
+        }
+
+        $note = $this->normalizeNote($note);
+        $now = now();
+
+        return DB::connection('omi_seo_ai')->transaction(function () use ($project, $userId, $note, $now): SeoProjectArchive {
+            $lockedProject = $this->lockProject($project);
+
+            if ($lockedProject->archived_at !== null) {
+                throw new RuntimeException('Project đã được lưu trữ.');
+            }
+
+            $summary = $this->buildSummary($lockedProject);
+            $archive = $this->resolveArchiveHeader($lockedProject);
+            $archivedAt = $now->copy();
+
+            $summaryWithArchivedAt = array_merge($summary, [
+                'archived_at' => $this->toIso8601($archivedAt),
+            ]);
+
+            $monthCarbon = $this->resolveProjectMonth($lockedProject);
+
+            $archive->fill([
+                'site_id' => $summary['domain_id'],
+                'owner_id' => $summary['owner_id'],
+                'project_name' => $summary['project_name'],
+                'project_month' => $monthCarbon?->month,
+                'project_year' => $monthCarbon?->year,
+                'articles_count' => $summary['total_articles'],
+                'total_articles' => $summary['total_articles'],
+                'completed_articles' => $summary['completed_articles'],
+                'approved_articles' => $summary['approved_articles'],
+                'synced_articles' => $summary['synced_articles'],
+                'average_seo_score' => $summary['average_seo_score'],
+                'note' => $note,
+                'archived_by' => $userId,
+                'archived_at' => $archivedAt,
+                'restored_at' => null,
+                'restored_by' => null,
+                'summary_snapshot' => $summaryWithArchivedAt,
+            ]);
+            $archive->save();
+
+            $this->syncArchiveItems($archive, $lockedProject, $now);
+
+            $lockedProject->forceFill([
+                'archived_at' => $archivedAt,
+                'archived_by' => $userId,
+            ])->saveQuietly();
+
+            RuntimeLogger::info('content_project_archived', [
+                'project_id' => (int) $lockedProject->getKey(),
+                'archive_id' => (int) $archive->getKey(),
+                'user_id' => $userId,
+                'total_articles' => $summary['total_articles'],
+                'site_id' => $summary['domain_id'],
+                'archived_at' => $this->toIso8601($archivedAt),
+            ]);
+
+            return $archive->fresh(['items']) ?? $archive;
+        });
+    }
+
+    public function restore(SeoProject $project, int $userId): SeoProjectArchive
+    {
+        $this->assertValidUserId($userId);
+        $now = now();
+
+        return DB::connection('omi_seo_ai')->transaction(function () use ($project, $userId, $now): SeoProjectArchive {
+            $lockedProject = $this->lockProject($project);
+
+            if ($lockedProject->archived_at === null) {
+                throw new RuntimeException('Project chưa được lưu trữ.');
+            }
+
+            $archive = $this->getCurrentArchive($lockedProject)
+                ?? SeoProjectArchive::query()
+                    ->where('project_id', (int) $lockedProject->getKey())
+                    ->orderByDesc('id')
+                    ->first();
+
+            if (! $archive instanceof SeoProjectArchive) {
+                throw new RuntimeException('Project chưa được lưu trữ.');
+            }
+
+            $lockedProject->forceFill([
+                'archived_at' => null,
+                'archived_by' => null,
+            ])->saveQuietly();
+
+            $archive->forceFill([
+                'restored_at' => $now,
+                'restored_by' => $userId,
+            ])->save();
+
+            RuntimeLogger::info('content_project_restored', [
+                'project_id' => (int) $lockedProject->getKey(),
+                'archive_id' => (int) $archive->getKey(),
+                'user_id' => $userId,
+                'restored_at' => $this->toIso8601($now),
+                'site_id' => $this->nullablePositiveInt($lockedProject->site_id),
+            ]);
+
+            return $archive->fresh() ?? $archive;
+        });
+    }
+
+    /**
+     * @return Collection<int, SeoProjectTask>
+     */
+    private function articleTasksForProject(SeoProject $project): Collection
+    {
+        return $project->tasks()
+            ->where('article_id', '>', 0)
+            ->with(['article.articleMetas', 'article.site'])
+            ->orderBy('id')
+            ->get();
+    }
+
+    /**
+     * @param  Collection<int, SeoProjectTask>  $tasks
+     * @return array{
+     *     total_articles: int,
+     *     completed_articles: int,
+     *     approved_articles: int,
+     *     synced_articles: int,
+     *     failed_articles: int,
+     *     average_seo_score: float|null,
+     * }
+     */
+    private function aggregateTaskStats(Collection $tasks): array
+    {
+        $totalArticles = 0;
+        $completedArticles = 0;
+        $approvedArticles = 0;
+        $syncedArticles = 0;
+        $failedArticles = 0;
+        $seoScores = [];
+
+        foreach ($tasks as $task) {
+            if (! $task instanceof SeoProjectTask) {
+                continue;
+            }
+
+            $totalArticles++;
+
+            if ((string) $task->status === SeoProjectTask::STATUS_FAILED) {
+                $failedArticles++;
+            }
+
+            $article = $task->article;
+            if ($article instanceof SeoArticle) {
+                if ($this->isTaskOrArticleCompleted($task, $article)) {
+                    $completedArticles++;
+                }
+
+                if ($this->isArticleApproved($article)) {
+                    $approvedArticles++;
+                }
+
+                if ((int) ($article->wp_post_id ?? 0) > 0) {
+                    $syncedArticles++;
+                }
+
+                if ($article->seo_score !== null) {
+                    $seoScores[] = (float) $article->seo_score;
+                }
+            } elseif ((string) $task->status === SeoProjectTask::STATUS_COMPLETED) {
+                $completedArticles++;
+            }
+        }
+
+        return [
+            'total_articles' => $totalArticles,
+            'completed_articles' => $completedArticles,
+            'approved_articles' => $approvedArticles,
+            'synced_articles' => $syncedArticles,
+            'failed_articles' => $failedArticles,
+            'average_seo_score' => $seoScores === []
+                ? null
+                : round(array_sum($seoScores) / count($seoScores), 2),
+        ];
+    }
+
+    private function syncArchiveItems(SeoProjectArchive $archive, SeoProject $project, Carbon $now): void
+    {
+        $tasks = $this->articleTasksForProject($project);
+        $archiveId = (int) $archive->getKey();
+        $currentArticleIds = [];
+        $position = 0;
+
+        foreach ($tasks as $task) {
+            if (! $task instanceof SeoProjectTask) {
+                continue;
+            }
+
+            $article = $task->article;
+            if (! $article instanceof SeoArticle) {
+                continue;
+            }
+
+            $position++;
+            $articleId = (int) $article->getKey();
+            $currentArticleIds[] = $articleId;
+
+            SeoProjectArchiveItem::query()->updateOrCreate(
+                [
+                    'seo_project_archive_id' => $archiveId,
+                    'article_id' => $articleId,
+                ],
+                [
+                    'task_id' => (int) $task->getKey(),
+                    'position' => $position,
+                    'article_snapshot' => $this->buildArticleSnapshot($task, $article),
+                    'updated_at' => $now,
+                ],
+            );
+        }
+
+        if ($currentArticleIds === []) {
+            SeoProjectArchiveItem::query()
+                ->where('seo_project_archive_id', $archiveId)
+                ->delete();
+
+            return;
+        }
+
+        SeoProjectArchiveItem::query()
+            ->where('seo_project_archive_id', $archiveId)
+            ->whereNotIn('article_id', $currentArticleIds)
+            ->delete();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildArticleSnapshot(SeoProjectTask $task, SeoArticle $article): array
+    {
+        $article->loadMissing(['articleMetas', 'site']);
+
+        $lastSaved = $this->lastSavedTimestamps->resolve($article);
+        $wpPostId = (int) ($article->wp_post_id ?? 0);
+        $syncStatus = trim((string) ($article->wp_sync_status ?? ''));
+        if ($syncStatus === '') {
+            $syncStatus = $wpPostId > 0 ? 'synced' : 'unsynced';
+        }
+
+        $cachedPermalink = trim((string) ($this->getMeta($article, 'wp_permalink') ?? ''));
+        $slug = trim((string) ($article->slug ?? ''));
+        $wordpressUrl = $this->permalinkBuilder->resolve(
+            $article,
+            $cachedPermalink,
+            $slug !== '' ? $slug : null,
+        );
+
+        $queuePayload = $this->resolveWpSyncQueuePayload($article);
+        $wpSyncError = trim((string) ($queuePayload['error'] ?? $queuePayload['error_message'] ?? ''));
+
+        $violationsRaw = $this->getMeta($article, 'seo_rule_violations');
+        $seoRuleViolations = null;
+        if ($violationsRaw !== null && $violationsRaw !== '') {
+            $decoded = json_decode($violationsRaw, true);
+            $seoRuleViolations = is_array($decoded) ? $decoded : null;
+        }
+
+        return [
+            'task_id' => (int) $task->getKey(),
+            'article_id' => (int) $article->getKey(),
+            'title' => (string) ($article->title ?? ''),
+            'slug' => $slug,
+            'primary_keyword' => $this->getMeta($article, 'seo_focus_keyword'),
+            'status' => (string) ($task->status ?? ''),
+            'approved_status' => (string) ($article->review_status ?? ''),
+            'word_count' => $this->countWords((string) ($article->body ?? '')),
+            'image_count' => $this->postImages->countForArticle($article),
+            'seo_score' => $article->seo_score !== null ? (float) $article->seo_score : null,
+            'sync_status' => $syncStatus,
+            'wordpress_post_id' => $wpPostId > 0 ? $wpPostId : null,
+            'wordpress_url' => $wordpressUrl !== '' ? $wordpressUrl : null,
+            'created_at' => $this->toIso8601($article->created_at),
+            'updated_at' => $this->toIso8601($article->updated_at),
+            'completed_at' => $this->toIso8601($task->completed_at),
+            'last_saved_at' => $this->toIso8601($lastSaved['at'] ?? null),
+            'meta_title' => $this->getMeta($article, 'seo_title'),
+            'meta_description' => $this->getMeta($article, 'seo_meta_description'),
+            'seo_rule_violations' => $seoRuleViolations,
+            'last_synced_at' => $this->toIso8601($article->last_synced_at),
+            'wp_sync_error' => $wpSyncError !== '' ? $wpSyncError : null,
+        ];
+    }
+
+    private function getMeta(SeoArticle $article, string $key): ?string
+    {
+        $article->loadMissing('articleMetas');
+
+        $value = $article->articleMetas->firstWhere('meta_key', $key)?->meta_value;
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $trimmed = trim($value);
+
+        return $trimmed !== '' ? $trimmed : null;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function resolveWpSyncQueuePayload(SeoArticle $article): array
+    {
+        $raw = $this->getMeta($article, ArticleWpSyncQueueService::META_KEY);
+        if ($raw === null) {
+            return [];
+        }
+
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function isTaskOrArticleCompleted(SeoProjectTask $task, SeoArticle $article): bool
+    {
+        if ((string) $task->status === SeoProjectTask::STATUS_COMPLETED) {
+            return true;
+        }
+
+        if (! (bool) ($article->is_reviewed ?? false)) {
+            return false;
+        }
+
+        $reviewStatus = ArticleReviewStatus::tryFromString((string) ($article->review_status ?? ''));
+
+        return $reviewStatus === ArticleReviewStatus::Approved
+            || $reviewStatus === ArticleReviewStatus::Archived;
+    }
+
+    private function isArticleApproved(SeoArticle $article): bool
+    {
+        if ((bool) ($article->is_reviewed ?? false)) {
+            return true;
+        }
+
+        $reviewStatus = ArticleReviewStatus::tryFromString((string) ($article->review_status ?? ''));
+
+        return $reviewStatus === ArticleReviewStatus::Approved
+            || $reviewStatus === ArticleReviewStatus::Archived;
+    }
+
+    private function resolveArchiveHeader(SeoProject $project): SeoProjectArchive
+    {
+        $projectId = (int) $project->getKey();
+
+        $current = SeoProjectArchive::query()
+            ->where('project_id', $projectId)
+            ->whereNull('restored_at')
+            ->orderByDesc('id')
+            ->first();
+
+        if ($current instanceof SeoProjectArchive) {
+            return $current;
+        }
+
+        $latest = SeoProjectArchive::query()
+            ->where('project_id', $projectId)
+            ->orderByDesc('id')
+            ->first();
+
+        if ($latest instanceof SeoProjectArchive) {
+            return $latest;
+        }
+
+        $archive = new SeoProjectArchive;
+        $archive->project_id = $projectId;
+
+        return $archive;
+    }
+
+    private function lockProject(SeoProject $project): SeoProject
+    {
+        $locked = SeoProject::query()
+            ->whereKey((int) $project->getKey())
+            ->lockForUpdate()
+            ->first();
+
+        if (! $locked instanceof SeoProject) {
+            throw new RuntimeException('Project không tồn tại.');
+        }
+
+        return $locked;
+    }
+
+    private function assertValidUserId(int $userId): void
+    {
+        if ($userId <= 0) {
+            throw new RuntimeException('Invalid user ID.');
+        }
+    }
+
+    private function normalizeNote(?string $note): ?string
+    {
+        $note = trim((string) $note);
+
+        return $note !== '' ? mb_substr($note, 0, 500) : null;
+    }
+
+    private function resolveProjectMonth(SeoProject $project): ?Carbon
+    {
+        if ($project->month === null) {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($project->month)->startOfMonth();
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function resolveDomainName(SeoProject $project): string
+    {
+        $site = $project->site;
+        if ($site === null) {
+            return '';
+        }
+
+        return trim((string) ($site->domain ?? ''));
+    }
+
+    private function resolveOwnerName(?User $user): string
+    {
+        if (! $user instanceof User) {
+            return '';
+        }
+
+        $displayName = trim((string) ($user->display_name ?? ''));
+        if ($displayName !== '') {
+            return $displayName;
+        }
+
+        $name = trim((string) ($user->name ?? ''));
+
+        return $name !== '' ? $name : (string) ($user->email ?? '');
+    }
+
+    private function nullablePositiveInt(mixed $value): ?int
+    {
+        $int = (int) $value;
+
+        return $int > 0 ? $int : null;
+    }
+
+    private function toIso8601(mixed $value): ?string
+    {
+        if ($value instanceof Carbon) {
+            return $value->toIso8601String();
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            return Carbon::instance($value)->toIso8601String();
+        }
+
+        if (is_string($value) && trim($value) !== '') {
+            try {
+                return Carbon::parse($value)->toIso8601String();
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    private function countWords(string $html): int
+    {
+        $text = trim(strip_tags($html));
+        $text = preg_replace('/\s+/u', ' ', $text) ?? '';
+
+        if ($text === '') {
+            return 0;
+        }
+
+        preg_match_all('/\pL[\pL\pN\-]*/u', $text, $matches);
+
+        return count($matches[0] ?? []);
+    }
+}

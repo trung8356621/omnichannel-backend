@@ -43,6 +43,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        $this->registerFallbackTestCommand();
+
         // HTTP/PHP-FPM → web_app only. Cron/queue giữ LOG_CHANNEL (laravel.log).
         // Phải set TRƯỚC mọi logger()/Log:: — tránh Permission denied trên laravel.log root-owned.
         // Skip when channel missing (stale config:cache) — else LogManager EMERGENCY spam.
@@ -96,6 +98,22 @@ class AppServiceProvider extends ServiceProvider
                 'IMAGE_DRIVER=imagick nhưng host không có imagick — tự fallback sang GD.',
             );
         }
+    }
+
+    private function registerFallbackTestCommand(): void
+    {
+        if (! $this->app->runningInConsole()) {
+            return;
+        }
+
+        // Collision owns `php artisan test` when require-dev is installed.
+        if (class_exists(\NunoMaduro\Collision\Adapters\Laravel\Commands\TestCommand::class)) {
+            return;
+        }
+
+        $this->commands([
+            \App\Console\Commands\FallbackPhpUnitCommand::class,
+        ]);
     }
 
     private function registerActiveAddonProviders(): void

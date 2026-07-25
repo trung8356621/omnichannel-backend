@@ -27,6 +27,51 @@ final class SeoConnectionContext
         }
     }
 
+    /**
+     * Resolve connection_hash for URL generation (login, getUrl, Livewire).
+     * Order: explicit route → context/session → path → Referer (Livewire).
+     */
+    public static function resolveHashFromRequest(?\Illuminate\Http\Request $request = null): ?string
+    {
+        $request ??= request();
+
+        $routeHash = $request->route('connection_hash');
+        if (is_string($routeHash) && self::isValidHashFormat($routeHash)) {
+            return $routeHash;
+        }
+
+        $current = self::hash();
+        if ($current !== null) {
+            return $current;
+        }
+
+        $path = trim((string) $request->path(), '/');
+        if (preg_match('#^seo/([a-zA-Z0-9]{32,64})(?:/|$)#', $path, $matches) === 1) {
+            return $matches[1];
+        }
+
+        $referer = (string) $request->headers->get('referer', '');
+        if ($referer !== '' && preg_match('#/seo/([a-zA-Z0-9]{32,64})(?:/|\\?|$)#', $referer, $matches) === 1) {
+            return $matches[1];
+        }
+
+        return null;
+    }
+
+    /**
+     * Apply URL defaults from the current request when possible.
+     */
+    public static function applyUrlDefaultsFromRequest(?\Illuminate\Http\Request $request = null): ?string
+    {
+        $hash = self::resolveHashFromRequest($request);
+        if ($hash !== null) {
+            self::applyUrlDefaults($hash);
+            self::rememberHash($hash);
+        }
+
+        return $hash;
+    }
+
     public static function rememberHash(?string $hash = null): void
     {
         $hash ??= self::hash();

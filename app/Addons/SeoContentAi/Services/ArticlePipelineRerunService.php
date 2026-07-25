@@ -12,6 +12,7 @@ use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\ContentProjectRunSettings;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Support\RuntimeLogger;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
@@ -39,7 +40,7 @@ final class ArticlePipelineRerunService
     public function __construct(
         private readonly SeoProjectWorkflowRunService $workflowRunService,
         private readonly SeoProjectRunItemService $runItemService,
-        private readonly SeoProjectWorkflowStepCatalogService $catalog,
+        private readonly ArticlePipelineRerunStartStepResolver $startStepResolver,
     ) {}
 
     /**
@@ -115,19 +116,36 @@ final class ArticlePipelineRerunService
             ];
         }
 
-        $startNodeId = $this->catalog->firstPromptNodeIdForKind(
-            $task,
-            $fromStep === self::FROM_ARTICLE ? 'content' : 'outline',
-        );
-        if ($startNodeId === null || $startNodeId === '') {
+        $resolved = $this->startStepResolver->resolve($task, $fromStep);
+        $this->startStepResolver->logResolution($resolved, [
+            'article_id' => (int) $article->id,
+            'project_id' => (int) $project->id,
+            'task_id' => (int) $task->id,
+            'from_step' => $fromStep,
+            'phase' => 'queue',
+        ]);
+        RuntimeLogger::info('seo.article_rerun.requested', [
+            'article_id' => (int) $article->id,
+            'project_id' => (int) $project->id,
+            'task_id' => (int) $task->id,
+            'from_step' => $fromStep,
+            'semantic_key' => $resolved['semantic_key'],
+            'strategy' => $resolved['strategy'],
+            'resolved_node_id' => $resolved['resolved_node_id'],
+        ]);
+
+        if (! $resolved['ok'] || $resolved['resolved_node_id'] === null) {
             return [
                 'success' => false,
                 'blocked' => true,
-                'message' => $fromStep === self::FROM_ARTICLE
-                    ? 'Workflow chưa có bước viết bài (content) để chạy lại.'
-                    : 'Workflow chưa có bước dàn ý (outline) để chạy lại.',
+                'message' => (string) ($resolved['message']
+                    ?? 'Workflow của bài viết đã thay đổi và không còn bước tương ứng. Vui lòng chọn lại bước bắt đầu.'),
             ];
         }
+
+        $startNodeId = (string) $resolved['resolved_node_id'];
+        $resolutionStrategy = (string) $resolved['strategy'];
+        $semanticKey = (string) $resolved['semantic_key'];
 
         $lockKey = $this->lockKey((int) $article->id, $fromStep);
         $lock = Cache::lock($lockKey, 30);
@@ -159,6 +177,8 @@ final class ArticlePipelineRerunService
                 $sourceRunId,
                 $baseSettings,
                 $startNodeId,
+                $resolutionStrategy,
+                $semanticKey,
             ): SeoProjectRun {
                 $run = $this->workflowRunService->startRun(
                     $project,
@@ -171,9 +191,12 @@ final class ArticlePipelineRerunService
                     'settings' => array_merge($settings, [
                         'run_type' => 'rerun',
                         'rerun_from_step' => $fromStep,
+                        'semantic_key' => $semanticKey,
                         'source_run_id' => $sourceRunId,
+                        'source_article_id' => (int) $article->id,
                         'article_id' => (int) $article->id,
                         'start_node_id' => $startNodeId,
+                        'resolution_strategy' => $resolutionStrategy,
                     ]),
                 ]);
 

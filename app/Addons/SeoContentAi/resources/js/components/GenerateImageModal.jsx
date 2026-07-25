@@ -166,6 +166,8 @@ export default function GenerateImageModal({
     const [galleryItems, setGalleryItems] = useState([]);
     const [selectedSplitUrl, setSelectedSplitUrl] = useState('');
     const [generationError, setGenerationError] = useState('');
+    const [generationErrorTechnical, setGenerationErrorTechnical] = useState('');
+    const [generationErrorRetryable, setGenerationErrorRetryable] = useState(false);
     const pollTimerRef = useRef(null);
     const pendingMediaIdRef = useRef(null);
     const connectedUrlsRef = useRef(new Set());
@@ -288,6 +290,8 @@ export default function GenerateImageModal({
 
             if (status === 'failed') {
                 setGenerationError(String(payload?.error_message ?? payload?.message ?? t('editor_ai_failed')));
+                setGenerationErrorTechnical(String(payload?.technical_details ?? payload?.technicalDetails ?? ''));
+                setGenerationErrorRetryable(Boolean(payload?.retryable));
             }
         },
         [markConnectedItem],
@@ -356,6 +360,8 @@ export default function GenerateImageModal({
             setSubmitting(false);
             setPendingMediaId(null);
             setGenerationError(String(detail.message ?? t('editor_generate_image_failed')));
+            setGenerationErrorTechnical(String(detail.technicalDetails ?? detail.technical_details ?? ''));
+            setGenerationErrorRetryable(Boolean(detail.retryable));
         };
 
         window.addEventListener('article-generate-image-prompt-preview', onPromptPreview);
@@ -607,7 +613,28 @@ export default function GenerateImageModal({
             <section className="seo-generate-image-modal__preview-section">
                 <h4 className="seo-generate-image-modal__preview-heading">{t('generate_image_preview_tab_image')}</h4>
                 {generationError ? (
-                    <p className="seo-generate-image-modal__error">{generationError}</p>
+                    <div className="seo-generate-image-modal__error-box">
+                        <p className="seo-generate-image-modal__error">{generationError}</p>
+                        {generationErrorRetryable ? (
+                            <button
+                                type="button"
+                                className="seo-generate-image-modal__retry"
+                                onClick={() => {
+                                    setGenerationError('');
+                                    setGenerationErrorTechnical('');
+                                    setGenerationErrorRetryable(false);
+                                }}
+                            >
+                                {t('retry') || 'Retry'}
+                            </button>
+                        ) : null}
+                        {generationErrorTechnical ? (
+                            <details className="seo-generate-image-modal__tech">
+                                <summary>{t('view_technical_details') || 'View technical details'}</summary>
+                                <pre className="seo-generate-image-modal__tech-pre">{generationErrorTechnical}</pre>
+                            </details>
+                        ) : null}
+                    </div>
                 ) : null}
                 {submitting && previewItems.length === 0 ? (
                     <p className="seo-generate-image-modal__empty">{t('generating_image')}</p>

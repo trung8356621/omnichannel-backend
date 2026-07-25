@@ -8,9 +8,11 @@ use App\Addons\SeoContentAi\Models\Concerns\BelongsToOnDefaultConnection;
 use App\Models\Site;
 use App\Models\User;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class SeoProject extends Model
 {
@@ -42,6 +44,8 @@ class SeoProject extends Model
         'month' => 'date',
         'site_id' => 'integer',
         'total_tasks' => 'integer',
+        'archived_at' => 'datetime',
+        'archived_by' => 'integer',
     ];
 
     public function site(): BelongsTo
@@ -76,6 +80,36 @@ class SeoProject extends Model
     public function archives(): HasMany
     {
         return $this->hasMany(SeoProjectArchive::class, 'project_id');
+    }
+
+    public function currentArchive(): HasOne
+    {
+        return $this->hasOne(SeoProjectArchive::class, 'project_id')
+            ->whereNull('restored_at')
+            ->orderByDesc('id');
+    }
+
+    /**
+     * @param  Builder<SeoProject>  $query
+     * @return Builder<SeoProject>
+     */
+    public function scopeActiveProjects(Builder $query): Builder
+    {
+        return $query->whereNull('archived_at');
+    }
+
+    /**
+     * @param  Builder<SeoProject>  $query
+     * @return Builder<SeoProject>
+     */
+    public function scopeArchivedProjects(Builder $query): Builder
+    {
+        return $query->whereNotNull('archived_at');
+    }
+
+    public function isProjectArchived(): bool
+    {
+        return $this->archived_at !== null;
     }
 
     public function isArchive(): bool

@@ -6,8 +6,6 @@ namespace App\Addons\SeoContentAi\Support;
 
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
-use App\Addons\SeoContentAi\Support\SeoAccessControl;
-use App\Models\Site;
 use Illuminate\Validation\ValidationException;
 
 class SeoProjectTaskSyncDataNormalizer
@@ -32,7 +30,36 @@ class SeoProjectTaskSyncDataNormalizer
                 continue;
             }
 
-            $content = trim((string) ($row['source_content'] ?? ''));
+            $type = SeoProjectTask::normalizeType($row['type'] ?? SeoProjectTask::TYPE_CREATE);
+            $keyword = trim((string) ($row['keyword'] ?? ''));
+            $title = trim((string) ($row['title'] ?? ''));
+            $secondaryDescription = trim((string) ($row['secondary_description'] ?? ''));
+            $existingArticleTitle = trim((string) ($row['source_content'] ?? ''));
+
+            // Legacy rows: single source_content before keyword/title split.
+            if ($keyword === '' && $title === '' && SeoProjectTask::isNewArticleType($type) && $existingArticleTitle !== '') {
+                $keyword = $existingArticleTitle;
+            }
+
+            if (in_array($type, [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE], true)
+                && $keyword === ''
+                && $title === ''
+            ) {
+                if ($type === SeoProjectTask::TYPE_CREATE) {
+                    continue;
+                }
+
+                throw ValidationException::withMessages([
+                    'tasks_data' => __('seo-content-ai::filament.projects.keyword_or_title_required'),
+                ]);
+            }
+
+            $content = SeoProjectTask::deriveSourceContent(
+                $type,
+                $keyword,
+                $title,
+                $existingArticleTitle,
+            );
             if ($content === '') {
                 continue;
             }
@@ -47,11 +74,6 @@ class SeoProjectTaskSyncDataNormalizer
                     'site_id' => __('seo-content-ai::filament.projects.domain_required'),
                     'tasks_data' => __('seo-content-ai::filament.projects.domain_required'),
                 ]);
-            }
-
-            $type = (string) ($row['type'] ?? SeoProjectTask::TYPE_NEW_KEYWORD);
-            if (! in_array($type, SeoProjectTask::typeKeys(), true)) {
-                $type = SeoProjectTask::TYPE_NEW_KEYWORD;
             }
 
             $postType = null;
@@ -71,11 +93,15 @@ class SeoProjectTaskSyncDataNormalizer
             }
 
             if ($type === SeoProjectTask::TYPE_REWRITE) {
-                $rewriteMode = SeoProjectTask::normalizeRewriteMode($row['rewrite_mode'] ?? null);
+                // Rewrite luôn đọc bài gốc; keyword/title/description chỉ định hướng thêm.
+                $rewriteMode = SeoProjectTask::REWRITE_MODE_CONTENT;
                 $notes = trim((string) ($row['rewrite_notes'] ?? ''));
-                $rewriteNotes = $rewriteMode === SeoProjectTask::REWRITE_MODE_CONTENT && $notes !== ''
-                    ? $notes
-                    : null;
+                $rewriteNotes = $notes !== '' ? $notes : null;
+            }
+
+            if ($type === SeoProjectTask::TYPE_IMPROVE) {
+                $notes = trim((string) ($row['rewrite_notes'] ?? $row['improve_instruction'] ?? ''));
+                $rewriteNotes = $notes !== '' ? $notes : null;
             }
 
             $taskIdRaw = (int) ($row['id'] ?? $row['task_id'] ?? 0);
@@ -99,6 +125,9 @@ class SeoProjectTaskSyncDataNormalizer
                 postType: $postType,
                 sourceContent: $content,
                 sourceKey: $sourceKey,
+                keyword: $keyword !== '' ? $keyword : null,
+                title: $title !== '' ? $title : null,
+                secondaryDescription: $secondaryDescription !== '' ? $secondaryDescription : null,
                 rewriteMode: $rewriteMode,
                 rewriteNotes: $rewriteNotes,
                 description: $description,
@@ -117,14 +146,6 @@ class SeoProjectTaskSyncDataNormalizer
      */
     protected function allowedSiteIds(): array
     {
-        $query = Site::query();
-
-        if (SeoAccessControl::shouldScopeToAccountOwner()) {
-            $query->where('user_id', SeoAccessControl::accountOwnerId() ?? (int) auth()->id());
-        }
-
-        return $query->pluck('id')
-            ->map(static fn (mixed $id): int => (int) $id)
-            ->all();
+        return SeoAccessControl::accessibleSiteIds();
     }
 }

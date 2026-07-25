@@ -17,13 +17,17 @@ class SeoProjectTask extends Model
     use BelongsToOnDefaultConnection;
     use SoftDeletes;
 
+    public const TYPE_CREATE = 'create';
+
     public const TYPE_REWRITE = 'rewrite';
 
-    public const TYPE_NEW_KEYWORD = 'new_keyword';
-
-    public const TYPE_NEW_TITLE = 'new_title';
-
     public const TYPE_IMPROVE = 'improve';
+
+    /** @deprecated Use TYPE_CREATE — kept for legacy form/payload aliases. */
+    public const TYPE_NEW_KEYWORD = 'create';
+
+    /** @deprecated Use TYPE_CREATE — kept for legacy form/payload aliases. */
+    public const TYPE_NEW_TITLE = 'create';
 
     public const REWRITE_MODE_KEYWORD = 'keyword';
 
@@ -154,9 +158,8 @@ class SeoProjectTask extends Model
     public static function typeOptions(): array
     {
         return [
-            self::TYPE_NEW_KEYWORD => 'Viết mới (Từ khóa)',
-            self::TYPE_NEW_TITLE => 'Viết mới (Tiêu đề)',
-            self::TYPE_REWRITE => 'Viết lại (Sửa bài lỗi)',
+            self::TYPE_CREATE => __('seo-content-ai::filament.projects.type_create'),
+            self::TYPE_REWRITE => __('seo-content-ai::filament.projects.type_rewrite'),
             self::TYPE_IMPROVE => __('seo-content-ai::filament.projects.type_improve'),
         ];
     }
@@ -167,11 +170,23 @@ class SeoProjectTask extends Model
     public static function typeKeys(): array
     {
         return [
+            self::TYPE_CREATE,
             self::TYPE_REWRITE,
-            self::TYPE_NEW_KEYWORD,
-            self::TYPE_NEW_TITLE,
             self::TYPE_IMPROVE,
         ];
+    }
+
+    public static function normalizeType(mixed $value): string
+    {
+        $normalized = trim((string) $value);
+
+        return match ($normalized) {
+            self::TYPE_REWRITE, 'Viết lại (Sửa bài lỗi)' => self::TYPE_REWRITE,
+            self::TYPE_IMPROVE => self::TYPE_IMPROVE,
+            'new_keyword', 'new_title', self::TYPE_CREATE,
+            'Viết mới (Từ khóa)', 'Viết mới (Tiêu đề)' => self::TYPE_CREATE,
+            default => self::TYPE_CREATE,
+        };
     }
 
     /**
@@ -179,17 +194,53 @@ class SeoProjectTask extends Model
      */
     public static function newArticleTypes(): array
     {
-        return [self::TYPE_NEW_KEYWORD, self::TYPE_NEW_TITLE];
+        return [self::TYPE_CREATE];
     }
 
     public static function isNewArticleType(mixed $type): bool
     {
-        return in_array((string) $type, self::newArticleTypes(), true);
+        return self::normalizeType($type) === self::TYPE_CREATE;
     }
 
     public static function isManualRunType(string $type): bool
     {
-        return $type === self::TYPE_IMPROVE;
+        // Improve chạy Prompt Improve (rewrite workflow), không còn manual-only.
+        return false;
+    }
+
+    public static function deriveSourceContent(
+        string $type,
+        ?string $keyword,
+        ?string $title,
+        ?string $existingArticleTitle = null,
+    ): string {
+        $normalized = self::normalizeType($type);
+
+        if (in_array($normalized, [self::TYPE_REWRITE, self::TYPE_IMPROVE], true)) {
+            return trim((string) $existingArticleTitle);
+        }
+
+        $keyword = trim((string) $keyword);
+        if ($keyword !== '') {
+            return $keyword;
+        }
+
+        return trim((string) $title);
+    }
+
+    /**
+     * @return array{keyword: string, title: string, secondary_description: string}
+     */
+    public static function promptInputFields(
+        ?string $keyword,
+        ?string $title,
+        ?string $secondaryDescription,
+    ): array {
+        return [
+            'keyword' => trim((string) $keyword),
+            'title' => trim((string) $title),
+            'secondary_description' => trim((string) $secondaryDescription),
+        ];
     }
 
     /**

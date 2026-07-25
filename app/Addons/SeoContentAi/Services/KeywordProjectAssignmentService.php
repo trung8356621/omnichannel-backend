@@ -111,7 +111,7 @@ final class KeywordProjectAssignmentService
 
                 $sourceContent = trim((string) $record->phrase);
                 $siteId = $targetSiteId;
-                $key = $siteId.'|'.SeoProjectTask::TYPE_NEW_KEYWORD.'|'.mb_strtolower($sourceContent);
+                $key = $siteId.'|'.SeoProjectTask::TYPE_CREATE.'|'.mb_strtolower($sourceContent);
                 if (isset($existingMap[$key])) {
                     $duplicate++;
 
@@ -124,8 +124,11 @@ final class KeywordProjectAssignmentService
                             'project_id' => (int) $project->id,
                             'site_id' => $siteId > 0 ? $siteId : null,
                             'article_id' => null,
-                            'type' => SeoProjectTask::TYPE_NEW_KEYWORD,
+                            'type' => SeoProjectTask::TYPE_CREATE,
                             'source_content' => $sourceContent,
+                            'keyword' => $sourceContent,
+                            'title' => null,
+                            'secondary_description' => null,
                             'description' => null,
                             'post_type' => SeoProjectTask::POST_TYPE_ARTICLE,
                             'target_date' => $project->monthCarbon()->copy()->addDays($currentTotal)->format('Y-m-d'),

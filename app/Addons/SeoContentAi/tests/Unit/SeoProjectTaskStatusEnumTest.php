@@ -87,8 +87,12 @@ final class SeoProjectTaskStatusEnumTest extends TestCase
             SeoProjectRunAction::fromLegacyTaskType('rewrite'),
         );
         $this->assertSame(
-            SeoProjectRunAction::ArticleUpdate,
+            SeoProjectRunAction::ArticleRewrite,
             SeoProjectRunAction::fromLegacyTaskType('improve'),
+        );
+        $this->assertSame(
+            SeoProjectRunAction::ArticleCreate,
+            SeoProjectRunAction::fromLegacyTaskType('create'),
         );
         $this->assertSame(
             SeoProjectRunItemStatus::Manual,

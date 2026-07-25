@@ -7,9 +7,12 @@ namespace App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
+use App\Addons\SeoContentAi\Services\RunEngine\ContentProjectRunEngine;
 use App\Addons\SeoContentAi\Services\SeoProjectRunConsolidationService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
+use App\Addons\SeoContentAi\Support\RunEngine\ContentProjectRunEngineFeature;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use Filament\Actions;
 use Filament\Forms;
 use Filament\Notifications\Notification;
@@ -92,17 +95,36 @@ final class ListSeoProjectRuns extends Page
                         ->label(__('seo-content-ai::filament.projects.run_settings_generate_post_images'))
                         ->helperText(__('seo-content-ai::filament.projects.run_settings_generate_post_images_help'))
                         ->default(false),
+                    Forms\Components\Checkbox::make('use_php_engine')
+                        ->label('PHP Engine (Phase 1)')
+                        ->helperText('Bật orchestration PHP cho run này (A/B với legacy JS). Global flag hoặc project allowlist cũng bật.')
+                        ->default(fn (): bool => ContentProjectRunEngineFeature::shouldStartWithPhpEngine($this->project)),
                 ])
                 ->action(function (array $data): void {
                     try {
+                        $usePhpEngine = ContentProjectRunEngineFeature::shouldStartWithPhpEngine(
+                            $this->project,
+                            isset($data['use_php_engine']) ? (bool) $data['use_php_engine'] : null,
+                        );
+
                         $run = SeoProjectResource::createProjectWorkflowRun(
                             $this->project,
                             SeoProjectRun::MODE_FULL,
                             [
                                 'generate_post_images' => (bool) ($data['generate_post_images'] ?? false),
+                                'use_php_engine' => $usePhpEngine,
                             ],
                         );
-                        $url = SeoProjectResource::getUrl('view-run', ['run' => $run->id]).'?autorun=1';
+
+                        if ($usePhpEngine) {
+                            app(ContentProjectRunEngine::class)->start($run);
+                        }
+
+                        SeoConnectionContext::applyUrlDefaults();
+                        $url = SeoProjectResource::getUrl('view-run', ['run' => $run->id]);
+                        if (! $usePhpEngine) {
+                            $url .= '?autorun=1';
+                        }
 
                         Notification::make()
                             ->title(__('seo-content-ai::filament.projects.run_started'))
@@ -143,17 +165,36 @@ final class ListSeoProjectRuns extends Page
                         ->label(__('seo-content-ai::filament.projects.run_settings_generate_post_images'))
                         ->helperText(__('seo-content-ai::filament.projects.run_settings_generate_post_images_help'))
                         ->default(false),
+                    Forms\Components\Checkbox::make('use_php_engine')
+                        ->label('PHP Engine (Phase 1)')
+                        ->helperText('Bật orchestration PHP cho run test này (A/B với legacy JS).')
+                        ->default(fn (): bool => ContentProjectRunEngineFeature::shouldStartWithPhpEngine($this->project)),
                 ])
                 ->action(function (array $data): void {
                     try {
+                        $usePhpEngine = ContentProjectRunEngineFeature::shouldStartWithPhpEngine(
+                            $this->project,
+                            isset($data['use_php_engine']) ? (bool) $data['use_php_engine'] : null,
+                        );
+
                         $run = SeoProjectResource::createProjectWorkflowRun(
                             $this->project,
                             SeoProjectRun::MODE_TEST,
                             [
                                 'generate_post_images' => (bool) ($data['generate_post_images'] ?? false),
+                                'use_php_engine' => $usePhpEngine,
                             ],
                         );
-                        $url = SeoProjectResource::getUrl('view-run', ['run' => $run->id]).'?autorun=1';
+
+                        if ($usePhpEngine) {
+                            app(ContentProjectRunEngine::class)->start($run);
+                        }
+
+                        SeoConnectionContext::applyUrlDefaults();
+                        $url = SeoProjectResource::getUrl('view-run', ['run' => $run->id]);
+                        if (! $usePhpEngine) {
+                            $url .= '?autorun=1';
+                        }
 
                         Notification::make()
                             ->title(__('seo-content-ai::filament.projects.run_started'))

@@ -108,6 +108,7 @@ final class SeoProjectRunItemsReader
         if ($this->sourceForRun($run) === self::SOURCE_DATABASE) {
             $rows = SeoProjectRunItem::query()
                 ->where('run_id', (int) $run->id)
+                ->articleExecution()
                 ->selectRaw('status, COUNT(*) as aggregate_count')
                 ->groupBy('status')
                 ->pluck('aggregate_count', 'status');
@@ -191,6 +192,7 @@ final class SeoProjectRunItemsReader
     {
         $items = SeoProjectRunItem::query()
             ->where('run_id', (int) $run->id)
+            ->articleExecution()
             ->with(['taskIncludingDeleted', 'article'])
             ->orderBy('id')
             ->get();
@@ -220,9 +222,6 @@ final class SeoProjectRunItemsReader
         $statusEnum = SeoProjectRunItemStatus::tryFrom((string) $item->status)
             ?? SeoProjectRunItemStatus::Pending;
         $legacyStatus = $statusEnum->toLegacyJsonStatus();
-        if ($type === SeoProjectTask::TYPE_IMPROVE && $statusEnum === SeoProjectRunItemStatus::Pending) {
-            $legacyStatus = SeoProjectRunItemStatus::Manual->value;
-        }
 
         $articleId = (int) ($item->article_id ?? ($task instanceof SeoProjectTask ? ($task->article_id ?? 0) : 0));
         $articleId = $articleId > 0 ? $articleId : null;
@@ -237,8 +236,7 @@ final class SeoProjectRunItemsReader
 
         $canRetry = $taskExists
             && $task->archived_at === null
-            && ! in_array($legacyStatus, ['manual'], true)
-            && $type !== SeoProjectTask::TYPE_IMPROVE;
+            && ! in_array($legacyStatus, ['manual'], true);
 
         // Task soft-deleted vẫn tính archived nếu đã có archived_at (để ẩn khỏi UI sau khi detach).
         $taskArchived = ($task instanceof SeoProjectTask
@@ -350,8 +348,7 @@ final class SeoProjectRunItemsReader
 
             $canRetry = $taskExists
                 && ! $taskArchived
-                && $status !== 'manual'
-                && $type !== SeoProjectTask::TYPE_IMPROVE;
+                && $status !== 'manual';
             $canArchive = $articleId !== null && $articleId > 0 && ! $taskArchived;
 
             $editUrl = null;

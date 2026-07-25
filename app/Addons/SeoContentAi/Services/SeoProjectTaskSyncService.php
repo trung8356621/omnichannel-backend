@@ -32,6 +32,9 @@ final class SeoProjectTaskSyncService
         'post_type',
         'source_content',
         'source_key',
+        'keyword',
+        'title',
+        'secondary_description',
         'rewrite_mode',
         'rewrite_notes',
         'description',
@@ -88,8 +91,20 @@ final class SeoProjectTaskSyncService
      */
     public function countEffectiveTasks(array $tasksData): int
     {
-        return count(array_filter($tasksData, static fn (mixed $row): bool => is_array($row)
-            && trim((string) ($row['source_content'] ?? '')) !== ''));
+        return count(array_filter($tasksData, static function (mixed $row): bool {
+            if (! is_array($row)) {
+                return false;
+            }
+
+            $type = SeoProjectTask::normalizeType($row['type'] ?? SeoProjectTask::TYPE_CREATE);
+            if (in_array($type, SeoProjectTask::articlePickerTypes(), true)) {
+                return trim((string) ($row['source_content'] ?? '')) !== '';
+            }
+
+            return trim((string) ($row['keyword'] ?? '')) !== ''
+                || trim((string) ($row['title'] ?? '')) !== ''
+                || trim((string) ($row['source_content'] ?? '')) !== '';
+        }));
     }
 
     /**
@@ -447,10 +462,15 @@ final class SeoProjectTaskSyncService
             'post_type' => $row->postType,
             'source_content' => $row->sourceContent,
             'source_key' => $row->sourceKey,
+            'keyword' => $row->keyword,
+            'title' => $row->title,
+            'secondary_description' => $row->secondaryDescription,
             'rewrite_mode' => $row->type === SeoProjectTask::TYPE_REWRITE
-                ? SeoProjectTask::normalizeRewriteMode($row->rewriteMode ?? null)
+                ? SeoProjectTask::REWRITE_MODE_CONTENT
                 : SeoProjectTask::REWRITE_MODE_KEYWORD,
-            'rewrite_notes' => $row->type === SeoProjectTask::TYPE_REWRITE ? $row->rewriteNotes : null,
+            'rewrite_notes' => in_array($row->type, [SeoProjectTask::TYPE_REWRITE, SeoProjectTask::TYPE_IMPROVE], true)
+                ? $row->rewriteNotes
+                : null,
             'description' => $row->description,
             'loai_san_pham' => $row->loaiSanPham,
             'target_date' => $targetDate,
@@ -529,10 +549,8 @@ final class SeoProjectTaskSyncService
         string $targetDate,
     ): SeoProjectTask {
         $articleId = null;
-        if (in_array($row->type, SeoProjectTask::articlePickerTypes(), true)
-            || SeoProjectTask::isNewArticleType($row->type)
-        ) {
-            // Chỉ resolve article có sẵn theo title cho create rewrite/improve — không create article.
+        if (in_array($row->type, SeoProjectTask::articlePickerTypes(), true)) {
+            // Rewrite/Improve: gắn bài có sẵn theo tiêu đề picker — không tạo bài mới.
             $articleId = $this->resolveArticleIdByTitle($row->sourceContent, $row->siteId);
         }
 
@@ -545,11 +563,16 @@ final class SeoProjectTaskSyncService
             'loai_san_pham' => $row->loaiSanPham,
             'source_content' => $row->sourceContent,
             'source_key' => $row->sourceKey,
+            'keyword' => $row->keyword,
+            'title' => $row->title,
+            'secondary_description' => $row->secondaryDescription,
             'description' => $row->description,
             'rewrite_mode' => $row->type === SeoProjectTask::TYPE_REWRITE
-                ? SeoProjectTask::normalizeRewriteMode($row->rewriteMode ?? null)
+                ? SeoProjectTask::REWRITE_MODE_CONTENT
                 : SeoProjectTask::REWRITE_MODE_KEYWORD,
-            'rewrite_notes' => $row->type === SeoProjectTask::TYPE_REWRITE ? $row->rewriteNotes : null,
+            'rewrite_notes' => in_array($row->type, [SeoProjectTask::TYPE_REWRITE, SeoProjectTask::TYPE_IMPROVE], true)
+                ? $row->rewriteNotes
+                : null,
             'target_date' => $targetDate,
             'status' => SeoProjectTask::STATUS_PENDING,
             'connected_at' => $articleId !== null ? now() : null,
@@ -739,8 +762,20 @@ final class SeoProjectTaskSyncService
             ->map(fn (SeoProjectTask $task): array => [
                 'id' => (int) $task->id,
                 'site_id' => $task->site_id !== null ? (int) $task->site_id : null,
-                'type' => $task->type,
+                'type' => SeoProjectTask::normalizeType($task->type),
                 'source_content' => $task->source_content,
+                'keyword' => in_array(SeoProjectTask::normalizeType($task->type), [
+                    SeoProjectTask::TYPE_CREATE,
+                    SeoProjectTask::TYPE_REWRITE,
+                ], true) ? ($task->keyword ?? null) : null,
+                'title' => in_array(SeoProjectTask::normalizeType($task->type), [
+                    SeoProjectTask::TYPE_CREATE,
+                    SeoProjectTask::TYPE_REWRITE,
+                ], true) ? ($task->title ?? null) : null,
+                'secondary_description' => in_array(SeoProjectTask::normalizeType($task->type), [
+                    SeoProjectTask::TYPE_CREATE,
+                    SeoProjectTask::TYPE_REWRITE,
+                ], true) ? ($task->secondary_description ?? null) : null,
                 'loai_san_pham' => SeoProjectTask::isNewArticleType($task->type)
                     && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
                         ? $task->loai_san_pham
@@ -753,11 +788,12 @@ final class SeoProjectTaskSyncService
                     ? SeoProjectTask::normalizePostType($task->post_type)
                     : null,
                 'rewrite_mode' => $task->type === SeoProjectTask::TYPE_REWRITE
-                    ? SeoProjectTask::normalizeRewriteMode($task->rewrite_mode)
+                    ? SeoProjectTask::REWRITE_MODE_CONTENT
                     : null,
-                'rewrite_notes' => $task->type === SeoProjectTask::TYPE_REWRITE
-                    ? $task->rewrite_notes
-                    : null,
+                'rewrite_notes' => in_array(SeoProjectTask::normalizeType($task->type), [
+                    SeoProjectTask::TYPE_REWRITE,
+                    SeoProjectTask::TYPE_IMPROVE,
+                ], true) ? $task->rewrite_notes : null,
                 'connected_at' => $task->connected_at?->format('Y-m-d H:i:s'),
                 'completed_at' => $task->completed_at?->format('Y-m-d H:i:s'),
             ])

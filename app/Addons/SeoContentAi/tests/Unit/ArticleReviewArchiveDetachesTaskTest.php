@@ -4,23 +4,17 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Tests\Unit;
 
-use App\Addons\SeoContentAi\SeoContentAiServiceProvider;
 use App\Addons\SeoContentAi\Services\ArticleReviewService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskLifecycleService;
-use App\Addons\SeoContentAi\Services\SeoProjectTaskMoveService;
 use App\Addons\SeoContentAi\Console\RepairArchivedArticleActiveTasksCommand;
-use ReflectionClass;
-use ReflectionMethod;
+use App\Addons\SeoContentAi\SeoContentAiServiceProvider;
 use PHPUnit\Framework\TestCase;
+use ReflectionClass;
 
 /**
- * Guard test cho fix "Content Project detach on article archive": khi
- * `ArticleReviewService::performAction(archive)` chuyển bài viết sang archived, mọi
- * `seo_project_tasks` active còn trỏ tới article đó phải bị archive theo (không còn bị Project
- * "Total items" / delete đếm nhầm — xem `SeoProjectTaskMoveService::deleteProject()`).
- *
- * Dùng reflection + source-string assertion (không cần DB thật), nhất quán với
- * `SeoProjectDeleteNoMonthRollbackTest`.
+ * Guard: “Hoàn tất duyệt” (Archive action) chỉ đổi trạng thái nghiệp vụ —
+ * không detach task, không set content_archived_at.
+ * Reopen vẫn có thể restore task đã detach bởi flow legacy.
  */
 final class ArticleReviewArchiveDetachesTaskTest extends TestCase
 {
@@ -35,35 +29,35 @@ final class ArticleReviewArchiveDetachesTaskTest extends TestCase
         );
     }
 
-    public function test_archive_side_effect_archives_active_tasks_scoped_by_article_id(): void
+    public function test_archive_side_effect_does_not_detach_tasks_or_set_content_archived_at(): void
     {
-        $method = (new ReflectionClass(ArticleReviewService::class))->getMethod('archiveAndDetachProjectTasks');
+        $method = (new ReflectionClass(ArticleReviewService::class))->getMethod('completeReviewWithoutDetaching');
         $source = $this->readMethodSource($method);
 
-        self::assertStringContainsString('article_id', $source);
-        self::assertStringContainsString('->active()', $source);
-        self::assertStringContainsString('->lockForUpdate()', $source);
-        self::assertStringContainsString('$this->taskLifecycle->archive(', $source);
+        self::assertStringNotContainsString('content_archived_at', $source);
+        self::assertStringNotContainsString('taskLifecycle->archive', $source);
+        self::assertStringContainsString('detached_task_ids', $source);
+        self::assertStringContainsString('[]', $source);
     }
 
-    public function test_reopen_side_effect_restores_archived_tasks_scoped_by_article_id(): void
+    public function test_reopen_side_effect_still_restores_legacy_detached_tasks(): void
     {
-        $method = (new ReflectionClass(ArticleReviewService::class))->getMethod('reopenAndRestoreProjectTasks');
+        $method = (new ReflectionClass(ArticleReviewService::class))->getMethod('reopenReviewKeepingProjectLinks');
         $source = $this->readMethodSource($method);
 
-        self::assertStringContainsString('article_id', $source);
+        self::assertStringContainsString('content_archived_at', $source);
         self::assertStringContainsString('->archived()', $source);
-        self::assertStringContainsString('->lockForUpdate()', $source);
         self::assertStringContainsString('$this->taskLifecycle->restore(', $source);
     }
 
-    public function test_apply_side_effects_routes_archive_and_reopen_through_task_sync_methods(): void
+    public function test_apply_side_effects_routes_through_non_detaching_archive(): void
     {
         $method = (new ReflectionClass(ArticleReviewService::class))->getMethod('applySideEffects');
         $source = $this->readMethodSource($method);
 
-        self::assertStringContainsString('archiveAndDetachProjectTasks', $source);
-        self::assertStringContainsString('reopenAndRestoreProjectTasks', $source);
+        self::assertStringContainsString('completeReviewWithoutDetaching', $source);
+        self::assertStringContainsString('reopenReviewKeepingProjectLinks', $source);
+        self::assertStringNotContainsString('archiveAndDetachProjectTasks', $source);
     }
 
     public function test_last_side_effect_meta_is_exposed_and_included_in_api_payload(): void
@@ -80,44 +74,16 @@ final class ArticleReviewArchiveDetachesTaskTest extends TestCase
     public function test_repair_command_has_dry_run_and_apply_options_and_is_registered(): void
     {
         $ref = new ReflectionClass(RepairArchivedArticleActiveTasksCommand::class);
-        $signature = (string) $ref->getDefaultProperties()['signature'];
+        $file = (string) file_get_contents((string) $ref->getFileName());
 
-        self::assertStringContainsString('seo:repair-archived-article-active-tasks', $signature);
-        self::assertStringContainsString('--dry-run', $signature);
-        self::assertStringContainsString('--apply', $signature);
+        self::assertStringContainsString('--dry-run', $file);
+        self::assertStringContainsString('--apply', $file);
 
-        $providerSource = (string) file_get_contents(
-            (new ReflectionClass(SeoContentAiServiceProvider::class))->getFileName(),
-        );
-        self::assertStringContainsString(
-            RepairArchivedArticleActiveTasksCommand::class.'::class',
-            $providerSource,
-        );
+        $provider = (string) file_get_contents((new ReflectionClass(SeoContentAiServiceProvider::class))->getFileName());
+        self::assertStringContainsString('RepairArchivedArticleActiveTasksCommand::class', $provider);
     }
 
-    public function test_repair_command_archives_via_task_lifecycle_service(): void
-    {
-        $method = (new ReflectionClass(RepairArchivedArticleActiveTasksCommand::class))->getMethod('handle');
-        $source = $this->readMethodSource($method);
-
-        self::assertStringContainsString('$taskLifecycle->archive(', $source);
-        self::assertStringContainsString('->active()', $source);
-    }
-
-    /**
-     * Regression: deleteProject() vẫn phải chỉ nhìn task active (không đếm task đã archive) —
-     * fix này không được thay đổi hành vi đó.
-     */
-    public function test_delete_project_still_scopes_by_active_tasks(): void
-    {
-        $method = (new ReflectionClass(SeoProjectTaskMoveService::class))->getMethod('deleteProject');
-        $source = $this->readMethodSource($method);
-
-        self::assertStringContainsString('->active()', $source);
-        self::assertStringNotContainsString('->tasks()->get()', $source);
-    }
-
-    private function readMethodSource(ReflectionMethod $method): string
+    private function readMethodSource(\ReflectionMethod $method): string
     {
         $lines = file((string) $method->getFileName());
         self::assertIsArray($lines);

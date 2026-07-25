@@ -7263,12 +7263,19 @@ export default function SeoArticleEditor({
                 if (result && typeof result === 'object' && result.ok === false) {
                     clearAwaitingClientImagePlaceholders();
                     const message = String(result.message ?? t('editor_generate_image_failed'));
+                    const technical = String(result.technical_details ?? result.technicalDetails ?? '');
                     window.dispatchEvent(
                         new CustomEvent('article-ai-media-failed', {
-                            detail: { type: 'image', message },
+                            detail: {
+                                type: 'image',
+                                message,
+                                technicalDetails: technical,
+                                classification: result.classification ?? null,
+                                retryable: Boolean(result.retryable),
+                            },
                         }),
                     );
-                    window.alert(message);
+                    // Không dùng window.alert — Filament Notification + modal/event đã hiển thị.
                 } else if (target !== 'product-gallery') {
                     // Không phụ thuộc Livewire event — gắn seoMediaId + poll từ return value / ai-jobs.
                     let mediaId = Number(result?.seo_media_id ?? result?.seoMediaId ?? 0);
@@ -7363,7 +7370,7 @@ export default function SeoArticleEditor({
                         },
                     }),
                 );
-                window.alert(message);
+                // Không dùng window.alert — tránh raw provider error; Notification/event đã đủ.
             } finally {
                 generateImageInFlightRef.current = false;
                 setArticleAutosaveLock('generate-image-request', false);

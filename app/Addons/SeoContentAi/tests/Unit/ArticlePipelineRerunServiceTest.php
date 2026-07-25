@@ -96,6 +96,11 @@ final class ArticlePipelineRerunServiceTest extends TestCase
         self::assertStringContainsString("'run_type' => 'rerun'", $serviceSource);
         self::assertStringContainsString("'rerun_from_step'", $serviceSource);
         self::assertStringContainsString("'source_run_id'", $serviceSource);
+        self::assertStringContainsString('ArticlePipelineRerunStartStepResolver', $serviceSource);
+        self::assertStringContainsString("'semantic_key'", $serviceSource);
+        self::assertStringContainsString("'resolution_strategy'", $serviceSource);
+        self::assertStringContainsString('ArticlePipelineRerunStartStepResolver', $source);
+        self::assertStringContainsString('đã thay đổi', $source);
     }
 
     public function test_service_does_not_create_run_when_blocked_path_documented(): void

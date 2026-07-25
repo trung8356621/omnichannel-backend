@@ -126,6 +126,48 @@ return [
     'content_project' => [
         /** Run item status=processing older than this (minutes) may be reclaimed. */
         'run_item_stale_minutes' => (int) env('SEO_CONTENT_PROJECT_RUN_ITEM_STALE_MINUTES', 30),
+        /**
+         * Tạm: log 1 event / cancel + snapshot busy khi build stepsForTask.
+         * Tắt sau khi chốt root cause Ngắt (A/B/C/D). Không log prompt/AI output.
+         */
+        'cancel_debug' => (bool) env('SEO_CONTENT_PROJECT_CANCEL_DEBUG', false),
+
+        /**
+         * Phase 1 ContentProjectRunEngine — PHP owns article orchestration.
+         * false = legacy JS for-loop (rollback). true = queue article jobs (global).
+         * Prefer per-run/project opt-in via settings / project allowlist (Phase 1.5).
+         * Never run both paths on the same run.
+         */
+        'php_engine' => (bool) env('CONTENT_PROJECT_PHP_ENGINE', false),
+
+        /**
+         * Comma-separated seo_projects.id allowlist for PHP engine when global flag OFF.
+         * Example: CONTENT_PROJECT_PHP_ENGINE_PROJECT_IDS=12,34
+         */
+        'php_engine_project_ids' => array_values(array_filter(array_map(
+            static fn (string $id): int => (int) trim($id),
+            explode(',', (string) env('CONTENT_PROJECT_PHP_ENGINE_PROJECT_IDS', '')),
+        ), static fn (int $id): bool => $id > 0)),
+
+        /**
+         * active_dispatch TTL (minutes). Release only when age ≥ TTL AND heartbeat missing/stale.
+         * Job still heartbeating → không release (worker còn sống).
+         */
+        'active_dispatch_ttl_minutes' => (int) env('CONTENT_PROJECT_ACTIVE_DISPATCH_TTL_MINUTES', 45),
+
+        /**
+         * Heartbeat stale threshold (minutes) for WARNING + TTL release gate.
+         * Quá hạn → log warning / health warn — không auto-resume ngay.
+         */
+        'heartbeat_stale_minutes' => (int) env('CONTENT_PROJECT_HEARTBEAT_STALE_MINUTES', 20),
+
+        /** Queue name for RunContentProjectArticleJob. */
+        'run_queue' => env('CONTENT_PROJECT_RUN_QUEUE', 'seo-content-run'),
+
+        /**
+         * Future parallel articles per run. Phase 1 engine always enforces 1.
+         */
+        'max_parallel_articles' => (int) env('CONTENT_PROJECT_MAX_PARALLEL_ARTICLES', 1),
     ],
 
     /** Log Article Editor mount/SEO bootstrap timings (no body/tokens). */

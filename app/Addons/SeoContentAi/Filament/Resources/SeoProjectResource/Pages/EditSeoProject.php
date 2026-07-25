@@ -27,7 +27,7 @@ class EditSeoProject extends SeoEditRecord
 
         /** @var SeoProject $project */
         $project = $this->getRecord();
-        if ($project->isArchive()) {
+        if ($project->isArchive() || $project->isProjectArchived()) {
             $this->redirect(SeoProjectResource::getUrl('index'));
         }
     }

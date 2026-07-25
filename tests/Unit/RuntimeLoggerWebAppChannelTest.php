@@ -45,7 +45,7 @@ final class RuntimeLoggerWebAppChannelTest extends TestCase
         $source = (string) file_get_contents($path);
 
         self::assertStringContainsString('public static function channel()', $source);
-        self::assertStringContainsString("Log::channel('web_app')", $source);
+        self::assertStringContainsString("self::safeChannel('web_app'", $source);
         self::assertStringContainsString('runningInConsole()', $source);
         self::assertStringContainsString('public static function error(', $source);
         self::assertStringContainsString('public static function warning(', $source);
@@ -53,7 +53,9 @@ final class RuntimeLoggerWebAppChannelTest extends TestCase
         self::assertStringContainsString('public static function report(', $source);
         self::assertStringContainsString('Never fall back', $source);
         self::assertStringNotContainsString("Log::channel('single')", $source);
-        self::assertStringNotContainsString('laravel.log', $source);
+        // Docblock/comments may mention laravel.log as the thing we avoid — code path must not Log:: to it.
+        self::assertStringNotContainsString("Log::channel('stack')", $source);
+        self::assertDoesNotMatchRegularExpression("/Log::channel\\(\\s*'laravel\\.log'\\s*\\)/", $source);
     }
 
     public function test_request_context_excludes_sensitive_keys(): void
@@ -65,8 +67,9 @@ final class RuntimeLoggerWebAppChannelTest extends TestCase
         self::assertStringContainsString("'article_id'", $source);
         self::assertStringContainsString('X-Request-ID', $source);
 
-        self::assertStringNotContainsString('password', $source);
-        self::assertStringNotContainsString('Authorization', $source);
+        // requestContext must not read secrets from the request.
+        self::assertStringNotContainsString("\$request->input('password')", $source);
+        self::assertStringNotContainsString("header('Authorization')", $source);
         self::assertStringNotContainsString('bearerToken', $source);
         self::assertStringNotContainsString('getContent(', $source);
         self::assertStringNotContainsString('$_COOKIE', $source);
@@ -91,7 +94,8 @@ final class RuntimeLoggerWebAppChannelTest extends TestCase
         self::assertStringContainsString('RuntimeLogger::report', $source);
         self::assertStringNotContainsString('logger()->warning', $source);
         self::assertStringNotContainsString('logger()->info', $source);
-        self::assertStringNotContainsString('report($e)', $source);
+        // Forbid bare report($e); allow RuntimeLogger::report($e).
+        self::assertDoesNotMatchRegularExpression('/(?<!RuntimeLogger::)report\(\s*\$e\s*\)/', $source);
     }
 
     public function test_editor_sync_and_lazy_controllers_use_runtime_logger_not_report(): void

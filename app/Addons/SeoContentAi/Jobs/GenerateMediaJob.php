@@ -19,7 +19,9 @@ use App\Addons\SeoContentAi\Services\PromptResultLinkService;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
+use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Support\ImageToolType;
+use App\Addons\SeoContentAi\Support\ImagenProviderErrorClassifier;
 use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -232,21 +234,46 @@ class GenerateMediaJob implements ShouldQueue
 
         $rawMessage = trim((string) $exception->getMessage());
 
+        if ($exception instanceof PromptRunException) {
+            $userMessage = $exception->userMessage();
+            $technical = $exception->technicalDetails();
+            $audit = $exception->audit();
+            $variables = is_array($media->prompt_variables) ? $media->prompt_variables : [];
+            if ($audit !== []) {
+                $variables['imagen_provider_audit'] = $audit;
+            }
+            $variables['imagen_technical_details'] = ImagenProviderErrorClassifier::redactSecrets($technical);
+            $media->update([
+                'status' => 'failed',
+                'error_message' => mb_substr($userMessage, 0, 1000),
+                'prompt_variables' => $variables,
+            ]);
+
+            return;
+        }
+
+        $presented = ImagenProviderErrorClassifier::present($rawMessage);
+
         $message = match (true) {
             $exception instanceof TimeoutExceededException => 'Job AI bị timeout khi xử lý (quá lâu). Chạy queue worker với --timeout=360 rồi bấm Thử lại.',
             str_contains($rawMessage, 'attempted too many times') => 'Job AI bị hủy giữa chừng (queue worker timeout). Khởi động lại worker với --timeout=360 rồi bấm Thử lại.',
             str_contains(strtolower($rawMessage), 'curl error 28')
                 || str_contains(strtolower($rawMessage), 'timed out') => 'Gemini API không phản hồi kịp. Thử lại sau hoặc đổi model Imagen 4 trong Cấu hình AI.',
-            default => $rawMessage,
+            $presented['classification'] === ImagenProviderErrorClassifier::PROVIDER_TRANSIENT => $presented['user_message'],
+            default => $presented['user_message'] !== '' ? $presented['user_message'] : $rawMessage,
         };
 
         if ($message === '') {
             $message = 'Job AI thất bại. Vui lòng bấm Thử lại.';
         }
 
+        $variables = is_array($media->prompt_variables) ? $media->prompt_variables : [];
+        $variables['imagen_technical_details'] = ImagenProviderErrorClassifier::redactSecrets($rawMessage);
+
         $media->update([
             'status' => 'failed',
             'error_message' => mb_substr($message, 0, 1000),
+            'prompt_variables' => $variables,
         ]);
     }
 

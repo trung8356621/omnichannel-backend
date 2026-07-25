@@ -30,7 +30,7 @@ final class SeoProjectWorkflowStepCatalogService
      */
     public function listRerunnableSteps(SeoProjectTask $projectTask): array
     {
-        $seoTask = $this->resolveSeoTask($projectTask);
+        $seoTask = $this->resolveSeoTaskForStepRetry($projectTask);
         if (! $seoTask instanceof SeoTask) {
             return [];
         }
@@ -175,11 +175,11 @@ final class SeoProjectWorkflowStepCatalogService
 
     public function resolveSeoTask(SeoProjectTask $projectTask): ?SeoTask
     {
-        $isContentRewrite = (string) $projectTask->type === SeoProjectTask::TYPE_REWRITE
-            && SeoProjectTask::normalizeRewriteMode($projectTask->rewrite_mode ?? null)
-                === SeoProjectTask::REWRITE_MODE_CONTENT;
+        $type = SeoProjectTask::normalizeType($projectTask->type);
+        $usesRewriteWorkflow = $type === SeoProjectTask::TYPE_REWRITE
+            || $type === SeoProjectTask::TYPE_IMPROVE;
 
-        $taskId = $isContentRewrite
+        $taskId = $usesRewriteWorkflow
             ? ($this->settings->getRewriteArticleTaskId() ?? $this->settings->getPublishArticleTaskId())
             : $this->settings->getPublishArticleTaskId();
 
@@ -192,6 +192,37 @@ final class SeoProjectWorkflowStepCatalogService
         return $task instanceof SeoTask ? $task : null;
     }
 
+    /**
+     * Workflow dùng cho menu «Chạy lại từng prompt».
+     * Rewrite thường chỉ 1 node «Prompt block» — ưu tiên publish nếu có nhiều bước chức năng.
+     */
+    public function resolveSeoTaskForStepRetry(SeoProjectTask $projectTask): ?SeoTask
+    {
+        $primary = $this->resolveSeoTask($projectTask);
+        $publishId = $this->settings->getPublishArticleTaskId();
+        $publish = $publishId !== null && $publishId > 0
+            ? SeoTask::query()->find($publishId)
+            : null;
+        $publish = $publish instanceof SeoTask ? $publish : null;
+
+        $type = SeoProjectTask::normalizeType($projectTask->type);
+        $usesRewriteWorkflow = $type === SeoProjectTask::TYPE_REWRITE
+            || $type === SeoProjectTask::TYPE_IMPROVE;
+
+        if (! $usesRewriteWorkflow) {
+            return $primary ?? $publish;
+        }
+
+        $primaryCount = $this->countPromptNodes($primary);
+        $publishCount = $this->countPromptNodes($publish);
+
+        if ($publish instanceof SeoTask && $publishCount > $primaryCount) {
+            return $publish;
+        }
+
+        return $primary ?? $publish;
+    }
+
     public function findStep(SeoProjectTask $projectTask, string $nodeId): ?array
     {
         foreach ($this->listRerunnableSteps($projectTask) as $step) {
@@ -201,6 +232,27 @@ final class SeoProjectWorkflowStepCatalogService
         }
 
         return null;
+    }
+
+    private function countPromptNodes(?SeoTask $seoTask): int
+    {
+        if (! $seoTask instanceof SeoTask) {
+            return 0;
+        }
+
+        $flow = is_array($seoTask->flow_data) ? $seoTask->flow_data : [];
+        $nodes = is_array($flow['nodes'] ?? null) ? $flow['nodes'] : [];
+        $count = 0;
+        foreach ($nodes as $node) {
+            if (! is_array($node)) {
+                continue;
+            }
+            if ((string) ($node['type'] ?? '') === 'prompt') {
+                $count++;
+            }
+        }
+
+        return $count;
     }
 
     /**

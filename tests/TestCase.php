@@ -5,17 +5,69 @@ namespace Tests;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
+use Throwable;
 
 abstract class TestCase extends BaseTestCase
 {
     protected function setUp(): void
     {
         parent::setUp();
-
-        $this->ensureSeoDatabaseConnectionIsConfigured();
     }
 
-    private function ensureSeoDatabaseConnectionIsConfigured(): void
+    protected function refreshApplication(): void
+    {
+        parent::refreshApplication();
+
+        // Must run before setUpTraits (DatabaseTransactions) — afterApplicationCreated is too late.
+        $this->configureTestingDatabaseConnections();
+    }
+
+    /**
+     * Testing strategy:
+     *
+     * - phpunit.xml sets DB_CONNECTION=sqlite + DB_DATABASE=:memory:.
+     * - Core models use `database.core_connection` (default mysql) via UsesCoreDatabaseConnection.
+     * - SEO models use `omi_seo_ai`.
+     *
+     * Default (SEO_TEST_USE_MYSQL unset/false):
+     *   Point core_connection + omi_seo_ai at the same sqlite default config so
+     *   RefreshDatabase migrations run without a live MySQL daemon.
+     *
+     * Server with real DB (recommended for SEO integration tests):
+     *   SEO_TEST_USE_MYSQL=true (+ reachable mysql / omi_seo_ai).
+     */
+    private function configureTestingDatabaseConnections(): void
+    {
+        if (! app()->environment('testing')) {
+            return;
+        }
+
+        if (filter_var(env('SEO_TEST_USE_MYSQL', false), FILTER_VALIDATE_BOOL)) {
+            $this->ensureSeoDatabaseConnectionFromMysql();
+
+            return;
+        }
+
+        $default = (string) config('database.default', 'sqlite');
+        $defaultConfig = config('database.connections.'.$default);
+        if (! is_array($defaultConfig)) {
+            return;
+        }
+
+        Config::set('database.core_connection', $default);
+        Config::set('database.connections.omi_seo_ai', $defaultConfig);
+
+        try {
+            DB::purge('omi_seo_ai');
+            if ($default !== 'mysql') {
+                DB::purge('mysql');
+            }
+        } catch (Throwable) {
+            // Not resolved yet.
+        }
+    }
+
+    private function ensureSeoDatabaseConnectionFromMysql(): void
     {
         $this->ensureCoreMysqlDatabaseIsConfigured();
 
@@ -35,7 +87,10 @@ abstract class TestCase extends BaseTestCase
             'database' => (string) env('SEO_TEST_DATABASE', env('SEO_DB_DATABASE', 'omi_seo_ai')),
         ]));
 
-        DB::purge($connectionName);
+        try {
+            DB::purge($connectionName);
+        } catch (Throwable) {
+        }
     }
 
     private function ensureCoreMysqlDatabaseIsConfigured(): void
@@ -65,6 +120,9 @@ abstract class TestCase extends BaseTestCase
         }
 
         Config::set('database.connections.mysql.database', $database);
-        DB::purge('mysql');
+        try {
+            DB::purge('mysql');
+        } catch (Throwable) {
+        }
     }
 }

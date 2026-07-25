@@ -51,6 +51,9 @@ final class SeoProjectRunItemService
             'type' => (string) $task->type,
             'post_type' => $task->post_type,
             'source_content' => (string) $task->source_content,
+            'keyword' => $task->keyword,
+            'title' => $task->title,
+            'secondary_description' => $task->secondary_description,
             'rewrite_mode' => $task->rewrite_mode,
             'rewrite_notes' => $task->rewrite_notes,
             'description' => $task->description,
@@ -66,9 +69,12 @@ final class SeoProjectRunItemService
             SeoProjectRunAction::ArticleRewrite => [
                 'task_id' => (int) $task->id,
                 'article_id' => (int) ($task->article_id ?? 0),
-                'rewrite_mode' => SeoProjectTask::normalizeRewriteMode($task->rewrite_mode),
+                'rewrite_mode' => SeoProjectTask::REWRITE_MODE_CONTENT,
                 'rewrite_notes' => (string) ($task->rewrite_notes ?? ''),
                 'source_content' => (string) $task->source_content,
+                'keyword' => (string) ($task->keyword ?? ''),
+                'title' => (string) ($task->title ?? ''),
+                'secondary_description' => (string) ($task->secondary_description ?? ''),
                 'description' => (string) ($task->description ?? ''),
                 'site_id' => (int) ($task->site_id ?? 0),
             ],
@@ -76,6 +82,7 @@ final class SeoProjectRunItemService
                 'task_id' => (int) $task->id,
                 'article_id' => (int) ($task->article_id ?? 0),
                 'source_content' => (string) $task->source_content,
+                'rewrite_notes' => (string) ($task->rewrite_notes ?? ''),
                 'description' => (string) ($task->description ?? ''),
                 'site_id' => (int) ($task->site_id ?? 0),
             ],
@@ -84,6 +91,9 @@ final class SeoProjectRunItemService
                 'type' => (string) $task->type,
                 'post_type' => SeoProjectTask::normalizePostType($task->post_type),
                 'source_content' => (string) $task->source_content,
+                'keyword' => (string) ($task->keyword ?? ''),
+                'title' => (string) ($task->title ?? ''),
+                'secondary_description' => (string) ($task->secondary_description ?? ''),
                 'description' => (string) ($task->description ?? ''),
                 'loai_san_pham' => (string) ($task->loai_san_pham ?? ''),
                 'target_date' => $task->target_date?->format('Y-m-d') ?? '',
@@ -149,9 +159,7 @@ final class SeoProjectRunItemService
                 'task_id' => (int) $task->id,
                 'article_id' => $task->article_id !== null ? (int) $task->article_id : null,
                 'action' => $action->value,
-                'status' => $task->type === SeoProjectTask::TYPE_IMPROVE
-                    ? SeoProjectRunItemStatus::Manual->value
-                    : SeoProjectRunItemStatus::Pending->value,
+                'status' => SeoProjectRunItemStatus::Pending->value,
                 'attempt' => 1,
                 'idempotency_key' => $idempotencyKey,
                 'input_snapshot' => $snapshot,
@@ -686,16 +694,19 @@ final class SeoProjectRunItemService
 
     public function recomputeRunCounters(SeoProjectRun $run, bool $markCompleted = false): SeoProjectRun
     {
-        $total = (int) SeoProjectRunItem::query()->where('run_id', (int) $run->id)->count();
-        $succeeded = (int) SeoProjectRunItem::query()
+        // Chỉ article execution — step/helper không tính counter / không reopen completed.
+        $base = SeoProjectRunItem::query()
             ->where('run_id', (int) $run->id)
+            ->articleExecution();
+
+        $total = (int) (clone $base)->count();
+        $succeeded = (int) (clone $base)
             ->whereIn('status', [
                 SeoProjectRunItemStatus::Success->value,
                 SeoProjectRunItemStatus::Skipped->value,
             ])
             ->count();
-        $failed = (int) SeoProjectRunItem::query()
-            ->where('run_id', (int) $run->id)
+        $failed = (int) (clone $base)
             ->where('status', SeoProjectRunItemStatus::Failed->value)
             ->count();
 
@@ -708,10 +719,9 @@ final class SeoProjectRunItemService
         if ($markCompleted) {
             $payload['status'] = SeoProjectRun::STATUS_COMPLETED;
             $payload['finished_at'] = now();
-        } else {
-            $payload['status'] = SeoProjectRun::STATUS_RUNNING;
-            $payload['finished_at'] = null;
         }
+        // markCompleted=false: chỉ cập nhật counter — KHÔNG ép status=running
+        // (trước đây step retry / abandon làm run completed → running → F5 autorun lại).
 
         $run->update($payload);
 

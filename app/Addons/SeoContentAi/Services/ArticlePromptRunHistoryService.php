@@ -21,6 +21,18 @@ final class ArticlePromptRunHistoryService
     ];
 
     /**
+     * Node workflow hệ thống — không phải prompt AI nội dung.
+     *
+     * @var list<string>
+     */
+    private const HIDDEN_STEP_TYPES = [
+        'article',
+        'article_filter',
+        'filter',
+        'action',
+    ];
+
+    /**
      * @param  list<int>  $accessibleProjectIds
      * @return list<array<string, mixed>>
      */
@@ -180,7 +192,7 @@ final class ArticlePromptRunHistoryService
         $seenRunItemIds = [];
         $seenLinkIds = [];
         $groups = $runs
-            ->map(function (array $entry) use ($results, $linkedRows, &$seenResultIds, &$seenRunItemIds, &$seenLinkIds): array {
+            ->map(function (array $entry) use ($results, $linkedRows, &$seenResultIds, &$seenRunItemIds, &$seenLinkIds): ?array {
                 /** @var SeoProjectRun $run */
                 $run = $entry['run'];
                 /** @var Collection<int, array<string, mixed>> $items */
@@ -202,6 +214,7 @@ final class ArticlePromptRunHistoryService
                         ));
 
                         return collect($steps)
+                            ->filter(fn (array $step): bool => ! $this->isHiddenWorkflowStep($step))
                             ->map(function (array $step, int $index) use ($item, $run, $results, &$seenResultIds): array {
                                 $resultId = (int) ($step['result_id'] ?? 0);
                                 $result = $resultId > 0 ? $results->get($resultId) : null;
@@ -273,10 +286,16 @@ final class ArticlePromptRunHistoryService
                     ->values()
                     ->all();
 
-                $prompts = collect($prompts)
-                    ->merge($runLinkedPrompts)
-                    ->values()
-                    ->all();
+                $prompts = $this->finalizePromptList(
+                    collect($prompts)->merge($runLinkedPrompts)->all(),
+                );
+
+                if ($prompts === []) {
+                    return null;
+                }
+
+                $runAt = $run->started_at ?? $run->created_at;
+                $latestPromptAt = $this->latestPromptTimestamp($prompts);
 
                 return [
                     'id' => 'run-'.$run->id,
@@ -284,10 +303,11 @@ final class ArticlePromptRunHistoryService
                     'project_name' => trim((string) ($run->project?->name ?? '')),
                     'mode' => (string) $run->mode,
                     'status' => (string) $run->status,
-                    'ran_at' => $run->started_at ?? $run->created_at,
+                    'ran_at' => $latestPromptAt ?? $runAt,
                     'prompts' => $prompts,
                 ];
             })
+            ->filter()
             ->values();
 
         $linkedResults = $linkedRows
@@ -300,24 +320,25 @@ final class ArticlePromptRunHistoryService
             ->unique(fn (PromptResult $result): int => (int) $result->id)
             ->values();
 
-        $orphanPrompts = $articleLinkedResults
-            ->filter(fn (PromptResult $result): bool => ! isset($seenResultIds[(int) $result->id]))
-            ->map(function (PromptResult $result): array {
-                return $this->normalizePromptItem(
-                    [
-                        'prompt_name' => (string) ($result->prompt?->name ?? ''),
-                        'status' => (string) $result->status,
-                        'output' => (string) ($result->output_text ?? ''),
-                        'message' => (string) ($result->error_message ?? ''),
-                    ],
-                    $result,
-                    0,
-                    0,
-                    0,
-                );
-            })
-            ->values()
-            ->all();
+        $orphanPrompts = $this->finalizePromptList(
+            $articleLinkedResults
+                ->filter(fn (PromptResult $result): bool => ! isset($seenResultIds[(int) $result->id]))
+                ->map(function (PromptResult $result): array {
+                    return $this->normalizePromptItem(
+                        [
+                            'prompt_name' => (string) ($result->prompt?->name ?? ''),
+                            'status' => (string) $result->status,
+                            'output' => (string) ($result->output_text ?? ''),
+                            'message' => (string) ($result->error_message ?? ''),
+                        ],
+                        $result,
+                        0,
+                        0,
+                        0,
+                    );
+                })
+                ->all(),
+        );
 
         if ($orphanPrompts !== []) {
             $groups->push([
@@ -326,12 +347,14 @@ final class ArticlePromptRunHistoryService
                 'project_name' => '',
                 'mode' => 'article',
                 'status' => '',
-                'ran_at' => $articleLinkedResults->max('created_at'),
+                'ran_at' => $this->latestPromptTimestamp($orphanPrompts)
+                    ?? $articleLinkedResults->max('created_at'),
                 'prompts' => $orphanPrompts,
             ]);
         }
 
         return $groups
+            ->filter(fn (array $group): bool => ($group['prompts'] ?? []) !== [])
             ->sortByDesc(fn (array $group): int => $group['ran_at']?->getTimestamp() ?? 0)
             ->values()
             ->all();
@@ -401,6 +424,20 @@ final class ArticlePromptRunHistoryService
 
         $primaryModel = $renderModel !== '' ? $renderModel : $plannerModel;
 
+        $snapshotVariables = is_array($snapshot['variables'] ?? null)
+            ? $snapshot['variables']
+            : (is_array($snapshot) ? $snapshot : []);
+
+        $debug = array_filter([
+            'article_generation_source' => $snapshotVariables['article_generation_source'] ?? null,
+            'source_run_id' => $snapshotVariables['source_run_id'] ?? null,
+            'source_run_item_id' => $snapshotVariables['source_run_item_id'] ?? null,
+            'source_prompt_result_id' => $snapshotVariables['source_prompt_result_id'] ?? null,
+            'outline_marker_found' => $snapshotVariables['outline_marker_found'] ?? null,
+            'writing_instructions_marker_found' => $snapshotVariables['writing_instructions_marker_found'] ?? null,
+            'artifact_version' => $snapshotVariables['artifact_version'] ?? null,
+        ], static fn (mixed $value): bool => $value !== null && $value !== '');
+
         return [
             'key' => $result !== null
                 ? 'result-'.$result->id
@@ -422,7 +459,80 @@ final class ArticlePromptRunHistoryService
             'winner_score' => $snapshot['winner_score'] ?? null,
             'validation_passed' => $snapshot['validation_passed'] ?? null,
             'ran_at' => $result?->started_at ?? $result?->created_at,
+            'variables' => $debug !== [] ? $debug : null,
+            'article_generation_source' => $debug['article_generation_source'] ?? null,
+            'source_run_id' => $debug['source_run_id'] ?? null,
+            'source_run_item_id' => $debug['source_run_item_id'] ?? null,
+            'outline_marker_found' => $debug['outline_marker_found'] ?? null,
+            'writing_instructions_marker_found' => $debug['writing_instructions_marker_found'] ?? null,
+            'artifact_version' => $debug['artifact_version'] ?? null,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $step
+     */
+    private function isHiddenWorkflowStep(array $step): bool
+    {
+        $type = strtolower(trim((string) ($step['type'] ?? '')));
+        if (in_array($type, self::HIDDEN_STEP_TYPES, true)) {
+            return true;
+        }
+
+        $name = strtolower(trim((string) ($step['prompt_name'] ?? $step['title'] ?? '')));
+
+        return in_array($name, self::HIDDEN_STEP_TYPES, true);
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function isHiddenPromptItem(array $item): bool
+    {
+        $type = strtolower(trim((string) ($item['type'] ?? '')));
+        if (in_array($type, self::HIDDEN_STEP_TYPES, true)) {
+            return true;
+        }
+
+        $name = strtolower(trim((string) ($item['prompt_name'] ?? '')));
+
+        return in_array($name, self::HIDDEN_STEP_TYPES, true);
+    }
+
+    /**
+     * Ẩn node hệ thống + mới nhất lên đầu.
+     *
+     * @param  list<array<string, mixed>>  $prompts
+     * @return list<array<string, mixed>>
+     */
+    private function finalizePromptList(array $prompts): array
+    {
+        return collect($prompts)
+            ->filter(fn (array $item): bool => ! $this->isHiddenPromptItem($item))
+            ->sortByDesc(fn (array $item): int => $item['ran_at']?->getTimestamp() ?? 0)
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $prompts
+     */
+    private function latestPromptTimestamp(array $prompts): mixed
+    {
+        $latest = null;
+        $latestTs = 0;
+        foreach ($prompts as $item) {
+            $ranAt = $item['ran_at'] ?? null;
+            $ts = is_object($ranAt) && method_exists($ranAt, 'getTimestamp')
+                ? (int) $ranAt->getTimestamp()
+                : 0;
+            if ($ts > $latestTs) {
+                $latestTs = $ts;
+                $latest = $ranAt;
+            }
+        }
+
+        return $latest;
     }
 
     /**

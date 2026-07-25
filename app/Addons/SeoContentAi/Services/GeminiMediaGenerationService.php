@@ -10,10 +10,12 @@ use App\Addons\SeoContentAi\Support\GeminiModelVersionPolicy;
 use App\Addons\SeoContentAi\Support\GoogleAiModelRegistry;
 use App\Addons\SeoContentAi\Support\ImageRoutingStrategy;
 use App\Addons\SeoContentAi\Support\ImageToolType;
+use App\Addons\SeoContentAi\Support\ImagenProviderErrorClassifier;
 use App\Addons\SeoContentAi\Support\RenderingPreference;
 use App\Addons\SeoContentAi\Support\TypographyComplexity;
 use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Models\ApiConnection;
+use App\Support\RuntimeLogger;
 use Illuminate\Support\Facades\Http;
 
 /**
@@ -25,11 +27,24 @@ final class GeminiMediaGenerationService
     /** Per-model HTTP budget — must stay below GenerateMediaJob queue timeout. */
     private const HTTP_TIMEOUT_SECONDS = 120;
 
+    /** Same-model transient retries (not counting model failover). */
+    private const TRANSIENT_MAX_RETRIES = 2;
+
+    /** @var callable(int): void */
+    private $sleeper;
+
     public function __construct(
         private readonly PromptMediaStorageService $promptMediaStorage,
         private readonly SeoCreateArticleSettingsService $workflowSettings,
         private readonly ImageRoutingStrategy $imageRoutingStrategy,
-    ) {}
+        ?callable $sleeper = null,
+    ) {
+        $this->sleeper = $sleeper ?? static function (int $milliseconds): void {
+            if ($milliseconds > 0) {
+                usleep($milliseconds * 1000);
+            }
+        };
+    }
 
     /**
      * @param  list<string>|null  $modelsOverride  Nếu có (vd. từ executionPolicy fallback) — dùng trực tiếp, không gọi lại modelsToTry
@@ -63,7 +78,7 @@ final class GeminiMediaGenerationService
             $rendered['model_used'],
         );
 
-        logger()->info('Image render succeeded', [
+        RuntimeLogger::info('seo.imagen.render_succeeded', [
             'render_model' => $rendered['model_used'],
             'tool_type' => $toolType->value,
         ]);
@@ -144,7 +159,7 @@ final class GeminiMediaGenerationService
                     ? $this->requestImagenPredict($connection, $prompt, $model)
                     : $this->requestGeminiNativeImage($connection, $prompt, $model);
 
-                logger()->info('Image render binary succeeded', [
+                RuntimeLogger::info('seo.imagen.render_binary_succeeded', [
                     'render_model' => $rendered['model_used'] ?? $model,
                     'tool_type' => $toolType->value,
                 ]);
@@ -153,13 +168,13 @@ final class GeminiMediaGenerationService
             } catch (PromptRunException $exception) {
                 $lastError = $exception;
                 $this->handleRenderModelFailure($connection, $model, $exception->getMessage());
-                if (! $this->isRetryable($exception->getMessage())) {
+                if (! $this->shouldFailoverToNextModel($exception)) {
                     throw $exception;
                 }
             } catch (\Throwable $exception) {
                 $lastError = new PromptRunException($exception->getMessage(), (int) $exception->getCode(), $exception);
                 $this->handleRenderModelFailure($connection, $model, $exception->getMessage());
-                if (! $this->isRetryable($exception->getMessage())) {
+                if (! $this->shouldFailoverToNextModel($lastError)) {
                     throw $lastError;
                 }
             }
@@ -168,11 +183,24 @@ final class GeminiMediaGenerationService
         throw $lastError ?? new PromptRunException('Không sinh được ảnh từ Gemini API.');
     }
 
+    private function shouldFailoverToNextModel(PromptRunException $exception): bool
+    {
+        $classification = $exception->classification();
+        if ($classification === ImagenProviderErrorClassifier::AUTHENTICATION_ERROR
+            || $classification === ImagenProviderErrorClassifier::INVALID_REQUEST
+            || $classification === ImagenProviderErrorClassifier::CONFIGURATION_ERROR
+        ) {
+            return false;
+        }
+
+        return $this->isRetryable($exception->getMessage()) || $exception->isRetryable();
+    }
+
     private function handleRenderModelFailure(ApiConnection $connection, string $model, string $message): void
     {
-        logger()->warning('Image render model failed, try next', [
+        RuntimeLogger::warning('seo.imagen.render_model_failed', [
             'render_model' => $model,
-            'error' => $message,
+            'error' => ImagenProviderErrorClassifier::redactSecrets(mb_substr($message, 0, 2000)),
         ]);
 
         if (! GeminiModelVersionPolicy::isProviderUnavailableError($message)) {
@@ -191,23 +219,25 @@ final class GeminiMediaGenerationService
         $capabilities = is_array($record->capabilities) ? $record->capabilities : [];
         $record->update([
             'capabilities' => GeminiModelVersionPolicy::markCapabilitiesUnavailable($capabilities, $message),
-            'last_error' => mb_substr($message, 0, 2000),
+            'last_error' => mb_substr(ImagenProviderErrorClassifier::redactSecrets($message), 0, 2000),
         ]);
     }
 
     /**
-     * Imagen 4 — POST .../models/{model}:predict
+     * Imagen 4 — POST Generative Language API .../models/{model}:predict
+     * Public model ID is sent as-is. Internal Vertex IDs (e.g. vertex-imagen-jpe-v1-8)
+     * appear only inside Google error payloads — never mapped in our code.
+     *
+     * Auth: AI Studio API key query param (not Vertex service-account / project/location).
      *
      * @return array{binary: string, mime: string, usage: array<string, mixed>|null, model_used: string}
      */
     private function requestImagenPredict(ApiConnection $connection, string $prompt, string $model): array
     {
-        $url = sprintf(
-            'https://generativelanguage.googleapis.com/v1beta/models/%s:predict',
-            rawurlencode($model),
-        );
-
-        $response = $this->geminiHttpClient($connection)->post($url, [
+        $endpointCategory = 'generativelanguage_v1beta_predict';
+        $urlPath = sprintf('/v1beta/models/%s:predict', $model);
+        $url = 'https://generativelanguage.googleapis.com'.$urlPath;
+        $payload = [
             'instances' => [
                 ['prompt' => $prompt],
             ],
@@ -215,13 +245,100 @@ final class GeminiMediaGenerationService
                 'sampleCount' => 1,
                 'aspectRatio' => $this->resolveImagenAspectRatio($prompt),
             ],
-        ]);
+        ];
+
+        $attempt = 0;
+        $lastException = null;
+
+        while ($attempt <= self::TRANSIENT_MAX_RETRIES) {
+            $attempt++;
+
+            try {
+                return $this->executeImagenPredictAttempt(
+                    connection: $connection,
+                    url: $url,
+                    urlPath: $urlPath,
+                    endpointCategory: $endpointCategory,
+                    model: $model,
+                    payload: $payload,
+                    attempt: $attempt,
+                );
+            } catch (PromptRunException $exception) {
+                $lastException = $exception;
+                $canRetry = $exception->isRetryable() && $attempt <= self::TRANSIENT_MAX_RETRIES;
+                if (! $canRetry) {
+                    throw $exception;
+                }
+
+                $backoffMs = (int) (500 * (2 ** ($attempt - 1)));
+                RuntimeLogger::warning('seo.imagen.transient_retry', [
+                    'requested_model' => $model,
+                    'attempt' => $attempt,
+                    'next_backoff_ms' => $backoffMs,
+                    'classification' => $exception->classification(),
+                ]);
+                ($this->sleeper)($backoffMs);
+            }
+        }
+
+        throw $lastException ?? new PromptRunException('Imagen API lỗi ('.$model.').');
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{binary: string, mime: string, usage: array<string, mixed>|null, model_used: string}
+     */
+    private function executeImagenPredictAttempt(
+        ApiConnection $connection,
+        string $url,
+        string $urlPath,
+        string $endpointCategory,
+        string $model,
+        array $payload,
+        int $attempt,
+    ): array {
+        $response = $this->geminiHttpClient($connection)->post($url, $payload);
+        $status = $response->status();
+        $providerRequestId = $response->header('x-request-id')
+            ?: $response->header('x-goog-request-id')
+            ?: null;
 
         if (! $response->successful()) {
-            $message = $response->json('error.message') ?? $response->body();
+            $rawBody = ImagenProviderErrorClassifier::redactSecrets((string) $response->body());
+            $providerMessage = (string) ($response->json('error.message') ?? $rawBody);
+            $providerMessage = ImagenProviderErrorClassifier::redactSecrets($providerMessage);
+            $presented = ImagenProviderErrorClassifier::present($providerMessage, $status);
+
+            $audit = [
+                'requested_model' => $model,
+                'resolved_model' => $model,
+                'provider' => 'gemini_generativelanguage',
+                'endpoint_category' => $endpointCategory,
+                'endpoint_path' => $urlPath,
+                'region' => null,
+                'project_id' => null,
+                'auth_mode' => 'api_key_query',
+                'http_status' => $status,
+                'provider_error_code' => $response->json('error.status') ?? $response->json('error.code'),
+                'provider_request_id' => $providerRequestId,
+                'retry_count' => max(0, $attempt - 1),
+                'final_classification' => $presented['classification'],
+                'internal_endpoint_hint' => self::extractInternalEndpointHint($providerMessage),
+            ];
+
+            RuntimeLogger::warning('seo.imagen.predict_failed', $audit);
 
             throw new PromptRunException(
-                'Imagen API lỗi ('.$model.'): '.$this->truncate((string) $message),
+                'Imagen API lỗi ('.$model.'): '.$this->truncate($presented['technical_details']),
+                $status,
+                null,
+                [
+                    'classification' => $presented['classification'],
+                    'retryable' => $presented['retryable'],
+                    'user_message' => $presented['user_message'],
+                    'technical_details' => $presented['technical_details'],
+                    'audit' => $audit,
+                ],
             );
         }
 
@@ -247,6 +364,17 @@ final class GeminiMediaGenerationService
 
             $mime = (string) ($prediction['mimeType'] ?? 'image/png');
 
+            RuntimeLogger::info('seo.imagen.predict_ok', [
+                'requested_model' => $model,
+                'resolved_model' => $model,
+                'provider' => 'gemini_generativelanguage',
+                'endpoint_category' => $endpointCategory,
+                'auth_mode' => 'api_key_query',
+                'http_status' => $status,
+                'provider_request_id' => $providerRequestId,
+                'retry_count' => max(0, $attempt - 1),
+            ]);
+
             return [
                 'binary' => $binary,
                 'mime' => $mime !== '' ? $mime : 'image/png',
@@ -255,7 +383,45 @@ final class GeminiMediaGenerationService
             ];
         }
 
-        throw new PromptRunException('Imagen không trả về ảnh ('.$model.').');
+        $presented = ImagenProviderErrorClassifier::present(
+            'Imagen không trả về ảnh ('.$model.').',
+            $status,
+        );
+
+        throw new PromptRunException(
+            $presented['technical_details'],
+            $status,
+            null,
+            [
+                'classification' => ImagenProviderErrorClassifier::UNKNOWN_PROVIDER_ERROR,
+                'retryable' => true,
+                'user_message' => $presented['user_message'],
+                'technical_details' => $presented['technical_details'],
+                'audit' => [
+                    'requested_model' => $model,
+                    'resolved_model' => $model,
+                    'provider' => 'gemini_generativelanguage',
+                    'endpoint_category' => $endpointCategory,
+                    'endpoint_path' => $urlPath,
+                    'region' => null,
+                    'project_id' => null,
+                    'auth_mode' => 'api_key_query',
+                    'http_status' => $status,
+                    'provider_request_id' => $providerRequestId,
+                    'retry_count' => max(0, $attempt - 1),
+                    'final_classification' => ImagenProviderErrorClassifier::UNKNOWN_PROVIDER_ERROR,
+                ],
+            ],
+        );
+    }
+
+    private static function extractInternalEndpointHint(string $message): ?string
+    {
+        if (preg_match('#/vertex/[a-z0-9\-]+#i', $message, $match) === 1) {
+            return $match[0];
+        }
+
+        return null;
     }
 
     /**
@@ -285,10 +451,21 @@ final class GeminiMediaGenerationService
         ]);
 
         if (! $response->successful()) {
-            $message = $response->json('error.message') ?? $response->body();
+            $message = ImagenProviderErrorClassifier::redactSecrets(
+                (string) ($response->json('error.message') ?? $response->body()),
+            );
+            $presented = ImagenProviderErrorClassifier::present($message, $response->status());
 
             throw new PromptRunException(
-                'Gemini Image API lỗi ('.$model.'): '.$this->truncate((string) $message),
+                'Gemini Image API lỗi ('.$model.'): '.$this->truncate($presented['technical_details']),
+                $response->status(),
+                null,
+                [
+                    'classification' => $presented['classification'],
+                    'retryable' => $presented['retryable'],
+                    'user_message' => $presented['user_message'],
+                    'technical_details' => $presented['technical_details'],
+                ],
             );
         }
 
@@ -414,19 +591,17 @@ final class GeminiMediaGenerationService
 
     private function isRetryable(string $message): bool
     {
+        $classification = ImagenProviderErrorClassifier::classify($message);
+
+        if (ImagenProviderErrorClassifier::isRetryableClassification($classification)) {
+            return true;
+        }
+
         $lower = strtolower($message);
 
-        return GeminiModelVersionPolicy::isProviderUnavailableError($message)
-            || str_contains($lower, 'not found')
+        return str_contains($lower, 'not found')
             || str_contains($lower, '404')
             || str_contains($lower, 'not supported')
-            || str_contains($lower, '429')
-            || str_contains($lower, '503')
-            || str_contains($lower, 'high demand')
-            || str_contains($lower, 'resource exhausted')
-            || str_contains($lower, 'timed out')
-            || str_contains($lower, 'timeout')
-            || str_contains($lower, 'curl error 28')
             || str_contains($lower, 'connection')
             || str_contains($lower, 'could not resolve');
     }

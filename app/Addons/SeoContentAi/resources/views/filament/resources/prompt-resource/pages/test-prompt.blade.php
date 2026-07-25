@@ -173,6 +173,42 @@
         @if (filled($errorMessage))
             <x-filament::section heading="Lỗi">
                 <p class="text-sm text-danger-600 dark:text-danger-400">{{ $errorMessage }}</p>
+
+                @if ($errorRetryable)
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        <x-filament::button
+                            type="button"
+                            color="warning"
+                            icon="heroicon-o-arrow-path"
+                            wire:click="runTest"
+                            wire:loading.attr="disabled"
+                            wire:target="runTest"
+                        >
+                            {{ __('seo-content-ai::filament.imagen.retry') }}
+                        </x-filament::button>
+                    </div>
+                @endif
+
+                @if (filled($errorTechnicalDetails))
+                    <div
+                        x-data="{ open: false }"
+                        class="mt-3"
+                    >
+                        <button
+                            type="button"
+                            class="text-sm font-semibold text-primary-600 hover:text-primary-500 dark:text-primary-400"
+                            x-on:click="open = !open"
+                        >
+                            <span x-text="open ? @js(__('seo-content-ai::filament.imagen.hide_technical')) : @js(__('seo-content-ai::filament.imagen.view_technical'))"></span>
+                        </button>
+                        <pre
+                            x-show="open"
+                            x-cloak
+                            class="mt-2 whitespace-pre-wrap break-words font-mono text-xs rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-950 p-3 max-h-64 overflow-auto"
+                        >@if (filled($errorClassification))[{{ $errorClassification }}]
+@endif{{ $errorTechnicalDetails }}</pre>
+                    </div>
+                @endif
             </x-filament::section>
         @endif
 

@@ -9,7 +9,7 @@ use App\Addons\SeoContentAi\Models\SeoArticleWpSyncJob;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncLeaseService;
 use PHPUnit\Framework\TestCase;
 
-final class WpSyncJobStatusAndLeaseContractTest extends TestCase
+final class WpSyncLeaseContractTest extends TestCase
 {
     public function test_status_lifecycle_covers_lease_terminals(): void
     {

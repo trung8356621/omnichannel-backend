@@ -20,11 +20,11 @@ use Throwable;
 
 /**
  * Single source of truth cho workflow review bài viết:
- * submit_review (CM) → approve (planner+) → archive (manager).
+ * submit_review (CM) → approve (planner+) → archive/Hoàn tất duyệt (manager).
  *
- * Thay thế 3 flow rời rạc trước đây (SeoProjectApprovalService::approveLinkedProject
- * ở mức project, ArticleResource::markArticleReviewed, SeoProjectArchiveService) bằng
- * một action log gắn trực tiếp vào article (`articles.review_status` + `seo_article_reviews`).
+ * Action `archive` chỉ cập nhật trạng thái nghiệp vụ (review_status = archived).
+ * Không detach task, không set content_archived_at, không tạo archive lẻ.
+ * Đơn vị lưu trữ kho = Content Project ({@see ArchiveContentProjectService}).
  */
 final class ArticleReviewService
 {
@@ -40,8 +40,8 @@ final class ArticleReviewService
     ];
 
     /**
-     * Metadata phụ của lần `performAction()` gần nhất (vd. task Content Project bị detach/khôi
-     * phục khi archive/reopen). Reset mỗi lần gọi `performAction()`, đọc lại qua
+     * Metadata phụ của lần `performAction()` gần nhất (vd. project_id liên kết).
+     * Reset mỗi lần gọi `performAction()`, đọc lại qua
      * {@see self::lastSideEffectMeta()} hoặc {@see self::toApiPayload()}.
      *
      * @var array<string, mixed>
@@ -299,63 +299,42 @@ final class ArticleReviewService
     {
         match ($action) {
             ArticleReviewActionType::Approve => ArticleResource::markArticleReviewed($article),
-            ArticleReviewActionType::Archive => $this->archiveAndDetachProjectTasks($article, $user),
-            // Mở lại bài đã hoàn tất: về approved, giữ nguyên is_reviewed/reviewed_at (đã duyệt trước đó).
-            ArticleReviewActionType::Reopen => $this->reopenAndRestoreProjectTasks($article, $user),
-            // Bỏ duyệt: về pending_review, xoá cờ is_reviewed/reviewed_at như flow cũ markArticleUnreviewed.
+            // Hoàn tất duyệt: chỉ trạng thái nghiệp vụ — không archive lẻ / không detach.
+            ArticleReviewActionType::Archive => $this->completeReviewWithoutDetaching($article),
+            // Mở lại: về approved; dọn cờ legacy content_archived_* + restore task đã detach (dữ liệu cũ).
+            ArticleReviewActionType::Reopen => $this->reopenReviewKeepingProjectLinks($article, $user),
             ArticleReviewActionType::Unapprove => ArticleResource::markArticleUnreviewed($article),
             default => null,
         };
     }
 
     /**
-     * Archive bài viết: đóng cờ content_archived_at/by (như cũ) + detach khỏi Content Project
-     * bằng cách archive mọi task active còn trỏ tới article này (cùng transaction — savepoint,
-     * xem {@see self::performAction()}). Task đã archive/soft-delete không bị đụng tới.
+     * Hoàn tất duyệt — không tạo archive lẻ, không set content_archived_at, không detach task.
+     * Bài vẫn thuộc Content Project; kho lưu trữ chỉ qua ArchiveContentProjectService.
      */
-    private function archiveAndDetachProjectTasks(SeoArticle $article, User $user): void
+    private function completeReviewWithoutDetaching(SeoArticle $article): void
     {
-        $article->forceFill([
-            'content_archived_at' => now(),
-            'content_archived_by' => (int) $user->id,
-        ])->save();
-
-        $tasks = SeoProjectTask::query()
-            ->where('article_id', (int) $article->getKey())
-            ->active()
-            ->lockForUpdate()
-            ->orderBy('id')
-            ->get();
-
-        $detachedTaskIds = [];
-        $projectId = null;
-
-        foreach ($tasks as $task) {
-            // Fail → ném exception → rollback toàn bộ performAction (không để article archived
-            // trong khi task vẫn active). Lifecycle đã no-op khi task đã archived.
-            $this->taskLifecycle->archive($task, (int) $user->id, ['from_article_review' => true]);
-            $detachedTaskIds[] = (int) $task->id;
-            $projectId ??= $task->project_id !== null ? (int) $task->project_id : null;
-        }
+        $projectId = $this->resolveLinkedProjectId((int) $article->getKey());
 
         $this->lastSideEffectMeta['content_project'] = [
-            'assignment' => $detachedTaskIds !== [] ? 'archived_detached' : 'unassigned',
+            'assignment' => $projectId !== null ? 'active' : 'unassigned',
             'project_id' => $projectId,
-            'detached_task_ids' => $detachedTaskIds,
+            'detached_task_ids' => [],
         ];
     }
 
     /**
-     * Reopen bài viết đã hoàn tất: xoá cờ content_archived_at/by (như cũ) + khôi phục lại các
-     * task Content Project đã bị detach lúc archive (best-effort — nếu project đã bị xoá thì
-     * bài vẫn reopen về approved nhưng không gắn lại project nào).
+     * Reopen: clear legacy content_archived_* nếu còn; restore task đã detach bởi flow archive lẻ cũ.
+     * Flow mới (sau khi bỏ detach) không có task archived → restore no-op.
      */
-    private function reopenAndRestoreProjectTasks(SeoArticle $article, User $user): void
+    private function reopenReviewKeepingProjectLinks(SeoArticle $article, User $user): void
     {
-        $article->forceFill([
-            'content_archived_at' => null,
-            'content_archived_by' => null,
-        ])->save();
+        if ($article->content_archived_at !== null || $article->content_archived_by !== null) {
+            $article->forceFill([
+                'content_archived_at' => null,
+                'content_archived_by' => null,
+            ])->save();
+        }
 
         $tasks = SeoProjectTask::query()
             ->where('article_id', (int) $article->getKey())
@@ -369,17 +348,33 @@ final class ArticleReviewService
         $projectId = null;
 
         foreach ($tasks as $task) {
-            // Fail → rollback toàn bộ reopen. Lifecycle no-op khi task chưa archived.
             $this->taskLifecycle->restore($task, (int) $user->id, ['from_article_review' => true]);
             $restoredTaskIds[] = (int) $task->id;
             $projectId ??= $task->project_id !== null ? (int) $task->project_id : null;
         }
 
+        $projectId ??= $this->resolveLinkedProjectId((int) $article->getKey());
+
         $this->lastSideEffectMeta['content_project'] = [
-            'assignment' => $restoredTaskIds !== [] ? 'active' : 'unassigned',
+            'assignment' => ($restoredTaskIds !== [] || $projectId !== null) ? 'active' : 'unassigned',
             'project_id' => $projectId,
             'restored_task_ids' => $restoredTaskIds,
         ];
+    }
+
+    private function resolveLinkedProjectId(int $articleId): ?int
+    {
+        if ($articleId <= 0) {
+            return null;
+        }
+
+        $projectId = SeoProjectTask::query()
+            ->where('article_id', $articleId)
+            ->whereNull('archived_at')
+            ->orderByDesc('id')
+            ->value('project_id');
+
+        return $projectId !== null ? (int) $projectId : null;
     }
 
     /**

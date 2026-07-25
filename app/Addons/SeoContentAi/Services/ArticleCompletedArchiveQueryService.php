@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Enums\ArticleReviewActionType;
-use App\Addons\SeoContentAi\Enums\ArticleReviewStatus;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoArticleReview;
@@ -19,9 +18,9 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
 /**
- * Nguồn truy vấn cho trang "Kho bài đã hoàn tất" (UI card cũ + data article-level mới):
- * `articles.review_status = archived` / `seo_article_reviews`. Không đọc
- * `seo_project_archives` / `seo_content_archive_items`.
+ * Nguồn truy vấn tab "Legacy bài lẻ" trong kho archive:
+ * chỉ bài từng có `content_archived_at` hoặc mirror `seo_content_archive_items`.
+ * Không dùng `review_status=archived` (đó là “Hoàn tất duyệt”, không phải archive lẻ).
  */
 final class ArticleCompletedArchiveQueryService
 {
@@ -40,10 +39,16 @@ final class ArticleCompletedArchiveQueryService
 
         $query = SeoArticle::query()
             ->with(['site', 'user', 'latestReview.reviewer'])
+            // Legacy bài lẻ: chỉ cờ content_archived_at / mirror seo_content_archive_items.
+            // review_status=archived sau khi bỏ archive-lẻ = “Hoàn tất duyệt”, không vào tab legacy.
             ->where(function (Builder $builder): void {
                 $builder
-                    ->where('review_status', ArticleReviewStatus::Archived->value)
-                    ->orWhereNotNull('content_archived_at');
+                    ->whereNotNull('content_archived_at')
+                    ->orWhereExists(function ($sub): void {
+                        $sub->selectRaw('1')
+                            ->from('seo_content_archive_items')
+                            ->whereColumn('seo_content_archive_items.article_id', 'articles.id');
+                    });
             });
 
         if ($siteIds === []) {

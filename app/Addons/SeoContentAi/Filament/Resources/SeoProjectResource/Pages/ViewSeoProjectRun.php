@@ -23,7 +23,9 @@ use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowStepCatalogService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowStepRetryService;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectRunBulkSyncService;
+use App\Addons\SeoContentAi\Services\RunEngine\ContentProjectRunEngine;
 use App\Addons\SeoContentAi\Support\ContentProjectRunSettings;
+use App\Addons\SeoContentAi\Support\RunEngine\ContentProjectRunEngineFeature;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoProjectRunErrorFormatter;
 use App\Addons\SeoContentAi\Support\SeoProjectRunItemsDisplayPresenter;
@@ -158,6 +160,15 @@ class ViewSeoProjectRun extends Page
             return ['success' => false, 'message' => 'Run không tồn tại.'];
         }
 
+        if ($this->shouldBlockPhpEngineArticleMutation('retryWorkflowStep')) {
+            $this->skipRender();
+
+            return [
+                'success' => false,
+                'message' => 'PHP engine đang chạy — không rerun step khi run còn active.',
+            ];
+        }
+
         abort_unless(
             SeoAccessControl::canRetryProjectRunItem($this->projectRun->project),
             403,
@@ -179,6 +190,15 @@ class ViewSeoProjectRun extends Page
                 'item' => is_array($result['item'] ?? null) ? $result['item'] : null,
             ];
         } catch (\Throwable $exception) {
+            try {
+                app(SeoProjectWorkflowStepRetryService::class)->cancelActiveStep(
+                    $this->projectRun,
+                    $taskId,
+                    $nodeId,
+                );
+            } catch (\Throwable) {
+                // Best-effort clear busy flag.
+            }
             RuntimeLogger::report($exception, [
                 'endpoint' => 'seo.project_run.retry_workflow_step',
                 'run_id' => (int) $this->projectRun->id,
@@ -190,6 +210,74 @@ class ViewSeoProjectRun extends Page
             return [
                 'success' => false,
                 'message' => $exception->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * @return array{
+     *     success: bool,
+     *     message: string,
+     *     cancelled: int,
+     *     already_idle?: bool,
+     *     match_mode?: string,
+     *     active_before?: int,
+     *     active_after?: int,
+     *     affected_item_ids?: list<int>,
+     *     step_action?: string,
+     *     article_id?: int
+     * }
+     */
+    public function cancelWorkflowStep(int $taskId, string $nodeId): array
+    {
+        if ($this->projectRun === null) {
+            $this->skipRender();
+
+            return ['success' => false, 'message' => 'Run không tồn tại.', 'cancelled' => 0];
+        }
+
+        abort_unless(
+            SeoAccessControl::canRetryProjectRunItem($this->projectRun->project),
+            403,
+        );
+
+        try {
+            $result = app(SeoProjectWorkflowStepRetryService::class)->cancelActiveStep(
+                $this->projectRun,
+                $taskId,
+                $nodeId,
+            );
+            $this->projectRun->refresh()->loadMissing(['project.site', 'user', 'project.tasks']);
+            $this->skipRender();
+
+            return [
+                'success' => (bool) ($result['success'] ?? false),
+                'message' => (string) ($result['message'] ?? ''),
+                'cancelled' => (int) ($result['cancelled'] ?? 0),
+                'already_idle' => (bool) ($result['already_idle'] ?? false),
+                'match_mode' => (string) ($result['match_mode'] ?? ''),
+                'active_before' => (int) ($result['active_before'] ?? 0),
+                'active_after' => (int) ($result['active_after'] ?? 0),
+                'affected_item_ids' => array_values(array_map(
+                    'intval',
+                    is_array($result['affected_item_ids'] ?? null) ? $result['affected_item_ids'] : [],
+                )),
+                'step_action' => (string) ($result['step_action'] ?? ''),
+                'article_id' => (int) ($result['article_id'] ?? 0),
+            ];
+        } catch (\Throwable $exception) {
+            RuntimeLogger::report($exception, [
+                'endpoint' => 'seo.project_run.cancel_workflow_step',
+                'run_id' => (int) $this->projectRun->id,
+                'task_id' => $taskId,
+                'node_id' => $nodeId,
+            ]);
+            $this->skipRender();
+
+            return [
+                'success' => false,
+                'message' => $exception->getMessage(),
+                'cancelled' => 0,
             ];
         }
     }
@@ -319,17 +407,43 @@ class ViewSeoProjectRun extends Page
      */
     public function getQueueBootstrapData(): array
     {
+        if ($this->projectRun !== null) {
+            try {
+                ContentProjectRunEngineFeature::ensureStamped($this->projectRun);
+                $this->projectRun->refresh();
+            } catch (\Throwable) {
+                // Read-only bootstrap — không fail page nếu stamp lazy lỗi.
+            }
+        }
+
+        $orchestration = $this->projectRun !== null
+            ? ContentProjectRunEngineFeature::orchestrationFor($this->projectRun)
+            : ContentProjectRunEngineFeature::ORCHESTRATION_LEGACY;
+        $phpEngine = $orchestration === ContentProjectRunEngineFeature::ORCHESTRATION_PHP;
+        $runStatus = (string) ($this->projectRun?->status ?? '');
+        $engineUiRunning = in_array($runStatus, [
+            SeoProjectRun::STATUS_RUNNING,
+            SeoProjectRun::STATUS_STOPPING,
+        ], true);
+
         return [
             'livewireId' => $this->getId(),
-            'runStatus' => (string) ($this->projectRun?->status ?? ''),
+            'runStatus' => $runStatus,
+            'engineUiRunning' => $engineUiRunning,
             'taskIds' => $this->getQueueTaskIds(),
             'rerunAllTaskIds' => [],
             'canRerunAll' => false,
             'canRetryWorkflowSteps' => $this->canRetryWorkflowSteps(),
             'workflowSteps' => $this->getBulkWorkflowSteps(),
             'canSyncAll' => $this->canSyncAllItems(),
+            'canArchiveItems' => false,
             'runSettings' => ContentProjectRunSettings::fromRun($this->projectRun)->toArray(),
-            'autorun' => request()->boolean('autorun'),
+            // PHP engine: never autorun JS orchestration (even if ?autorun=1 in URL).
+            'autorun' => $phpEngine ? false : request()->boolean('autorun'),
+            'phpEngine' => $phpEngine,
+            'orchestration' => $orchestration,
+            'engineLabel' => $phpEngine ? 'PHP' : 'Legacy',
+            'progressPollMs' => $phpEngine ? 3000 : 0,
             'labels' => [
                 'running' => __('seo-content-ai::filament.projects.run_queue_running'),
                 'ok' => 'OK',
@@ -891,6 +1005,16 @@ class ViewSeoProjectRun extends Page
             return;
         }
 
+        if ($this->shouldBlockPhpEngineArticleMutation('runItem')) {
+            Notification::make()
+                ->title('PHP Engine đang chạy')
+                ->body('Không chạy lại article khi run PHP còn active. Đợi terminal hoặc Stop trước.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
         if (! SeoAccessControl::canRetryProjectRunItem($this->projectRun->project)) {
             abort(403, __('seo-content-ai::filament.projects.run_retry_failed'));
         }
@@ -959,7 +1083,19 @@ class ViewSeoProjectRun extends Page
      */
     public function runItemQueued(int $taskId, bool $markCompleted = false): array
     {
-        \Illuminate\Support\Facades\Log::info('seo.project_run.runItemQueued.called', [
+        // PHP engine owns article orchestration while run active.
+        // Terminal PHP run: cho phép manual retry (adapter ExecutionService).
+        if ($this->shouldBlockPhpEngineArticleMutation('runItemQueued')) {
+            $this->skipRender();
+
+            return [
+                'success' => false,
+                'message' => 'PHP engine đang bật — không chạy article qua Livewire queue khi run còn active. Dùng Start/Stop của engine, hoặc retry sau khi run terminal.',
+                'stats' => $this->getRunStatsPayload(),
+            ];
+        }
+
+        RuntimeLogger::info('seo.project_run.runItemQueued.called', [
             'run_id' => (int) ($this->projectRun?->id ?? 0),
             'task_id' => $taskId,
             'mark_completed' => $markCompleted,
@@ -1009,7 +1145,7 @@ class ViewSeoProjectRun extends Page
             $itemStatus = (string) ($enriched['status'] ?? '');
             $isSuccess = $itemStatus === 'success';
 
-            \Illuminate\Support\Facades\Log::info('seo.project_run.runItemQueued.done', [
+            RuntimeLogger::info('seo.project_run.runItemQueued.done', [
                 'run_id' => (int) $this->projectRun->id,
                 'task_id' => $taskId,
                 'item_status' => $itemStatus,
@@ -1029,7 +1165,7 @@ class ViewSeoProjectRun extends Page
                 'stats' => $this->getRunStatsPayload(),
             ];
         } catch (\Throwable $exception) {
-            \Illuminate\Support\Facades\Log::error('seo.project_run.runItemQueued.exception', [
+            RuntimeLogger::error('seo.project_run.runItemQueued.exception', [
                 'run_id' => (int) ($this->projectRun?->id ?? 0),
                 'task_id' => $taskId,
                 'error' => $exception->getMessage(),
@@ -1147,6 +1283,10 @@ class ViewSeoProjectRun extends Page
 
     public function beginRunQueue(): void
     {
+        if ($this->denyLegacyOrchestrationAction('beginRunQueue')) {
+            return;
+        }
+
         if ($this->projectRun === null) {
             return;
         }
@@ -1166,8 +1306,21 @@ class ViewSeoProjectRun extends Page
 
     public function completeRunQueue(bool $stopped = false): void
     {
+        // PHP engine finalizes run — JS must not complete.
+        if ($this->denyLegacyOrchestrationAction('completeRunQueue')) {
+            return;
+        }
         if ($this->projectRun === null) {
             return;
+        }
+
+        if ($stopped) {
+            try {
+                app(SeoProjectWorkflowStepRetryService::class)
+                    ->cancelAllActiveSteps($this->projectRun);
+            } catch (\Throwable) {
+                // Best-effort.
+            }
         }
 
         if ($this->projectRun->status === SeoProjectRun::STATUS_RUNNING) {
@@ -1181,6 +1334,10 @@ class ViewSeoProjectRun extends Page
                 return;
             }
 
+            $this->projectRun->refresh();
+        } elseif ($stopped) {
+            // Run không còn running (vd. đã completed rồi bị reopen lỗi) — vẫn đảm bảo finished.
+            app(SeoProjectWorkflowRunService::class)->markRunCompletedQuietly($this->projectRun);
             $this->projectRun->refresh();
         }
 
@@ -1208,6 +1365,151 @@ class ViewSeoProjectRun extends Page
         } else {
             $notification->success()->send();
         }
+    }
+
+    /**
+     * Stop ngay lập tức — không đợi item đang treo xong.
+     *
+     * @return array{success: bool, message: string, cancelled_steps: int}
+     */
+    public function forceStopRunQueue(): array
+    {
+        if ($this->projectRun === null) {
+            $this->skipRender();
+
+            return ['success' => false, 'message' => 'Run không tồn tại.', 'cancelled_steps' => 0];
+        }
+
+        abort_unless(
+            SeoAccessControl::canRetryProjectRunItem($this->projectRun->project),
+            403,
+        );
+
+        if ($this->projectRun !== null && ContentProjectRunEngineFeature::enabledFor($this->projectRun)) {
+            app(ContentProjectRunEngine::class)->requestStop(
+                $this->projectRun,
+                auth()->id() !== null ? (int) auth()->id() : null,
+                'Stopped by user.',
+            );
+            $this->projectRun->refresh();
+            $this->skipRender();
+
+            return [
+                'success' => true,
+                'message' => 'Đã yêu cầu dừng. Run → stopping → cancelled (không map completed).',
+                'cancelled_steps' => 0,
+                'status' => (string) $this->projectRun->status,
+            ];
+        }
+
+        $cancelled = 0;
+        try {
+            $cancelled = app(SeoProjectWorkflowStepRetryService::class)
+                ->cancelAllActiveSteps($this->projectRun);
+        } catch (\Throwable $exception) {
+            RuntimeLogger::report($exception, [
+                'endpoint' => 'seo.project_run.force_stop',
+                'run_id' => (int) $this->projectRun->id,
+            ]);
+        }
+
+        app(SeoProjectWorkflowRunService::class)->markRunCompletedQuietly($this->projectRun);
+        $this->projectRun->refresh();
+        $this->skipRender();
+
+        return [
+            'success' => true,
+            'message' => 'Đã dừng run. F5 sẽ không tự chạy lại.',
+            'cancelled_steps' => $cancelled,
+        ];
+    }
+
+    /**
+     * Read-only progress for PHP engine UI poll — never dispatches execution.
+     *
+     * @return array{success: bool, stats: array<string, int|string>, status: string}
+     */
+    public function pollRunProgress(): array
+    {
+        if ($this->projectRun === null) {
+            $this->skipRender();
+
+            return [
+                'success' => false,
+                'stats' => $this->getRunStatsPayload(),
+                'status' => '',
+            ];
+        }
+
+        $this->projectRun->refresh();
+        $this->skipRender();
+
+        return [
+            'success' => true,
+            'stats' => $this->getRunStatsPayload(),
+            'status' => (string) ($this->projectRun->status ?? ''),
+            'engineUiRunning' => in_array((string) ($this->projectRun->status ?? ''), [
+                SeoProjectRun::STATUS_RUNNING,
+                SeoProjectRun::STATUS_STOPPING,
+            ], true),
+            'orchestration' => ContentProjectRunEngineFeature::orchestrationFor($this->projectRun),
+        ];
+    }
+
+    /**
+     * Block legacy queue start/complete on PHP-orchestrated runs (always).
+     */
+    private function denyLegacyOrchestrationAction(string $action): bool
+    {
+        if ($this->projectRun === null || ! ContentProjectRunEngineFeature::enabledFor($this->projectRun)) {
+            return false;
+        }
+
+        $this->logLegacyActionBlocked($action);
+        $this->skipRender();
+
+        return true;
+    }
+
+    /**
+     * Manual article/step retry: blocked while PHP run active; allowed when terminal.
+     */
+    private function shouldBlockPhpEngineArticleMutation(string $action): bool
+    {
+        if ($this->projectRun === null || ! ContentProjectRunEngineFeature::enabledFor($this->projectRun)) {
+            return false;
+        }
+
+        $status = (string) $this->projectRun->status;
+        $terminal = in_array($status, [
+            SeoProjectRun::STATUS_COMPLETED,
+            SeoProjectRun::STATUS_CANCELLED,
+            SeoProjectRun::STATUS_FAILED,
+        ], true);
+
+        if ($terminal) {
+            return false;
+        }
+
+        $this->logLegacyActionBlocked($action);
+
+        return true;
+    }
+
+    private function logLegacyActionBlocked(string $action): void
+    {
+        if ($this->projectRun === null) {
+            return;
+        }
+
+        RuntimeLogger::warning('content_project_run.legacy_action_blocked', [
+            'run_id' => (int) $this->projectRun->id,
+            'action' => $action,
+            'orchestration' => ContentProjectRunEngineFeature::orchestrationFor($this->projectRun),
+            'status' => (string) $this->projectRun->status,
+            'user_id' => auth()->id() !== null ? (int) auth()->id() : null,
+            'caller' => 'ViewSeoProjectRun',
+        ]);
     }
 
     private function reloadCurrentRunPage(): void
@@ -1250,113 +1552,16 @@ class ViewSeoProjectRun extends Page
         }
     }
 
+    /**
+     * @deprecated Per-item archive disabled — use project-level archive.
+     */
     public function archiveItem(int $taskId): void
     {
-        if ($this->projectRun === null || $taskId <= 0) {
-            $this->skipRender();
-
-            return;
-        }
-
-        $project = $this->projectRun->project;
-        if ($project === null) {
-            $this->skipRender();
-
-            return;
-        }
-
-        abort_unless(
-            SeoAccessControl::canArchiveContentProjects()
-                || SeoAccessControl::canFinalizeArticleReview(),
-            403,
-        );
-
-        $user = auth()->user();
-        if (! $user instanceof User) {
-            abort(403);
-        }
-
-        $articleId = $this->resolveArticleIdForRunTask($taskId);
-        /** @var SeoProjectTask|null $task */
-        $task = SeoProjectTask::withTrashed()->whereKey($taskId)->first();
-
-        if ($articleId <= 0 && $task instanceof SeoProjectTask) {
-            $articleId = (int) ($task->article_id ?? 0);
-        }
-
-        if ($articleId <= 0) {
-            Notification::make()
-                ->title(__('seo-content-ai::filament.projects.archive_failed'))
-                ->body(__('seo-content-ai::filament.projects.archive_no_active_articles'))
-                ->danger()
-                ->send();
-            $this->skipRender();
-
-            return;
-        }
-
-        try {
-            $article = SeoArticle::query()->find($articleId);
-            if ($article instanceof SeoArticle) {
-                $review = app(ArticleReviewService::class);
-                $status = $review->resolveStatus($article);
-
-                if ($status === ArticleReviewStatus::Approved) {
-                    $review->performAction($article, $user, ArticleReviewActionType::Archive);
-                } elseif ($status !== ArticleReviewStatus::Archived) {
-                    // Data cũ không ở approved — vẫn đánh archived + detach task bên dưới.
-                    $article->forceFill([
-                        'review_status' => ArticleReviewStatus::Archived->value,
-                        'content_archived_at' => $article->content_archived_at ?? now(),
-                        'content_archived_by' => (int) ($article->content_archived_by ?? $user->id),
-                    ])->save();
-                }
-            }
-
-            $this->detachStuckProjectTask($task, $project, $articleId, (int) $user->id);
-
-            if (! $task instanceof SeoProjectTask) {
-                // Task hard-delete: đánh dấu run item đã detach để UI ẩn hàng.
-                $this->markRunItemDetached($taskId);
-            }
-
-            // Giữ run item history — chỉ sửa JSON nếu legacy run; DB run giữ audit row.
-            if (app(SeoProjectRunItemsReader::class)->usesLegacyFallback($this->projectRun)) {
-                $this->removeTaskFromCurrentRunItems($taskId);
-            }
-
-            app(SeoProjectRunItemsReader::class)->forgetRun((int) $this->projectRun->id);
-            $this->projectRun->refresh();
-            $this->projectRun->loadMissing('project');
-            $this->projectRun->project?->refresh();
-
-            Notification::make()
-                ->title(__('seo-content-ai::filament.projects.archive_item_completed'))
-                ->body(__('seo-content-ai::filament.projects.archive_item_completed_body', [
-                    'archived' => 1,
-                    'tasks_removed' => 1,
-                ]))
-                ->success()
-                ->send();
-        } catch (ArticleReviewException $exception) {
-            Notification::make()
-                ->title(__('seo-content-ai::filament.projects.archive_failed'))
-                ->body($exception->getMessage())
-                ->danger()
-                ->send();
-        } catch (Throwable $exception) {
-            RuntimeLogger::report($exception, [
-                'endpoint' => 'content_project_run.archive_item',
-                'task_id' => $taskId,
-                'article_id' => $articleId,
-            ]);
-
-            Notification::make()
-                ->title(__('seo-content-ai::filament.projects.archive_failed'))
-                ->body($exception->getMessage())
-                ->danger()
-                ->send();
-        }
+        Notification::make()
+            ->title(__('seo-content-ai::filament.projects.archive_item_disabled_title'))
+            ->body(__('seo-content-ai::filament.projects.archive_item_disabled_body'))
+            ->danger()
+            ->send();
 
         $this->skipRender();
     }
@@ -1554,21 +1759,7 @@ class ViewSeoProjectRun extends Page
 
     public function canArchiveRunItem(array $item): bool
     {
-        if (
-            ! SeoAccessControl::canArchiveContentProjects()
-            && ! SeoAccessControl::canFinalizeArticleReview()
-        ) {
-            return false;
-        }
-
-        if (array_key_exists('can_archive', $item)) {
-            return (bool) $item['can_archive'];
-        }
-
-        $articleId = (int) ($item['article_id'] ?? 0);
-        $taskArchived = (bool) ($item['task_archived'] ?? false);
-
-        return $articleId > 0 && ! $taskArchived;
+        return false;
     }
 
     public function canRetryRunItem(array $item): bool

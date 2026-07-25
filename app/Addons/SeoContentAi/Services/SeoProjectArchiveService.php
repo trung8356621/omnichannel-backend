@@ -20,8 +20,9 @@ use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
 /**
- * Archive orchestration — task lifecycle là source of truth;
- * seo_content_archive_items chỉ còn compatibility / article mirror.
+ * @deprecated Per-article / move-to-warehouse archive. Đơn vị archive chính =
+ * {@see ArchiveContentProjectService}. Giữ class cho diagnose/repair/legacy mirror.
+ * Không gọi từ UI Content Project list.
  */
 final class SeoProjectArchiveService
 {

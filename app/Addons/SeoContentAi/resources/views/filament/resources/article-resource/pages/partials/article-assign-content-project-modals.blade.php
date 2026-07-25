@@ -9,7 +9,6 @@
     $articleDirectProjectId = ArticleResource::resolveDirectAssignContentProjectId($articleSiteId);
     $articleProjectOptions = ArticleResource::contentProjectOptions($articleSiteId);
     $articleAssignTypeOptions = SeoProjectTask::typeOptions();
-    $articleRewriteModeOptions = SeoProjectTask::rewriteModeOptions();
     $writerOptions = SeoProjectResource::userSelectOptions();
 
     $keywordSiteId = (int) ($record->site_id ?? 0);
@@ -25,7 +24,6 @@
         quickCreateOpen: false,
         projectId: @js($articleDirectProjectId ? (string) $articleDirectProjectId : ''),
         assignType: @js(SeoProjectTask::TYPE_REWRITE),
-        rewriteMode: @js(SeoProjectTask::REWRITE_MODE_KEYWORD),
         rewriteNotes: '',
         quickWriterId: @js(SeoAccessControl::isContentManager() ? (string) auth()->id() : ''),
         quickCreateSubmitting: false,
@@ -36,7 +34,6 @@
         openModal() {
             this.projectId = this.directProjectId ? String(this.directProjectId) : '';
             this.assignType = @js(SeoProjectTask::TYPE_REWRITE);
-            this.rewriteMode = @js(SeoProjectTask::REWRITE_MODE_KEYWORD);
             this.rewriteNotes = '';
             this.open = true;
         },
@@ -53,7 +50,7 @@
             this.$wire.assignCurrentArticleToContentProject({
                 project_id: this.directProjectId || this.projectId,
                 type: this.assignType,
-                rewrite_mode: this.rewriteMode,
+                rewrite_mode: @js(SeoProjectTask::REWRITE_MODE_CONTENT),
                 rewrite_notes: this.rewriteNotes,
             }).then(() => {
                 this.open = false;
@@ -132,18 +129,14 @@
                 </x-select>
             </div>
 
-            <div x-show="assignType === @js(SeoProjectTask::TYPE_REWRITE)">
-                <label class="seo-content-project-assign-modal__label">{{ __('seo-content-ai::filament.projects.rewrite_mode') }}</label>
-                <x-select x-model="rewriteMode" class="mt-1 block w-full rounded-lg border-gray-300 text-sm dark:border-white/10 dark:bg-gray-950">
-                    @foreach ($articleRewriteModeOptions as $value => $label)
-                        <option value="{{ $value }}">{{ $label }}</option>
-                    @endforeach
-                </x-select>
-            </div>
-
-            <div x-show="assignType === @js(SeoProjectTask::TYPE_REWRITE) && rewriteMode === @js(SeoProjectTask::REWRITE_MODE_CONTENT)">
-                <label class="seo-content-project-assign-modal__label">{{ __('seo-content-ai::filament.projects.rewrite_notes') }}</label>
-                <textarea x-model="rewriteNotes" rows="3" class="mt-1 block w-full rounded-lg border-gray-300 text-sm dark:border-white/10 dark:bg-gray-950"></textarea>
+            <div x-show="assignType === @js(SeoProjectTask::TYPE_IMPROVE)">
+                <label class="seo-content-project-assign-modal__label">{{ __('seo-content-ai::filament.projects.improve_instruction') }}</label>
+                <textarea
+                    x-model="rewriteNotes"
+                    rows="3"
+                    class="mt-1 block w-full rounded-lg border-gray-300 text-sm dark:border-white/10 dark:bg-gray-950"
+                    placeholder="{{ __('seo-content-ai::filament.projects.improve_instruction_placeholder') }}"
+                ></textarea>
             </div>
         </div>
 

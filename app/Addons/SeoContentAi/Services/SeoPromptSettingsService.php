@@ -37,7 +37,7 @@ final class SeoPromptSettingsService
     /** Nội dung chèn vào prompt qua {{tone}}. */
     public const KEY_TONE_TEXT = 'tone_text';
 
-    /** Độ dài bài (chữ) — product: {{article_length_product}}, còn lại: {{article_length_default}}; runtime: {{article_length}}. */
+    /** Độ dài bài (số từ) — product: {{article_length_product}}, còn lại: {{article_length_default}}; runtime: {{article_length}}. */
     public const KEY_ARTICLE_LENGTH_PRODUCT = 'article_length_product';
 
     public const KEY_ARTICLE_LENGTH_DEFAULT = 'article_length_default';
@@ -176,14 +176,13 @@ final class SeoPromptSettingsService
 
         return [
             'tone' => $settings[self::KEY_TONE_TEXT],
-            'article_length' => $isProduct
-                ? $settings[self::KEY_ARTICLE_LENGTH_PRODUCT]
-                : $settings[self::KEY_ARTICLE_LENGTH_DEFAULT],
+            // Luôn số thuần (từ) — hook input type=integer + prompt {{article_length}}.
+            'article_length' => (string) $this->resolveArticleLengthTarget($postType),
             'keyword_density' => $isProduct
                 ? $settings[self::KEY_KEYWORD_DENSITY_PRODUCT]
                 : $settings[self::KEY_KEYWORD_DENSITY_DEFAULT],
-            'article_length_product' => $settings[self::KEY_ARTICLE_LENGTH_PRODUCT],
-            'article_length_default' => $settings[self::KEY_ARTICLE_LENGTH_DEFAULT],
+            'article_length_product' => (string) $this->resolveArticleLengthTarget('product'),
+            'article_length_default' => (string) $this->resolveArticleLengthTarget('article'),
             'keyword_density_product' => $settings[self::KEY_KEYWORD_DENSITY_PRODUCT],
             'keyword_density_default' => $settings[self::KEY_KEYWORD_DENSITY_DEFAULT],
         ];

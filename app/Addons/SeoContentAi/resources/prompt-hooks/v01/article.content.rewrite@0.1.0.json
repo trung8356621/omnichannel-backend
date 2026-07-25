@@ -90,6 +90,7 @@
       "nullable": true,
       "minimum": 300,
       "maximum": 20000,
+      "description": "Target article length in words (product vs other from seo_prompt_settings).",
       "allowed_source": [
         "seo_prompt_settings",
         "runtime"
@@ -99,7 +100,7 @@
       "type": "string",
       "required": false,
       "nullable": true,
-      "max_length": 100,
+      "max_length": 2000,
       "allowed_source": [
         "seo_prompt_settings",
         "runtime"
@@ -151,6 +152,7 @@
     "type": "markdown",
     "validation": {
       "not_empty": true,
+      "length_unit": "words",
       "minimum_length": 300,
       "reject_provider_preamble": true
     },
@@ -195,7 +197,8 @@
     "prompt_concern": "rewrite existing article",
     "workflow_concern": "return revised article markdown",
     "domain_action_concern": "article update belongs to Business Action",
-    "ui_concern": "Prompt Editor, Article Editor or Workflow Prompt block"
+    "ui_concern": "Prompt Editor, Article Editor or Workflow Prompt block",
+    "article_length_unit": "words"
   },
 
   "side_effects": []

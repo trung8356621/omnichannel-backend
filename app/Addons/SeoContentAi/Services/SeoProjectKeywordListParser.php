@@ -46,7 +46,7 @@ final class SeoProjectKeywordListParser
      * @param  list<string>  $keywords
      * @return list<array{type: string, site_id: null, source_content: string, description: null}>
      */
-    public function appendKeywordsToTasks(array $existing, array $keywords, string $defaultType = 'new_keyword'): array
+    public function appendKeywordsToTasks(array $existing, array $keywords, string $defaultType = 'create'): array
     {
         foreach ($keywords as $keyword) {
             $phrase = trim($keyword);
@@ -54,12 +54,17 @@ final class SeoProjectKeywordListParser
                 continue;
             }
 
+            $type = SeoProjectTask::normalizeType($defaultType);
+
             $existing[] = [
                 'site_id' => null,
-                'type' => $defaultType,
+                'type' => $type,
                 'source_content' => $phrase,
+                'keyword' => $phrase,
+                'title' => null,
+                'secondary_description' => null,
                 'description' => null,
-                'post_type' => SeoProjectTask::isNewArticleType($defaultType)
+                'post_type' => SeoProjectTask::isNewArticleType($type)
                     ? SeoProjectTask::POST_TYPE_ARTICLE
                     : null,
             ];

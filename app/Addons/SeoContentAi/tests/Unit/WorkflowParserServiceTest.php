@@ -7,7 +7,7 @@ namespace App\Addons\SeoContentAi\Tests\Unit;
 use App\Addons\SeoContentAi\Services\SeoOverviewSettingsService;
 use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
 use App\Addons\SeoContentAi\Services\WorkflowParserService;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 final class WorkflowParserServiceTest extends TestCase
 {

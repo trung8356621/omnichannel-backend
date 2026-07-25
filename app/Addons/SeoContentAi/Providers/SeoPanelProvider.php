@@ -31,6 +31,7 @@ use App\Addons\SeoContentAi\Http\Controllers\SeoWatermarkController;
 use App\Addons\SeoContentAi\Http\Controllers\TeamMessageController;
 use App\Addons\SeoContentAi\Http\Controllers\WorkspaceMediaPickerController;
 use App\Addons\SeoContentAi\Http\Middleware\CheckMainRole;
+use App\Addons\SeoContentAi\Http\Middleware\SeoAuthenticate;
 use App\Addons\SeoContentAi\Http\Middleware\SeoPlannerPermissionMiddleware;
 use App\Addons\SeoContentAi\Http\Middleware\SetDynamicSeoDatabase;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
@@ -95,7 +96,8 @@ class SeoPanelProvider extends PanelProvider
                 return;
             }
 
-            $hash = SeoConnectionContext::hash();
+            $hash = SeoConnectionContext::applyUrlDefaultsFromRequest();
+
             if ($hash !== null) {
                 try {
                     app(SeoDatabaseConnectionService::class)->bootstrapByHash($hash);
@@ -109,14 +111,7 @@ class SeoPanelProvider extends PanelProvider
                 app(SeoDatabaseConnectionService::class)->bootstrapBySiteId($siteId);
             }
 
-            $routeHash = request()->route('connection_hash');
-            if (is_string($routeHash) && SeoConnectionContext::isValidHashFormat($routeHash)) {
-                SeoConnectionContext::applyUrlDefaults($routeHash);
-
-                return;
-            }
-
-            SeoConnectionContext::applyUrlDefaults();
+            SeoConnectionContext::applyUrlDefaultsFromRequest();
         });
 
         FilamentView::registerRenderHook(
@@ -604,9 +599,10 @@ class SeoPanelProvider extends PanelProvider
                 EncryptCookies::class,
                 AddQueuedCookiesToResponse::class,
                 StartSession::class,
+                // Hash/URL defaults TRƯỚC AuthenticateSession — tránh generate login thiếu connection_hash.
+                SetDynamicSeoDatabaseByHash::class,
                 AuthenticateSession::class,
                 ShareErrorsFromSession::class,
-                SetDynamicSeoDatabaseByHash::class,
                 VerifyCsrfToken::class,
                 SubstituteBindings::class,
                 DisableBladeIconComponents::class,
@@ -614,7 +610,7 @@ class SeoPanelProvider extends PanelProvider
                 SetDynamicSeoDatabase::class,
             ])
             ->authMiddleware([
-                \Filament\Http\Middleware\Authenticate::class,
+                SeoAuthenticate::class,
                 CheckMainRole::class,
                 SeoPlannerPermissionMiddleware::class,
             ]);

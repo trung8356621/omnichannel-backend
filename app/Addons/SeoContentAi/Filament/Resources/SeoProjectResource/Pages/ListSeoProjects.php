@@ -19,6 +19,7 @@ class ListSeoProjects extends ListRecords
     {
         return SeoProjectResource::applyGlobalSiteScopeToProjectQuery(
             parent::getTableQuery()
+                ->activeProjects()
                 ->where(function (Builder $builder): void {
                     $builder
                         ->where('kind', SeoProject::KIND_MONTHLY)

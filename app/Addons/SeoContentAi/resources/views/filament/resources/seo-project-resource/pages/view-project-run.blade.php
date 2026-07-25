@@ -95,13 +95,28 @@
         @seo-run-mark-running="markRowRunning($event.detail)"
         @seo-run-start-queue="handleStartQueue($event.detail)"
     >
-        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
             <x-filament::section>
                 <p class="text-sm text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.run_mode') }}</p>
                 <p class="mt-1 text-lg font-semibold text-gray-950 dark:text-white">
                     {{ $this->projectRun->isTestMode()
                         ? __('seo-content-ai::filament.projects.run_mode_test')
                         : __('seo-content-ai::filament.projects.run_mode_full') }}
+                </p>
+            </x-filament::section>
+
+            <x-filament::section>
+                <p class="text-sm text-gray-500 dark:text-gray-400">Engine</p>
+                <p class="mt-1">
+                    @php
+                        $engineLabel = (string) ($queueBootstrap['engineLabel'] ?? 'Legacy');
+                        $isPhpEngine = ($queueBootstrap['orchestration'] ?? '') === 'php';
+                    @endphp
+                    <span @class([
+                        'inline-flex items-center rounded-md px-2 py-0.5 text-sm font-semibold',
+                        'bg-info-50 text-info-700 ring-1 ring-inset ring-info-600/20 dark:bg-info-400/10 dark:text-info-400' => $isPhpEngine,
+                        'bg-gray-100 text-gray-700 ring-1 ring-inset ring-gray-500/20 dark:bg-gray-500/10 dark:text-gray-300' => ! $isPhpEngine,
+                    ])>Engine: {{ $engineLabel }}</span>
                 </p>
             </x-filament::section>
 
@@ -149,13 +164,13 @@
                     type="button"
                     class="seo-run-stop-button inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
                     x-cloak
-                    x-show="$store.seoRunQueue.isRunning"
-                    x-on:click.stop="$store.seoRunQueue.requestStop()"
-                    x-bind:disabled="$store.seoRunQueue.stopRequested"
+                    x-show="(config.engineUiRunning === true) || config.runStatus === 'running' || config.runStatus === 'stopping' || ($store.seoRunQueue.isRunning && !['completed','cancelled','failed'].includes(String(config.runStatus || '')))"
+                    x-on:click.stop="forceStopRunQueue()"
+                    x-bind:disabled="$store.seoRunQueue.stopRequested || forceStopBusy"
                 >
                     <x-filament::icon icon="heroicon-o-stop" class="h-4 w-4" />
-                    <span x-show="!$store.seoRunQueue.stopRequested">{{ __('seo-content-ai::filament.projects.run_stop') }}</span>
-                    <span x-show="$store.seoRunQueue.stopRequested" x-cloak>{{ __('seo-content-ai::filament.projects.run_stopping') }}</span>
+                    <span x-show="!$store.seoRunQueue.stopRequested && !forceStopBusy">{{ __('seo-content-ai::filament.projects.run_stop') }}</span>
+                    <span x-show="$store.seoRunQueue.stopRequested || forceStopBusy" x-cloak>{{ __('seo-content-ai::filament.projects.run_stopping') }}</span>
                 </button>
             </div>
 
@@ -231,6 +246,11 @@
                                 $isReviewed = (bool) ($item['article_is_reviewed'] ?? false);
                                 $taskExists = (bool) ($item['task_exists'] ?? true);
                                 $canRetry = $this->canRetryRunItem($item);
+                                $runIsTerminal = in_array((string) ($this->projectRun?->status ?? ''), [
+                                    \App\Addons\SeoContentAi\Models\SeoProjectRun::STATUS_COMPLETED,
+                                    \App\Addons\SeoContentAi\Models\SeoProjectRun::STATUS_CANCELLED,
+                                    \App\Addons\SeoContentAi\Models\SeoProjectRun::STATUS_FAILED,
+                                ], true);
                             @endphp
                             <tr
                                 class="align-top {{ in_array($itemStatus, ['pending', 'manual'], true) ? 'bg-warning-50/40 dark:bg-warning-500/5' : '' }}"
@@ -331,14 +351,25 @@
                                     @endif
                                     @php
                                         $busySteps = collect($item['workflow_steps'] ?? [])
-                                            ->filter(static fn (array $step): bool => (bool) ($step['busy'] ?? false))
+                                            ->filter(static fn (array $step): bool => (bool) ($step['busy'] ?? false) && ! $runIsTerminal)
                                             ->values();
                                     @endphp
-                                    @foreach ($busySteps as $busyStep)
-                                        <div class="mt-1 text-[11px] text-warning-700 dark:text-warning-400">
-                                            {{ $busyStep['label'] ?? '' }}: Đang chạy
-                                        </div>
-                                    @endforeach
+                                        @foreach ($busySteps as $busyStep)
+                                            <div class="mt-1 text-[11px] text-warning-700 dark:text-warning-400" data-run-busy-step>
+                                                {{ $busyStep['label'] ?? '' }}: Đang chạy
+                                                <button
+                                                    type="button"
+                                                    class="ml-1 underline"
+                                                    @click="
+                                                        const root = $el.closest('[data-seo-run-queue]');
+                                                        const queue = root ? Alpine.$data(root) : null;
+                                                        if (queue && typeof queue.cancelWorkflowStep === 'function') {
+                                                            queue.cancelWorkflowStep({{ (int) ($item['task_id'] ?? 0) }}, @js($busyStep['node_id'] ?? ''));
+                                                        }
+                                                    "
+                                                >Ngắt</button>
+                                            </div>
+                                        @endforeach
                                 </td>
                                 <td class="px-3 py-3 text-gray-600 dark:text-gray-300">
                                     <div title="{{ $item['last_saved_source_label'] ?? '' }}">
@@ -478,34 +509,55 @@
                                                     </div>
                                                     @foreach ($workflowSteps as $step)
                                                         @php
-                                                            $stepBusy = (bool) ($step['busy'] ?? false);
+                                                            $stepBusy = (bool) ($step['busy'] ?? false) && ! $runIsTerminal;
                                                             $stepLabel = (string) ($step['label'] ?? $step['title'] ?? '');
                                                             $stepMeta = $stepBusy
                                                                 ? 'Đang chạy'
                                                                 : (filled($step['last_finished_at'] ?? null) ? 'Lần cuối: '.$step['last_finished_at'] : '');
                                                         @endphp
-                                                        <button
-                                                            type="button"
-                                                            class="seo-run-actions-dropdown__item"
-                                                            @disabled($stepBusy)
-                                                            @click="
-                                                                open = false;
-                                                                const root = $el.closest('[data-seo-run-queue]');
-                                                                const queue = root ? Alpine.$data(root) : null;
-                                                                if (! queue || typeof queue.retryWorkflowStep !== 'function') {
-                                                                    window.alert('Queue UI chưa sẵn sàng — Ctrl+F5 rồi thử lại.');
-                                                                    return;
-                                                                }
-                                                                queue.retryWorkflowStep({{ $taskId }}, @js($step['node_id']));
-                                                            "
-                                                        >
-                                                            <span class="flex items-center justify-between gap-3">
-                                                                <span>{{ $stepLabel }}</span>
-                                                                @if ($stepMeta !== '')
+                                                        @if ($stepBusy)
+                                                            <button
+                                                                type="button"
+                                                                class="seo-run-actions-dropdown__item text-danger-600 dark:text-danger-400"
+                                                                @click="
+                                                                    open = false;
+                                                                    const root = $el.closest('[data-seo-run-queue]');
+                                                                    const queue = root ? Alpine.$data(root) : null;
+                                                                    if (! queue || typeof queue.cancelWorkflowStep !== 'function') {
+                                                                        window.alert('Queue UI chưa sẵn sàng — Ctrl+F5 rồi thử lại.');
+                                                                        return;
+                                                                    }
+                                                                    queue.cancelWorkflowStep({{ $taskId }}, @js($step['node_id']));
+                                                                "
+                                                            >
+                                                                <span class="flex items-center justify-between gap-3">
+                                                                    <span>Ngắt: {{ $stepLabel }}</span>
                                                                     <span class="text-[11px] font-normal text-gray-400">{{ $stepMeta }}</span>
-                                                                @endif
-                                                            </span>
-                                                        </button>
+                                                                </span>
+                                                            </button>
+                                                        @else
+                                                            <button
+                                                                type="button"
+                                                                class="seo-run-actions-dropdown__item"
+                                                                @click="
+                                                                    open = false;
+                                                                    const root = $el.closest('[data-seo-run-queue]');
+                                                                    const queue = root ? Alpine.$data(root) : null;
+                                                                    if (! queue || typeof queue.retryWorkflowStep !== 'function') {
+                                                                        window.alert('Queue UI chưa sẵn sàng — Ctrl+F5 rồi thử lại.');
+                                                                        return;
+                                                                    }
+                                                                    queue.retryWorkflowStep({{ $taskId }}, @js($step['node_id']));
+                                                                "
+                                                            >
+                                                                <span class="flex items-center justify-between gap-3">
+                                                                    <span>{{ $stepLabel }}</span>
+                                                                    @if ($stepMeta !== '')
+                                                                        <span class="text-[11px] font-normal text-gray-400">{{ $stepMeta }}</span>
+                                                                    @endif
+                                                                </span>
+                                                            </button>
+                                                        @endif
                                                     @endforeach
                                                 @endif
 

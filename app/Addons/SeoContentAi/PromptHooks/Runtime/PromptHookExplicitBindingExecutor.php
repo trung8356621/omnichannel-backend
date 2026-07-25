@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\PromptHooks\Runtime;
 
+use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\InvalidInput;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\PromptHookFailure;
@@ -106,13 +107,24 @@ final class PromptHookExplicitBindingExecutor
                 $correlationId,
             );
         } catch (PromptHookFailure $exception) {
+            $promptResultId = $exception->promptResultId();
+            if ($promptResultId !== null && $promptResultId > 0) {
+                PromptResult::query()->whereKey($promptResultId)->update([
+                    'status' => 'failed',
+                    'error_message' => mb_substr($exception->getMessage(), 0, 2000),
+                    'finished_at' => now(),
+                ]);
+            }
+
             Log::warning('prompt_hook.explicit_binding_failed', [
                 'hook_key' => $binding->hookKey,
                 'hook_version' => $binding->hookVersion,
                 'execution_source' => PromptHookExecutionIntent::ExplicitBinding->value,
                 'prompt_id' => (int) $prompt->id,
+                'prompt_result_id' => $promptResultId,
                 'node_id' => $contextExtras['node_id'] ?? null,
                 'site_id' => $contextExtras['site_id'] ?? null,
+                'article_id' => $contextExtras['article_id'] ?? null,
                 'correlation_id' => $correlationId,
                 'failure_category' => $exception->failureCode->value,
                 'message' => $exception->getMessage(),
@@ -203,8 +215,21 @@ final class PromptHookExplicitBindingExecutor
             }
             $field = (string) $field;
             $value = $variables[$field] ?? null;
-            if (($value === null || $value === '') && isset($aliases[$field])) {
+            // article_length: ưu tiên key đã resolve theo post_type; không nhảy product trước default.
+            if ($field === 'article_length') {
+                if ($value === null || $value === '') {
+                    foreach (['article_length_default', 'article_length_product'] as $alias) {
+                        if (isset($variables[$alias]) && $variables[$alias] !== '' && $variables[$alias] !== null) {
+                            $value = $variables[$alias];
+                            break;
+                        }
+                    }
+                }
+            } elseif (($value === null || $value === '') && isset($aliases[$field])) {
                 foreach ($aliases[$field] as $alias) {
+                    if ($alias === $field) {
+                        continue;
+                    }
                     if (isset($variables[$alias]) && $variables[$alias] !== '' && $variables[$alias] !== null) {
                         $value = $variables[$alias];
                         break;
@@ -214,8 +239,20 @@ final class PromptHookExplicitBindingExecutor
             if (($value === null || $value === '') && isset($previousOutputs[$field])) {
                 $value = $previousOutputs[$field];
             }
-            if (($value === null || $value === '') && isset($aliases[$field])) {
+            if ($field === 'article_length') {
+                if (($value === null || $value === '')) {
+                    foreach (['article_length_default', 'article_length_product'] as $alias) {
+                        if (isset($previousOutputs[$alias]) && $previousOutputs[$alias] !== '' && $previousOutputs[$alias] !== null) {
+                            $value = $previousOutputs[$alias];
+                            break;
+                        }
+                    }
+                }
+            } elseif (($value === null || $value === '') && isset($aliases[$field])) {
                 foreach ($aliases[$field] as $alias) {
+                    if ($alias === $field) {
+                        continue;
+                    }
                     if (isset($previousOutputs[$alias]) && $previousOutputs[$alias] !== '' && $previousOutputs[$alias] !== null) {
                         $value = $previousOutputs[$alias];
                         break;
@@ -276,6 +313,8 @@ final class PromptHookExplicitBindingExecutor
                 $int = $value;
             } elseif (is_numeric($value)) {
                 $int = (int) $value;
+            } elseif (is_string($value) && preg_match('/(\d+)/', $value, $matches) === 1) {
+                $int = (int) $matches[1];
             } else {
                 throw new InvalidInput("Hook input [{$field}] must be integer.");
             }

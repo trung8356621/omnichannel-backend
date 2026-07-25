@@ -66,12 +66,15 @@ final class CreateProjectTaskAction implements BusinessAction
             return ActionResult::failure('project_capacity_full', 'Project has no remaining task capacity.');
         }
 
-        $type = trim((string) ($input['type'] ?? SeoProjectTask::TYPE_NEW_KEYWORD));
-        if (! in_array($type, SeoProjectTask::typeKeys(), true)) {
-            $type = SeoProjectTask::TYPE_NEW_KEYWORD;
-        }
+        $type = SeoProjectTask::normalizeType($input['type'] ?? SeoProjectTask::TYPE_CREATE);
 
+        $keyword = trim((string) ($input['keyword'] ?? ''));
+        $title = trim((string) ($input['title'] ?? ''));
+        $secondaryDescription = trim((string) ($input['secondary_description'] ?? ''));
         $sourceContent = trim((string) ($input['source_content'] ?? ''));
+        if ($sourceContent === '') {
+            $sourceContent = SeoProjectTask::deriveSourceContent($type, $keyword, $title, $sourceContent);
+        }
         $articleId = (int) ($input['article_id'] ?? 0);
         $siteId = (int) ($project->site_id ?? 0);
 
@@ -79,6 +82,9 @@ final class CreateProjectTaskAction implements BusinessAction
             $project,
             $type,
             $sourceContent,
+            $keyword,
+            $title,
+            $secondaryDescription,
             $articleId,
             $siteId,
             $input,
@@ -88,6 +94,9 @@ final class CreateProjectTaskAction implements BusinessAction
                 'site_id' => $siteId > 0 ? $siteId : null,
                 'type' => $type,
                 'source_content' => $sourceContent,
+                'keyword' => $keyword !== '' ? $keyword : null,
+                'title' => $title !== '' ? $title : null,
+                'secondary_description' => $secondaryDescription !== '' ? $secondaryDescription : null,
                 'description' => null,
                 'target_date' => $project->monthCarbon()->format('Y-m-d'),
                 'status' => SeoProjectTask::STATUS_PENDING,
@@ -102,9 +111,12 @@ final class CreateProjectTaskAction implements BusinessAction
             }
 
             if ($type === SeoProjectTask::TYPE_REWRITE) {
-                $payload['rewrite_mode'] = SeoProjectTask::normalizeRewriteMode(
-                    $input['rewrite_mode'] ?? null,
-                );
+                $payload['rewrite_mode'] = SeoProjectTask::REWRITE_MODE_CONTENT;
+            }
+
+            if ($type === SeoProjectTask::TYPE_IMPROVE) {
+                $notes = trim((string) ($input['rewrite_notes'] ?? $input['improve_instruction'] ?? ''));
+                $payload['rewrite_notes'] = $notes !== '' ? $notes : null;
             }
 
             $payload['source_key'] = app(\App\Addons\SeoContentAi\Support\ProjectTaskSourceKeyGenerator::class)->generate(

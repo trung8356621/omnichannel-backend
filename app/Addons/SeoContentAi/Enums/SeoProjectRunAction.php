@@ -31,8 +31,9 @@ enum SeoProjectRunAction: string
     public static function fromLegacyTaskType(?string $type): self
     {
         return match (trim((string) $type)) {
+            'create' => self::ArticleCreate,
             'rewrite' => self::ArticleRewrite,
-            'improve' => self::ArticleUpdate,
+            'improve' => self::ArticleRewrite,
             'new_keyword', 'new_title' => self::ArticleCreate,
             default => self::ArticleCreate,
         };

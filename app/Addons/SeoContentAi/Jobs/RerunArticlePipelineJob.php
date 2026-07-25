@@ -14,12 +14,12 @@ use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Services\ArticlePipelineRerunService;
+use App\Addons\SeoContentAi\Services\ArticlePipelineRerunStartStepResolver;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPostRunPipeline;
 use App\Addons\SeoContentAi\Services\SeoArticleRevisionService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Services\SeoProjectRunItemService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
-use App\Addons\SeoContentAi\Services\SeoProjectWorkflowStepCatalogService;
 use App\Addons\SeoContentAi\Services\TaskTestInputResolver;
 use App\Addons\SeoContentAi\Services\TaskWorkflowTestRunner;
 use App\Models\User;
@@ -60,7 +60,7 @@ final class RerunArticlePipelineJob implements ShouldBeUnique, ShouldQueue
     public function handle(
         SeoDatabaseConnectionService $databaseConnection,
         ArticlePipelineRerunService $rerunService,
-        SeoProjectWorkflowStepCatalogService $catalog,
+        ArticlePipelineRerunStartStepResolver $startStepResolver,
         SeoProjectRunItemService $runItemService,
         SeoProjectWorkflowRunService $workflowRunService,
         TaskTestInputResolver $inputResolver,
@@ -109,32 +109,51 @@ final class RerunArticlePipelineJob implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        $seoTask = $catalog->resolveSeoTask($task);
-        if (! $seoTask instanceof SeoTask) {
-            $this->failRun($run, null, $article, $rerunService, $runItemService, 'Chưa cấu hình quy trình đăng bài / viết lại.');
-
-            return;
-        }
-
-        $kind = $fromStep === ArticlePipelineRerunService::FROM_ARTICLE ? 'content' : 'outline';
+        $seoTask = null;
         $settings = is_array($run->settings) ? $run->settings : [];
-        $startNodeId = trim((string) ($settings['start_node_id'] ?? ''));
-        if ($startNodeId === '') {
-            $startNodeId = (string) ($catalog->firstPromptNodeIdForKind($task, $kind) ?? '');
-        }
+        $sourceNodeId = trim((string) ($settings['start_node_id'] ?? ''));
+        $sourceNodeId = $sourceNodeId !== '' ? $sourceNodeId : null;
 
-        if ($startNodeId === '') {
+        $resolved = $startStepResolver->resolve(
+            $task,
+            $fromStep,
+            $sourceNodeId,
+        );
+        $startStepResolver->logResolution($resolved, [
+            'article_id' => (int) $article->id,
+            'run_id' => (int) $run->id,
+            'project_id' => (int) $project->id,
+            'task_id' => (int) $task->id,
+            'from_step' => $fromStep,
+            'phase' => 'job',
+        ]);
+
+        if (! $resolved['ok'] || ! $resolved['seo_task'] instanceof SeoTask || $resolved['resolved_node_id'] === null) {
             $this->failRun(
                 $run,
                 null,
                 $article,
                 $rerunService,
                 $runItemService,
-                'Không tìm thấy bước bắt đầu trong workflow.',
+                (string) ($resolved['message']
+                    ?? 'Workflow của bài viết đã thay đổi và không còn bước tương ứng. Vui lòng chọn lại bước bắt đầu.'),
             );
 
             return;
         }
+
+        $seoTask = $resolved['seo_task'];
+        $startNodeId = (string) $resolved['resolved_node_id'];
+
+        $run->update([
+            'settings' => array_merge($settings, [
+                'semantic_key' => $resolved['semantic_key'],
+                'resolved_node_id' => $startNodeId,
+                'source_node_id' => $resolved['source_node_id'],
+                'resolution_strategy' => $resolved['strategy'],
+                'start_node_id' => $startNodeId,
+            ]),
+        ]);
 
         $action = $runItemService->resolveAction($task);
         $claim = $runItemService->claimForExecution($run, (int) $task->id, $action, forceRetry: true);
@@ -182,12 +201,22 @@ final class RerunArticlePipelineJob implements ShouldBeUnique, ShouldQueue
             }
 
             $seedOutline = $fromStep === ArticlePipelineRerunService::FROM_ARTICLE;
-            $steps = $workflowRunner->runFromNodeId(
-                $seoTask,
-                $context,
-                $startNodeId,
-                $seedOutline,
-            );
+            try {
+                $steps = $workflowRunner->runFromNodeId(
+                    $seoTask,
+                    $context,
+                    $startNodeId,
+                    $seedOutline,
+                );
+            } catch (\InvalidArgumentException $exception) {
+                $message = $exception->getMessage();
+                if (str_contains($message, 'Không tìm thấy bước bắt đầu')) {
+                    $message = 'Workflow của bài viết đã thay đổi và không còn bước tương ứng. Vui lòng chọn lại bước bắt đầu.';
+                }
+                $this->failRun($run, $runItem, $article, $rerunService, $runItemService, $message);
+
+                return;
+            }
 
             $failed = collect($steps)->first(
                 static fn (array $step): bool => in_array((string) ($step['status'] ?? ''), ['failed', 'error'], true),
