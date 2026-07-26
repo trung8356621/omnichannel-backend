@@ -56,11 +56,15 @@ abstract class TestCase extends BaseTestCase
 
         Config::set('database.core_connection', $default);
         Config::set('database.connections.omi_seo_ai', $defaultConfig);
+        // Tests still listing `mysql` in $connectionsToTransact must not hit
+        // MySQL driver with DB_DATABASE=:memory: from phpunit.xml.
+        Config::set('database.connections.mysql', $defaultConfig);
 
         try {
             DB::purge('omi_seo_ai');
-            if ($default !== 'mysql') {
-                DB::purge('mysql');
+            DB::purge('mysql');
+            if ($default !== 'mysql' && $default !== 'omi_seo_ai') {
+                DB::purge($default);
             }
         } catch (Throwable) {
             // Not resolved yet.

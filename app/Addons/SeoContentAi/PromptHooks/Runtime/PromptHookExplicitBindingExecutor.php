@@ -207,7 +207,52 @@ final class PromptHookExplicitBindingExecutor
             $payload['ports'] = $ports;
         }
 
+        $lengthValidation = is_array($result->output['length_validation'] ?? null)
+            ? $result->output['length_validation']
+            : null;
+        if ($lengthValidation !== null) {
+            $payload['length_validation'] = $lengthValidation;
+            $payload['actual_word_count'] = $lengthValidation['actual_word_count'] ?? null;
+            $payload['minimum_acceptable_words'] = $lengthValidation['minimum_acceptable_words'] ?? null;
+            $payload['target_article_length'] = $lengthValidation['target_article_length'] ?? null;
+            $payload['length_validation_result'] = $lengthValidation['length_validation_result'] ?? null;
+            $this->persistLengthValidationToPromptResult(
+                isset($payload['prompt_result_id']) ? (int) $payload['prompt_result_id'] : 0,
+                $lengthValidation,
+            );
+        }
+
         return $payload;
+    }
+
+    /**
+     * @param  array{
+     *     actual_word_count: int,
+     *     minimum_acceptable_words: int,
+     *     target_article_length: int,
+     *     length_validation_result: string
+     * }  $lengthValidation
+     */
+    private function persistLengthValidationToPromptResult(int $promptResultId, array $lengthValidation): void
+    {
+        if ($promptResultId <= 0) {
+            return;
+        }
+
+        $result = PromptResult::query()->find($promptResultId);
+        if ($result === null) {
+            return;
+        }
+
+        $snapshot = is_array($result->input_snapshot) ? $result->input_snapshot : [];
+        $variables = is_array($snapshot['variables'] ?? null) ? $snapshot['variables'] : [];
+        foreach ($lengthValidation as $key => $value) {
+            $variables[$key] = $value;
+            $snapshot[$key] = $value;
+        }
+        $snapshot['variables'] = $variables;
+        $result->input_snapshot = $snapshot;
+        $result->save();
     }
 
     /**

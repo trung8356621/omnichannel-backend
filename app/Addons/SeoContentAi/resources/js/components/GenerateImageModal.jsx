@@ -140,6 +140,7 @@ function normalizePostProcessing(raw) {
  *   articleId?: number | string | null,
  *   siteId?: number | string | null,
  *   productGalleryItems?: Array<{ id?: number, url: string, connected?: boolean }>,
+ *   canaryProduct?: boolean,
  * }} props
  */
 export default function GenerateImageModal({
@@ -153,6 +154,7 @@ export default function GenerateImageModal({
     articleId = null,
     siteId = null,
     productGalleryItems = [],
+    canaryProduct = false,
 }) {
     const [prompt, setPrompt] = useState(initialPrompt);
     const [productCategoryId, setProductCategoryId] = useState('');
@@ -168,6 +170,10 @@ export default function GenerateImageModal({
     const [generationError, setGenerationError] = useState('');
     const [generationErrorTechnical, setGenerationErrorTechnical] = useState('');
     const [generationErrorRetryable, setGenerationErrorRetryable] = useState(false);
+    const [mode1Status, setMode1Status] = useState(null);
+    const [galleryGenerationMode, setGalleryGenerationMode] = useState('sprite');
+    const [providerSupportsReference, setProviderSupportsReference] = useState(null);
+    const [mode2Progress, setMode2Progress] = useState('');
     const pollTimerRef = useRef(null);
     const pendingMediaIdRef = useRef(null);
     const connectedUrlsRef = useRef(new Set());
@@ -221,6 +227,9 @@ export default function GenerateImageModal({
             setPendingMediaId(null);
             setGenerationError('');
             setSelectedSplitUrl('');
+            setMode1Status(null);
+            setGalleryGenerationMode('sprite');
+            setMode2Progress('');
             refreshGalleryItems();
         }
     }, [open, initialPrompt, initialLoaiSanPhamCustom, refreshGalleryItems]);
@@ -239,12 +248,19 @@ export default function GenerateImageModal({
         (payload) => {
             const url = String(payload?.url ?? '').trim();
             const status = String(payload?.status ?? '').toLowerCase();
-            const mediaId = Number(payload?.seoMediaId ?? payload?.seo_media_id ?? 0) || 0;
+            const mediaId = Number(payload?.seoMediaId ?? payload?.seo_media_id ?? payload?.id ?? 0) || 0;
             const galleryRows = Array.isArray(payload?.gallery_urls)
                 ? payload.gallery_urls
                 : Array.isArray(payload?.galleryUrls)
                   ? payload.galleryUrls
                   : [];
+            const productGallery = payload?.product_gallery && typeof payload.product_gallery === 'object'
+                ? payload.product_gallery
+                : null;
+
+            if (productGallery) {
+                setMode1Status(productGallery);
+            }
 
             if (url) {
                 const processing = status === 'processing' || status === 'pending';
@@ -253,6 +269,7 @@ export default function GenerateImageModal({
                     url,
                     processing,
                     connected: status === 'completed',
+                    role: payload?.media_artifact_role || null,
                 };
 
                 if (status === 'completed') {
@@ -531,6 +548,7 @@ export default function GenerateImageModal({
             userBrief: brief,
             loaiSanPhamCategoryArticleId: categoryId,
             loaiSanPhamCustom: customValue || brief,
+            galleryGenerationMode,
         };
 
         setSubmitting(true);
@@ -554,6 +572,44 @@ export default function GenerateImageModal({
         <div className="seo-generate-image-modal__col seo-generate-image-modal__col--form">
             {isProductGallery ? (
                 <>
+                    <label className="seo-generate-image-modal__label" htmlFor="seo-generate-gallery-mode">
+                        {t('generate_image_mode2_mode_label')}
+                    </label>
+                    <SeoSelect
+                        id="seo-generate-gallery-mode"
+                        value={galleryGenerationMode}
+                        onChange={(event) => setGalleryGenerationMode(event.target.value)}
+                        options={[
+                            { value: 'sprite', label: t('generate_image_mode2_mode_sprite') },
+                            { value: 'parent_child', label: t('generate_image_mode2_mode_parent_child') },
+                            { value: 'auto', label: t('generate_image_mode2_mode_auto') },
+                        ]}
+                    />
+                    <p className="seo-generate-image-modal__helper">
+                        {t('generate_image_mode2_capability_label')}
+                        {': '}
+                        {providerSupportsReference === null
+                            ? t('generate_image_mode2_capability_unknown')
+                            : providerSupportsReference
+                              ? t('generate_image_mode2_capability_yes')
+                              : t('generate_image_mode2_capability_no')}
+                    </p>
+                    {galleryGenerationMode === 'parent_child' && providerSupportsReference === false ? (
+                        <p className="seo-generate-image-modal__helper">
+                            {t('generate_image_mode2_unsupported_hint')}
+                        </p>
+                    ) : null}
+                    {canaryProduct ? (
+                        <div className="seo-generate-image-modal__helper" data-testid="pg-canary-badge">
+                            <strong>Canary Product</strong>
+                            {' — '}
+                            Test A Sprite · Test C Parent/Child · Test D Auto. Original media must exist before Mode 2.
+                        </div>
+                    ) : null}
+                    {mode2Progress ? (
+                        <p className="seo-generate-image-modal__helper">{mode2Progress}</p>
+                    ) : null}
+
                     <label className="seo-generate-image-modal__label" htmlFor="seo-generate-image-product-cat">
                         {t('generate_image_product_cat_label')}
                     </label>
@@ -633,6 +689,87 @@ export default function GenerateImageModal({
                                 <summary>{t('view_technical_details') || 'View technical details'}</summary>
                                 <pre className="seo-generate-image-modal__tech-pre">{generationErrorTechnical}</pre>
                             </details>
+                        ) : null}
+                    </div>
+                ) : null}
+                {mode1Status ? (
+                    <div className="seo-generate-image-modal__mode1-status">
+                        <p className="seo-generate-image-modal__preview-label">
+                            {t('generate_image_mode1_mode_label')}
+                            {': '}
+                            <strong>{t('generate_image_mode1_mode_sprite')}</strong>
+                        </p>
+                        <p className="seo-generate-image-modal__helper">
+                            {t('generate_image_mode1_sprite_saved')}
+                        </p>
+                        <p className="seo-generate-image-modal__preview-label">
+                            {t('generate_image_mode1_validation')}
+                            {': '}
+                            <strong>
+                                {mode1Status?.sprite_validation?.valid
+                                    ? t('generate_image_mode1_pass')
+                                    : t('generate_image_mode1_fail')}
+                            </strong>
+                        </p>
+                        {mode1Status?.sprite_validation ? (
+                            <p className="seo-generate-image-modal__helper">
+                                {t('generate_image_mode1_confidence', {
+                                    value: Number(mode1Status.sprite_validation.confidence ?? 0).toFixed(2),
+                                })}
+                                {' · '}
+                                {t('generate_image_mode1_panels', {
+                                    count: Number(
+                                        mode1Status.sprite_validation.detected_panel_count
+                                            ?? mode1Status.sprite_validation.detected_panels
+                                            ?? 0,
+                                    ) || 0,
+                                })}
+                                {' · '}
+                                {t('generate_image_mode1_usable_panels', {
+                                    count: Array.isArray(mode1Status.selected_media_ids)
+                                        && mode1Status.gallery_source === 'ai_children'
+                                        ? mode1Status.selected_media_ids.length
+                                        : Array.isArray(mode1Status.child_media_ids)
+                                          ? mode1Status.child_media_ids.length
+                                          : 0,
+                                })}
+                            </p>
+                        ) : null}
+                        <p className="seo-generate-image-modal__helper">
+                            {t('generate_image_mode1_source_label')}
+                            {': '}
+                            {mode1Status?.gallery_source === 'ai_children'
+                                ? t('generate_image_mode1_source_ai')
+                                : mode1Status?.gallery_source === 'original_images'
+                                    || mode1Status?.gallery_source === 'original_fallback'
+                                  ? t('generate_image_mode1_source_original')
+                                  : t('generate_image_mode1_source_pending')}
+                        </p>
+                        <p className="seo-generate-image-modal__helper">
+                            {t('generate_image_mode1_quality_label')}
+                            {': '}
+                            {mode1Status?.gallery_quality === 'perfect'
+                                ? t('generate_image_mode1_quality_perfect')
+                                : mode1Status?.gallery_quality === 'usable'
+                                  ? t('generate_image_mode1_quality_usable')
+                                  : mode1Status?.gallery_quality === 'manual'
+                                    ? t('generate_image_mode1_quality_manual')
+                                    : t('generate_image_mode1_quality_fallback')}
+                        </p>
+                        <p className="seo-generate-image-modal__preview-label">
+                            {t('generate_image_mode1_gallery_ready')}
+                            {': '}
+                            <strong>
+                                {mode1Status?.gallery_ready
+                                    ? t('generate_image_mode1_ready_yes')
+                                    : t('generate_image_mode1_ready_no')}
+                            </strong>
+                        </p>
+                        {(mode1Status?.gallery_source === 'original_images'
+                            || mode1Status?.gallery_source === 'original_fallback') ? (
+                            <p className="seo-generate-image-modal__helper">
+                                {t('generate_image_mode1_fallback_hint')}
+                            </p>
                         ) : null}
                     </div>
                 ) : null}

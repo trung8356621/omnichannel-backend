@@ -36,7 +36,7 @@ final class ListSeoProjectRuns extends Page
         self::authorizeResourceAccess();
 
         $this->record = (int) $record;
-        $this->project = SeoProjectResource::getEloquentQuery()
+        $this->project = SeoProjectResource::getRecordRouteBindingEloquentQuery()
             ->with(['site', 'user'])
             ->findOrFail($this->record);
 

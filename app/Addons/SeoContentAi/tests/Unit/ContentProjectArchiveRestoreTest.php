@@ -56,9 +56,7 @@ final class ContentProjectArchiveRestoreTest extends TestCase
         self::assertStringContainsString('reopenArticle', $source);
         self::assertStringContainsString("activeTab = 'projects'", $source);
 
-        $viewPath = base_path(
-            'app/Addons/SeoContentAi/resources/views/filament/resources/seo-project-resource/pages/content-project-archive.blade.php',
-        );
+        $viewPath = dirname(__DIR__, 2).'/resources/views/filament/resources/seo-project-resource/pages/content-project-archive.blade.php';
         $view = (string) file_get_contents($viewPath);
         self::assertStringContainsString('archive-dashboard', $view);
         self::assertStringContainsString('setActiveTab', $view);
@@ -70,7 +68,9 @@ final class ContentProjectArchiveRestoreTest extends TestCase
         $source = (string) file_get_contents((new ReflectionClass(ContentProjectArchivePreview::class))->getFileName());
 
         self::assertStringContainsString('getHeaderSummary', $source);
-        self::assertStringContainsString('article_snapshot', $source);
+        self::assertStringContainsString('viewArchiveItemAction', $source);
+        self::assertStringContainsString('slideOver', $source);
+        self::assertStringContainsString('ArchivePreviewArticlePresenter', $source);
         self::assertStringNotContainsString('ArchiveContentProjectService::archive', $source);
     }
 

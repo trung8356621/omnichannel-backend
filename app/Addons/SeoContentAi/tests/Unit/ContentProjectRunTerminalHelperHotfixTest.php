@@ -114,7 +114,11 @@ final class ContentProjectRunTerminalHelperHotfixTest extends TestCase
     {
         $steps = $this->source('Services/SeoProjectWorkflowStepRetryService.php');
         self::assertStringContainsString('$runTerminal', $steps);
-        self::assertStringContainsString('! $runTerminal && isset($activeByAction[$action])', $steps);
+        // Terminal run wins: busy only when run is non-terminal AND an active step map hits.
+        self::assertStringContainsString('$busy = ! $runTerminal && (', $steps);
+        self::assertStringContainsString('isset($activeByNode[$nodeId])', $steps);
+        self::assertStringContainsString('isset($activeByAction[$action])', $steps);
+        self::assertStringContainsString("'can_retry' => ! \$busy && ! \$taskHasAnyActive && ! \$runTerminal", $steps);
 
         $blade = $this->source('resources/views/filament/resources/seo-project-resource/pages/view-project-run.blade.php');
         self::assertStringContainsString('$runIsTerminal', $blade);

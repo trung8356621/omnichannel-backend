@@ -12,11 +12,46 @@ use Carbon\Carbon;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Tests\TestCase;
 
+/**
+ * Integration: needs real MySQL for core users/sites + omi_seo_ai projects.
+ *
+ * Default phpunit.xml forces SEO_TEST_USE_MYSQL=false (sqlite :memory:).
+ * These cases skip unless SEO_TEST_USE_MYSQL=true and phpunit does not force it false.
+ */
 final class ArticleContentProjectOptionsTest extends TestCase
 {
-    use DatabaseTransactions;
+    use DatabaseTransactions {
+        beginDatabaseTransaction as private beginDatabaseTransactionTrait;
+    }
 
+    /** @var list<string> */
     protected $connectionsToTransact = ['mysql', 'omi_seo_ai'];
+
+    public function beginDatabaseTransaction(): void
+    {
+        // setUpTraits calls this before test body / markTestSkipped.
+        if (! $this->shouldRunMysqlIntegration()) {
+            return;
+        }
+
+        $this->beginDatabaseTransactionTrait();
+    }
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        if (! $this->shouldRunMysqlIntegration()) {
+            $this->markTestSkipped(
+                'Requires SEO_TEST_USE_MYSQL=true with reachable MySQL (not sqlite :memory:).'
+            );
+        }
+    }
+
+    private function shouldRunMysqlIntegration(): bool
+    {
+        return filter_var(env('SEO_TEST_USE_MYSQL', false), FILTER_VALIDATE_BOOL);
+    }
 
     public function test_manager_sees_writer_assigned_project_with_zero_tasks(): void
     {

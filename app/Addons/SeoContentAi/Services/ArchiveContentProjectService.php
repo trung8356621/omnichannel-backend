@@ -221,7 +221,9 @@ final class ArchiveContentProjectService
      */
     private function articleTasksForProject(SeoProject $project): Collection
     {
+        // Chỉ task còn gắn project (chưa detach / archive lẻ).
         return $project->tasks()
+            ->active()
             ->where('article_id', '>', 0)
             ->with(['article.articleMetas', 'article.site'])
             ->orderBy('id')
@@ -384,6 +386,8 @@ final class ArchiveContentProjectService
             'approved_status' => (string) ($article->review_status ?? ''),
             'word_count' => $this->countWords((string) ($article->body ?? '')),
             'image_count' => $this->postImages->countForArticle($article),
+            'internal_link_count' => (int) ($article->internal_link_count ?? 0),
+            'external_link_count' => (int) ($article->external_link_count ?? 0),
             'seo_score' => $article->seo_score !== null ? (float) $article->seo_score : null,
             'sync_status' => $syncStatus,
             'wordpress_post_id' => $wpPostId > 0 ? $wpPostId : null,

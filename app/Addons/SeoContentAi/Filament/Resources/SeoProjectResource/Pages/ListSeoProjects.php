@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
+use App\Addons\SeoContentAi\Filament\Widgets\UnassignedContentProjectStaffWidget;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Actions;
@@ -28,9 +29,33 @@ class ListSeoProjects extends ListRecords
         );
     }
 
+    /**
+     * @return array<class-string>
+     */
+    protected function getHeaderWidgets(): array
+    {
+        return [
+            UnassignedContentProjectStaffWidget::class,
+        ];
+    }
+
+    public function getHeaderWidgetsColumns(): int|array
+    {
+        return [
+            'default' => 1,
+            'lg' => 12,
+        ];
+    }
+
     protected function getHeaderActions(): array
     {
         return [
+            Actions\Action::make('product_gallery_canary')
+                ->label('PG Canary fixture')
+                ->icon('heroicon-o-beaker')
+                ->color('warning')
+                ->visible(fn (): bool => \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryCanaryAccess::allowsUi())
+                ->url(fn (): string => \App\Addons\SeoContentAi\Filament\Pages\ProductGalleryCanaryPage::getUrl()),
             Actions\Action::make('open_site_archive')
                 ->label(__('seo-content-ai::filament.projects.open_site_archive'))
                 ->icon('heroicon-o-archive-box')

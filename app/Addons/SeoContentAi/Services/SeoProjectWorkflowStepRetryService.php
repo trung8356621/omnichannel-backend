@@ -11,6 +11,8 @@ use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoTask;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectActiveExecutionResolver;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectExecutionStatus;
 use App\Support\RuntimeLogger;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -20,11 +22,6 @@ use Illuminate\Support\Str;
  */
 final class SeoProjectWorkflowStepRetryService
 {
-    private const ACTIVE_STATUSES = [
-        SeoProjectRunItemStatus::Pending->value,
-        SeoProjectRunItemStatus::Processing->value,
-    ];
-
     public function __construct(
         private readonly SeoProjectWorkflowStepCatalogService $catalog,
         private readonly TaskTestInputResolver $inputResolver,
@@ -32,6 +29,7 @@ final class SeoProjectWorkflowStepRetryService
         private readonly SeoProjectRunItemService $runItemService,
         private readonly ArticleOutlineResolver $outlineResolver,
         private readonly ArticleGenerationInputResolver $articleGenerationInput,
+        private readonly ContentProjectActiveExecutionResolver $activeResolver,
     ) {}
 
     /**
@@ -56,7 +54,7 @@ final class SeoProjectWorkflowStepRetryService
         $activeByNode = $this->activeStepStatusesByNode((int) $run->id, (int) $task->id);
         $latestByAction = $this->latestStepFinishes((int) $run->id, (int) $task->id);
         $latestByNode = $this->latestStepFinishesByNode((int) $run->id, (int) $task->id);
-        $taskHasAnyActive = $activeByNode !== [] || $activeByAction !== [];
+        $taskHasAnyActive = $this->activeResolver->hasActiveForTask($run, (int) $task->id);
         $runTerminal = in_array((string) $run->status, [
             SeoProjectRun::STATUS_COMPLETED,
             SeoProjectRun::STATUS_CANCELLED,
@@ -71,10 +69,10 @@ final class SeoProjectWorkflowStepRetryService
             $status = $activeByNode[$nodeId]
                 ?? $activeByAction[$action]
                 ?? ($latestByNode[$nodeId]['status'] ?? ($latestByAction[$action]['status'] ?? null));
+            // Không đánh busy tất cả step chỉ vì task có 1 active — tránh Lỗi/Đang chạy lệch.
             $busy = ! $runTerminal && (
                 isset($activeByNode[$nodeId])
                 || isset($activeByAction[$action])
-                || $taskHasAnyActive
             );
 
             $rows[] = [
@@ -89,7 +87,7 @@ final class SeoProjectWorkflowStepRetryService
                 'last_finished_at' => $latestByNode[$nodeId]['finished_at']
                     ?? ($latestByAction[$action]['finished_at'] ?? null),
                 'busy' => $busy,
-                'can_retry' => ! $busy,
+                'can_retry' => ! $busy && ! $taskHasAnyActive && ! $runTerminal,
                 'rerunnable' => (bool) ($step['rerunnable'] ?? true),
             ];
         }
@@ -99,7 +97,7 @@ final class SeoProjectWorkflowStepRetryService
                 ->where('run_id', (int) $run->id)
                 ->where('task_id', (int) $task->id)
                 ->where('action', 'like', 'step:%')
-                ->whereIn('status', self::ACTIVE_STATUSES)
+                ->whereIn('status', ContentProjectExecutionStatus::activeStatuses())
                 ->get(['id', 'action', 'status', 'error_message', 'article_id']);
 
             RuntimeLogger::info('seo.project_run.step_busy_snapshot', [
@@ -229,7 +227,7 @@ final class SeoProjectWorkflowStepRetryService
                     ->where('run_id', (int) $run->id)
                     ->where('task_id', $taskId)
                     ->where('action', $action)
-                    ->whereIn('status', self::ACTIVE_STATUSES)
+                    ->whereIn('status', ContentProjectExecutionStatus::activeStatuses())
                     ->lockForUpdate()
                     ->first();
 
@@ -1053,7 +1051,7 @@ final class SeoProjectWorkflowStepRetryService
 
             $affected = SeoProjectRunItem::query()
                 ->whereKey($runItemId)
-                ->whereIn('status', self::ACTIVE_STATUSES)
+                ->whereIn('status', ContentProjectExecutionStatus::activeStatuses())
                 ->where(function ($query): void {
                     $query->whereNull('error_message')
                         ->orWhere(function ($inner): void {
@@ -1115,12 +1113,9 @@ final class SeoProjectWorkflowStepRetryService
 
         $status = (string) $runItem->status;
 
-        return in_array($status, [
-            SeoProjectRunItemStatus::Failed->value,
-            SeoProjectRunItemStatus::Success->value,
-            SeoProjectRunItemStatus::Skipped->value,
-        ], true);
+        return ContentProjectExecutionStatus::isTerminal($status);
     }
+
 
     private function assertExecutionStillActive(int $runItemId): bool
     {
@@ -1165,7 +1160,7 @@ final class SeoProjectWorkflowStepRetryService
         SeoProjectRunItem::query()
             ->whereKey((int) $runItem->id)
             ->where(function ($query): void {
-                $query->whereIn('status', self::ACTIVE_STATUSES)
+                $query->whereIn('status', ContentProjectExecutionStatus::activeStatuses())
                     ->orWhere(function ($inner): void {
                         $inner->where('status', SeoProjectRunItemStatus::Failed->value)
                             ->whereNull('finished_at');
@@ -1195,7 +1190,7 @@ final class SeoProjectWorkflowStepRetryService
         $query = SeoProjectRunItem::query()
             ->where('run_id', $runId)
             ->where('action', 'like', 'step:%')
-            ->whereIn('status', self::ACTIVE_STATUSES);
+            ->whereIn('status', ContentProjectExecutionStatus::activeStatuses());
 
         if ($taskId !== null && $taskId > 0) {
             $query->where('task_id', $taskId);
@@ -1386,7 +1381,7 @@ final class SeoProjectWorkflowStepRetryService
             ->where('run_id', $runId)
             ->where('task_id', $taskId)
             ->where('action', 'like', 'step:%')
-            ->whereIn('status', self::ACTIVE_STATUSES)
+            ->whereIn('status', ContentProjectExecutionStatus::activeStatuses())
             ->pluck('id')
             ->map(static fn ($id): int => (int) $id)
             ->values()
@@ -1408,7 +1403,7 @@ final class SeoProjectWorkflowStepRetryService
                 $query->whereNull('task_id')->orWhere('task_id', 0);
             })
             ->where('action', 'like', 'step:%')
-            ->whereIn('status', self::ACTIVE_STATUSES)
+            ->whereIn('status', ContentProjectExecutionStatus::activeStatuses())
             ->pluck('id')
             ->map(static fn ($id): int => (int) $id)
             ->values()
@@ -1483,7 +1478,7 @@ final class SeoProjectWorkflowStepRetryService
         $items = SeoProjectRunItem::query()
             ->where('run_id', (int) $run->id)
             ->where('action', 'like', 'step:%')
-            ->whereIn('status', self::ACTIVE_STATUSES)
+            ->whereIn('status', ContentProjectExecutionStatus::activeStatuses())
             ->get();
 
         if ($items->isEmpty()) {
@@ -1523,7 +1518,8 @@ final class SeoProjectWorkflowStepRetryService
             ->where('run_id', $runId)
             ->where('task_id', $taskId)
             ->where('action', 'like', 'step:%')
-            ->whereIn('status', self::ACTIVE_STATUSES)
+            ->whereIn('status', ContentProjectExecutionStatus::activeStatuses())
+            ->whereNull('finished_at')
             ->get(['action', 'status']);
 
         $map = [];
@@ -1580,7 +1576,8 @@ final class SeoProjectWorkflowStepRetryService
             ->where('run_id', $runId)
             ->where('task_id', $taskId)
             ->where('action', 'like', 'step:%')
-            ->whereIn('status', self::ACTIVE_STATUSES)
+            ->whereIn('status', ContentProjectExecutionStatus::activeStatuses())
+            ->whereNull('finished_at')
             ->get(['action', 'status', 'input_snapshot']);
 
         $map = [];

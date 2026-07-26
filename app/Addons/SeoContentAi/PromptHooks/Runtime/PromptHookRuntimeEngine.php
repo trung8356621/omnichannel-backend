@@ -4,13 +4,16 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\PromptHooks\Runtime;
 
+use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\PromptHooks\Canonical\PromptHookDefinition;
+use App\Addons\SeoContentAi\PromptHooks\Exceptions\OutputTruncated;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\PromptHookFailure;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\ProviderFailed;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\TemplateRenderFailed;
 use App\Addons\SeoContentAi\PromptHooks\Output\PromptHookRuntimeOutputPipeline;
 use App\Addons\SeoContentAi\PromptHooks\Provider\PromptProviderAdapter;
 use App\Addons\SeoContentAi\PromptHooks\Provider\PromptProviderCapabilityResolver;
+use App\Addons\SeoContentAi\Support\ArticleGenerationLengthValidator;
 use Illuminate\Support\Str;
 
 /**
@@ -123,6 +126,12 @@ final class PromptHookRuntimeEngine
             $promptResultId = (int) ($providerResponse->meta['prompt_result_id'] ?? 0);
             if ($promptResultId > 0) {
                 $failure->bindPromptResultId($promptResultId);
+                $this->persistFailedLengthValidation(
+                    $promptResultId,
+                    (string) ($pipelinePayload['text'] ?? ''),
+                    is_array($validated['input'] ?? null) ? $validated['input'] : [],
+                    $failure,
+                );
             }
             throw $failure;
         }
@@ -266,5 +275,51 @@ final class PromptHookRuntimeEngine
     public function definition(string $hookKey, string $version): PromptHookDefinition
     {
         return $this->registry->get($hookKey, $version);
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     */
+    private function persistFailedLengthValidation(
+        int $promptResultId,
+        string $text,
+        array $input,
+        PromptHookFailure $failure,
+    ): void {
+        if (! $failure instanceof OutputTruncated) {
+            return;
+        }
+        if (! array_key_exists('article_length', $input)
+            || $input['article_length'] === null
+            || $input['article_length'] === '') {
+            return;
+        }
+
+        $raw = $input['article_length'];
+        $target = is_numeric($raw) ? (int) $raw : 0;
+        if (is_string($raw) && $target <= 0 && preg_match('/(\d+)/', $raw, $matches) === 1) {
+            $target = (int) $matches[1];
+        }
+        if ($target <= 0) {
+            return;
+        }
+
+        $meta = (new ArticleGenerationLengthValidator)->evaluate($text, $target);
+        $meta['length_validation_result'] = 'truncated';
+
+        $result = PromptResult::query()->find($promptResultId);
+        if ($result === null) {
+            return;
+        }
+
+        $snapshot = is_array($result->input_snapshot) ? $result->input_snapshot : [];
+        $variables = is_array($snapshot['variables'] ?? null) ? $snapshot['variables'] : [];
+        foreach ($meta as $key => $value) {
+            $variables[$key] = $value;
+            $snapshot[$key] = $value;
+        }
+        $snapshot['variables'] = $variables;
+        $result->input_snapshot = $snapshot;
+        $result->save();
     }
 }

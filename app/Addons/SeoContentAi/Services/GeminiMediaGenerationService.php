@@ -425,17 +425,68 @@ final class GeminiMediaGenerationService
     }
 
     /**
+     * Nano Banana with optional reference image parts (inline_data).
+     * Imagen path does not support references — callers must pass Gemini native model.
+     *
+     * @param  list<array{mime_type: string, base64: string}>  $referenceImages
+     * @return array{binary: string, mime: string, usage: array<string, mixed>|null, model_used: string}
+     */
+    public function generateNativeImageWithReferences(
+        ApiConnection $connection,
+        string $prompt,
+        string $model,
+        array $referenceImages = [],
+    ): array {
+        $model = GoogleAiModelRegistry::normalizeSlug($model);
+        if ($model === '' || GoogleAiModelRegistry::isImagenModel($model)) {
+            throw new PromptRunException(
+                'Reference image requires a Gemini native image model (not Imagen).',
+                0,
+                null,
+                [
+                    'classification' => 'reference_transport_unsupported',
+                    'retryable' => false,
+                    'error_code' => 'reference_transport_unsupported',
+                ],
+            );
+        }
+
+        return $this->requestGeminiNativeImage($connection, $prompt, $model, $referenceImages);
+    }
+
+    /**
      * Nano Banana — POST .../models/{model}:generateContent (v1beta).
      * Bắt buộc yêu cầu IMAGE modality, nếu không model có thể trả text-only rồi stop.
      *
+     * @param  list<array{mime_type: string, base64: string}>  $referenceImages
      * @return array{binary: string, mime: string, usage: array<string, mixed>|null, model_used: string}
      */
-    private function requestGeminiNativeImage(ApiConnection $connection, string $prompt, string $model): array
-    {
+    private function requestGeminiNativeImage(
+        ApiConnection $connection,
+        string $prompt,
+        string $model,
+        array $referenceImages = [],
+    ): array {
         $url = sprintf(
             'https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent',
             rawurlencode($model),
         );
+
+        $parts = [];
+        foreach ($referenceImages as $ref) {
+            $mime = trim((string) ($ref['mime_type'] ?? ''));
+            $b64 = trim((string) ($ref['base64'] ?? ''));
+            if ($mime === '' || $b64 === '') {
+                continue;
+            }
+            $parts[] = [
+                'inlineData' => [
+                    'mimeType' => $mime,
+                    'data' => $b64,
+                ],
+            ];
+        }
+        $parts[] = ['text' => $prompt];
 
         $response = $this->geminiHttpClient($connection)->post($url, [
             'generationConfig' => [
@@ -443,9 +494,7 @@ final class GeminiMediaGenerationService
             ],
             'contents' => [
                 [
-                    'parts' => [
-                        ['text' => $prompt],
-                    ],
+                    'parts' => $parts,
                 ],
             ],
         ]);

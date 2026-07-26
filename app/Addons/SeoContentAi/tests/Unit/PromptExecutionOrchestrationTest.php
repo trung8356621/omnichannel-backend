@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Tests\Unit;
 
+use App\Addons\SeoContentAi\Contracts\SeoProjectWorkflowStepCatalogContract;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Services\ArticlePipelineRerunStartStepResolver;
-use App\Addons\SeoContentAi\Services\SeoProjectWorkflowStepCatalogService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowStepRetryService;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
@@ -29,27 +29,17 @@ final class PromptExecutionOrchestrationTest extends TestCase
             ],
         ]);
 
-        $catalog = $this->getMockBuilder(SeoProjectWorkflowStepCatalogService::class)
-            ->disableOriginalConstructor()
-            ->onlyMethods([
-                'resolveSeoTaskForStepRetry',
-                'firstPromptNodeIdForKind',
-                'findStep',
-                'listRerunnableSteps',
-            ])
-            ->getMock();
-
-        $catalog->method('resolveSeoTaskForStepRetry')->willReturn($publish);
-        $catalog->method('firstPromptNodeIdForKind')->willReturnCallback(
-            static function (SeoProjectTask $task, string $kind) use ($publish): ?string {
-                return $kind === 'outline' ? 'node_current_outline' : 'node_current_content';
-            }
+        $catalog = $this->stubCatalog(
+            seoTask: $publish,
+            findStep: null,
+            firstByKind: static fn (string $kind): ?string => $kind === 'outline'
+                ? 'node_current_outline'
+                : 'node_current_content',
+            steps: [
+                ['node_id' => 'node_current_outline', 'kind' => 'outline', 'title' => 'Outline', 'label' => 'x', 'prompt_id' => 1, 'depends_on_kinds' => []],
+                ['node_id' => 'node_current_content', 'kind' => 'content', 'title' => 'Content', 'label' => 'y', 'prompt_id' => 2, 'depends_on_kinds' => ['outline']],
+            ],
         );
-        $catalog->method('findStep')->willReturn(null);
-        $catalog->method('listRerunnableSteps')->willReturn([
-            ['node_id' => 'node_current_outline', 'kind' => 'outline', 'title' => 'Outline', 'label' => 'x', 'prompt_id' => 1, 'depends_on_kinds' => []],
-            ['node_id' => 'node_current_content', 'kind' => 'content', 'title' => 'Content', 'label' => 'y', 'prompt_id' => 2, 'depends_on_kinds' => ['outline']],
-        ]);
 
         $resolver = new ArticlePipelineRerunStartStepResolver($catalog);
         $task = new SeoProjectTask;
@@ -77,28 +67,21 @@ final class PromptExecutionOrchestrationTest extends TestCase
             ],
         ]);
 
-        $catalog = $this->getMockBuilder(SeoProjectWorkflowStepCatalogService::class)
-            ->disableOriginalConstructor()
-            ->onlyMethods([
-                'resolveSeoTaskForStepRetry',
-                'firstPromptNodeIdForKind',
-                'findStep',
-                'listRerunnableSteps',
-            ])
-            ->getMock();
-
-        $catalog->method('resolveSeoTaskForStepRetry')->willReturn($publish);
-        $catalog->method('findStep')->willReturn([
-            'node_id' => 'node_1780563019334',
-            'kind' => 'outline',
-            'title' => 'Outline',
-            'label' => 'x',
-            'prompt_id' => 1,
-            'depends_on_kinds' => [],
-        ]);
-        $catalog->method('listRerunnableSteps')->willReturn([
-            ['node_id' => 'node_1780563019334', 'kind' => 'outline', 'title' => 'Outline', 'label' => 'x', 'prompt_id' => 1, 'depends_on_kinds' => []],
-        ]);
+        $catalog = $this->stubCatalog(
+            seoTask: $publish,
+            findStep: [
+                'node_id' => 'node_1780563019334',
+                'kind' => 'outline',
+                'title' => 'Outline',
+                'label' => 'x',
+                'prompt_id' => 1,
+                'depends_on_kinds' => [],
+            ],
+            firstByKind: static fn (): ?string => 'node_1780563019334',
+            steps: [
+                ['node_id' => 'node_1780563019334', 'kind' => 'outline', 'title' => 'Outline', 'label' => 'x', 'prompt_id' => 1, 'depends_on_kinds' => []],
+            ],
+        );
 
         $resolver = new ArticlePipelineRerunStartStepResolver($catalog);
         $resolved = $resolver->resolve(new SeoProjectTask, 'outline', 'node_1780563019334');
@@ -110,21 +93,15 @@ final class PromptExecutionOrchestrationTest extends TestCase
 
     public function test_rerun_resolver_unresolved_has_user_message_not_raw_node(): void
     {
-        $catalog = $this->getMockBuilder(SeoProjectWorkflowStepCatalogService::class)
-            ->disableOriginalConstructor()
-            ->onlyMethods([
-                'resolveSeoTaskForStepRetry',
-                'firstPromptNodeIdForKind',
-                'findStep',
-                'listRerunnableSteps',
-            ])
-            ->getMock();
-
         $empty = new SeoTask;
         $empty->forceFill(['id' => 1, 'flow_data' => ['nodes' => [], 'edges' => []]]);
-        $catalog->method('resolveSeoTaskForStepRetry')->willReturn($empty);
-        $catalog->method('firstPromptNodeIdForKind')->willReturn(null);
-        $catalog->method('listRerunnableSteps')->willReturn([]);
+
+        $catalog = $this->stubCatalog(
+            seoTask: $empty,
+            findStep: null,
+            firstByKind: static fn (): ?string => null,
+            steps: [],
+        );
 
         $resolver = new ArticlePipelineRerunStartStepResolver($catalog);
         $resolved = $resolver->resolve(new SeoProjectTask, 'article', 'node_1780563019334');
@@ -173,8 +150,11 @@ final class PromptExecutionOrchestrationTest extends TestCase
         );
         $failPos = strpos($source, 'private function failPrepared');
         self::assertNotFalse($failPos);
-        $chunk = substr($source, (int) $failPos, 1800);
-        self::assertStringContainsString('whereIn(\'status\', self::ACTIVE_STATUSES)', $chunk);
+        $nextPos = strpos($source, 'private function isExecutionTerminal', (int) $failPos + 1);
+        $chunk = $nextPos !== false
+            ? substr($source, (int) $failPos, $nextPos - (int) $failPos)
+            : substr($source, (int) $failPos, 6000);
+        self::assertStringContainsString('whereIn(\'status\', ContentProjectExecutionStatus::activeStatuses())', $chunk);
         self::assertStringContainsString('ensureCancelledFailureState', $chunk);
     }
 
@@ -192,5 +172,52 @@ final class PromptExecutionOrchestrationTest extends TestCase
         ]);
 
         self::assertTrue($method->invoke($service, $item));
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $findStep
+     * @param  callable(string): (?string)  $firstByKind
+     * @param  list<array<string, mixed>>  $steps
+     */
+    private function stubCatalog(
+        ?SeoTask $seoTask,
+        ?array $findStep,
+        callable $firstByKind,
+        array $steps,
+    ): SeoProjectWorkflowStepCatalogContract {
+        return new class($seoTask, $findStep, $firstByKind, $steps) implements SeoProjectWorkflowStepCatalogContract
+        {
+            /**
+             * @param  array<string, mixed>|null  $findStep
+             * @param  callable(string): (?string)  $firstByKind
+             * @param  list<array<string, mixed>>  $steps
+             */
+            public function __construct(
+                private readonly ?SeoTask $seoTask,
+                private readonly ?array $findStep,
+                private readonly mixed $firstByKind,
+                private readonly array $steps,
+            ) {}
+
+            public function resolveSeoTaskForStepRetry(SeoProjectTask $projectTask): ?SeoTask
+            {
+                return $this->seoTask;
+            }
+
+            public function firstPromptNodeIdForKind(SeoProjectTask $projectTask, string $kind): ?string
+            {
+                return ($this->firstByKind)($kind);
+            }
+
+            public function findStep(SeoProjectTask $projectTask, string $nodeId): ?array
+            {
+                return $this->findStep;
+            }
+
+            public function listRerunnableSteps(SeoProjectTask $projectTask): array
+            {
+                return $this->steps;
+            }
+        };
     }
 }

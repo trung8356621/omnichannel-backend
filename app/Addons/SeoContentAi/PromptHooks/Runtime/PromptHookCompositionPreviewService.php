@@ -188,6 +188,15 @@ class PromptHookCompositionPreviewService
             ];
         }
 
+        $referenceNote = $this->galleryReferenceAttachmentNote($definition);
+        if ($referenceNote !== null) {
+            $segments[] = [
+                'key' => 'reference_attachment',
+                'label' => 'Reference image attachment',
+                'body' => $referenceNote,
+            ];
+        }
+
         if ($segments === [] && $final !== '') {
             $segments[] = [
                 'key' => 'final',
@@ -360,6 +369,19 @@ class PromptHookCompositionPreviewService
         } catch (\Throwable) {
             return $markdownContent;
         }
+    }
+
+    private function galleryReferenceAttachmentNote(PromptHookDefinition $definition): ?string
+    {
+        $meta = $definition->metadata ?? [];
+        if (! is_array($meta)) {
+            return null;
+        }
+        if (($meta['reference_attachment'] ?? '') !== 'provider_runtime_inline_data') {
+            return null;
+        }
+
+        return "Reference image attachment:\n- supplied at provider runtime\n- not embedded in text prompt";
     }
 
     private function contractDelta(string $before, string $after): string

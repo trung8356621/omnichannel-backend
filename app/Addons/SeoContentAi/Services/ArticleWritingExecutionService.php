@@ -394,6 +394,12 @@ class ArticleWritingExecutionService
 
         $markdown = trim((string) ($hookResult->output['value'] ?? $hookResult->output['raw'] ?? ''));
         $history = $this->historyMetadata($writing, $owner, $variables);
+        $lengthValidation = is_array($hookResult->output['length_validation'] ?? null)
+            ? $hookResult->output['length_validation']
+            : null;
+        if ($lengthValidation !== null) {
+            $history = array_merge($history, $lengthValidation);
+        }
 
         if (! $context->persistArticle) {
             return new ArticleWritingExecutionResult(

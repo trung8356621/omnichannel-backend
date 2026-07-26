@@ -23,21 +23,20 @@
 
 <div class="prose prose-sm max-w-none dark:prose-invert">
     <ul class="my-0 list-disc space-y-1 pl-5">
-        <li><strong>Tên miền:</strong> {{ $domainName !== '' ? e($domainName) : '—' }}</li>
-        <li><strong>Tháng/Năm:</strong> {{ e($period) }}</li>
-        <li><strong>Tổng bài:</strong> {{ $total }}</li>
-        <li><strong>Hoàn thành:</strong> {{ $completed }}</li>
-        <li><strong>Đã duyệt:</strong> {{ $approved }}</li>
-        <li><strong>Đã đồng bộ:</strong> {{ $synced }}</li>
-        <li><strong>Chưa hoàn thành:</strong> {{ $incomplete }}</li>
-        <li><strong>Chưa duyệt:</strong> {{ $unapproved }}</li>
-        <li><strong>Chưa đồng bộ:</strong> {{ $unsynced }}</li>
-        <li><strong>Bài lỗi:</strong> {{ $failed }}</li>
+        <li><strong>{{ __('seo-content-ai::filament.projects.archive_modal_domain') }}:</strong> {{ $domainName !== '' ? e($domainName) : '—' }}</li>
+        <li><strong>{{ __('seo-content-ai::filament.projects.archive_modal_period') }}:</strong> {{ e($period) }}</li>
+        <li><strong>{{ __('seo-content-ai::filament.projects.archive_col_total') }}:</strong> {{ $total }}</li>
+        <li><strong>{{ __('seo-content-ai::filament.projects.archive_col_completed') }}:</strong> {{ $completed }}</li>
+        <li><strong>{{ __('seo-content-ai::filament.projects.archive_col_synced') }}:</strong> {{ $synced }}</li>
+        <li><strong>{{ __('seo-content-ai::filament.projects.archive_modal_incomplete') }}:</strong> {{ $incomplete }}</li>
+        <li><strong>{{ __('seo-content-ai::filament.projects.archive_modal_unapproved') }}:</strong> {{ $unapproved }}</li>
+        <li><strong>{{ __('seo-content-ai::filament.projects.archive_modal_unsynced') }}:</strong> {{ $unsynced }}</li>
+        <li><strong>{{ __('seo-content-ai::filament.projects.archive_modal_failed') }}:</strong> {{ $failed }}</li>
     </ul>
 
     @if ($showWarning)
         <div class="mt-4 rounded-lg border border-warning-300 bg-warning-50 px-3 py-2 text-sm text-warning-900 not-prose dark:border-warning-500/40 dark:bg-warning-500/10 dark:text-warning-100">
-            Dự án còn bài chưa duyệt, chưa đồng bộ hoặc lỗi — vẫn có thể lưu trữ. Snapshot sẽ giữ nguyên trạng thái hiện tại.
+            {{ __('seo-content-ai::filament.projects.archive_modal_warning') }}
         </div>
     @endif
 </div>

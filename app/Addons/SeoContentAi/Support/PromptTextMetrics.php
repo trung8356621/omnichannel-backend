@@ -39,8 +39,9 @@ final class PromptTextMetrics
     }
 
     /**
-     * Min words = đúng resolved article_length (Settings SSOT). Không tự nhân tolerance.
-     * $hardFloor chỉ dùng khi article_length <= 0.
+     * Hard validation floor cho full article generation.
+     * Target Prompt vẫn là $articleLength; floor config (default 1400), không vượt target.
+     * $hardFloor chỉ dùng khi article_length <= 0 (fallback schema).
      */
     public static function minWordsFromArticleLength(int $articleLength, int $hardFloor = 300): int
     {
@@ -49,6 +50,6 @@ final class PromptTextMetrics
             return max(1, $hardFloor);
         }
 
-        return $articleLength;
+        return (new ArticleGenerationLengthValidator)->minimumForTarget($articleLength);
     }
 }

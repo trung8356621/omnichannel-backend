@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Contracts\SeoProjectWorkflowStepCatalogContract;
 use App\Addons\SeoContentAi\Enums\WorkflowExecutionRole;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
@@ -17,7 +18,7 @@ use App\Addons\SeoContentAi\Support\ImageToolType;
  * Danh sách bước prompt có thể «Chạy lại» từ workflow SeoTask của project.
  * Identity: node_id + execution_role / hook_key — không title heuristic.
  */
-final class SeoProjectWorkflowStepCatalogService
+final class SeoProjectWorkflowStepCatalogService implements SeoProjectWorkflowStepCatalogContract
 {
     public function __construct(
         private readonly SeoCreateArticleSettingsService $settings,

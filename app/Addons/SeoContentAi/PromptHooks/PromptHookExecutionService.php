@@ -85,7 +85,22 @@ final class PromptHookExecutionService
         $this->attachPromptResultAfterExecution($article, $definition, $prompt, $result);
 
         $raw = trim((string) ($result->output_text ?? ''));
-        $output = $this->outputNormalizer->normalize($definition, $raw);
+        $output = $this->outputNormalizer->normalize($definition, $raw, $resolvedInput);
+
+        $lengthValidation = is_array($output['length_validation'] ?? null)
+            ? $output['length_validation']
+            : null;
+        if ($lengthValidation !== null && $result->id !== null) {
+            $snapshot = is_array($result->input_snapshot) ? $result->input_snapshot : [];
+            $variables = is_array($snapshot['variables'] ?? null) ? $snapshot['variables'] : [];
+            foreach ($lengthValidation as $key => $value) {
+                $variables[$key] = $value;
+                $snapshot[$key] = $value;
+            }
+            $snapshot['variables'] = $variables;
+            $result->input_snapshot = $snapshot;
+            $result->save();
+        }
 
         return new PromptHookExecutionResult(
             hook: $definition->key,
@@ -125,6 +140,62 @@ final class PromptHookExecutionService
                 'workflow_step_title' => $stepTitle,
             ],
         );
+    }
+
+    /**
+     * Assemble final prompt text without calling the AI provider.
+     * Used by Mode 2 image stages (parent/child) so Gemini receives Hook-compiled text + inlineData.
+     *
+     * @param  array<string, mixed>  $runtimeInput
+     * @return array{
+     *     final_prompt: string,
+     *     variables: array<string, mixed>,
+     *     prompt_id: int,
+     *     hook_key: string
+     * }
+     */
+    public function compilePromptOnly(
+        string $hookKey,
+        int $articleId,
+        array $runtimeInput = [],
+        ?SeoPrompt $prompt = null,
+    ): array {
+        $definition = $this->registry->get($hookKey);
+        $article = $this->articleResolver->loadAuthorized($articleId);
+        $entityContext = $this->articleResolver->buildContext($article);
+
+        $prompt ??= $this->resolveConfiguredPrompt($definition);
+        $this->assertPromptMatchesHook($prompt, $definition);
+        $this->assertPromptModelSupported($prompt, $definition);
+
+        $resolvedInput = $this->inputResolver->resolve($definition, $runtimeInput, $entityContext);
+        $exposedInput = $this->inputResolver->exposeToPrompt($definition, $resolvedInput);
+        $resolvedSettings = $this->settingsResolver->resolve(
+            $definition,
+            is_array($prompt->hook_settings) ? $prompt->hook_settings : null,
+        );
+
+        $assembled = $this->promptAssembler->assemble(
+            $definition,
+            $prompt,
+            $exposedInput,
+            $resolvedSettings,
+        );
+
+        $final = trim((string) ($assembled['final_prompt'] ?? ''));
+        if ($final === '') {
+            throw new PromptHookException(
+                PromptHookErrorCode::HookExecutionFailed,
+                'prompt_variable_missing: compiled prompt empty for ['.$definition->key.']',
+            );
+        }
+
+        return [
+            'final_prompt' => $final,
+            'variables' => is_array($assembled['variables'] ?? null) ? $assembled['variables'] : [],
+            'prompt_id' => (int) $prompt->id,
+            'hook_key' => $definition->key,
+        ];
     }
 
     /**

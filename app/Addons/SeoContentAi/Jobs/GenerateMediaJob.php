@@ -178,31 +178,42 @@ class GenerateMediaJob implements ShouldQueue
 
             $media = $media->fresh();
             if (ImageToolType::fromMixed($this->toolType)->isImagePipeline() && $media instanceof SeoMedia) {
-                try {
-                    $postResult = $postProcessing->applyIfConfigured($media, $prompt);
-                    $variables = is_array($media->prompt_variables) ? $media->prompt_variables : [];
-                    if ($postResult->applied && count($postResult->pieces) > 0) {
-                        $variables['post_processing_piece_ids'] = array_values(array_map(
-                            static fn (SeoMedia $piece): int => (int) $piece->id,
-                            $postResult->pieces,
-                        ));
-                        unset($variables['quick_split_error'], $variables['quick_split_error_code']);
-                        $media->update(['prompt_variables' => $variables]);
-                    } elseif ($postResult->errorCode !== null || filled($postResult->message)) {
-                        $variables['quick_split_error'] = (string) $postResult->message;
-                        $variables['quick_split_error_code'] = (string) ($postResult->errorCode ?? 'QUICK_SPLIT_FAILED');
-                        $media->update(['prompt_variables' => $variables]);
+                $isProductGallery = trim((string) ($media->editor_block_id ?? ''))
+                    === ArticleEditorMediaAiService::PRODUCT_GALLERY_EDITOR_BLOCK_ID;
+
+                if ($isProductGallery) {
+                    $this->runProductGalleryMode1Pipeline($media, $prompt, $articleId);
+                } else {
+                    try {
+                        $postResult = $postProcessing->applyIfConfigured($media, $prompt);
+                        $variables = is_array($media->prompt_variables) ? $media->prompt_variables : [];
+                        if ($postResult->applied && count($postResult->pieces) > 0) {
+                            $variables['post_processing_piece_ids'] = array_values(array_map(
+                                static fn (SeoMedia $piece): int => (int) $piece->id,
+                                $postResult->pieces,
+                            ));
+                            unset($variables['quick_split_error'], $variables['quick_split_error_code']);
+                            $media->update(['prompt_variables' => $variables]);
+                        } elseif ($postResult->errorCode !== null || filled($postResult->message)) {
+                            $variables['quick_split_error'] = (string) $postResult->message;
+                            $variables['quick_split_error_code'] = (string) ($postResult->errorCode ?? 'QUICK_SPLIT_FAILED');
+                            $media->update(['prompt_variables' => $variables]);
+                        }
+                    } catch (Throwable $postProcessingException) {
+                        logger()->warning(
+                            "GenerateMediaJob post-processing failed [media_id={$this->seoMediaId}]: {$postProcessingException->getMessage()}",
+                        );
                     }
-                } catch (Throwable $postProcessingException) {
-                    logger()->warning(
-                        "GenerateMediaJob post-processing failed [media_id={$this->seoMediaId}]: {$postProcessingException->getMessage()}",
-                    );
                 }
             }
 
             $media = $media->fresh();
             if (ImageToolType::fromMixed($this->toolType)->isImagePipeline() && $media instanceof SeoMedia) {
-                $this->persistProductGalleryLinkIfNeeded($media);
+                $isProductGallery = trim((string) ($media->editor_block_id ?? ''))
+                    === ArticleEditorMediaAiService::PRODUCT_GALLERY_EDITOR_BLOCK_ID;
+                if (! $isProductGallery) {
+                    $this->persistProductGalleryLinkIfNeeded($media);
+                }
             }
 
             if ($articleId > 0 && $media instanceof SeoMedia) {
@@ -401,6 +412,63 @@ class GenerateMediaJob implements ShouldQueue
             logger()->warning(
                 "GenerateMediaJob product gallery link failed [media_id={$this->seoMediaId}]: {$exception->getMessage()}",
             );
+        }
+    }
+
+    private function runProductGalleryMode1Pipeline(SeoMedia $media, SeoPrompt $prompt, int $articleId): void
+    {
+        if ($articleId <= 0) {
+            $articleId = (int) ($media->firstArticleId() ?? 0);
+        }
+        if ($articleId <= 0) {
+            return;
+        }
+
+        $article = SeoArticle::query()->find($articleId);
+        if (! $article instanceof SeoArticle) {
+            return;
+        }
+
+        try {
+            app(\App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryPipelineService::class)
+                ->runAfterSpriteSaved($media, $prompt, $article);
+        } catch (Throwable $exception) {
+            logger()->warning(
+                "GenerateMediaJob product gallery Mode 1 failed [media_id={$this->seoMediaId}]: {$exception->getMessage()}",
+            );
+
+            // Never fail the job: keep sprite completed; try original fallback if snapshot exists.
+            try {
+                $variables = is_array($media->prompt_variables) ? $media->prompt_variables : [];
+                $state = \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::readFromVariables($variables);
+                $snapshot = $state['fallback_snapshot'];
+                $items = [];
+                foreach ($snapshot['urls'] as $index => $url) {
+                    $url = trim((string) $url);
+                    if ($url === '') {
+                        continue;
+                    }
+                    $items[] = [
+                        'id' => (int) ($snapshot['media_ids'][$index] ?? 0),
+                        'url' => $url,
+                    ];
+                }
+                if ($items !== []) {
+                    app(ArticleMediaLocalService::class)->replaceProductAlbumLocal($article, $items);
+                    $next = [
+                        'gallery_ready' => true,
+                        'gallery_source' => \App\Addons\SeoContentAi\Support\ProductGallery\ProductGallerySource::OriginalImages->value,
+                        'gallery_generation_mode' => \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryGenerationMode::Sprite->value,
+                        'gallery_quality' => \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryQuality::Fallback->value,
+                        'fallback_snapshot' => $snapshot,
+                    ];
+                    $variables = \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::mergeIntoVariables($variables, $next);
+                    $media->update(['prompt_variables' => $variables]);
+                    \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::mirrorToArticle($article, $next);
+                }
+            } catch (Throwable) {
+                // ignore secondary fallback errors
+            }
         }
     }
 }

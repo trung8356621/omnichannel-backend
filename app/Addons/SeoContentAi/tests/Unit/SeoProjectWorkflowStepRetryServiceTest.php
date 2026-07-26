@@ -124,8 +124,10 @@ final class SeoProjectWorkflowStepRetryServiceTest extends TestCase
         self::assertStringContainsString('%Cancelled by user%', $source);
         self::assertStringContainsString("where('status', SeoProjectRunItemStatus::Pending->value)", $source);
         self::assertStringContainsString("where('status', SeoProjectRunItemStatus::Processing->value)", $source);
-        // Busy chỉ từ active map exact action — terminal run luôn thắng (hotfix helper pending).
-        self::assertStringContainsString('! $runTerminal && isset($activeByAction[$action])', $source);
+        // Busy chỉ khi run chưa terminal + active map (node hoặc action) — terminal luôn thắng.
+        self::assertStringContainsString('$busy = ! $runTerminal && (', $source);
+        self::assertStringContainsString('isset($activeByNode[$nodeId])', $source);
+        self::assertStringContainsString('isset($activeByAction[$action])', $source);
         self::assertStringContainsString('status_in_pending_or_processing', $source);
     }
 

@@ -598,6 +598,7 @@ function readArticleEditorBootstrap() {
     let expectedUpdatedAt = '';
     let expectedContentHash = '';
     let supportsProductGallery = false;
+    let isCanaryProduct = false;
     let productCategoryOptions = [];
     let initialProductGallery = [];
     let aiDebug = { enabled: false };
@@ -623,6 +624,7 @@ function readArticleEditorBootstrap() {
             expectedUpdatedAt = String(core?.expectedUpdatedAt ?? core?.expected_updated_at ?? '').trim();
             expectedContentHash = String(core?.expectedContentHash ?? core?.expected_content_hash ?? '').trim();
             supportsProductGallery = Boolean(core?.supportsProductGallery ?? core?.supports_product_gallery);
+            isCanaryProduct = Boolean(core?.isCanaryProduct ?? core?.is_canary_product);
             initialHtml = typeof core?.content === 'string' ? core.content : '';
             if (core?.settings && typeof core.settings === 'object') {
                 editorSettings = { ...editorSettings, ...core.settings };
@@ -725,6 +727,7 @@ function readArticleEditorBootstrap() {
             if (!expectedUpdatedAt) expectedUpdatedAt = String(meta?.expected_updated_at ?? '').trim();
             if (!expectedContentHash) expectedContentHash = String(meta?.expected_content_hash ?? '').trim();
             supportsProductGallery = supportsProductGallery || Boolean(meta?.supports_product_gallery);
+            isCanaryProduct = isCanaryProduct || Boolean(meta?.is_canary_product);
             productCategoryOptions = Array.isArray(meta?.product_category_options)
                 ? meta.product_category_options
                 : [];
@@ -882,6 +885,7 @@ function mountArticleEditorPage() {
                 expectedUpdatedAt={expectedUpdatedAt}
                 expectedContentHash={expectedContentHash}
                 supportsProductGallery={supportsProductGallery}
+                isCanaryProduct={isCanaryProduct}
                 productCategoryOptions={productCategoryOptions}
                 initialProductGallery={initialProductGallery}
                 initialFaqs={[]}

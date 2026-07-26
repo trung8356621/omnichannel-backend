@@ -65,8 +65,9 @@ flowchart LR
 ### 1.4 Site & Data Scoping
 
 **Global Site Scope:**
-- `shouldApplyGlobalSiteScope()`: true với Planner/Manager đã chọn global site
+- `shouldApplyGlobalSiteScope()`: true với Planner/Manager đã chọn global site — **chỉ cho list / default create / dashboard**, không dùng làm authorization cho detail/edit/preview
 - Content Manager KHÔNG được chọn global site — chỉ thấy data gán trực tiếp
+- Detail/edit article hoặc content project thuộc domain khác global: vẫn mở nếu `canAccessSite` / policy cho phép; không 404 giả; không bắt buộc đổi header domain
 - Cookie/session lưu dưới key `seo_global_site_id`
 
 **Account Owner Scoping:**

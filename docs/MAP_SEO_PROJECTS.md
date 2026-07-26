@@ -414,7 +414,7 @@ flowchart TB
 | **SeoNotificationService** | `SeoNotificationService.php` | Gửi Filament notification cho các sự kiện project: gán owner, approved, task added. Dùng khi `KeywordResource::assignKeywordsToContentProject()` thêm task. |
 | **ArticlePendingInternalLinkService** | `ArticlePendingInternalLinkService.php` | Gán keyword vào `SeoProjectTask` + tạo pending link `#hash` từ editor (`assignFromEditor`). |
 | **PromptResultLinkService** | `PromptResultLinkService.php` | Liên kết PromptResult với task/article của project để truy xuất nguồn gốc output AI. |
-| **ArticlePromptRunHistoryService** | `ArticlePromptRunHistoryService.php` | build() → xây dựng timeline lịch sử run cho một article (project runs đã ảnh hưởng). |
+| **ArticlePromptRunHistoryService** | `ArticlePromptRunHistoryService.php` | `build()` timeline `/articles/{id}/prompts`. Phase 2.1: `execution_type` First/Retry/Rerun + `status_label` (stale/blocked). |
 | **WorkflowKeywordResearchService** | `WorkflowKeywordResearchService.php` | `syncTopicCluster()` — lưu Topic Cluster từ action workflow `save_vocabulary_research`; không throw khi focus keyword khớp CTA blacklist. |
 | **AllDomainsDashboardService** | `AllDomainsDashboardService.php` | Tổng hợp thống kê article/project/task trên tất cả sites cho All-Domains Dashboard. |
 
@@ -524,7 +524,24 @@ ArchiveContentProjectService.restore(project, userId)
 - List active: action **Lưu trữ dự án**; nút **Kho dự án đã lưu trữ** → `/content-projects/archive`
 - Tab 1: dự án đã lưu trữ (preview / Excel / restore)
 - Tab 2: **Legacy bài lẻ** (`content_archived_at` / `seo_content_archive_items`) — chỉ đọc
-- Preview: `/content-projects/archive/{archive}/preview` read-only
+- Preview: `/content-projects/archive/{archive}/preview` — `{archive}` = ID `seo_project_archives` (không phải project gốc).
+  - Page `ContentProjectArchivePreview`: route param scalar `$archive`, model `$archiveRecord` (tránh Livewire bind Eloquent trùng tên param → 404 layout rỗng).
+  - Không phụ thuộc global domain. Snapshot lỗi → banner + `RuntimeLogger` (`archive_id`, `source_project_id`), không giả 404.
+  - Header summary: CSS grid 1→2→4 cột (class `fi-archive-preview-summary-grid`, không phụ thuộc Tailwind purge).
+  - Table full width; title link `text-primary-600` (tab mới); cột **Int/Ext** (`internal_link_count` / `external_link_count` từ article hoặc snapshot).
+  - Hydrate rows: method `rebuildArticleRows()` — **không** đặt tên `hydrate*` (Livewire coi là lifecycle hook → `BadMethodCallException`).
+- Details bài: Filament Action `viewArchiveItem` **slideOver** (`MaxWidth::FourExtraLarge`, sticky header) + partial `archive-preview-item-slideover` (section Main / SEO / Status / Links / Timestamps / Excerpt).
+  - Presenter `ArchivePreviewArticlePresenter`: batch `whereIn` article IDs, map `edit_url` qua `ArticleResource::getUrl('edit')` (binding không scope global domain). Không lazy-load `task`/`articleMetas` nếu chưa eager. Auth/URL factory thiếu (pure PHPUnit) → catch, `can_edit=false`.
+  - Article mất → badge `archive_preview_article_missing`, không link hỏng.
+- Modal archive confirm: bỏ dòng **Đã duyệt**; count chỉ `tasks()->active()` còn gắn project. Field `approved_articles` vẫn lưu snapshot (tương thích cũ).
+- List widget **Staff chưa có dự án** (`UnassignedContentProjectStaffWidget` + `ContentProjectStaffAvailabilityService`): `role=staff` + `seo_role=content_manager`, chưa là `user_id` của project active. Create: nhóm unassigned + Staff khác; preselect `?writer_id=`; create + assign trong transaction + race validate.
+- Tests: `ContentProjectArchivePreviewAndDomainContextTest`, `ArchivePreviewArticleUiTest` (pure PHPUnit — dùng `dirname(__DIR__, 2)`, không `base_path()`).
+
+**Global domain (UI context, không phải auth):**
+- List Content Projects / Articles: vẫn filter theo `SeoAccessControl::globalSiteId()`.
+- Detail/edit/preview: `getRecordRouteBindingEloquentQuery()` **không** áp global site scope. `canView` project dùng `canAccessSite`, không dùng `getEloquentQuery()` đã scope domain.
+- Edit article khác domain: mở được, note badge, **không** auto `setGlobalSiteId`, **không** 404 giả.
+- `ListSeoProjectRuns` / `ViewSeoProjectRunStep` resolve project qua `getRecordRouteBindingEloquentQuery()`.
 
 **“Hoàn tất duyệt”** (`ArticleReviewService` action `archive`): chỉ `review_status=archived` + audit log. **Không** detach task, **không** `content_archived_at`.
 
@@ -680,6 +697,153 @@ Generate binding **không** log `article_writing.legacy_adapter_used`
 ### Tests
 
 `ArticleWritingStablePhase10Test`
+
+---
+
+## Phase 2.0 — Step Rerun + Bulk Execution
+
+**Verdict:** Canary ready → khóa tiếp Phase 2.1.
+
+Không mở lại Article Writing / không engine mới / không parallel article / không Agent-SSE.
+
+### Retry vs Rerun
+
+| | Retry | Rerun |
+|---|---|---|
+| User | «Thử lại lần chạy lỗi» | «Chạy lại bằng cấu hình hiện tại» |
+| Service | `SeoProjectWorkflowStepRetryService` (mutate `step:{nodeId}` + attempt++) | `ContentProjectStepRerunService` |
+| Config | Snapshot lần lỗi (Article Writing path) | Live Publish workflow + Prompt + Settings hiện tại |
+| Record | Cùng row Model A | **Append-only** `action = step:rr:{ulid}` — không ghi đè history cũ |
+
+### Step Catalog
+
+`SeoProjectWorkflowStepCatalogService::listStepDescriptors()` → `ContentProjectStepDescriptor`:
+
+`node_id`, `execution_role`, `hook_key`, `post_type`, `label`, `kind`, `sequence`, `rerunnable`, `source_requirements`, `downstream_nodes`, `prompt_id`
+
+Identity: `execution_role` / `hook_key` / image tool — **không** title heuristic.  
+`listGenericPickerSteps()` loại outline+content (đã có 3 nút Article).
+
+### Source contract
+
+`ContentProjectStepSourceValidator` — outline cần title; article content cần outline usable; FAQ/meta/image cần article body. Thiếu source → không gọi AI.
+
+### Typed request / result
+
+- `ContentProjectStepRerunRequest` — `mode`: `single_step` (UI mặc định) | `step_and_downstream`
+- `ContentProjectStepRerunResult`
+- Metadata item: `execution_type=rerun`, `source_run_id`, `source_run_item_id`, `target_node_id`, `target_execution_role`, `rerun_mode`, `uses_current_workflow`
+
+### Ba action Article (giữ rõ)
+
+`ContentProjectBulkRerunService` → ủy quyền `ContentProjectStepRerunService::executeBulkSerial`:
+
+1. `regenerate_outline` — single outline node  
+2. `regenerate_article` — single content node  
+3. `regenerate_outline_and_article` — `step_and_downstream` + handoff `CreateArticlesFromTaskService::runOutlineThenArticleForContext`
+
+Bulk: preview valid/invalid → confirm partial → **serial** từng article. Không «Chạy lại toàn bộ» (`canRerunAllItems()=false`).
+
+### UI (Phase 2.0)
+
+`ViewSeoProjectRun` + `view-project-run.blade.php` + `project-run-queue.js`  
+Per-row step menu gọi rerun (Livewire `retryWorkflowStep` → `ContentProjectStepRerunService`).  
+Active article → block parallel.
+
+### Tests
+
+`ContentProjectStepRerunPhase20Test`, `ContentProjectBulkRerunPhase20Test`
+
+---
+
+## Phase 2.1 — Final UX + History + Timestamp lock
+
+**Verdict:** Content Project step rerun **Stable** (with minor limitations: featured hard-delete gallery cũ chủ yếu append; modal Alpine không Filament Action class).
+
+### Generic step modal
+
+Bỏ `window.prompt`. Alpine modal `genericStepOpen` trên run page:
+
+- Options từ `genericPickerSteps` / catalog rerunnable  
+- Preview Livewire `previewBulkGenericStep`  
+- Submit `bulkRerunGenericStep` → cùng `ContentProjectStepRerunService`  
+- Partial: «Chạy N bài hợp lệ» chỉ sau confirm
+
+### Row status
+
+`ContentProjectArticleRowStatusResolver` + `ContentProjectArticleRowStatus`:
+
+Priority: Active → Failed(+step) → `ignored_stale` → Manual edit (`manual_saved_at` > `last_ai_content_at`) → Completed → Pending  
+
+Labels: `Đang chạy: {step}`, `Lỗi: {step}`, `Bỏ qua kết quả AI cũ`, `Đã sửa thủ công`, …
+
+### Last saved contract
+
+`ArticleLastContentChange` / `ArticleLastContentChangeResolver`:
+
+- Max(`last_manual_saved_at`, `last_synced_at`, `last_ai_content_at`)  
+- Trả `occurred_at` + `source` (`manual`|`sync`|`ai`) — không chỉ Carbon  
+- **Không** `updated_at` / poll / heartbeat  
+- UI: relative + tooltip absolute + nguồn
+
+### `last_ai_content_at`
+
+Migration `2026_07_26_160000_add_last_ai_content_at_to_articles_table`  
+Touch: `ArticleLastSavedTimestampService::touchAiContent` sau `PromptTestPublishService::publishArticle` khi body hash đổi  
+
+**Có touch:** first-run / article rerun / outline+article / editor full rewrite / Improve scope=article / brief generate (qua publish body)  
+**Không touch:** outline-only, FAQ/meta/image-only, ignored_stale, AI fail, manual save, sync
+
+### History
+
+`ArticlePromptRunHistoryService` + `view-article-prompts.blade.php`:
+
+- `execution_type` / `execution_type_label`: Lần chạy đầu | Thử lại | Chạy lại  
+- Status UI: Thành công / Lỗi / Đang chạy / Bỏ qua vì bài đã thay đổi / Bị chặn…  
+- Rerun append-only hiện riêng — không merge vào row cũ trên UI
+
+### Image cleanup contract
+
+`ContentProjectImageRerunCleanupContract` — order: generate → persist → update_reference → commit → cleanup_old  
+Audit `ArticleEditorMediaAiService`: cancel processing trước generate; **không** delete completed asset trước persist.
+
+### Key paths
+
+| Symbol | Path |
+|---|---|
+| `ContentProjectStepRerunService` | `Services/ContentProject/` |
+| `ContentProjectStepSourceValidator` | `Services/ContentProject/` |
+| `ContentProjectStepDescriptor` | `Support/ContentProject/` |
+| `ContentProjectBulkRerunService` | `Services/` |
+| `SeoProjectWorkflowStepCatalogService` | `Services/` |
+| `ContentProjectArticleRowStatusResolver` | `Services/` |
+| `ArticleLastContentChangeResolver` | `Services/` |
+| `ViewSeoProjectRun` | `Filament/.../ViewSeoProjectRun.php` |
+
+### Tests Phase 2.1
+
+`ContentProjectPhase21FinalUxTest`, `ContentProjectArticleRowStatusPhase21Test`, `ArticleLastContentChangePhase21Test`  
+(+ regression Phase 2.0 / ArticleWritingStable / RunEngine / PromptOwnership)
+
+### Host commands
+
+```text
+php artisan migrate
+php artisan optimize:clear
+php vendor/bin/phpunit --filter=ContentProjectStepRerun
+php vendor/bin/phpunit --filter=ContentProjectBulkRerun
+php vendor/bin/phpunit --filter=ContentProjectArticleRowStatus
+php vendor/bin/phpunit --filter=ArticleLastContentChange
+php vendor/bin/phpunit --filter=ContentProjectPhase21
+php vendor/bin/phpunit --filter=ArticleWritingStable
+```
+
+### Overall stack verdict
+
+```text
+Article Writing: Stable with legacy compatibility
+Content Project step rerun: Stable
+```
 
 ---
 

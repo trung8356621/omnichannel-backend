@@ -2156,6 +2156,7 @@ export default function SeoArticleEditor({
     expectedUpdatedAt = '',
     expectedContentHash = '',
     supportsProductGallery: supportsProductGalleryProp = false,
+    isCanaryProduct: isCanaryProductProp = false,
     productCategoryOptions = [],
     initialProductGallery = [],
     initialFaqs = [],
@@ -2168,6 +2169,7 @@ export default function SeoArticleEditor({
     perfDebug = false,
 }) {
     const [supportsProductGallery, setSupportsProductGallery] = useState(() => Boolean(supportsProductGalleryProp));
+    const isCanaryProduct = Boolean(isCanaryProductProp);
     const historyStep = editorSettings?.history_step ?? 20;
     const connectionHashRef = useRef(connectionHash);
     connectionHashRef.current = connectionHash;
@@ -2940,6 +2942,7 @@ export default function SeoArticleEditor({
                         loaiSanPhamCustom: String(
                             normalized.loaiSanPhamCustom ?? normalized.userBrief ?? '',
                         ).trim(),
+                        galleryGenerationMode: String(normalized.galleryGenerationMode ?? 'sprite').trim() || 'sprite',
                     },
                 }),
             );
@@ -7258,6 +7261,7 @@ export default function SeoArticleEditor({
                     target,
                     Number.parseInt(String(payload.loaiSanPhamCategoryArticleId ?? 0), 10) || 0,
                     String(payload.loaiSanPhamCustom ?? '').trim(),
+                    String(payload.galleryGenerationMode ?? 'sprite').trim() || 'sprite',
                 );
 
                 if (result && typeof result === 'object' && result.ok === false) {
@@ -10758,6 +10762,7 @@ export default function SeoArticleEditor({
                 articleId={articleId}
                 siteId={siteId}
                 productGalleryItems={productGalleryItems}
+                canaryProduct={isCanaryProduct}
             />
             <FeaturedSnippetPromptModal
                 open={featuredSnippetPromptOpen}

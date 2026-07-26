@@ -29,17 +29,14 @@ use Illuminate\Support\Str;
  */
 final class ContentProjectStepRerunService
 {
-    private const ACTIVE_STATUSES = [
-        SeoProjectRunItemStatus::Pending->value,
-        SeoProjectRunItemStatus::Processing->value,
-    ];
-
     public function __construct(
         private readonly SeoProjectWorkflowStepCatalogService $catalog,
         private readonly ContentProjectStepSourceValidator $sourceValidator,
         private readonly SeoProjectWorkflowStepRetryService $stepExecutor,
         private readonly TaskTestInputResolver $inputResolver,
         private readonly CreateArticlesFromTaskService $createArticles,
+        private readonly ContentProjectActiveExecutionResolver $activeResolver,
+        private readonly ContentProjectExecutionFinalizer $finalizer,
     ) {}
 
     public function rerun(
@@ -60,7 +57,15 @@ final class ContentProjectStepRerunService
             return $this->fail($run, $request, ContentProjectStepRerunResult::STATUS_INVALID, 'Hạng mục không thuộc project.');
         }
 
-        if ($this->taskHasActiveExecution($run, (int) $task->id)) {
+        $active = $this->activeResolver->findActiveForTask($run, (int) $task->id);
+        if ($active !== null) {
+            // Heal stale trước guard (ngưỡng chính thức staleMinutes) — không clear mù.
+            $this->stepExecutor->abandonStaleActiveSteps((int) $run->id, (int) $task->id);
+            $active = $this->activeResolver->findActiveForTask($run, (int) $task->id);
+        }
+        if ($active !== null) {
+            $this->logRerunBlocked($run, $task, $active, $request);
+
             return $this->fail(
                 $run,
                 $request,
@@ -120,6 +125,18 @@ final class ContentProjectStepRerunService
         try {
             $createdItems = [];
             DB::connection('omi_seo_ai')->transaction(function () use ($run, $task, $descriptor, $request, $nodeIds, &$createdItems): void {
+                // Race: lock ownership task row rồi recheck active trước khi append.
+                SeoProjectTask::query()
+                    ->whereKey((int) $task->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                $raceActive = $this->activeResolver->findActiveForTask($run, (int) $task->id);
+                if ($raceActive !== null) {
+                    $this->logRerunBlocked($run, $task, $raceActive, $request);
+                    throw new \RuntimeException('Bài đang có execution active — không tạo rerun song song.');
+                }
+
                 foreach ($nodeIds as $nodeId) {
                     $step = $nodeId === $descriptor->nodeId
                         ? $descriptor
@@ -140,7 +157,8 @@ final class ContentProjectStepRerunService
 
             $lastResult = null;
             $lastItemId = null;
-            foreach ($createdItems as $entry) {
+            $failed = false;
+            foreach ($createdItems as $index => $entry) {
                 $item = $entry['item'];
                 $nodeId = (string) $entry['node_id'];
                 $lastItemId = (int) $item->id;
@@ -151,11 +169,16 @@ final class ContentProjectStepRerunService
                     (int) $item->id,
                 );
                 if (($lastResult['status'] ?? '') !== 'success') {
+                    $failed = true;
+                    $this->finalizeLeftoverPending(
+                        array_slice($createdItems, $index + 1),
+                        'Blocked by upstream step failure — không chạy song song.',
+                    );
                     break;
                 }
             }
 
-            $ok = is_array($lastResult) && ($lastResult['status'] ?? '') === 'success';
+            $ok = ! $failed && is_array($lastResult) && ($lastResult['status'] ?? '') === 'success';
 
             return new ContentProjectStepRerunResult(
                 success: $ok,
@@ -172,6 +195,26 @@ final class ContentProjectStepRerunService
                 articleId: (int) ($task->article_id ?? 0) ?: null,
                 nodeIds: $nodeIds,
             );
+        } catch (\RuntimeException $exception) {
+            if (str_contains($exception->getMessage(), 'execution active')) {
+                return $this->fail(
+                    $run,
+                    $request,
+                    ContentProjectStepRerunResult::STATUS_BLOCKED,
+                    $exception->getMessage(),
+                    (int) $task->id,
+                    (int) ($task->article_id ?? 0) ?: null,
+                );
+            }
+
+            RuntimeLogger::report($exception, [
+                'endpoint' => 'seo.content_project.step_rerun',
+                'run_id' => (int) $run->id,
+                'task_id' => (int) $task->id,
+                'node_id' => $request->targetNodeId,
+            ]);
+
+            return $this->fail($run, $request, ContentProjectStepRerunResult::STATUS_FAILED, $exception->getMessage(), (int) $task->id, (int) ($task->article_id ?? 0) ?: null);
         } catch (\Throwable $exception) {
             RuntimeLogger::report($exception, [
                 'endpoint' => 'seo.content_project.step_rerun',
@@ -204,7 +247,18 @@ final class ContentProjectStepRerunService
             return ['ok' => false, 'reason' => 'Hạng mục không thuộc project.', 'descriptor' => null];
         }
 
-        if ($this->taskHasActiveExecution($run, $taskId)) {
+        if ($this->activeResolver->hasActiveForTask($run, $taskId)) {
+            $this->stepExecutor->abandonStaleActiveSteps((int) $run->id, $taskId);
+        }
+        if ($this->activeResolver->hasActiveForTask($run, $taskId)) {
+            $active = $this->activeResolver->findActiveForTask($run, $taskId);
+            if ($active !== null) {
+                RuntimeLogger::info('content_project.rerun_blocked_active', array_merge($active->toArray(), [
+                    'action' => 'preview_availability',
+                    'node_id' => $nodeId,
+                ]));
+            }
+
             return ['ok' => false, 'reason' => 'Bài đang có execution active.', 'descriptor' => null];
         }
 
@@ -530,20 +584,45 @@ final class ContentProjectStepRerunService
 
     private function taskHasActiveExecution(SeoProjectRun $run, int $taskId): bool
     {
-        if (in_array((string) $run->status, [
-            SeoProjectRun::STATUS_COMPLETED,
-            SeoProjectRun::STATUS_CANCELLED,
-            SeoProjectRun::STATUS_FAILED,
-        ], true)) {
-            // Terminal run: vẫn chặn nếu còn step pending/processing stale cho task.
+        return $this->activeResolver->hasActiveForTask($run, $taskId);
+    }
+
+    /**
+     * @param  list<array{node_id: string, item: SeoProjectRunItem}>  $leftovers
+     */
+    private function finalizeLeftoverPending(array $leftovers, string $reason): void
+    {
+        $items = [];
+        foreach ($leftovers as $entry) {
+            $item = $entry['item'] ?? null;
+            if ($item instanceof SeoProjectRunItem) {
+                $items[] = $item;
+            }
+        }
+        if ($items === []) {
+            return;
         }
 
-        return SeoProjectRunItem::query()
-            ->where('run_id', (int) $run->id)
-            ->where('task_id', $taskId)
-            ->where('action', 'like', 'step:%')
-            ->whereIn('status', self::ACTIVE_STATUSES)
-            ->exists();
+        $this->finalizer->finalizeMany(
+            $items,
+            SeoProjectRunItemStatus::Skipped->value,
+            $reason,
+        );
+    }
+
+    private function logRerunBlocked(
+        SeoProjectRun $run,
+        SeoProjectTask $task,
+        \App\Addons\SeoContentAi\Support\ContentProject\ContentProjectActiveExecution $active,
+        ContentProjectStepRerunRequest $request,
+    ): void {
+        RuntimeLogger::info('content_project.rerun_blocked_active', array_merge($active->toArray(), [
+            'run_id' => (int) $run->id,
+            'article_id' => (int) ($task->article_id ?? 0) ?: null,
+            'task_id' => (int) $task->id,
+            'action' => $request->targetNodeId,
+            'node_id' => $request->targetNodeId,
+        ]));
     }
 
     private function latestSourceStepItemId(SeoProjectRun $run, int $taskId, string $nodeId): ?int
@@ -558,7 +637,7 @@ final class ContentProjectStepRerunService
                     ->orWhere('input_snapshot->target_node_id', $nodeId);
             })
             ->where('action', 'like', 'step:%')
-            ->whereNotIn('status', self::ACTIVE_STATUSES)
+            ->whereNotIn('status', \App\Addons\SeoContentAi\Support\ContentProject\ContentProjectExecutionStatus::activeStatuses())
             ->orderByDesc('id')
             ->first(['id']);
 

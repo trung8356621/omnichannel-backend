@@ -30,6 +30,7 @@ final class PromptPostProcessingApplyService
             return PromptPostProcessingApplyResult::skipped($media);
         }
 
+        // Mode 1 owns product-gallery flow (validate → split/fallback). Avoid double-split.
         if ($this->shouldSkipAutoPostProcessingForProductGallery($media, $prompt)) {
             return PromptPostProcessingApplyResult::skipped($media);
         }
@@ -50,6 +51,30 @@ final class PromptPostProcessingApplyService
         }
 
         return PromptPostProcessingApplyResult::skipped($sourceMedia);
+    }
+
+    /**
+     * Product Gallery Mode 1 — run configured Quick Split even when editor_block_id=product-gallery.
+     */
+    public function applyConfiguredSplitForProductGallery(SeoMedia $media, SeoPrompt $prompt): PromptPostProcessingApplyResult
+    {
+        $config = PromptPostProcessing::resolveFromMediaOrPrompt($media, $prompt);
+        if (! ($config['split_enabled'] ?? false)) {
+            return PromptPostProcessingApplyResult::failed(
+                $media,
+                'Quick Split is disabled on this prompt.',
+                'QUICK_SPLIT_DISABLED',
+            );
+        }
+
+        $media->refresh();
+        $sourceMedia = $this->resolveSourceMedia($media);
+
+        if ($this->hasExistingSplitPieces($sourceMedia)) {
+            $this->removePreviousSplitPieces($sourceMedia);
+        }
+
+        return $this->applySplit($sourceMedia, $prompt, $config);
     }
 
     public function resolveSourceMedia(SeoMedia $media): SeoMedia
@@ -368,8 +393,11 @@ final class PromptPostProcessingApplyService
         Storage::disk('public')->put($processed['relative_path'], $processed['binary']);
 
         $articleIds = SeoMedia::normalizeArticleIds($template->article_id);
-        $promptVariables = is_array($template->prompt_variables) ? $template->prompt_variables : [];
-        $promptVariables['post_processing_source_media_id'] = (int) $template->id;
+        $promptVariables = [
+            'post_processing_source_media_id' => (int) $template->id,
+            \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryArtifactRole::KEY
+                => \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryArtifactRole::GENERATED_CHILD,
+        ];
 
         $media = SeoMedia::query()->create([
             'site_id' => $siteId,

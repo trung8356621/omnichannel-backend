@@ -483,6 +483,18 @@ final class ArticlePromptRunHistoryService
             'source_run_item_id' => $snapshotVariables['source_run_item_id'] ?? null,
             'source_prompt_result_id' => $snapshotVariables['source_prompt_result_id'] ?? null,
             'article_length' => $snapshotVariables['article_length'] ?? null,
+            'actual_word_count' => $snapshotVariables['actual_word_count']
+                ?? $snapshot['actual_word_count']
+                ?? null,
+            'minimum_acceptable_words' => $snapshotVariables['minimum_acceptable_words']
+                ?? $snapshot['minimum_acceptable_words']
+                ?? null,
+            'target_article_length' => $snapshotVariables['target_article_length']
+                ?? $snapshot['target_article_length']
+                ?? null,
+            'length_validation_result' => $snapshotVariables['length_validation_result']
+                ?? $snapshot['length_validation_result']
+                ?? null,
             'description_present' => $snapshotVariables['description_present'] ?? null,
             'outline_marker_found' => $snapshotVariables['outline_marker_found'] ?? null,
             'writing_instructions_marker_found' => $snapshotVariables['writing_instructions_marker_found'] ?? null,
@@ -572,6 +584,10 @@ final class ArticlePromptRunHistoryService
             'workflow_node_title' => $debug['workflow_node_title'] ?? null,
             'execution_role' => $debug['execution_role'] ?? null,
             'article_length' => $debug['article_length'] ?? null,
+            'actual_word_count' => $debug['actual_word_count'] ?? null,
+            'minimum_acceptable_words' => $debug['minimum_acceptable_words'] ?? null,
+            'target_article_length' => $debug['target_article_length'] ?? null,
+            'length_validation_result' => $debug['length_validation_result'] ?? null,
             'article_writing_source_type' => $sourceTypeRaw !== '' ? $sourceTypeRaw : null,
             'article_generation_source' => $debug['article_generation_source'] ?? null,
             'source_run_id' => $debug['source_run_id'] ?? null,

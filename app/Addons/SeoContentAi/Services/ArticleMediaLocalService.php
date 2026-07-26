@@ -714,4 +714,35 @@ final class ArticleMediaLocalService
 
         return count($after) > $beforeCount;
     }
+
+    /**
+     * Replace product album with Mode 1 gallery items (AI children or original fallback).
+     *
+     * @param  list<array{id?: int, url?: string}>  $album
+     * @return list<array{id: int, url: string}>
+     */
+    public function replaceProductAlbumLocal(SeoArticle $article, array $album): array
+    {
+        if ((string) ($article->type ?? '') !== 'product') {
+            return $this->resolveProductAlbum($article);
+        }
+
+        foreach ($album as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            $id = (int) ($item['id'] ?? 0);
+            if ($id <= 0) {
+                continue;
+            }
+            $media = SeoMedia::query()->find($id);
+            if ($media instanceof SeoMedia) {
+                $this->linkSeoMediaToArticle($media, $article);
+            }
+        }
+
+        $article->unsetRelation('articleMetas');
+
+        return $this->saveProductAlbumLocal($article, $album);
+    }
 }

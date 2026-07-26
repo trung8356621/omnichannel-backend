@@ -114,6 +114,8 @@ Page cấu hình workflow quan trọng nhất. **Prompt ownership model (2026-07
 
 - **Hook** = loại/capability contract (`settings_visible` trong Runtime Registry).
 - **Settings binding** = `prompt_hook_bindings` map `hook_key → prompt_id` (runtime SoT).
+- **UI labels:** section Settings + Hook dropdown + Prompt table hiện `Display [hook_key]` (`PromptHookEditorCatalog::labelWithHookKey` / `option_label`) — khớp `seo:workflow:doctor`.
+- **`article.content.generate`:** `settings_visible=true` (Editor full rewrite + Stable Gate); Publish CP vẫn dùng Prompt trên Workflow node.
 - **Form encoding:** Filament coi `.` là nested path — form dùng `article__title_suggestion` rồi decode về `article.title_suggestion` khi save (`encodeHookKeyForForm` / `decodePromptHookBindingsFromForm`).
 - **Presentation metadata** (optional trên Hook JSON): `presentation.default_instructions`, `output_format`, `variables[].label` — UI Settings/Prompt Edit; không ảnh hưởng resolver.
 - **Task Prompt Block** = `prompt_id` trực tiếp trong workflow graph.

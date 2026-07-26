@@ -13,6 +13,8 @@ use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\ImageToolType;
+use App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState;
+use App\Addons\SeoContentAi\Support\ProductGallery\ProductGallerySource;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
 use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -43,9 +45,24 @@ final class ArticleEditorMediaAiService
         string $target = 'editor',
         int $loaiSanPhamCategoryArticleId = 0,
         string $loaiSanPhamCustom = '',
+        string $galleryGenerationMode = 'sprite',
     ): array {
         $target = trim($target);
         $editorBlockId = $this->resolveEditorBlockIdForTarget($target, $editorBlockId);
+
+        if ($target === 'product-gallery') {
+            $mode2 = $this->maybeStartMode2Gallery(
+                $article,
+                $galleryGenerationMode,
+                $userBrief,
+                $loaiSanPhamCategoryArticleId,
+                $loaiSanPhamCustom,
+            );
+            if ($mode2 !== null) {
+                return $mode2;
+            }
+        }
+
         [$loaiSanPhamCategoryArticleId, $loaiSanPhamCustom] = $this->resolveLoaiSanPhamInputs(
             $target,
             $userBrief,
@@ -103,6 +120,7 @@ final class ArticleEditorMediaAiService
                 ),
                 $config,
             );
+            $variables = $this->attachProductGalleryMode1Snapshot($article, $target, $variables);
             $this->reconcileStaleAiMediaJobs((int) $article->id);
             $this->cancelProcessingJobsForBlock($article, 'image', $editorBlockId);
 
@@ -205,6 +223,7 @@ final class ArticleEditorMediaAiService
                 ),
                 $config,
             );
+            $variables = $this->attachProductGalleryMode1Snapshot($article, $target, $variables);
             $this->reconcileStaleAiMediaJobs((int) $article->id);
             $this->cancelProcessingJobsForBlock($article, 'image', $editorBlockId);
 
@@ -1209,6 +1228,145 @@ final class ArticleEditorMediaAiService
         $variables['input'] = $retryInput;
 
         return $variables;
+    }
+
+    /**
+     * Snapshot connected / album-before-generate for Mode 1 fallback.
+     *
+     * @param  array<string, mixed>  $variables
+     * @return array<string, mixed>
+     */
+    private function attachProductGalleryMode1Snapshot(SeoArticle $article, string $target, array $variables): array
+    {
+        if (trim($target) !== 'product-gallery') {
+            return $variables;
+        }
+
+        $existing = ProductGalleryReadyState::readFromVariables($variables);
+        $hasSnapshot = ($existing['fallback_snapshot']['media_ids'] ?? []) !== []
+            || ($existing['fallback_snapshot']['urls'] ?? []) !== [];
+        if ($hasSnapshot) {
+            return $variables;
+        }
+
+        $connectedItems = $this->resolveConnectedMediaItemsFromVariables($variables);
+        if ($connectedItems !== []) {
+            $origin = ProductGalleryReadyState::ORIGIN_GENERATE_INPUT;
+            $snapshotItems = $connectedItems;
+        } else {
+            $origin = ProductGalleryReadyState::ORIGIN_ALBUM_BEFORE_GENERATE;
+            $snapshotItems = app(ArticleMediaLocalService::class)->resolveProductAlbum($article);
+        }
+
+        foreach ($snapshotItems as $item) {
+            $id = (int) ($item['id'] ?? 0);
+            if ($id <= 0) {
+                continue;
+            }
+            $media = SeoMedia::query()->find($id);
+            if ($media instanceof SeoMedia && ProductGalleryReadyState::artifactRole($media) === null) {
+                ProductGalleryReadyState::tagArtifactRole($media, ProductGalleryReadyState::ROLE_ORIGINAL);
+            }
+        }
+
+        return ProductGalleryReadyState::mergeIntoVariables($variables, [
+            'gallery_ready' => false,
+            'gallery_source' => ProductGallerySource::Pending->value,
+            'fallback_snapshot' => ProductGalleryReadyState::buildFallbackSnapshot($snapshotItems, $origin),
+        ]);
+    }
+
+    /**
+     * Mode 2 entry — returns placeholder-like status when parent_child/auto resolves to Mode 2.
+     * Null = fall through to Mode 1 sprite path.
+     *
+     * @return array{url: string, media_type: 'image', seo_media_id: int, status: string, gallery_execution_id?: string, gallery_generation_mode?: string}|null
+     */
+    private function maybeStartMode2Gallery(
+        SeoArticle $article,
+        string $galleryGenerationMode,
+        string $userBrief,
+        int $loaiSanPhamCategoryArticleId,
+        string $loaiSanPhamCustom,
+    ): ?array {
+        $mode = strtolower(trim($galleryGenerationMode));
+        if ($mode === '' || $mode === 'sprite') {
+            return null;
+        }
+
+        $variables = $this->attachProductGalleryMode1Snapshot($article, 'product-gallery', [
+            'title' => (string) ($article->title ?? ''),
+            'input' => $userBrief,
+            'loai_san_pham_category_article_id' => $loaiSanPhamCategoryArticleId,
+            'loai_san_pham_custom' => $loaiSanPhamCustom,
+        ]);
+        $snapshot = ProductGalleryReadyState::readFromVariables($variables)['fallback_snapshot'] ?? [];
+        $originalIds = array_values(array_filter(array_map(
+            static fn (mixed $id): int => (int) $id,
+            is_array($snapshot['media_ids'] ?? null) ? $snapshot['media_ids'] : [],
+        )));
+
+        $started = app(\App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryParentChildDispatchService::class)->start(
+            article: $article,
+            requestedMode: $mode,
+            originalSnapshotIds: $originalIds,
+            variables: $variables,
+            provider: 'gemini',
+            model: null,
+            requestedImageCount: max(1, (int) config('seo-content-ai.product_gallery.parent_child.max_shots', 6)),
+        );
+
+        if (! ($started['ok'] ?? false) || ($started['route'] ?? '') !== 'parent_child') {
+            return null;
+        }
+
+        return [
+            'url' => '',
+            'media_type' => 'image',
+            'seo_media_id' => 0,
+            'status' => 'processing',
+            'gallery_execution_id' => (string) ($started['execution_id'] ?? ''),
+            'gallery_generation_mode' => 'parent_child',
+            'mode2_existing' => (bool) ($started['existing'] ?? false),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $variables
+     * @return list<array{id: int, url: string}>
+     */
+    private function resolveConnectedMediaItemsFromVariables(array $variables): array
+    {
+        $ids = [];
+        foreach (['connected_media_ids', 'product_gallery_input_media_ids', 'generate_input_media_ids'] as $key) {
+            if (! is_array($variables[$key] ?? null)) {
+                continue;
+            }
+            foreach ($variables[$key] as $id) {
+                $id = (int) $id;
+                if ($id > 0) {
+                    $ids[$id] = true;
+                }
+            }
+        }
+
+        if ($ids === []) {
+            return [];
+        }
+
+        $items = [];
+        foreach (array_keys($ids) as $id) {
+            $media = SeoMedia::query()->find($id);
+            if (! $media instanceof SeoMedia) {
+                continue;
+            }
+            $items[] = [
+                'id' => (int) $media->id,
+                'url' => $media->publicUrl(),
+            ];
+        }
+
+        return $items;
     }
 
     /**

@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\PromptHooks\Exceptions\OutputTruncated;
 use App\Addons\SeoContentAi\PromptHooks\Output\PromptHookRuntimeOutputPipeline;
 use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookDefinitionLoader;
 use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
+use App\Addons\SeoContentAi\Support\ArticleGenerationLengthValidator;
 use App\Addons\SeoContentAi\Support\PromptTextMetrics;
 use PHPUnit\Framework\TestCase;
 
@@ -21,11 +22,16 @@ final class ArticleLengthWordsValidationTest extends TestCase
         self::assertSame(5, PromptTextMetrics::wordCount('một hai ba bốn năm'));
     }
 
-    public function test_min_words_from_article_length_equals_resolved_target(): void
+    public function test_minimum_acceptable_words_uses_floor_not_target(): void
     {
+        $validator = new ArticleGenerationLengthValidator;
+        self::assertSame(1400, $validator->configuredMinimum());
+        self::assertSame(1400, $validator->minimumForTarget(2000));
+        self::assertSame(1400, $validator->minimumForTarget(3000));
+        self::assertSame(1000, $validator->minimumForTarget(1000));
+        self::assertSame(300, $validator->minimumForTarget(300));
+        self::assertSame(1400, PromptTextMetrics::minWordsFromArticleLength(2000));
         self::assertSame(1000, PromptTextMetrics::minWordsFromArticleLength(1000));
-        self::assertSame(2000, PromptTextMetrics::minWordsFromArticleLength(2000));
-        self::assertSame(1800, PromptTextMetrics::minWordsFromArticleLength(1800));
         self::assertSame(300, PromptTextMetrics::minWordsFromArticleLength(0));
     }
 
@@ -56,7 +62,6 @@ final class ArticleLengthWordsValidationTest extends TestCase
         $pipeline = new PromptHookRuntimeOutputPipeline;
         $def = $this->markdownWordsDefinition(300);
 
-        // ~60 words nhưng >400 ký tự (padding) — vẫn fail theo từ.
         $words = [];
         for ($i = 0; $i < 60; $i++) {
             $words[] = 'từkhoádài'.str_repeat('x', 5);
@@ -69,7 +74,7 @@ final class ArticleLengthWordsValidationTest extends TestCase
         $pipeline->process($def, ['text' => $text], null, ['article_length' => 1000]);
     }
 
-    public function test_output_pipeline_words_passes_at_exact_article_length(): void
+    public function test_output_pipeline_words_passes_at_exact_article_length_when_below_floor(): void
     {
         $pipeline = new PromptHookRuntimeOutputPipeline;
         $def = $this->markdownWordsDefinition(300);
@@ -79,31 +84,123 @@ final class ArticleLengthWordsValidationTest extends TestCase
 
         $out = $pipeline->process($def, ['text' => $text], null, ['article_length' => 1000]);
         self::assertSame($text, $out['value']);
+        self::assertSame('accepted', $out['length_validation']['length_validation_result'] ?? null);
+        self::assertSame(1000, $out['length_validation']['minimum_acceptable_words'] ?? null);
+        self::assertSame(1000, $out['length_validation']['target_article_length'] ?? null);
     }
 
-    public function test_output_pipeline_words_fails_below_exact_article_length(): void
+    public function test_output_pipeline_words_fails_below_clamped_minimum(): void
     {
         $pipeline = new PromptHookRuntimeOutputPipeline;
         $def = $this->markdownWordsDefinition(300);
 
         $text = trim(str_repeat('word ', 999));
         $this->expectException(OutputTruncated::class);
-        $this->expectExceptionMessage('999 words < 1000 words');
+        $this->expectExceptionMessage('actual: 999 words, minimum: 1000 words, target: 1000 words');
         $pipeline->process($def, ['text' => $text], null, ['article_length' => 1000]);
     }
 
-    public function test_output_pipeline_words_uses_updated_settings_target(): void
+    public function test_gemini_bulkget_1534_words_target_2000_passes(): void
     {
         $pipeline = new PromptHookRuntimeOutputPipeline;
         $def = $this->markdownWordsDefinition(300);
 
-        $text = trim(str_repeat('word ', 1800));
-        $out = $pipeline->process($def, ['text' => $text], null, ['article_length' => 1800]);
-        self::assertSame($text, $out['value']);
+        $text = trim(str_repeat('word ', 1534));
+        $out = $pipeline->process($def, ['text' => $text], null, ['article_length' => 2000]);
+        self::assertSame('accepted', $out['length_validation']['length_validation_result']);
+        self::assertSame(1534, $out['length_validation']['actual_word_count']);
+        self::assertSame(1400, $out['length_validation']['minimum_acceptable_words']);
+        self::assertSame(2000, $out['length_validation']['target_article_length']);
+    }
 
+    public function test_output_pipeline_words_passes_at_minimum_1400(): void
+    {
+        $pipeline = new PromptHookRuntimeOutputPipeline;
+        $def = $this->markdownWordsDefinition(300);
+
+        $text = trim(str_repeat('word ', 1400));
+        $out = $pipeline->process($def, ['text' => $text], null, ['article_length' => 2000]);
+        self::assertSame('accepted', $out['length_validation']['length_validation_result']);
+    }
+
+    public function test_output_pipeline_words_fails_at_1399(): void
+    {
+        $pipeline = new PromptHookRuntimeOutputPipeline;
+        $def = $this->markdownWordsDefinition(300);
+
+        $text = trim(str_repeat('word ', 1399));
         $this->expectException(OutputTruncated::class);
-        $this->expectExceptionMessage('1800 words < 2000 words');
+        $this->expectExceptionMessage('actual: 1399 words, minimum: 1400 words, target: 2000 words');
         $pipeline->process($def, ['text' => $text], null, ['article_length' => 2000]);
+    }
+
+    public function test_output_pipeline_words_target_3000_actual_1500_passes(): void
+    {
+        $pipeline = new PromptHookRuntimeOutputPipeline;
+        $def = $this->markdownWordsDefinition(300);
+
+        $text = trim(str_repeat('word ', 1500));
+        $out = $pipeline->process($def, ['text' => $text], null, ['article_length' => 3000]);
+        self::assertSame('accepted', $out['length_validation']['length_validation_result']);
+        self::assertSame(1400, $out['length_validation']['minimum_acceptable_words']);
+    }
+
+    public function test_finish_reason_length_fails_even_when_word_count_ok(): void
+    {
+        $pipeline = new PromptHookRuntimeOutputPipeline;
+        $def = $this->markdownWordsDefinition(300);
+
+        $text = trim(str_repeat('word ', 1500));
+        $this->expectException(OutputTruncated::class);
+        $this->expectExceptionMessage('Provider output was truncated.');
+        $pipeline->process($def, [
+            'text' => $text,
+            'finish_reason' => 'length',
+        ], null, ['article_length' => 2000]);
+    }
+
+    public function test_truncated_flag_fails_even_when_word_count_ok(): void
+    {
+        $pipeline = new PromptHookRuntimeOutputPipeline;
+        $def = $this->markdownWordsDefinition(300);
+
+        $text = trim(str_repeat('word ', 1500));
+        $this->expectException(OutputTruncated::class);
+        $pipeline->process($def, [
+            'text' => $text,
+            'truncated' => true,
+        ], null, ['article_length' => 2000]);
+    }
+
+    public function test_malformed_json_fails_even_when_long(): void
+    {
+        $pipeline = new PromptHookRuntimeOutputPipeline;
+        $loader = new PromptHookDefinitionLoader(
+            dirname(__DIR__, 2).'/resources/prompt-hooks/v01',
+            dirname(__DIR__, 2).'/resources/prompt-hooks',
+        );
+        $def = $loader->hydrateSpecV01([
+            'spec_version' => '0.1',
+            'key' => 'article.test.json',
+            'version' => '0.1.0',
+            'enabled' => true,
+            'model' => ['settings' => []],
+            'locale' => ['mode' => 'site', 'fallback' => 'en'],
+            'input_schema' => [],
+            'output_schema' => [
+                'type' => 'json',
+                'validation' => [
+                    'not_empty' => true,
+                    'json_object' => true,
+                ],
+                'normalize' => ['trim'],
+            ],
+            'template' => ['system' => 's', 'user' => 'u'],
+            'side_effects' => [],
+        ]);
+
+        $this->expectException(InvalidOutput::class);
+        $pipeline->process($def, ['text' => '{'.str_repeat('word ', 1500)]);
     }
 
     public function test_output_pipeline_words_fails_500_words_when_target_1000(): void
@@ -149,6 +246,62 @@ final class ArticleLengthWordsValidationTest extends TestCase
 
         $this->expectException(InvalidOutput::class);
         $pipeline->process($def, ['text' => str_repeat('a', 90)]);
+    }
+
+    public function test_shared_validator_wired_across_generation_paths(): void
+    {
+        $validator = ArticleGenerationLengthValidator::class;
+        $files = [
+            'PromptHooks/Output/PromptHookRuntimeOutputPipeline.php',
+            'PromptHooks/PromptHookOutputNormalizer.php',
+            'PromptHooks/Runtime/PromptHookExplicitBindingExecutor.php',
+            'Services/ArticleWritingExecutionService.php',
+            'Services/TaskWorkflowTestRunner.php',
+            'Services/ArticleWritingLegacyRewriteAdapter.php',
+            'Services/ArticleImproveExecutionService.php',
+        ];
+        $root = dirname(__DIR__, 2);
+        foreach ($files as $relative) {
+            $src = (string) file_get_contents($root.'/'.$relative);
+            if ($relative === 'Services/ArticleImproveExecutionService.php') {
+                self::assertStringNotContainsString($validator, $src);
+                self::assertStringContainsString('Không truyền article_length', $src);
+                continue;
+            }
+            if ($relative === 'Services/ArticleWritingLegacyRewriteAdapter.php') {
+                self::assertStringContainsString('article.content.generate', $src);
+                self::assertStringNotContainsString('article_length', $src);
+                continue;
+            }
+            if ($relative === 'Services/TaskWorkflowTestRunner.php') {
+                self::assertStringContainsString('minimum_acceptable_words', $src);
+                self::assertStringContainsString('PromptHookExplicitBindingExecutor', $src);
+                continue;
+            }
+            if ($relative === 'Services/ArticleWritingExecutionService.php') {
+                self::assertStringContainsString('length_validation', $src);
+                continue;
+            }
+            if ($relative === 'PromptHooks/Runtime/PromptHookExplicitBindingExecutor.php') {
+                self::assertStringContainsString('length_validation', $src);
+                self::assertStringContainsString('persistLengthValidationToPromptResult', $src);
+                continue;
+            }
+            self::assertStringContainsString($validator, $src, $relative);
+        }
+
+        $config = (string) file_get_contents(dirname(__DIR__, 5).'/config/seo-content-ai.php');
+        self::assertStringContainsString("'minimum_acceptable_words'", $config);
+        self::assertStringContainsString('1400', $config);
+    }
+
+    public function test_improve_hook_has_no_word_length_unit(): void
+    {
+        $path = dirname(__DIR__, 2).'/resources/prompt-hooks/v01/article.content.improve@0.1.0.json';
+        $json = json_decode((string) file_get_contents($path), true);
+        self::assertIsArray($json);
+        self::assertArrayNotHasKey('length_unit', $json['output_schema']['validation'] ?? []);
+        self::assertArrayNotHasKey('minimum_length', $json['output_schema']['validation'] ?? []);
     }
 
     private function markdownWordsDefinition(int $minimumLength): \App\Addons\SeoContentAi\PromptHooks\Canonical\PromptHookDefinition

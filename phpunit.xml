@@ -11,11 +11,11 @@
         <testsuite name="Feature">
             <directory suffix="Test.php">tests/Feature</directory>
         </testsuite>
-        <testsuite name="SeoContentAiUnit">
-            <directory suffix="Test.php">app/Addons/SeoContentAi/tests/Unit</directory>
+        <testsuite name="SeoContentAi">
+            <directory suffix="Test.php">./app/Addons/SeoContentAi/tests/Unit</directory>
         </testsuite>
         <testsuite name="SeoContentAiFeature">
-            <directory suffix="Test.php">app/Addons/SeoContentAi/tests/Feature</directory>
+            <directory suffix="Test.php">./app/Addons/SeoContentAi/tests/Feature</directory>
         </testsuite>
     </testsuites>
     <source>
@@ -40,6 +40,6 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
-        <env name="SEO_TEST_USE_MYSQL" value="false" force="true"/>
+        <env name="SEO_TEST_USE_MYSQL" value="false" force="false"/>
     </php>
 </phpunit>

@@ -46,7 +46,7 @@ final class ViewSeoProjectRunStep extends Page
         );
 
         abort_unless(
-            SeoProjectResource::getEloquentQuery()
+            SeoProjectResource::getRecordRouteBindingEloquentQuery()
                 ->whereKey((int) $this->projectRun->project_id)
                 ->exists(),
             403,

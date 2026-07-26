@@ -8,18 +8,33 @@ use App\Addons\SeoContentAi\PromptHooks\Canonical\PromptHookDefinition;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\InvalidOutput;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\OutputTruncated;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\ProviderRefused;
+use App\Addons\SeoContentAi\Support\ArticleGenerationLengthValidator;
 use App\Addons\SeoContentAi\Support\PromptTextMetrics;
 
 final class PromptHookRuntimeOutputPipeline
 {
     public function __construct(
         private readonly MarkdownSectionsOutputParser $markdownSectionsParser = new MarkdownSectionsOutputParser,
+        private readonly ArticleGenerationLengthValidator $articleLengthValidator = new ArticleGenerationLengthValidator,
     ) {}
 
     /**
      * @param  array<string, mixed>  $providerResponse
      * @param  array<string, mixed>  $input  Validated hook input (vd. article_length)
-     * @return array{type: string, raw: string, value: mixed, warnings: list<string>, sections?: array<string, string>, ports?: array<string, string>}
+     * @return array{
+     *     type: string,
+     *     raw: string,
+     *     value: mixed,
+     *     warnings: list<string>,
+     *     sections?: array<string, string>,
+     *     ports?: array<string, string>,
+     *     length_validation?: array{
+     *         actual_word_count: int,
+     *         minimum_acceptable_words: int,
+     *         target_article_length: int,
+     *         length_validation_result: string
+     *     }
+     * }
      */
     public function process(
         PromptHookDefinition $definition,
@@ -30,7 +45,14 @@ final class PromptHookRuntimeOutputPipeline
         if (($providerResponse['refused'] ?? false) === true) {
             throw new ProviderRefused('Provider refused to generate content.');
         }
-        if (($providerResponse['truncated'] ?? false) === true) {
+
+        $finishReason = isset($providerResponse['finish_reason'])
+            ? (string) $providerResponse['finish_reason']
+            : null;
+        if (ArticleGenerationLengthValidator::isProviderLengthTruncation(
+            $finishReason,
+            (bool) ($providerResponse['truncated'] ?? false),
+        )) {
             throw new OutputTruncated('Provider output was truncated.');
         }
 
@@ -96,29 +118,41 @@ final class PromptHookRuntimeOutputPipeline
             $this->assertNoProviderPreamble($parsed);
         }
 
+        $lengthValidation = null;
         if (is_string($parsed)) {
-            $this->assertLengthConstraints($parsed, $validation, $input, $warnings);
+            $lengthValidation = $this->assertLengthConstraints($parsed, $validation, $input, $warnings);
         }
 
-        return [
+        $result = [
             'type' => $type,
             'raw' => $raw,
             'value' => $parsed,
             'warnings' => $warnings,
         ];
+        if ($lengthValidation !== null) {
+            $result['length_validation'] = $lengthValidation;
+        }
+
+        return $result;
     }
 
     /**
      * @param  array<string, mixed>  $validation
      * @param  array<string, mixed>  $input
      * @param  list<string>  $warnings
+     * @return array{
+     *     actual_word_count: int,
+     *     minimum_acceptable_words: int,
+     *     target_article_length: int,
+     *     length_validation_result: string
+     * }|null
      */
     private function assertLengthConstraints(
         string $parsed,
         array $validation,
         array $input,
         array &$warnings,
-    ): void {
+    ): ?array {
         $unit = strtolower(trim((string) ($validation['length_unit'] ?? 'chars')));
         if ($unit !== 'words') {
             $unit = 'chars';
@@ -126,22 +160,23 @@ final class PromptHookRuntimeOutputPipeline
 
         $schemaMin = $validation['min_length'] ?? $validation['minimum_length'] ?? null;
         $min = $schemaMin !== null ? (int) $schemaMin : null;
+        $lengthMeta = null;
 
-        // Single source: runtime {article_length} từ Settings — không tự sinh % tolerance.
+        // Words + article_length: target = Prompt; hard min = config floor (≤ target).
         if ($unit === 'words') {
             $articleLength = $this->resolveArticleLengthWords($input);
             if ($articleLength !== null && $articleLength > 0) {
-                $min = $articleLength;
+                $lengthMeta = $this->articleLengthValidator->assertAcceptable($parsed, $articleLength);
+                $min = $lengthMeta['minimum_acceptable_words'];
             }
         }
 
         $measured = PromptTextMetrics::measure($parsed, $unit);
 
-        if ($min !== null && $measured < $min) {
-            // OutputTruncated → retry.on truncated của content hooks.
+        if ($lengthMeta === null && $min !== null && $measured < $min) {
             throw new OutputTruncated(
                 $unit === 'words'
-                    ? "Output shorter than article_length ({$measured} words < {$min} words)."
+                    ? "Output shorter than minimum_length ({$measured} words < {$min} words)."
                     : "Output shorter than minimum_length ({$measured} chars < {$min}).",
             );
         }
@@ -156,6 +191,8 @@ final class PromptHookRuntimeOutputPipeline
                 );
             }
         }
+
+        return $lengthMeta;
     }
 
     /**

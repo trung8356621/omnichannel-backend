@@ -1,10 +1,6 @@
 @php
-    use App\Addons\SeoContentAi\Models\SeoProjectArchiveItem;
-
     $summary = $this->getHeaderSummary();
-    $items = $this->archive?->items ?? collect();
-    $selectedItem = $this->selectedItem;
-    $selectedDetails = $selectedItem instanceof SeoProjectArchiveItem ? $this->buildItemDetails($selectedItem) : null;
+    $rows = is_array($this->articleRows ?? null) ? $this->articleRows : [];
 
     $month = (int) ($summary['month'] ?? 0);
     $year = (int) ($summary['year'] ?? 0);
@@ -12,114 +8,165 @@
 @endphp
 
 <x-filament-panels::page>
-    <div class="space-y-6">
-        <div class="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
+    <div class="fi-archive-preview space-y-6">
+        @if (filled($this->snapshotLoadError))
+            <div class="rounded-xl border border-danger-300 bg-danger-50 px-4 py-3 text-sm text-danger-800 dark:border-danger-500/40 dark:bg-danger-500/10 dark:text-danger-100">
+                {{ $this->snapshotLoadError }}
+            </div>
+        @endif
+
+        <div class="fi-archive-preview-summary rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900 sm:p-5">
             <h2 class="text-base font-semibold text-gray-950 dark:text-white">
                 {{ e((string) ($summary['project_name'] ?? '')) ?: '—' }}
             </h2>
-            <dl class="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-                <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.article_list.domain') }}</dt>
-                    <dd class="mt-1 text-gray-900 dark:text-white">{{ e((string) ($summary['domain'] ?? '')) ?: '—' }}</dd>
+
+            <div class="fi-archive-preview-summary-grid mt-4">
+                <div class="fi-archive-preview-summary-item">
+                    <div class="fi-archive-preview-summary-label">{{ __('seo-content-ai::filament.article_list.domain') }}</div>
+                    <div class="fi-archive-preview-summary-value">{{ e((string) ($summary['domain'] ?? '')) ?: '—' }}</div>
                 </div>
-                <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.month') }}</dt>
-                    <dd class="mt-1 text-gray-900 dark:text-white">{{ e($period) }}</dd>
+                <div class="fi-archive-preview-summary-item">
+                    <div class="fi-archive-preview-summary-label">{{ __('seo-content-ai::filament.projects.month') }}</div>
+                    <div class="fi-archive-preview-summary-value">{{ e($period) }}</div>
                 </div>
-                <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.owner') }}</dt>
-                    <dd class="mt-1 text-gray-900 dark:text-white">{{ e((string) ($summary['owner'] ?? '')) ?: '—' }}</dd>
+                <div class="fi-archive-preview-summary-item">
+                    <div class="fi-archive-preview-summary-label">{{ __('seo-content-ai::filament.projects.owner') }}</div>
+                    <div class="fi-archive-preview-summary-value">{{ e((string) ($summary['owner'] ?? '')) ?: '—' }}</div>
                 </div>
-                <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_col_archived_at') }}</dt>
-                    <dd class="mt-1 text-gray-900 dark:text-white">{{ \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource::formatTaskTimestamp($summary['archived_at'] ?? null) }}</dd>
+                <div class="fi-archive-preview-summary-item">
+                    <div class="fi-archive-preview-summary-label">{{ __('seo-content-ai::filament.projects.archive_col_archived_at') }}</div>
+                    <div class="fi-archive-preview-summary-value">{{ \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource::formatTaskTimestamp($summary['archived_at'] ?? null) }}</div>
                 </div>
-                <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_col_total') }}</dt>
-                    <dd class="mt-1 text-gray-900 dark:text-white">{{ (int) ($summary['total_articles'] ?? 0) }}</dd>
+                <div class="fi-archive-preview-summary-item">
+                    <div class="fi-archive-preview-summary-label">{{ __('seo-content-ai::filament.projects.archive_col_total') }}</div>
+                    <div class="fi-archive-preview-summary-value">{{ (int) ($summary['total_articles'] ?? 0) }}</div>
                 </div>
-                <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_col_completed') }}</dt>
-                    <dd class="mt-1 text-gray-900 dark:text-white">{{ (int) ($summary['completed_articles'] ?? 0) }}</dd>
+                <div class="fi-archive-preview-summary-item">
+                    <div class="fi-archive-preview-summary-label">{{ __('seo-content-ai::filament.projects.archive_col_completed') }}</div>
+                    <div class="fi-archive-preview-summary-value">{{ (int) ($summary['completed_articles'] ?? 0) }}</div>
                 </div>
-                <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_col_approved') }}</dt>
-                    <dd class="mt-1 text-gray-900 dark:text-white">{{ (int) ($summary['approved_articles'] ?? 0) }}</dd>
+                <div class="fi-archive-preview-summary-item">
+                    <div class="fi-archive-preview-summary-label">{{ __('seo-content-ai::filament.projects.archive_col_synced') }}</div>
+                    <div class="fi-archive-preview-summary-value">{{ (int) ($summary['synced_articles'] ?? 0) }}</div>
                 </div>
-                <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_col_synced') }}</dt>
-                    <dd class="mt-1 text-gray-900 dark:text-white">{{ (int) ($summary['synced_articles'] ?? 0) }}</dd>
-                </div>
-                <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_col_avg_seo') }}</dt>
-                    <dd class="mt-1 text-gray-900 dark:text-white">
+                <div class="fi-archive-preview-summary-item">
+                    <div class="fi-archive-preview-summary-label">{{ __('seo-content-ai::filament.projects.archive_col_avg_seo') }}</div>
+                    <div class="fi-archive-preview-summary-value">
                         @if (($summary['average_seo_score'] ?? null) !== null)
                             {{ number_format((float) $summary['average_seo_score'], 2) }}
                         @else
                             —
                         @endif
-                    </dd>
+                    </div>
                 </div>
-                <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_col_archived_by') }}</dt>
-                    <dd class="mt-1 text-gray-900 dark:text-white">{{ e((string) ($summary['archived_by'] ?? '')) ?: '—' }}</dd>
+                <div class="fi-archive-preview-summary-item">
+                    <div class="fi-archive-preview-summary-label">{{ __('seo-content-ai::filament.projects.archive_col_archived_by') }}</div>
+                    <div class="fi-archive-preview-summary-value">{{ e((string) ($summary['archived_by'] ?? '')) ?: '—' }}</div>
                 </div>
-            </dl>
-
-            @if (trim((string) ($summary['note'] ?? '')) !== '')
-                <div class="mt-4 rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700 dark:bg-gray-800/60 dark:text-gray-200">
-                    <span class="font-medium">{{ __('seo-content-ai::filament.projects.archive_note') }}:</span>
-                    {{ e((string) $summary['note']) }}
-                </div>
-            @endif
+            </div>
         </div>
 
-        <div class="overflow-x-auto rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
-            <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
-                <thead class="bg-gray-50 dark:bg-gray-800/60">
+        @if (trim((string) ($summary['note'] ?? '')) !== '')
+            <div class="fi-archive-preview-note-bar" role="note">
+                <span class="fi-archive-preview-note-label">{{ __('seo-content-ai::filament.projects.archive_note') }}</span>
+                <span class="fi-archive-preview-note-text">{{ e((string) $summary['note']) }}</span>
+            </div>
+        @endif
+
+        <div class="fi-archive-preview-table w-full overflow-x-auto rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
+            <table class="w-full min-w-full table-auto divide-y divide-gray-200 text-sm dark:divide-gray-700">
+                <thead class="sticky top-0 z-10 bg-gray-50 dark:bg-gray-800/95">
                     <tr>
-                        <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">#</th>
-                        <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_col_title') }}</th>
-                        <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_preview_col_keyword') }}</th>
-                        <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_col_status') }}</th>
-                        <th class="px-3 py-2 text-right font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_col_avg_seo') }}</th>
-                        <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_preview_col_sync') }}</th>
-                        <th class="px-3 py-2 text-right font-medium text-gray-600 dark:text-gray-300"></th>
+                        <th class="w-10 px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">#</th>
+                        <th class="min-w-[16rem] w-[32%] px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_col_title') }}</th>
+                        <th class="min-w-[8rem] px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_keyword') }}</th>
+                        <th class="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_col_status') }}</th>
+                        <th class="w-16 px-3 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400" title="{{ __('seo-content-ai::filament.projects.archive_preview_col_internal_links') }}">{{ __('seo-content-ai::filament.projects.archive_preview_col_int') }}</th>
+                        <th class="w-16 px-3 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400" title="{{ __('seo-content-ai::filament.projects.archive_preview_col_external_links') }}">{{ __('seo-content-ai::filament.projects.archive_preview_col_ext') }}</th>
+                        <th class="w-20 px-3 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_col_avg_seo') }}</th>
+                        <th class="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_sync') }}</th>
+                        <th class="w-24 px-3 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400"></th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-                    @forelse ($items as $item)
+                    @forelse ($rows as $row)
                         @php
-                            if (! $item instanceof SeoProjectArchiveItem) {
-                                continue;
-                            }
-                            $snapshot = is_array($item->article_snapshot) ? $item->article_snapshot : [];
-                            $title = trim((string) ($snapshot['title'] ?? $item->article?->title ?? ''));
-                            $keyword = trim((string) ($snapshot['primary_keyword'] ?? ''));
-                            $status = trim((string) ($snapshot['status'] ?? $item->task?->status ?? ''));
-                            $seoScore = $snapshot['seo_score'] ?? $item->article?->seo_score;
-                            $syncStatus = trim((string) ($snapshot['sync_status'] ?? $item->article?->wp_sync_status ?? ''));
+                            $title = trim((string) ($row['title'] ?? ''));
+                            $keyword = trim((string) ($row['keyword'] ?? ''));
+                            $status = trim((string) ($row['task_status'] ?? ''));
+                            $syncStatus = trim((string) ($row['sync_status'] ?? ''));
+                            $seoScore = $row['seo_score'] ?? null;
+                            $editUrl = is_string($row['edit_url'] ?? null) ? $row['edit_url'] : null;
+                            $canEdit = (bool) ($row['can_edit'] ?? false);
+                            $articleExists = (bool) ($row['article_exists'] ?? false);
+                            $itemId = (int) ($row['item_id'] ?? 0);
+                            $position = (int) ($row['position'] ?? 0);
+                            $internalLinks = (int) ($row['internal_link_count'] ?? 0);
+                            $externalLinks = (int) ($row['external_link_count'] ?? 0);
                         @endphp
-                        <tr wire:key="archive-preview-item-{{ $item->id }}">
-                            <td class="px-3 py-2 text-gray-600 dark:text-gray-300">{{ (int) ($item->position ?? 0) ?: $loop->iteration }}</td>
-                            <td class="px-3 py-2 font-medium text-gray-950 dark:text-white">{{ $title !== '' ? e($title) : '—' }}</td>
-                            <td class="px-3 py-2 text-gray-700 dark:text-gray-200">{{ $keyword !== '' ? e($keyword) : '—' }}</td>
-                            <td class="px-3 py-2 text-gray-700 dark:text-gray-200">{{ $status !== '' ? e($status) : '—' }}</td>
-                            <td class="px-3 py-2 text-right text-gray-700 dark:text-gray-200">{{ $seoScore !== null ? number_format((float) $seoScore, 2) : '—' }}</td>
-                            <td class="px-3 py-2 text-gray-700 dark:text-gray-200">{{ $syncStatus !== '' ? e($syncStatus) : '—' }}</td>
-                            <td class="px-3 py-2 text-right">
-                                <button
+                        <tr
+                            wire:key="archive-preview-item-{{ $itemId }}"
+                            class="transition hover:bg-gray-50/80 dark:hover:bg-gray-800/40"
+                        >
+                            <td class="whitespace-nowrap px-3 py-2.5 text-gray-600 dark:text-gray-300">{{ $position > 0 ? $position : $loop->iteration }}</td>
+                            <td class="px-3 py-2.5">
+                                <div class="min-w-0">
+                                    @if ($canEdit && filled($editUrl))
+                                        <a
+                                            href="{{ $editUrl }}"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            class="text-primary-600 hover:underline dark:text-primary-400"
+                                            title="{{ $title !== '' ? $title : '' }}"
+                                        >
+                                            <span class="line-clamp-2">{{ $title !== '' ? e($title) : '—' }}</span>
+                                        </a>
+                                    @else
+                                        <span class="line-clamp-2 font-medium text-gray-950 dark:text-white" title="{{ $title !== '' ? $title : '' }}">
+                                            {{ $title !== '' ? e($title) : '—' }}
+                                        </span>
+                                    @endif
+
+                                    @if (! $articleExists)
+                                        <span class="mt-1 inline-flex items-center rounded-md bg-warning-50 px-1.5 py-0.5 text-[11px] font-medium text-warning-800 ring-1 ring-warning-200 dark:bg-warning-500/10 dark:text-warning-200 dark:ring-warning-500/30">
+                                            {{ __('seo-content-ai::filament.projects.archive_preview_article_missing') }}
+                                        </span>
+                                    @endif
+                                </div>
+                            </td>
+                            <td class="px-3 py-2.5 text-gray-700 dark:text-gray-200">{{ $keyword !== '' ? e($keyword) : '—' }}</td>
+                            <td class="px-3 py-2.5">
+                                @if ($status !== '')
+                                    <span class="inline-flex rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700 dark:bg-gray-800 dark:text-gray-200">{{ e($status) }}</span>
+                                @else
+                                    —
+                                @endif
+                            </td>
+                            <td class="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-gray-700 dark:text-gray-200">{{ $internalLinks }}</td>
+                            <td class="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-gray-700 dark:text-gray-200">{{ $externalLinks }}</td>
+                            <td class="whitespace-nowrap px-3 py-2.5 text-right text-gray-700 dark:text-gray-200">{{ $seoScore !== null ? number_format((float) $seoScore, 2) : '—' }}</td>
+                            <td class="px-3 py-2.5">
+                                @if ($syncStatus !== '')
+                                    <span class="inline-flex rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700 dark:bg-gray-800 dark:text-gray-200">{{ e($syncStatus) }}</span>
+                                @else
+                                    —
+                                @endif
+                            </td>
+                            <td class="whitespace-nowrap px-3 py-2.5 text-right">
+                                <x-filament::button
+                                    color="gray"
+                                    size="sm"
+                                    tag="button"
                                     type="button"
-                                    class="inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary-700 ring-1 ring-primary-300 hover:bg-primary-50 dark:text-primary-300 dark:ring-primary-500/40 dark:hover:bg-primary-500/10"
-                                    x-on:click="$wire.openItem({{ $item->id }})"
+                                    wire:click="mountAction('viewArchiveItem', { itemId: {{ $itemId }} })"
                                 >
                                     {{ __('seo-content-ai::filament.projects.archive_preview_item') }}
-                                </button>
+                                </x-filament::button>
                             </td>
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="7" class="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
+                            <td colspan="9" class="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
                                 {{ __('seo-content-ai::filament.projects.archive_preview_empty') }}
                             </td>
                         </tr>
@@ -129,148 +176,99 @@
         </div>
     </div>
 
-    <template x-teleport="body">
-        <div
-            x-show="$wire.selectedItemId"
-            x-cloak
-            x-on:keydown.escape.window="$wire.closeItem()"
-            class="fixed inset-0 z-[80] flex items-center justify-center p-4"
-            role="dialog"
-            aria-modal="true"
-        >
-            <div
-                class="absolute inset-0 bg-gray-950/50"
-                x-on:click="$wire.closeItem()"
-            ></div>
+    <style>
+        .fi-archive-preview-summary-grid {
+            display: grid;
+            gap: 0.875rem 1.25rem;
+            grid-template-columns: repeat(1, minmax(0, 1fr));
+        }
 
-            <div class="relative z-10 flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-gray-900">
-                <div class="flex items-start justify-between gap-3 border-b border-gray-200 px-5 py-4 dark:border-gray-700">
-                    <div class="min-w-0">
-                        <h3 class="text-base font-semibold text-gray-900 dark:text-white">
-                            {{ __('seo-content-ai::filament.projects.archive_preview_item_heading') }}
-                        </h3>
-                        @if (is_array($selectedDetails))
-                            <p class="mt-1 truncate text-sm text-gray-500 dark:text-gray-400">{{ e((string) ($selectedDetails['title'] ?? '')) }}</p>
-                        @endif
-                    </div>
-                    <button
-                        type="button"
-                        class="rounded-lg p-1 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800"
-                        x-on:click="$wire.closeItem()"
-                    >
-                        <x-filament::icon icon="heroicon-o-x-mark" class="h-5 w-5" />
-                    </button>
-                </div>
+        @media (min-width: 640px) {
+            .fi-archive-preview-summary-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
 
-                <div class="overflow-y-auto px-5 py-4">
-                    @if (is_array($selectedDetails))
-                        <dl class="grid gap-4 text-sm sm:grid-cols-2">
-                            <div class="sm:col-span-2">
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_col_title') }}</dt>
-                                <dd class="mt-1 text-gray-900 dark:text-white">{{ e((string) ($selectedDetails['title'] ?? '')) ?: '—' }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_slug') }}</dt>
-                                <dd class="mt-1 break-all text-gray-900 dark:text-white">{{ e((string) ($selectedDetails['slug'] ?? '')) ?: '—' }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_keyword') }}</dt>
-                                <dd class="mt-1 text-gray-900 dark:text-white">{{ e((string) ($selectedDetails['keyword'] ?? '')) ?: '—' }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_meta_title') }}</dt>
-                                <dd class="mt-1 text-gray-900 dark:text-white">{{ e((string) ($selectedDetails['meta_title'] ?? '')) ?: '—' }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_meta_description') }}</dt>
-                                <dd class="mt-1 text-gray-900 dark:text-white">{{ e((string) ($selectedDetails['meta_description'] ?? '')) ?: '—' }}</dd>
-                            </div>
-                            <div class="sm:col-span-2">
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_outline') }}</dt>
-                                <dd class="mt-1 whitespace-pre-wrap text-gray-900 dark:text-white">{{ e((string) ($selectedDetails['outline_meta'] ?? '')) ?: '—' }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_col_status') }}</dt>
-                                <dd class="mt-1 text-gray-900 dark:text-white">{{ e((string) ($selectedDetails['task_status'] ?? '')) ?: '—' }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_review_status') }}</dt>
-                                <dd class="mt-1 text-gray-900 dark:text-white">{{ e((string) ($selectedDetails['approved_status'] ?? '')) ?: '—' }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_col_avg_seo') }}</dt>
-                                <dd class="mt-1 text-gray-900 dark:text-white">
-                                    @if (($selectedDetails['seo_score'] ?? null) !== null)
-                                        {{ number_format((float) $selectedDetails['seo_score'], 2) }}
-                                    @else
-                                        —
-                                    @endif
-                                </dd>
-                            </div>
-                            <div>
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_images') }}</dt>
-                                <dd class="mt-1 text-gray-900 dark:text-white">{{ (int) ($selectedDetails['image_count'] ?? 0) }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_sync') }}</dt>
-                                <dd class="mt-1 text-gray-900 dark:text-white">{{ e((string) ($selectedDetails['sync_status'] ?? '')) ?: '—' }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_wp_post') }}</dt>
-                                <dd class="mt-1 text-gray-900 dark:text-white">{{ ($selectedDetails['wordpress_post_id'] ?? null) ? (int) $selectedDetails['wordpress_post_id'] : '—' }}</dd>
-                            </div>
-                            <div class="sm:col-span-2">
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_wp_url') }}</dt>
-                                <dd class="mt-1 break-all text-gray-900 dark:text-white">
-                                    @if (trim((string) ($selectedDetails['wordpress_url'] ?? '')) !== '')
-                                        <a href="{{ e((string) $selectedDetails['wordpress_url']) }}" target="_blank" rel="noopener noreferrer" class="text-primary-600 hover:underline dark:text-primary-400">
-                                            {{ e((string) $selectedDetails['wordpress_url']) }}
-                                        </a>
-                                    @else
-                                        —
-                                    @endif
-                                </dd>
-                            </div>
-                            @if (trim((string) ($selectedDetails['wp_sync_error'] ?? '')) !== '')
-                                <div class="sm:col-span-2">
-                                    <dt class="text-xs font-medium uppercase tracking-wide text-danger-600 dark:text-danger-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_wp_error') }}</dt>
-                                    <dd class="mt-1 text-danger-700 dark:text-danger-300">{{ e((string) $selectedDetails['wp_sync_error']) }}</dd>
-                                </div>
-                            @endif
-                            <div>
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_col_created_at') }}</dt>
-                                <dd class="mt-1 text-gray-900 dark:text-white">{{ e((string) ($selectedDetails['created_at'] ?? '—')) }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_updated_at') }}</dt>
-                                <dd class="mt-1 text-gray-900 dark:text-white">{{ e((string) ($selectedDetails['updated_at'] ?? '—')) }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.completed_at') }}</dt>
-                                <dd class="mt-1 text-gray-900 dark:text-white">{{ e((string) ($selectedDetails['completed_at'] ?? '—')) }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_last_saved') }}</dt>
-                                <dd class="mt-1 text-gray-900 dark:text-white">{{ e((string) ($selectedDetails['last_saved_at'] ?? '—')) }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_last_synced') }}</dt>
-                                <dd class="mt-1 text-gray-900 dark:text-white">{{ e((string) ($selectedDetails['last_synced_at'] ?? '—')) }}</dd>
-                            </div>
-                            <div class="sm:col-span-2">
-                                <dt class="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_body_excerpt') }}</dt>
-                                <dd class="mt-1 whitespace-pre-wrap text-gray-900 dark:text-white">{{ e((string) ($selectedDetails['body_excerpt'] ?? '')) ?: '—' }}</dd>
-                            </div>
-                        </dl>
-                    @else
-                        <div class="animate-pulse space-y-3">
-                            <div class="h-4 w-2/3 rounded bg-gray-200 dark:bg-gray-700"></div>
-                            <div class="h-4 w-full rounded bg-gray-200 dark:bg-gray-700"></div>
-                            <div class="h-4 w-5/6 rounded bg-gray-200 dark:bg-gray-700"></div>
-                        </div>
-                    @endif
-                </div>
-            </div>
-        </div>
-    </template>
+        @media (min-width: 1024px) {
+            .fi-archive-preview-summary-grid {
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
+        }
+
+        .fi-archive-preview-summary-label {
+            font-size: 0.75rem;
+            line-height: 1rem;
+            font-weight: 500;
+            letter-spacing: 0.025em;
+            text-transform: uppercase;
+            color: rgb(107 114 128);
+        }
+
+        .dark .fi-archive-preview-summary-label {
+            color: rgb(156 163 175);
+        }
+
+        .fi-archive-preview-summary-value {
+            margin-top: 0.25rem;
+            font-size: 0.875rem;
+            line-height: 1.25rem;
+            color: rgb(17 24 39);
+            word-break: break-word;
+        }
+
+        .dark .fi-archive-preview-summary-value {
+            color: rgb(255 255 255);
+        }
+
+        .fi-archive-preview-note-bar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 0.5rem 0.75rem;
+            width: 100%;
+            border-radius: 0.75rem;
+            border: 1px solid rgb(147 197 253);
+            background: rgb(239 246 255);
+            padding: 0.75rem 1rem;
+            font-size: 0.875rem;
+            line-height: 1.25rem;
+            color: rgb(30 64 175);
+        }
+
+        .dark .fi-archive-preview-note-bar {
+            border-color: rgba(59, 130, 246, 0.45);
+            background: rgba(59, 130, 246, 0.12);
+            color: rgb(191 219 254);
+        }
+
+        .fi-archive-preview-note-label {
+            flex-shrink: 0;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+        }
+
+        .fi-archive-preview-note-label::after {
+            content: ':';
+        }
+
+        .fi-archive-preview-note-text {
+            min-width: 0;
+            flex: 1 1 auto;
+            word-break: break-word;
+        }
+
+        .fi-modal-window.fi-archive-preview-item-slideover {
+            width: min(52rem, 85vw) !important;
+            max-width: 85vw !important;
+        }
+
+        @media (max-width: 768px) {
+            .fi-modal-window.fi-archive-preview-item-slideover {
+                width: 100% !important;
+                max-width: 100vw !important;
+            }
+        }
+    </style>
 </x-filament-panels::page>

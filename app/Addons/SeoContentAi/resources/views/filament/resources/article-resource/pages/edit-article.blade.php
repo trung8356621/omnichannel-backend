@@ -110,6 +110,13 @@
         </p>
     </div>
 @else
+@if ($this->recordDomainDiffersFromGlobal)
+    <div class="mb-4 rounded-lg border border-warning-300 bg-warning-50 px-3 py-2 text-sm text-warning-900 dark:border-warning-500/40 dark:bg-warning-500/10 dark:text-warning-100">
+        {{ __('seo-content-ai::filament.article_list.record_domain_note', [
+            'domain' => (string) ($this->record?->site?->domain ?? ('#'.(int) ($this->record?->site_id ?? 0))),
+        ]) }}
+    </div>
+@endif
 @php
     $seoActiveArticleOperation = app(\App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService::class)
         ->activeOperation($record);

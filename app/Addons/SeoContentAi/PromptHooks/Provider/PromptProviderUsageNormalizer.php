@@ -46,6 +46,12 @@ final class PromptProviderUsageNormalizer
             $usageSource = 'estimated';
         }
 
+        $finishReason = isset($usage['finish_reason']) ? (string) $usage['finish_reason'] : null;
+        $truncated = \App\Addons\SeoContentAi\Support\ArticleGenerationLengthValidator::isProviderLengthTruncation(
+            $finishReason,
+            $truncated,
+        );
+
         return new PromptProviderResponse(
             text: $text,
             refused: $refused,
@@ -58,7 +64,7 @@ final class PromptProviderUsageNormalizer
             usageSource: $usageSource,
             provider: $provider !== '' ? $provider : null,
             model: $model !== '' ? $model : null,
-            finishReason: isset($usage['finish_reason']) ? (string) $usage['finish_reason'] : null,
+            finishReason: $finishReason,
             providerRequestId: isset($usage['request_id'])
                 ? (string) $usage['request_id']
                 : (isset($usage['provider_request_id']) ? (string) $usage['provider_request_id'] : null),

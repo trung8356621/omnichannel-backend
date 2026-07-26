@@ -878,8 +878,9 @@ class ViewSeoProjectRun extends Page
         $items = app(SeoProjectRunItemsDisplayPresenter::class)->consolidate($this->getResultItems());
 
         $enriched = array_map(
-            fn (array $item): array => $this->enrichItemWorkflowSteps(
-                $this->enrichItemLastSaved(
+            // workflow_steps + active SoT TRƯỚC row status — tránh Lỗi + chặn active lệch nguồn.
+            fn (array $item): array => $this->enrichItemLastSaved(
+                $this->enrichItemWorkflowSteps(
                     $this->enrichItemRewriteMeta($this->enrichItemArticleLink($item))
                 )
             ),
@@ -1136,6 +1137,7 @@ class ViewSeoProjectRun extends Page
         $taskId = (int) ($item['task_id'] ?? 0);
         if ($taskId <= 0 || $this->projectRun === null || $this->itemIsImproveType($item)) {
             $item['workflow_steps'] = [];
+            $item['active_execution'] = null;
 
             return $item;
         }
@@ -1143,12 +1145,17 @@ class ViewSeoProjectRun extends Page
         $task = SeoProjectTask::query()->whereKey($taskId)->first();
         if (! $task instanceof SeoProjectTask) {
             $item['workflow_steps'] = [];
+            $item['active_execution'] = null;
 
             return $item;
         }
 
         $item['workflow_steps'] = app(SeoProjectWorkflowStepRetryService::class)
             ->stepsForTask($this->projectRun, $task);
+
+        $active = app(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectActiveExecutionResolver::class)
+            ->findActiveForTask($this->projectRun, $taskId);
+        $item['active_execution'] = $active?->toArray();
 
         return $item;
     }

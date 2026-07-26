@@ -81,9 +81,34 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
         $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookRuntimeEngine::class);
         $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookCallerBridge::class);
         $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookEditorCatalog::class);
-        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookExplicitBindingExecutor::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryPromptHookRuntime::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryPromptsDoctorService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookUiFailureMapper::class);
+
+        $this->app->bind(
+            \App\Addons\SeoContentAi\Contracts\ProductGalleryParentChildAiPort::class,
+            function ($app) {
+                if (\App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryParentChildFeature::enabled()) {
+                    return $app->make(\App\Addons\SeoContentAi\Services\ProductGallery\GeminiProductGalleryParentChildAiAdapter::class);
+                }
+
+                return $app->make(\App\Addons\SeoContentAi\Services\ProductGallery\NullProductGalleryParentChildAiPort::class);
+            },
+        );
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ProductGallery\ImageProviderCapabilityResolver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryGenerationModeResolver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryModeOrchestrator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryReferenceImageResolver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryParentChildDispatchService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryPlanParser::class, function () {
+            return \App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryPlanParser::fromConfig();
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ProductGallery\ProductGallerySerialChildLoop::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Contracts\PromptResultAttacher::class, \App\Addons\SeoContentAi\Services\PromptResultAttachService::class);
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Contracts\SeoProjectWorkflowStepCatalogContract::class,
+            \App\Addons\SeoContentAi\Services\SeoProjectWorkflowStepCatalogService::class,
+        );
         $this->app->singleton(\App\Addons\SeoContentAi\Services\PromptResultAttachService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\PromptHookExecutionService::class);
 
@@ -236,6 +261,11 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 \App\Addons\SeoContentAi\Console\DiagnoseContentProjectCommand::class,
                 \App\Addons\SeoContentAi\Console\ContentProjectRunStatusCommand::class,
                 \App\Addons\SeoContentAi\Console\ContentProjectRunRecoverCommand::class,
+                \App\Addons\SeoContentAi\Console\RepairContentProjectActiveExecutionsCommand::class,
+                \App\Addons\SeoContentAi\Console\ProductGalleryParentChildCanaryCommand::class,
+                \App\Addons\SeoContentAi\Console\ProductGalleryPromptsDoctorCommand::class,
+                \App\Addons\SeoContentAi\Console\InstallDefaultProductGalleryPromptsCommand::class,
+                \App\Addons\SeoContentAi\Console\ProductGalleryCanaryFixtureCommand::class,
                 \App\Addons\SeoContentAi\Console\RepairContentProjectCommand::class,
                 \App\Addons\SeoContentAi\Console\RepairContentProjectMonthDriftCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationListEventsCommand::class,

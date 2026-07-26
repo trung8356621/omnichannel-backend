@@ -69,6 +69,9 @@ class EditSeoProject extends SeoEditRecord
 
         $data = SeoProjectResource::normalizeProjectSiteId($data);
 
+        $tasksData = $data['tasks_data'] ?? [];
+        unset($data['unassigned_staff_ids'], $data['assign_from_unassigned']);
+
         if (! empty($data['month'])) {
             $data['month'] = Carbon::parse($data['month'])->startOfMonth()->format('Y-m-d');
             $data['name'] = SeoProject::defaultNameFromMonth($data['month']);
@@ -88,7 +91,6 @@ class EditSeoProject extends SeoEditRecord
             }
         }
 
-        $tasksData = $data['tasks_data'] ?? [];
         $projectSiteId = isset($data['site_id']) ? (int) $data['site_id'] : null;
         $sanitized = app(SeoProjectTaskSyncService::class)->sanitizeTasksData($tasksData, $projectSiteId);
 

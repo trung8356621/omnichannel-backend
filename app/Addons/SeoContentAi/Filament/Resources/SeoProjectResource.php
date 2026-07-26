@@ -85,8 +85,14 @@ class SeoProjectResource extends SeoPanelResource
             return (int) $record->user_id === (int) auth()->id();
         }
 
-        return SeoAccessControl::canAccessPlannerFeatures()
-            && static::getEloquentQuery()->whereKey($record->getKey())->exists();
+        if (! SeoAccessControl::canAccessPlannerFeatures()) {
+            return false;
+        }
+
+        $siteId = (int) ($record->site_id ?? 0);
+
+        // Authorization theo quyền site — không dùng global domain làm auth.
+        return $siteId > 0 && SeoAccessControl::canAccessSite($siteId);
     }
 
     public static function projectRecordUrl(SeoProject $record): string
@@ -160,13 +166,43 @@ class SeoProjectResource extends SeoPanelResource
 
                     Forms\Components\Select::make('user_id')
                         ->label(__('seo-content-ai::filament.projects.assign_writer'))
-                        ->options(fn (): array => static::userSelectOptions())
+                        ->options(fn (): array => static::groupedWriterSelectOptions())
                         ->searchable()
                         ->preload()
                         ->required()
                         ->disabled(fn (): bool => SeoAccessControl::isContentManager())
                         ->dehydrated()
-                        ->native(false),
+                        ->native(false)
+                        ->helperText(__('seo-content-ai::filament.projects.assign_writer_help')),
+
+                    Forms\Components\CheckboxList::make('unassigned_staff_ids')
+                        ->label(__('seo-content-ai::filament.projects.unassigned_staff_heading'))
+                        ->options(function (): array {
+                            return app(\App\Addons\SeoContentAi\Services\ContentProjectStaffAvailabilityService::class)
+                                ->groupedSelectOptions()['unassigned'];
+                        })
+                        ->searchable()
+                        ->bulkToggleable(false)
+                        ->columns(1)
+                        ->visible(fn (?SeoProject $record): bool => $record === null
+                            && app(\App\Addons\SeoContentAi\Services\ContentProjectStaffAvailabilityService::class)->canViewUnassignedStaff())
+                        ->dehydrated(false)
+                        ->live()
+                        ->afterStateUpdated(function ($state, callable $set): void {
+                            $ids = is_array($state) ? array_values(array_filter(array_map('intval', $state))) : [];
+                            if ($ids === []) {
+                                return;
+                            }
+                            // Schema: 1 writer / project (user_id). Giữ lựa chọn mới nhất.
+                            $set('user_id', (int) end($ids));
+                            $set('unassigned_staff_ids', [(int) end($ids)]);
+                            $set('assign_from_unassigned', true);
+                        })
+                        ->helperText(__('seo-content-ai::filament.projects.unassigned_staff_help')),
+
+                    Forms\Components\Hidden::make('assign_from_unassigned')
+                        ->default(false)
+                        ->dehydrated(fn (?SeoProject $record): bool => $record === null),
 
                     Forms\Components\Select::make('site_id')
                         ->label(__('seo-content-ai::filament.projects.domain'))
@@ -921,6 +957,23 @@ class SeoProjectResource extends SeoPanelResource
         return $query;
     }
 
+    /**
+     * Detail/edit/preview route binding: không lọc theo global domain.
+     * Global domain chỉ là UI context cho list/create default.
+     */
+    public static function getRecordRouteBindingEloquentQuery(): Builder
+    {
+        $query = parent::getEloquentQuery()->with(['user', 'site']);
+
+        if (SeoAccessControl::isContentManager()) {
+            $query->where('user_id', (int) auth()->id());
+        } elseif (SeoAccessControl::shouldScopeToAccountOwner()) {
+            SeoAccessControl::applyAccessibleSiteScope($query);
+        }
+
+        return $query;
+    }
+
     public static function applyGlobalSiteScopeToProjectQuery(Builder $query): Builder
     {
         if (! SeoAccessControl::shouldApplyGlobalSiteScope()) {
@@ -1153,6 +1206,50 @@ class SeoProjectResource extends SeoPanelResource
      */
     public static function userSelectOptions(): array
     {
+        $grouped = static::groupedWriterSelectOptions();
+        $flat = [];
+
+        foreach ($grouped as $options) {
+            if (! is_array($options)) {
+                continue;
+            }
+            foreach ($options as $id => $label) {
+                $flat[(int) $id] = (string) $label;
+            }
+        }
+
+        return $flat;
+    }
+
+    /**
+     * @return array<string, array<int, string>>
+     */
+    public static function groupedWriterSelectOptions(): array
+    {
+        $service = app(\App\Addons\SeoContentAi\Services\ContentProjectStaffAvailabilityService::class);
+        $grouped = $service->groupedSelectOptions();
+        $result = [];
+
+        if ($grouped['unassigned'] !== []) {
+            $result[(string) __('seo-content-ai::filament.projects.unassigned_staff_heading')] = $grouped['unassigned'];
+        }
+
+        if ($grouped['assigned'] !== []) {
+            $result[(string) __('seo-content-ai::filament.projects.assigned_staff_heading')] = $grouped['assigned'];
+        }
+
+        if ($result === []) {
+            return ['' => static::legacyUserSelectOptions()];
+        }
+
+        return $result;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public static function legacyUserSelectOptions(): array
+    {
         $query = User::query()
             ->where('seo_role', User::SEO_ROLE_CONTENT_MANAGER)
             ->where('status', User::STATUS_NORMAL);
@@ -1175,22 +1272,8 @@ class SeoProjectResource extends SeoPanelResource
 
     public static function formatUserSelectLabel(User $user): string
     {
-        $name = trim((string) ($user->display_name ?? ''));
-        $email = trim((string) ($user->email ?? ''));
-
-        if ($name !== '' && $email !== '') {
-            return sprintf('%s(%s)', $name, $email);
-        }
-
-        if ($name !== '') {
-            return $name;
-        }
-
-        if ($email !== '') {
-            return $email;
-        }
-
-        return (string) $user->id;
+        return app(\App\Addons\SeoContentAi\Services\ContentProjectStaffAvailabilityService::class)
+            ->formatLabel($user);
     }
 
     /**

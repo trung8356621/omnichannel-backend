@@ -7,13 +7,29 @@ namespace App\Addons\SeoContentAi\PromptHooks;
 use App\Addons\SeoContentAi\PromptHooks\Data\PromptHookDefinition;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\PromptHookException;
 use App\Addons\SeoContentAi\PromptHooks\Support\PromptHookErrorCode;
+use App\Addons\SeoContentAi\Support\ArticleGenerationLengthValidator;
 
 final class PromptHookOutputNormalizer
 {
+    public function __construct(
+        private readonly ArticleGenerationLengthValidator $articleLengthValidator = new ArticleGenerationLengthValidator,
+    ) {}
+
     /**
-     * @return array{format: string, raw: string, value: string}
+     * @param  array<string, mixed>  $input  Resolved hook input (vd. article_length)
+     * @return array{
+     *     format: string,
+     *     raw: string,
+     *     value: string,
+     *     length_validation?: array{
+     *         actual_word_count: int,
+     *         minimum_acceptable_words: int,
+     *         target_article_length: int,
+     *         length_validation_result: string
+     *     }
+     * }
      */
-    public function normalize(PromptHookDefinition $definition, string $rawOutput): array
+    public function normalize(PromptHookDefinition $definition, string $rawOutput, array $input = []): array
     {
         $raw = $rawOutput;
         $value = $rawOutput;
@@ -36,11 +52,74 @@ final class PromptHookOutputNormalizer
             );
         }
 
-        return [
+        $lengthValidation = $this->assertArticleLengthIfNeeded($definition, $validation, $value, $input);
+
+        $result = [
             'format' => $definition->outputFormat(),
             'raw' => $raw,
             'value' => $value,
         ];
+        if ($lengthValidation !== null) {
+            $result['length_validation'] = $lengthValidation;
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param  array<string, mixed>  $validation
+     * @param  array<string, mixed>  $input
+     * @return array{
+     *     actual_word_count: int,
+     *     minimum_acceptable_words: int,
+     *     target_article_length: int,
+     *     length_validation_result: string
+     * }|null
+     */
+    private function assertArticleLengthIfNeeded(
+        PromptHookDefinition $definition,
+        array $validation,
+        string $value,
+        array $input,
+    ): ?array {
+        // Improve / hooks không full-generation → bỏ qua.
+        if ($definition->key === 'article.content.improve') {
+            return null;
+        }
+
+        $unit = strtolower(trim((string) ($validation['length_unit'] ?? '')));
+        $isArticleBodyHook = in_array($definition->key, [
+            'article.content.generate',
+            'article.content.rewrite',
+        ], true);
+        if ($unit !== 'words' && ! $isArticleBodyHook) {
+            return null;
+        }
+
+        if (! array_key_exists('article_length', $input)
+            || $input['article_length'] === null
+            || $input['article_length'] === '') {
+            return null;
+        }
+
+        $raw = $input['article_length'];
+        $target = is_numeric($raw) ? (int) $raw : 0;
+        if (is_string($raw) && $target <= 0 && preg_match('/(\d+)/', $raw, $matches) === 1) {
+            $target = (int) $matches[1];
+        }
+        if ($target <= 0) {
+            return null;
+        }
+
+        try {
+            return $this->articleLengthValidator->assertAcceptable($value, $target);
+        } catch (\App\Addons\SeoContentAi\PromptHooks\Exceptions\OutputTruncated $exception) {
+            throw new PromptHookException(
+                PromptHookErrorCode::HookOutputInvalid,
+                "Hook [{$definition->key}] ".$exception->getMessage(),
+                $exception,
+            );
+        }
     }
 
     private function stripMarkdownFence(string $value): string

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Contracts\SeoProjectWorkflowStepCatalogContract;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Support\RuntimeLogger;
@@ -32,7 +33,7 @@ final class ArticlePipelineRerunStartStepResolver
     public const STRATEGY_UNRESOLVED = 'unresolved';
 
     public function __construct(
-        private readonly SeoProjectWorkflowStepCatalogService $catalog,
+        private readonly SeoProjectWorkflowStepCatalogContract $catalog,
     ) {}
 
     /**

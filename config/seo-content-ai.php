@@ -170,6 +170,18 @@ return [
         'max_parallel_articles' => (int) env('CONTENT_PROJECT_MAX_PARALLEL_ARTICLES', 1),
     ],
 
+    /**
+     * Full article generation length contract.
+     * article_length / {{article_length}} = Prompt target.
+     * minimum_acceptable_words = hard OUTPUT_TRUNCATED floor (never above target).
+     */
+    'article_writing' => [
+        'minimum_acceptable_words' => (int) env(
+            'SEO_ARTICLE_WRITING_MINIMUM_ACCEPTABLE_WORDS',
+            1400,
+        ),
+    ],
+
     /** Log Article Editor mount/SEO bootstrap timings (no body/tokens). */
     'article_editor_perf_debug' => (bool) env('ARTICLE_EDITOR_PERF_DEBUG', false),
 
@@ -251,5 +263,43 @@ return [
 
         /** @deprecated Dùng stop_phrases — giữ alias để không phá config cũ. */
         'fallback_stop_phrases' => null,
+    ],
+
+    /**
+     * Product Gallery Mode 1 — sprite validator + original fallback.
+     * Nghi ngờ → fallback gốc; không chase collage hoàn hảo.
+     */
+    'product_gallery' => [
+        'mode' => 'mode_1_validator_fallback',
+        'default_mode' => 'sprite', // sprite | parent_child | auto
+        'minimum_required_images' => 1,
+        'sprite_validator' => [
+            'confidence_threshold' => 0.8,
+            'min_canvas_px' => 256,
+            'min_panel_count_ratio' => 1.0,
+            'soft_weights' => [
+                'gutter_uniformity' => 0.25,
+                'cell_squareness' => 0.2,
+                'area_uniformity' => 0.2,
+                'whitespace' => 0.2,
+                'crop_safety' => 0.15,
+            ],
+        ],
+        'parent_child' => [
+            'enabled' => false,
+            'canary_article_ids' => [],
+            'minimum_required_images' => 1,
+            'max_shots' => 9,
+            'child_retry_count' => 1,
+            'fallback_to_sprite' => true,
+            'supported_aspect_ratios' => ['1:1', '4:3', '3:4', '16:9', '9:16'],
+        ],
+        'canary' => [
+            // Filament page + ListSeoProjects action (admin/manager + local/staging/flag).
+            'fixture_ui_enabled' => (bool) env('SEO_PRODUCT_GALLERY_CANARY_UI', false),
+            // Fixture articles (is_canary meta) pass Mode 2 allowlist when true.
+            'auto_allow_fixture_articles' => true,
+            'min_original_media' => 2,
+        ],
     ],
 ];

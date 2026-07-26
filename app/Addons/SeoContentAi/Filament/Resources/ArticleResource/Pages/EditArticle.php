@@ -108,6 +108,9 @@ class EditArticle extends SeoEditRecord
 
     public string $articleSlug = '';
 
+    /** Record thuộc domain khác global domain đang chọn (chỉ note UI, không chặn). */
+    public bool $recordDomainDiffersFromGlobal = false;
+
     public string $seoTitle = '';
 
     public string $seoMetaDescription = '';
@@ -237,11 +240,11 @@ class EditArticle extends SeoEditRecord
         $articleSiteId = (int) ($this->record->site_id ?? 0);
         $globalSiteId = SeoAccessControl::globalSiteId();
 
-        if ($globalSiteId !== null && $articleSiteId > 0 && $globalSiteId !== $articleSiteId) {
-            SeoAccessControl::setGlobalSiteId($articleSiteId);
-        }
-
-        ArticleResource::syncGlobalSiteForArticle($this->record);
+        // Global domain = UI context only. Không 404 / không ép đổi domain khi mở record khác domain.
+        $this->record->loadMissing('site');
+        $this->recordDomainDiffersFromGlobal = $globalSiteId !== null
+            && $articleSiteId > 0
+            && $globalSiteId !== $articleSiteId;
 
         $readiness = app(ArticleEditorReadinessService::class)->evaluate($this->record);
         if (! $readiness->isReady) {
@@ -3686,6 +3689,12 @@ class EditArticle extends SeoEditRecord
             'expectedContentHash' => $bodyHash,
             'featuredImageUrl' => $this->featuredImageUrl,
             'supportsProductGallery' => $this->supportsProductGallery(),
+            'productGalleryReady' => $this->supportsProductGallery()
+                ? \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::isReadyOnArticle($this->record)
+                : false,
+            'productGallerySource' => $this->supportsProductGallery()
+                ? \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::sourceOnArticle($this->record)
+                : null,
             'authorUserId' => $this->record->user_id !== null ? (int) $this->record->user_id : null,
             'authorName' => $this->resolveArticleAuthorName(),
             'currentUserId' => auth()->id() !== null ? (int) auth()->id() : null,
@@ -3975,6 +3984,8 @@ class EditArticle extends SeoEditRecord
             'post_type' => SeoProjectTask::normalizePostType($this->articlePostType),
             'virtual_reviews' => [],
             'supports_product_gallery' => $this->supportsProductGallery(),
+            'is_canary_product' => in_array(strtolower(trim((string) $metaMap->get('is_canary', ''))), ['1', 'true', 'yes'], true)
+                || strtolower(trim((string) $metaMap->get('canary_type', ''))) === 'product_gallery',
             'product_category_options' => collect($productCategoryOptions)
                 ->map(static fn (string $label, int $id): array => [
                     'id' => $id,
@@ -4480,6 +4491,7 @@ class EditArticle extends SeoEditRecord
         string $target = 'editor',
         int $loaiSanPhamCategoryArticleId = 0,
         string $loaiSanPhamCustom = '',
+        string $galleryGenerationMode = 'sprite',
     ): array {
         try {
             $result = app(ArticleEditorMediaAiService::class)->generateImage(
@@ -4491,6 +4503,7 @@ class EditArticle extends SeoEditRecord
                 $target,
                 $loaiSanPhamCategoryArticleId,
                 $loaiSanPhamCustom,
+                $galleryGenerationMode,
             );
         } catch (\Throwable $exception) {
             $presented = $exception instanceof PromptRunException

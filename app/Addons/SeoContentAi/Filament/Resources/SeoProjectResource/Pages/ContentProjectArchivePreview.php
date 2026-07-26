@@ -5,14 +5,20 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
-use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectArchive;
 use App\Addons\SeoContentAi\Models\SeoProjectArchiveItem;
+use App\Addons\SeoContentAi\Support\ContentProject\ArchivePreviewArticlePresenter;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Support\RuntimeLogger;
 use Filament\Actions;
+use Filament\Actions\Action;
 use Filament\Resources\Pages\Page;
+use Filament\Support\Enums\MaxWidth;
 use Illuminate\Contracts\Support\Htmlable;
-use Illuminate\Support\Str;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Support\Collection;
+use Illuminate\Support\HtmlString;
+use Throwable;
 
 final class ContentProjectArchivePreview extends Page
 {
@@ -22,11 +28,18 @@ final class ContentProjectArchivePreview extends Page
 
     protected static bool $shouldRegisterNavigation = false;
 
-    public int $archiveId = 0;
+    /**
+     * Route parameter `{archive}` — scalar only; model loaded in mount().
+     * Do not type this as SeoProjectArchive (Livewire would 404 on binding).
+     */
+    public int|string $archive = 0;
 
-    public ?SeoProjectArchive $archive = null;
+    public ?SeoProjectArchive $archiveRecord = null;
 
-    public ?int $selectedItemId = null;
+    public ?string $snapshotLoadError = null;
+
+    /** @var list<array<string, mixed>> */
+    public array $articleRows = [];
 
     public function mount(int|string $archive): void
     {
@@ -34,26 +47,59 @@ final class ContentProjectArchivePreview extends Page
 
         abort_unless(SeoAccessControl::canViewProjectArchives(), 403);
 
-        $this->archiveId = (int) $archive;
-        $this->archive = SeoProjectArchive::query()
-            ->current()
-            ->with([
-                'items' => static fn ($query) => $query->orderBy('position')->orderBy('id'),
-                'items.article.articleMetas',
-                'archivedByUser',
-                'owner',
-                'site',
-                'project',
-            ])
-            ->findOrFail($this->archiveId);
+        $this->archive = (int) $archive;
+        $this->snapshotLoadError = null;
+        $this->articleRows = [];
 
-        $siteId = (int) ($this->archive->site_id ?? 0);
+        try {
+            $this->archiveRecord = SeoProjectArchive::query()
+                ->current()
+                ->with([
+                    'items' => static fn ($query) => $query->orderBy('position')->orderBy('id'),
+                    'archivedByUser',
+                    'owner',
+                    'site',
+                    'project',
+                ])
+                ->findOrFail((int) $this->archive);
+
+            $this->rebuildArticleRows();
+        } catch (ModelNotFoundException $exception) {
+            throw $exception;
+        } catch (Throwable $exception) {
+            RuntimeLogger::report($exception, [
+                'archive_id' => (int) $this->archive,
+                'source_project_id' => null,
+                'endpoint' => 'content-project-archive-preview',
+            ]);
+
+            $this->archiveRecord = SeoProjectArchive::query()
+                ->current()
+                ->find((int) $this->archive);
+
+            $this->snapshotLoadError = __('seo-content-ai::filament.projects.archive_preview_snapshot_error');
+
+            if (! $this->archiveRecord instanceof SeoProjectArchive) {
+                throw $exception;
+            }
+
+            try {
+                $this->archiveRecord->load([
+                    'items' => static fn ($query) => $query->orderBy('position')->orderBy('id'),
+                ]);
+                $this->rebuildArticleRows();
+            } catch (Throwable) {
+                $this->articleRows = [];
+            }
+        }
+
+        $siteId = (int) ($this->archiveRecord->site_id ?? 0);
         abort_unless($siteId > 0 && SeoAccessControl::canAccessSite($siteId), 403);
     }
 
     public function getTitle(): string|Htmlable
     {
-        $name = trim((string) ($this->archive?->project_name ?? ''));
+        $name = trim((string) ($this->archiveRecord?->project_name ?? ''));
 
         return $name !== ''
             ? __('seo-content-ai::filament.projects.archive_preview_heading').': '.$name
@@ -71,33 +117,59 @@ final class ContentProjectArchivePreview extends Page
         ];
     }
 
-    public function openItem(int $itemId): void
+    public function viewArchiveItemAction(): Action
     {
-        if ($itemId <= 0) {
-            return;
-        }
+        return Action::make('viewArchiveItem')
+            ->label(__('seo-content-ai::filament.projects.archive_preview_item'))
+            ->slideOver()
+            ->modalWidth(MaxWidth::FourExtraLarge)
+            ->stickyModalHeader()
+            ->modalSubmitAction(false)
+            ->modalCancelActionLabel(__('seo-content-ai::filament.projects.archive_preview_close'))
+            ->extraModalWindowAttributes([
+                'class' => 'fi-archive-preview-item-slideover',
+            ])
+            ->modalHeading(function (array $arguments): HtmlString {
+                $row = $this->findRow((int) ($arguments['itemId'] ?? 0));
+                $title = trim((string) ($row['title'] ?? ''));
+                $badge = e(__('seo-content-ai::filament.projects.archive_preview_badge_archived'));
 
-        $exists = $this->archive?->items?->contains(
-            static fn (SeoProjectArchiveItem $item): bool => (int) $item->getKey() === $itemId,
-        );
+                return new HtmlString(
+                    '<div class="flex flex-col gap-2 pe-6">'
+                    .'<span class="inline-flex w-fit items-center rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700 dark:bg-gray-800 dark:text-gray-200">'
+                    .$badge
+                    .'</span>'
+                    .'<span class="text-base font-semibold text-gray-950 dark:text-white">'
+                    .e($title !== '' ? $title : __('seo-content-ai::filament.projects.archive_preview_no_data'))
+                    .'</span>'
+                    .'</div>'
+                );
+            })
+            ->extraModalFooterActions(function (Action $action): array {
+                $arguments = $action->getArguments();
+                $row = $this->findRow((int) ($arguments['itemId'] ?? 0));
+                $editUrl = is_string($row['edit_url'] ?? null) ? $row['edit_url'] : null;
 
-        $this->selectedItemId = $exists ? $itemId : null;
-    }
+                if ($editUrl === null || $editUrl === '' || ! ($row['can_edit'] ?? false)) {
+                    return [];
+                }
 
-    public function closeItem(): void
-    {
-        $this->selectedItemId = null;
-    }
+                return [
+                    Action::make('editArticle')
+                        ->label(__('seo-content-ai::filament.projects.archive_preview_edit_article'))
+                        ->icon('heroicon-o-pencil-square')
+                        ->color('primary')
+                        ->url($editUrl, shouldOpenInNewTab: true),
+                ];
+            })
+            ->modalContent(function (array $arguments) {
+                $row = $this->findRow((int) ($arguments['itemId'] ?? 0));
 
-    public function getSelectedItemProperty(): ?SeoProjectArchiveItem
-    {
-        if ($this->selectedItemId === null || $this->archive === null) {
-            return null;
-        }
-
-        $item = $this->archive->items->firstWhere('id', $this->selectedItemId);
-
-        return $item instanceof SeoProjectArchiveItem ? $item : null;
+                return view(
+                    'seo-content-ai::filament.resources.seo-project-resource.partials.archive-preview-item-slideover',
+                    ['row' => $row],
+                );
+            });
     }
 
     /**
@@ -105,159 +177,61 @@ final class ContentProjectArchivePreview extends Page
      */
     public function getHeaderSummary(): array
     {
-        if (! $this->archive instanceof SeoProjectArchive) {
+        if (! $this->archiveRecord instanceof SeoProjectArchive) {
             return [];
         }
 
-        $snapshot = is_array($this->archive->summary_snapshot) ? $this->archive->summary_snapshot : [];
+        $snapshot = is_array($this->archiveRecord->summary_snapshot) ? $this->archiveRecord->summary_snapshot : [];
 
         return [
-            'project_name' => (string) ($this->archive->project_name ?: ($snapshot['project_name'] ?? '')),
-            'domain' => trim((string) ($this->archive->site?->domain ?? ($snapshot['domain_name'] ?? ''))),
-            'owner' => trim((string) ($this->archive->owner?->display_name ?? $this->archive->owner?->name ?? ($snapshot['owner_name'] ?? ''))),
-            'month' => (int) ($this->archive->project_month ?? ($snapshot['month'] ?? 0)),
-            'year' => (int) ($this->archive->project_year ?? ($snapshot['year'] ?? 0)),
-            'total_articles' => (int) ($this->archive->total_articles ?? $this->archive->articles_count ?? ($snapshot['total_articles'] ?? 0)),
-            'completed_articles' => (int) ($this->archive->completed_articles ?? ($snapshot['completed_articles'] ?? 0)),
-            'approved_articles' => (int) ($this->archive->approved_articles ?? ($snapshot['approved_articles'] ?? 0)),
-            'synced_articles' => (int) ($this->archive->synced_articles ?? ($snapshot['synced_articles'] ?? 0)),
-            'average_seo_score' => $this->archive->average_seo_score ?? ($snapshot['average_seo_score'] ?? null),
-            'archived_at' => $this->archive->archived_at,
-            'archived_by' => trim((string) ($this->archive->archivedByUser?->display_name ?? $this->archive->archivedByUser?->name ?? '')),
-            'note' => trim((string) ($this->archive->note ?? '')),
+            'project_name' => (string) ($this->archiveRecord->project_name ?: ($snapshot['project_name'] ?? '')),
+            'domain' => trim((string) ($this->archiveRecord->site?->domain ?? ($snapshot['domain_name'] ?? ''))),
+            'owner' => trim((string) ($this->archiveRecord->owner?->display_name ?? $this->archiveRecord->owner?->name ?? ($snapshot['owner_name'] ?? ''))),
+            'month' => (int) ($this->archiveRecord->project_month ?? ($snapshot['month'] ?? 0)),
+            'year' => (int) ($this->archiveRecord->project_year ?? ($snapshot['year'] ?? 0)),
+            'total_articles' => (int) ($this->archiveRecord->total_articles ?? $this->archiveRecord->articles_count ?? ($snapshot['total_articles'] ?? 0)),
+            'completed_articles' => (int) ($this->archiveRecord->completed_articles ?? ($snapshot['completed_articles'] ?? 0)),
+            'synced_articles' => (int) ($this->archiveRecord->synced_articles ?? ($snapshot['synced_articles'] ?? 0)),
+            'average_seo_score' => $this->archiveRecord->average_seo_score ?? ($snapshot['average_seo_score'] ?? null),
+            'archived_at' => $this->archiveRecord->archived_at,
+            'archived_by' => trim((string) ($this->archiveRecord->archivedByUser?->display_name ?? $this->archiveRecord->archivedByUser?->name ?? '')),
+            'note' => trim((string) ($this->archiveRecord->note ?? '')),
         ];
     }
 
     /**
      * @return array<string, mixed>
      */
-    public function buildItemDetails(SeoProjectArchiveItem $item): array
+    private function findRow(int $itemId): array
     {
-        $snapshot = is_array($item->article_snapshot) ? $item->article_snapshot : [];
-        $article = $item->article;
-
-        $title = $this->firstNonEmpty([
-            $snapshot['title'] ?? null,
-            $article?->title,
-        ]);
-        $slug = $this->firstNonEmpty([
-            $snapshot['slug'] ?? null,
-            $article?->slug,
-        ]);
-        $keyword = $this->firstNonEmpty([
-            $snapshot['primary_keyword'] ?? null,
-            $this->articleMeta($article, 'seo_focus_keyword'),
-        ]);
-        $metaTitle = $this->firstNonEmpty([
-            $snapshot['meta_title'] ?? null,
-            $this->articleMeta($article, 'seo_title'),
-        ]);
-        $metaDescription = $this->firstNonEmpty([
-            $snapshot['meta_description'] ?? null,
-            $this->articleMeta($article, 'seo_meta_description'),
-        ]);
-        $outlineMeta = $this->firstNonEmpty([
-            $this->articleMeta($article, 'outline_meta'),
-            $this->articleMeta($article, 'seo_outline'),
-        ]);
-
-        $bodyExcerpt = $this->buildBodyExcerpt($article);
-        $imageCount = (int) ($snapshot['image_count'] ?? 0);
-        $seoScore = $snapshot['seo_score'] ?? $article?->seo_score;
-        $syncStatus = $this->firstNonEmpty([
-            $snapshot['sync_status'] ?? null,
-            $article?->wp_sync_status,
-        ]);
-        $wpPostId = $this->firstNonEmpty([
-            $snapshot['wordpress_post_id'] ?? null,
-            $article?->wp_post_id,
-        ]);
-        $wpUrl = $this->firstNonEmpty([
-            $snapshot['wordpress_url'] ?? null,
-            $this->articleMeta($article, 'wp_permalink'),
-        ]);
-        $wpSyncError = $this->firstNonEmpty([
-            $snapshot['wp_sync_error'] ?? null,
-        ]);
-
-        return [
-            'item_id' => (int) $item->getKey(),
-            'article_id' => (int) ($item->article_id ?? ($snapshot['article_id'] ?? 0)),
-            'title' => is_string($title) ? $title : '',
-            'slug' => is_string($slug) ? $slug : '',
-            'keyword' => is_string($keyword) ? $keyword : '',
-            'meta_title' => is_string($metaTitle) ? $metaTitle : '',
-            'meta_description' => is_string($metaDescription) ? $metaDescription : '',
-            'outline_meta' => is_string($outlineMeta) ? $outlineMeta : '',
-            'body_excerpt' => $bodyExcerpt,
-            'image_count' => $imageCount,
-            'seo_score' => $seoScore !== null ? (float) $seoScore : null,
-            'task_status' => (string) ($snapshot['status'] ?? $item->task?->status ?? ''),
-            'approved_status' => (string) ($snapshot['approved_status'] ?? $article?->review_status ?? ''),
-            'sync_status' => is_string($syncStatus) ? $syncStatus : '',
-            'wordpress_post_id' => $wpPostId !== null ? (int) $wpPostId : null,
-            'wordpress_url' => is_string($wpUrl) ? $wpUrl : '',
-            'wp_sync_error' => is_string($wpSyncError) ? $wpSyncError : '',
-            'created_at' => SeoProjectResource::formatTaskTimestamp($snapshot['created_at'] ?? $article?->created_at),
-            'updated_at' => SeoProjectResource::formatTaskTimestamp($snapshot['updated_at'] ?? $article?->updated_at),
-            'completed_at' => SeoProjectResource::formatTaskTimestamp($snapshot['completed_at'] ?? $item->task?->completed_at),
-            'last_saved_at' => SeoProjectResource::formatTaskTimestamp($snapshot['last_saved_at'] ?? null),
-            'last_synced_at' => SeoProjectResource::formatTaskTimestamp($snapshot['last_synced_at'] ?? $article?->last_synced_at),
-            'article_exists' => $article instanceof SeoArticle,
-        ];
-    }
-
-    private function buildBodyExcerpt(?SeoArticle $article): string
-    {
-        if (! $article instanceof SeoArticle) {
-            return '';
+        if ($itemId <= 0) {
+            return [];
         }
 
-        $text = trim(strip_tags((string) ($article->body ?? '')));
-        $text = preg_replace('/\s+/u', ' ', $text) ?? '';
-
-        if ($text === '') {
-            return '';
-        }
-
-        return Str::limit($text, 500);
-    }
-
-    private function articleMeta(?SeoArticle $article, string $key): ?string
-    {
-        if (! $article instanceof SeoArticle) {
-            return null;
-        }
-
-        $article->loadMissing('articleMetas');
-        $value = $article->articleMetas->firstWhere('meta_key', $key)?->meta_value;
-
-        if (! is_string($value)) {
-            return null;
-        }
-
-        $trimmed = trim($value);
-
-        return $trimmed !== '' ? $trimmed : null;
-    }
-
-    /**
-     * @param  list<mixed>  $values
-     */
-    private function firstNonEmpty(array $values): mixed
-    {
-        foreach ($values as $value) {
-            if ($value === null) {
-                continue;
+        foreach ($this->articleRows as $row) {
+            if ((int) ($row['item_id'] ?? 0) === $itemId) {
+                return $row;
             }
-
-            if (is_string($value) && trim($value) === '') {
-                continue;
-            }
-
-            return $value;
         }
 
-        return null;
+        return [];
+    }
+
+    private function rebuildArticleRows(): void
+    {
+        if (! $this->archiveRecord instanceof SeoProjectArchive) {
+            $this->articleRows = [];
+
+            return;
+        }
+
+        /** @var Collection<int, SeoProjectArchiveItem> $items */
+        $items = $this->archiveRecord->items instanceof Collection
+            ? $this->archiveRecord->items
+            : collect($this->archiveRecord->items ?? []);
+
+        $presenter = app(ArchivePreviewArticlePresenter::class);
+        $articlesById = $presenter->loadArticlesById($items);
+        $this->articleRows = $presenter->presentItems($items, $articlesById);
     }
 }

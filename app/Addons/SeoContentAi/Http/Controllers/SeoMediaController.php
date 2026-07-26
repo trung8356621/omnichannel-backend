@@ -509,12 +509,17 @@ class SeoMediaController extends Controller
                 && is_array($result['saved'] ?? null)
                 && $result['saved'] !== []
             ) {
-                $postProcessing = app(PromptPostProcessingApplyService::class);
-                $galleryItems = $postProcessing->finalizeProductGalleryManualSplit(
-                    $article,
-                    $originalMedia instanceof SeoMedia ? $originalMedia : null,
-                    $result['saved'],
-                );
+                if ($originalMedia instanceof SeoMedia) {
+                    $galleryItems = app(\App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryPipelineService::class)
+                        ->applyManualSplitRetry($article, $originalMedia, $result['saved']);
+                } else {
+                    $postProcessing = app(PromptPostProcessingApplyService::class);
+                    $galleryItems = $postProcessing->finalizeProductGalleryManualSplit(
+                        $article,
+                        null,
+                        $result['saved'],
+                    );
+                }
                 $result['product_gallery_items'] = $galleryItems;
             }
         } catch (\InvalidArgumentException $e) {
@@ -790,7 +795,29 @@ class SeoMediaController extends Controller
             'created_at' => $media->created_at?->toIso8601String(),
             'is_placeholder' => $status === 'processing' || str_contains($url, 'placeholder-loading'),
             'gallery_urls' => $this->resolvePostProcessingGalleryUrls($media),
+            'product_gallery' => $this->resolveProductGalleryMode1Payload($media),
+            'media_artifact_role' => \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::artifactRole($media),
         ];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function resolveProductGalleryMode1Payload(SeoMedia $media): ?array
+    {
+        $variables = is_array($media->prompt_variables) ? $media->prompt_variables : [];
+        $state = \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::readFromVariables($variables);
+        if (
+            ($state['sprite_validation'] ?? null) === null
+            && ! ($state['gallery_ready'] ?? false)
+            && ($state['gallery_source'] ?? '') === \App\Addons\SeoContentAi\Support\ProductGallery\ProductGallerySource::Pending->value
+            && ($state['fallback_snapshot']['urls'] ?? []) === []
+            && ($state['child_media_ids'] ?? []) === []
+        ) {
+            return null;
+        }
+
+        return $state;
     }
 
     /**

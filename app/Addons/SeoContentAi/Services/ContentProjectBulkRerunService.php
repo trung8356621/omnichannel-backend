@@ -5,13 +5,12 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Enums\ContentProjectStepRerunMode;
-use App\Addons\SeoContentAi\Enums\SeoProjectRunItemStatus;
 use App\Addons\SeoContentAi\Enums\WorkflowExecutionRole;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
-use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoTask;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectActiveExecutionResolver;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectStepRerunService;
 use App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionRoleResolver;
 use App\Support\RuntimeLogger;
@@ -350,15 +349,9 @@ final class ContentProjectBulkRerunService
                 continue;
             }
 
-            $activeStep = SeoProjectRunItem::query()
-                ->where('run_id', (int) $run->id)
-                ->where('task_id', $taskId)
-                ->whereIn('status', [
-                    SeoProjectRunItemStatus::Pending->value,
-                    SeoProjectRunItemStatus::Processing->value,
-                ])
-                ->exists();
-            if ($activeStep) {
+            $active = app(ContentProjectActiveExecutionResolver::class)
+                ->findActiveForTask($run, $taskId);
+            if ($active !== null) {
                 $invalid[] = [
                     'task_id' => $taskId,
                     'label' => $label,

@@ -582,7 +582,7 @@ final class TaskWorkflowTestRunner
                         'status' => 'skipped',
                         'prompt_id' => $prompt->id,
                         'prompt_name' => (string) $prompt->name,
-                        'message' => 'Bỏ qua prompt product gallery vì album hình ảnh sản phẩm đã có ảnh.',
+                        'message' => 'Bỏ qua prompt product gallery vì gallery_ready đã true.',
                     ];
                 }
             }
@@ -820,6 +820,10 @@ final class TaskWorkflowTestRunner
                         'persists_as_outline' => $outlinePersistedMarkdown !== '',
                         'result_id' => $hookResult['prompt_result_id'],
                         'duration_ms' => $hookResult['duration_ms'],
+                        'actual_word_count' => $hookResult['actual_word_count'] ?? null,
+                        'minimum_acceptable_words' => $hookResult['minimum_acceptable_words'] ?? null,
+                        'target_article_length' => $hookResult['target_article_length'] ?? null,
+                        'length_validation_result' => $hookResult['length_validation_result'] ?? null,
                         'message' => 'Prompt Hook completed ('.$hookResult['hook_key'].'@'.$hookResult['hook_version'].').',
                     ];
                 }
@@ -870,7 +874,7 @@ final class TaskWorkflowTestRunner
                 ) {
                     $workflowArticle = $this->resolveWorkflowArticle($context, $state);
                     if ($workflowArticle instanceof SeoArticle) {
-                        $this->persistProductGalleryUrlsFromOutput($workflowArticle, $output);
+                        $this->runProductGalleryMode1FromWorkflowOutput($workflowArticle, $prompt, $output);
                     }
                 }
 
@@ -1258,9 +1262,15 @@ final class TaskWorkflowTestRunner
             $galleryImagesCount = $this->appendGalleryImagesFromActionEdges($article, $nodeId, $edges, $state);
             if ($galleryImagesCount > 0) {
                 $messages[] = sprintf('Đã thêm %d ảnh vào product gallery.', $galleryImagesCount);
+            }
+        }
 
-                // Rải ảnh gallery vào các section còn trống sau khi lưu thành công
-                $article->unsetRelation('articleMetas');
+        if ($this->isProductWorkflowContext($context, $state)) {
+            $article->unsetRelation('articleMetas');
+            $galleryReady = \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::isReadyOnArticle($article)
+                || $this->articleMediaLocal->resolveProductAlbum($article) !== [];
+
+            if ($galleryReady) {
                 $mediaService = $this->articleMediaLocal;
                 $fixedMediaCount = $this->quickFixProductGalleryMedia($article, $context, $mediaService);
                 if ($fixedMediaCount > 0) {
@@ -1276,9 +1286,14 @@ final class TaskWorkflowTestRunner
                         $messages[] = sprintf('Đã rải %d ảnh vào các section.', $distributedCount);
                     }
                 }
+            } elseif (! $shouldAppendProductGallery) {
+                $article->unsetRelation('articleMetas');
+                $stillPending = ! \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::isReadyOnArticle($article)
+                    && $this->articleMediaLocal->resolveProductAlbum($article) === [];
+                $messages[] = $stillPending
+                    ? 'Không có ảnh sản phẩm khả dụng để tạo gallery.'
+                    : 'Giữ nguyên album hình ảnh sản phẩm đã có.';
             }
-        } elseif ($this->isProductWorkflowContext($context, $state)) {
-            $messages[] = 'Giữ nguyên album hình ảnh sản phẩm đã có.';
         }
 
         $savedKeys = $this->persistWorkflowMeta($article, $state);
@@ -2090,7 +2105,12 @@ final class TaskWorkflowTestRunner
 
         $article->unsetRelation('articleMetas');
 
-        return $this->articleMediaLocal->resolveProductAlbum($article) === [];
+        // Mode 1: skip only when gallery already ready (AI children or original fallback).
+        if (\App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::isReadyOnArticle($article)) {
+            return false;
+        }
+
+        return true;
     }
 
     private function shouldReuseExistingAiOutput(TaskTestContext $context): bool
@@ -2277,11 +2297,22 @@ final class TaskWorkflowTestRunner
      */
     private function persistProductGalleryUrlsFromOutput(SeoArticle $article, string $output): int
     {
+        // Mode 1 pipeline owns album when gallery_ready already set.
+        if (\App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::isReadyOnArticle($article)) {
+            return 0;
+        }
+
         $added = 0;
 
         foreach ($this->extractGalleryImageUrls($output) as $url) {
             $media = $this->resolveSeoMediaFromUrl($url);
             if (! $media instanceof SeoMedia) {
+                continue;
+            }
+
+            // Never auto-insert generated_sprite as gallery when Mode 1 will/did handle fallback.
+            $role = \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::artifactRole($media);
+            if ($role === \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::ROLE_GENERATED_SPRITE) {
                 continue;
             }
 
@@ -2291,6 +2322,57 @@ final class TaskWorkflowTestRunner
         }
 
         return $added;
+    }
+
+    private function runProductGalleryMode1FromWorkflowOutput(
+        SeoArticle $article,
+        SeoPrompt $prompt,
+        string $output,
+    ): void {
+        $sprite = $this->resolveSeoMediaFromOutput($output);
+        if (! $sprite instanceof SeoMedia) {
+            return;
+        }
+
+        $this->attachMediaToArticleScope($sprite, $article);
+
+        // Mark as product-gallery sprite so Mode 1 ownership metadata is consistent.
+        if (trim((string) ($sprite->editor_block_id ?? '')) === '') {
+            $sprite->update([
+                'editor_block_id' => ArticleEditorMediaAiService::PRODUCT_GALLERY_EDITOR_BLOCK_ID,
+            ]);
+            $sprite->refresh();
+        }
+
+        $variables = is_array($sprite->prompt_variables) ? $sprite->prompt_variables : [];
+        $state = \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::readFromVariables($variables);
+        if (($state['fallback_snapshot']['urls'] ?? []) === [] && ($state['fallback_snapshot']['media_ids'] ?? []) === []) {
+            $album = app(ArticleMediaLocalService::class)->resolveProductAlbum($article);
+            $variables = \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::mergeIntoVariables($variables, [
+                'gallery_ready' => false,
+                'gallery_source' => \App\Addons\SeoContentAi\Support\ProductGallery\ProductGallerySource::Pending->value,
+                'fallback_snapshot' => \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::buildFallbackSnapshot(
+                    $album,
+                    \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::ORIGIN_ALBUM_BEFORE_GENERATE,
+                ),
+            ]);
+            $sprite->update(['prompt_variables' => $variables]);
+            $sprite->refresh();
+        }
+
+        try {
+            app(\App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryPipelineService::class)
+                ->runAfterSpriteSaved($sprite, $prompt, $article);
+        } catch (\Throwable $exception) {
+            logger()->warning(sprintf(
+                'Workflow product gallery Mode 1 failed [article_id=%d, media_id=%d]: %s',
+                (int) $article->id,
+                (int) $sprite->id,
+                $exception->getMessage(),
+            ));
+            // Fallback: keep originals only; never append sprite as gallery.
+            $this->persistProductGalleryUrlsFromOutput($article, '');
+        }
     }
 
     /**

@@ -6,10 +6,12 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectArticleRowStatus;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectExecutionStatus;
 use Illuminate\Support\Carbon;
 
 /**
  * Row status semantic — không dùng updated_at chung.
+ * Active chỉ thắng khi SoT / busy step xác nhận execution thực sự active.
  */
 final class ContentProjectArticleRowStatusResolver
 {
@@ -19,18 +21,30 @@ final class ContentProjectArticleRowStatusResolver
     public function resolve(array $item, ?SeoArticle $article = null): ContentProjectArticleRowStatus
     {
         $steps = is_array($item['workflow_steps'] ?? null) ? $item['workflow_steps'] : [];
+        $activeMeta = is_array($item['active_execution'] ?? null) ? $item['active_execution'] : null;
+        $hasCanonicalActive = $activeMeta !== null
+            && ContentProjectExecutionStatus::isActive((string) ($activeMeta['status'] ?? ''))
+            && empty($activeMeta['finished_at']);
+
         $busy = [];
         foreach ($steps as $step) {
             if (! is_array($step)) {
                 continue;
             }
-            if ((bool) ($step['busy'] ?? false)) {
+            $stepStatus = strtolower(trim((string) ($step['status'] ?? '')));
+            $stepBusy = (bool) ($step['busy'] ?? false);
+            // busy chỉ tin khi status step cũng active (tránh false busy từ query lệch).
+            if ($stepBusy && ($stepStatus === '' || ContentProjectExecutionStatus::isActive($stepStatus))) {
                 $busy[] = $step;
             }
         }
 
-        if ($busy !== []) {
-            $label = trim((string) ($busy[0]['label'] ?? 'Bước'));
+        if ($hasCanonicalActive || $busy !== []) {
+            $label = trim((string) (
+                ($busy[0]['label'] ?? null)
+                ?? ($activeMeta['node_id'] ?? null)
+                ?? 'Bước'
+            ));
 
             return new ContentProjectArticleRowStatus(
                 code: ContentProjectArticleRowStatus::CODE_RUNNING,

@@ -381,12 +381,14 @@ flowchart LR
 | Thành phần | Vai trò |
 |------------|---------|
 | `Alpine.store('seoRunQueue')` | `isRunning`, `stopRequested`, `currentTaskId` |
-| `Alpine.data('seoProjectRunQueue')` | Queue `taskIds`, gọi `runItemQueued` / `completeRunQueue` / `retryWorkflowStep` / `cancelWorkflowStep` |
-| Livewire | `ViewSeoProjectRun` page methods |
+| `Alpine.data('seoProjectRunQueue')` | Queue `taskIds`, bulk Article actions, generic step modal |
+| Livewire | `ViewSeoProjectRun`: `retryWorkflowStep` (→ StepRerun), `previewBulkRerunByAction` / `bulkRerunByAction`, `previewBulkGenericStep` / `bulkRerunGenericStep`, `cancelWorkflowStep` |
+| Bulk Article | `regenerate_outline` / `regenerate_article` / `regenerate_outline_and_article` + confirm modal |
+| Generic step modal | `genericStepOpen` — **không** `window.prompt`; preview valid/invalid rồi serial rerun |
 | `cancelWorkflowStep` | Chỉ xóa `[data-run-busy-step]` + reload khi `success && (cancelled>0 \|\| already_idle)`; không `applyItemFailure` hàng chính |
-| Busy badge | Blade `data-run-busy-step` — từ `workflow_steps[].busy` (server) |
+| Busy badge / row status | Blade `data-run-busy-step` + `row_status_*` từ `ContentProjectArticleRowStatusResolver` |
 
-**Không** gọi REST — orchestration workflow qua Livewire. Không `$refresh` khi `seoRunQueue.isRunning`; `init()` bỏ qua nếu queue đang chạy (tránh re-init mất hàng). Chi tiết: [MAP_SEO_PROJECTS.md](MAP_SEO_PROJECTS.md).
+**Không** gọi REST — orchestration workflow qua Livewire. Không `$refresh` khi `seoRunQueue.isRunning`; `init()` bỏ qua nếu queue đang chạy (tránh re-init mất hàng). Chi tiết Phase 2.0/2.1: [MAP_SEO_PROJECTS.md](MAP_SEO_PROJECTS.md).
 
 ---
 

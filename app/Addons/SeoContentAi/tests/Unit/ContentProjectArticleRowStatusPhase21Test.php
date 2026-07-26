@@ -60,4 +60,19 @@ final class ContentProjectArticleRowStatusPhase21Test extends TestCase
         self::assertSame(ContentProjectArticleRowStatus::CODE_MANUAL_EDIT, $status->code);
         self::assertSame('Đã sửa thủ công', $status->label);
     }
+
+    public function test_failed_row_not_running_when_active_execution_absent(): void
+    {
+        $resolver = new ContentProjectArticleRowStatusResolver;
+        $status = $resolver->resolve([
+            'status' => 'failed',
+            'error_message' => 'AI timeout',
+            'active_execution' => null,
+            'workflow_steps' => [
+                ['label' => 'Dàn ý', 'busy' => false, 'status' => 'failed'],
+            ],
+        ]);
+        self::assertSame(ContentProjectArticleRowStatus::CODE_FAILED, $status->code);
+        self::assertNotSame(ContentProjectArticleRowStatus::CODE_RUNNING, $status->code);
+    }
 }
