@@ -15,7 +15,7 @@ use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Models\ApiConnection;
 use Illuminate\Support\Facades\Http;
 
-final class PromptRunnerService
+class PromptRunnerService
 {
     public function __construct(
         private readonly AiExecutionService $aiExecution,

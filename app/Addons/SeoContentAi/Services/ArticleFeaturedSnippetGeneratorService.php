@@ -93,7 +93,7 @@ final class ArticleFeaturedSnippetGeneratorService
             );
         }
 
-        $prompt = SeoPrompt::query()->where('is_active', true)->find($promptId);
+        $prompt = SeoPrompt::query()->find($promptId);
         if ($prompt === null) {
             throw new \InvalidArgumentException(
                 'Prompt Featured Snippet không tồn tại hoặc đã tắt.',

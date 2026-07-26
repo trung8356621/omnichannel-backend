@@ -175,41 +175,53 @@
             </div>
 
             <div
-                class="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-sm dark:border-primary-500/30 dark:bg-primary-500/10"
+                class="mb-3 flex flex-wrap items-start gap-3 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-sm dark:border-primary-500/30 dark:bg-primary-500/10"
                 x-cloak
                 x-show="selectedTaskIds.length > 0"
             >
-                <span class="font-medium text-primary-800 dark:text-primary-200" x-text="bulkSelectedLabel()"></span>
-                <div class="relative" x-data="{ open: false }">
+                <span class="pt-1.5 font-medium text-primary-800 dark:text-primary-200" x-text="bulkSelectedLabel()"></span>
+                <div class="flex min-w-0 flex-1 flex-wrap gap-2">
                     <button
                         type="button"
-                        class="inline-flex items-center gap-1 rounded-md bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 ring-1 ring-gray-300 hover:bg-gray-50 dark:bg-gray-900 dark:text-gray-200 dark:ring-gray-600"
-                        @click="open = !open"
+                        class="inline-flex flex-col items-start rounded-md bg-white px-2.5 py-1.5 text-left text-xs font-semibold text-gray-700 ring-1 ring-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-900 dark:text-gray-200 dark:ring-gray-600"
+                        x-bind:disabled="bulkBusy || !canBulkAction('regenerate_outline')"
+                        x-on:click="openBulkRerunPreview('regenerate_outline')"
+                        x-bind:title="!canBulkAction('regenerate_outline') ? 'Workflow thiếu role outline' : ''"
                     >
-                        <span x-text="config.labels?.bulkPickPrompt ?? 'Chọn prompt'"></span>
-                        <span x-text="selectedNodeIds.length ? '(' + selectedNodeIds.length + ')' : ''"></span>
+                        <span x-text="config.labels?.bulkActionOutline ?? 'Tạo lại dàn ý'"></span>
+                        <span class="mt-0.5 font-normal text-[11px] text-gray-500 dark:text-gray-400" x-text="config.labels?.bulkActionOutlineHelp ?? 'Chạy lại node outline. Không chạy lại bài viết.'"></span>
                     </button>
-                    <div
-                        x-show="open"
-                        x-cloak
-                        @click.outside="open = false"
-                        class="absolute left-0 z-40 mt-1 max-h-64 w-64 overflow-auto rounded-md border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-900"
+                    <button
+                        type="button"
+                        class="inline-flex flex-col items-start rounded-md bg-white px-2.5 py-1.5 text-left text-xs font-semibold text-gray-700 ring-1 ring-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-900 dark:text-gray-200 dark:ring-gray-600"
+                        x-bind:disabled="bulkBusy || !canBulkAction('regenerate_article')"
+                        x-on:click="openBulkRerunPreview('regenerate_article')"
+                        x-bind:title="!canBulkAction('regenerate_article') ? 'Workflow thiếu role viết bài' : ''"
                     >
-                        <template x-for="step in (config.workflowSteps || [])" :key="step.node_id">
-                            <label class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-white/5">
-                                <input type="checkbox" class="rounded border-gray-300 text-primary-600" :value="step.node_id" x-model="selectedNodeIds">
-                                <span x-text="step.label"></span>
-                            </label>
-                        </template>
-                    </div>
+                        <span x-text="config.labels?.bulkActionArticle ?? 'Tạo lại bài từ dàn ý'"></span>
+                        <span class="mt-0.5 font-normal text-[11px] text-gray-500 dark:text-gray-400" x-text="config.labels?.bulkActionArticleHelp ?? 'Dùng dàn ý hiện tại, chỉ chạy node viết bài.'"></span>
+                    </button>
+                    <button
+                        type="button"
+                        class="inline-flex flex-col items-start rounded-md bg-white px-2.5 py-1.5 text-left text-xs font-semibold text-gray-700 ring-1 ring-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-900 dark:text-gray-200 dark:ring-gray-600"
+                        x-bind:disabled="bulkBusy || !canBulkAction('regenerate_outline_and_article')"
+                        x-on:click="openBulkRerunPreview('regenerate_outline_and_article')"
+                        x-bind:title="!canBulkAction('regenerate_outline_and_article') ? 'Workflow thiếu role outline hoặc viết bài' : ''"
+                    >
+                        <span x-text="config.labels?.bulkActionOutlineAndArticle ?? 'Tạo lại dàn ý và bài viết'"></span>
+                        <span class="mt-0.5 font-normal text-[11px] text-gray-500 dark:text-gray-400" x-text="config.labels?.bulkActionOutlineAndArticleHelp ?? 'Tạo outline mới rồi viết bài từ artifact đó.'"></span>
+                    </button>
+                    <button
+                        type="button"
+                        class="inline-flex flex-col items-start rounded-md bg-white px-2.5 py-1.5 text-left text-xs font-semibold text-gray-700 ring-1 ring-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-900 dark:text-gray-200 dark:ring-gray-600"
+                        x-bind:disabled="bulkBusy || !(config.genericPickerSteps || []).length"
+                        x-on:click="openGenericStepPicker()"
+                        x-bind:title="(config.genericPickerSteps || []).length ? 'Chọn bước khác từ workflow' : 'Không có bước generic'"
+                    >
+                        <span x-text="config.labels?.bulkActionGenericStep ?? 'Chạy lại bước...'"></span>
+                        <span class="mt-0.5 font-normal text-[11px] text-gray-500 dark:text-gray-400">Chỉ bước này, không chạy bước sau</span>
+                    </button>
                 </div>
-                <button
-                    type="button"
-                    class="inline-flex items-center rounded-md bg-primary-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-primary-500 disabled:opacity-50"
-                    x-bind:disabled="selectedNodeIds.length === 0 || bulkBusy"
-                    x-on:click="openBulkConfirm()"
-                    x-text="config.labels?.bulkExecute ?? 'Thực hiện'"
-                ></button>
             </div>
 
             <div class="seo-run-items-wrap overflow-visible">
@@ -332,7 +344,26 @@
                                     </div>
                                 </td>
                                 <td class="px-3 py-3" data-run-status>
-                                    @if ($itemStatus === 'success')
+                                    @php
+                                        $rowLabel = (string) ($item['row_status_label'] ?? '');
+                                        $rowCode = (string) ($item['row_status_code'] ?? '');
+                                        $rowTooltip = (string) ($item['row_status_tooltip'] ?? '');
+                                    @endphp
+                                    @if ($rowLabel !== '')
+                                        <span
+                                            class="inline-flex rounded-md px-2 py-0.5 text-xs font-medium
+                                                {{ $rowCode === 'running' ? 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400' : '' }}
+                                                {{ $rowCode === 'failed' ? 'bg-danger-50 text-danger-700 dark:bg-danger-500/10 dark:text-danger-400' : '' }}
+                                                {{ $rowCode === 'completed' ? 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400' : '' }}
+                                                {{ $rowCode === 'manual_edit' ? 'bg-info-50 text-info-700 dark:bg-info-500/10 dark:text-info-400' : '' }}
+                                                {{ $rowCode === 'ignored_stale' ? 'bg-amber-50 text-amber-800 dark:bg-amber-500/10 dark:text-amber-200' : '' }}
+                                                {{ in_array($rowCode, ['pending', ''], true) ? 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400' : '' }}
+                                            "
+                                            @if ($rowTooltip !== '') title="{{ $rowTooltip }}" @endif
+                                        >
+                                            {{ $rowLabel }}
+                                        </span>
+                                    @elseif ($itemStatus === 'success')
                                         <span class="inline-flex rounded-md bg-success-50 px-2 py-0.5 text-xs font-medium text-success-700 dark:bg-success-500/10 dark:text-success-400">
                                             OK
                                         </span>
@@ -372,7 +403,7 @@
                                         @endforeach
                                 </td>
                                 <td class="px-3 py-3 text-gray-600 dark:text-gray-300">
-                                    <div title="{{ $item['last_saved_source_label'] ?? '' }}">
+                                    <div title="{{ $item['last_saved_tooltip'] ?? ($item['last_saved_source_label'] ?? '') }}">
                                         <div>{{ $item['last_saved_display'] ?? '—' }}</div>
                                         @if (! empty($item['last_saved_source_label']))
                                             <div class="text-[11px] text-gray-400">{{ $item['last_saved_source_label'] }}</div>
@@ -593,6 +624,109 @@
             </div>
         </x-filament::section>
 
+        {{-- Generic step picker modal (Phase 2.1 — no browser prompt) --}}
+        <div
+            x-show="genericStepOpen"
+            x-cloak
+            x-transition.opacity.duration.150ms
+            class="fixed inset-0 z-[210] flex items-center justify-center p-4 sm:p-6"
+            style="display: none;"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="seo-generic-step-title"
+        >
+            <div
+                class="absolute inset-0 bg-gray-950/60 dark:bg-gray-950/75"
+                x-on:click="closeGenericStepPicker()"
+            ></div>
+            <div
+                class="relative z-10 w-full max-w-lg overflow-hidden rounded-xl bg-white shadow-xl ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10"
+                x-on:click.stop
+                x-on:keydown.escape.window="closeGenericStepPicker()"
+            >
+                <div class="border-b border-gray-200 px-6 py-4 dark:border-white/10">
+                    <h3 id="seo-generic-step-title" class="text-base font-semibold text-gray-950 dark:text-white">
+                        Chạy lại bước...
+                    </h3>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        Chỉ chạy lại bước này, không chạy các bước sau.
+                    </p>
+                </div>
+                <div class="space-y-4 px-6 py-5">
+                    <div>
+                        <label class="mb-1 block text-xs font-semibold text-gray-700 dark:text-gray-200">Bước cần chạy lại</label>
+                        <x-select
+                            x-model="genericSelectedNodeId"
+                            x-on:change="refreshGenericStepPreview()"
+                            class="w-full"
+                        >
+                            <template x-for="step in genericPickerSteps()" :key="step.node_id">
+                                <option
+                                    x-bind:value="step.node_id"
+                                    x-text="step.label || step.node_id"
+                                ></option>
+                            </template>
+                        </x-select>
+                        <template x-if="genericSelectedStep()?.source_requirements?.length">
+                            <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                                Nguồn cần:
+                                <span x-text="(genericSelectedStep()?.source_requirements || []).join(', ')"></span>
+                            </p>
+                        </template>
+                    </div>
+
+                    <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700 dark:border-white/10 dark:bg-white/5 dark:text-gray-200">
+                        <p>Chế độ: Chỉ chạy bước này</p>
+                        <template x-if="genericStepLoading">
+                            <p class="mt-1 animate-pulse">Đang kiểm tra...</p>
+                        </template>
+                        <template x-if="!genericStepLoading && genericPreview">
+                            <div class="mt-1 space-y-0.5">
+                                <p>Đã chọn: <span x-text="genericPreview.selected_count"></span></p>
+                                <p>Hợp lệ: <span x-text="genericPreview.valid_count"></span></p>
+                                <p>Không hợp lệ: <span x-text="genericPreview.invalid_count"></span></p>
+                                <p>Bước: <span x-text="genericPreview.label || genericSelectedStep()?.label"></span></p>
+                            </div>
+                        </template>
+                        <template x-if="genericPreviewError">
+                            <p class="mt-2 font-medium text-danger-600 dark:text-danger-400" x-text="genericPreviewError"></p>
+                        </template>
+                    </div>
+
+                    <template x-if="(genericPreview?.invalid || []).length">
+                        <div class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                            <p class="mb-1 font-semibold">Không thể chạy lại (một số bài):</p>
+                            <ul class="list-disc space-y-0.5 pl-4">
+                                <template x-for="row in (genericPreview.invalid || []).slice(0, 5)" :key="row.task_id">
+                                    <li>
+                                        <span x-text="row.label"></span>
+                                        — <span x-text="row.reason"></span>
+                                    </li>
+                                </template>
+                            </ul>
+                            <template x-if="(genericPreview.invalid || []).length > 5">
+                                <p class="mt-1" x-text="'+ ' + ((genericPreview.invalid || []).length - 5) + ' lỗi khác'"></p>
+                            </template>
+                        </div>
+                    </template>
+                </div>
+                <div class="flex items-center justify-end gap-3 border-t border-gray-200 bg-gray-50 px-6 py-4 dark:border-white/10 dark:bg-white/5">
+                    <button
+                        type="button"
+                        class="fi-btn relative grid-flow-col items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold text-gray-700 outline-none transition duration-75 hover:bg-gray-100 focus-visible:ring-2 dark:text-gray-200 dark:hover:bg-white/5"
+                        x-on:click="closeGenericStepPicker()"
+                    >Hủy</button>
+                    <button
+                        type="button"
+                        class="fi-btn relative grid-flow-col items-center justify-center gap-1.5 rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white shadow-sm outline-none transition duration-75 hover:bg-primary-500 focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-70"
+                        x-bind:disabled="bulkBusy || genericStepLoading || !(genericPreview?.can_execute)"
+                        x-on:click="confirmGenericStepRerun()"
+                        x-text="(genericPreview?.invalid_count > 0) ? ('Chạy ' + (genericPreview?.valid_count || 0) + ' bài hợp lệ') : 'Chạy lại bước'"
+                    ></button>
+                </div>
+            </div>
+        </div>
+
         {{-- Bulk retry confirm modal --}}
         <div
             x-show="bulkConfirmOpen"
@@ -622,11 +756,29 @@
                 </div>
                 <div class="space-y-3 px-6 py-5">
                     <p class="text-sm leading-6 text-gray-600 dark:text-gray-300" x-text="bulkConfirmText()"></p>
-                    <ul class="list-disc space-y-1 pl-5 text-sm text-gray-700 dark:text-gray-200">
-                        <template x-for="label in selectedStepLabels()" :key="label">
-                            <li x-text="label"></li>
-                        </template>
-                    </ul>
+                    <template x-if="bulkPreview?.outline_node_title || bulkPreview?.article_node_title">
+                        <ul class="list-disc space-y-1 pl-5 text-sm text-gray-700 dark:text-gray-200">
+                            <template x-if="bulkPreview?.outline_node_title">
+                                <li>Outline: <span x-text="bulkPreview.outline_node_title"></span></li>
+                            </template>
+                            <template x-if="bulkPreview?.article_node_title">
+                                <li>Bài viết: <span x-text="bulkPreview.article_node_title"></span></li>
+                            </template>
+                        </ul>
+                    </template>
+                    <template x-if="(bulkPreview?.invalid || []).length">
+                        <div class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                            <p class="mb-1 font-semibold">Không hợp lệ:</p>
+                            <ul class="list-disc space-y-0.5 pl-4">
+                                <template x-for="row in (bulkPreview.invalid || []).slice(0, 8)" :key="row.task_id">
+                                    <li>
+                                        <span x-text="row.label"></span>
+                                        — <span x-text="row.reason"></span>
+                                    </li>
+                                </template>
+                            </ul>
+                        </div>
+                    </template>
                 </div>
                 <div class="flex items-center justify-end gap-3 border-t border-gray-200 bg-gray-50 px-6 py-4 dark:border-white/10 dark:bg-white/5">
                     <button
@@ -638,7 +790,7 @@
                     <button
                         type="button"
                         class="fi-btn relative grid-flow-col items-center justify-center gap-1.5 rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white shadow-sm outline-none transition duration-75 hover:bg-primary-500 focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-70"
-                        x-bind:disabled="bulkBusy"
+                        x-bind:disabled="bulkBusy || !(bulkPreview?.can_execute)"
                         x-on:click="confirmBulkRetry()"
                         x-text="config.labels?.bulkExecute ?? 'Thực hiện'"
                     ></button>

@@ -19,7 +19,7 @@ use App\Addons\SeoContentAi\Support\ArticleGenerationSourceResult;
  *
  * Section 2 trong product language = writing instructions / vocabulary.
  */
-final class ArticleGenerationInputResolver
+class ArticleGenerationInputResolver
 {
     public const OUTLINE_START = '[START_TASK_1_OUTLINE]';
 
@@ -191,11 +191,25 @@ final class ArticleGenerationInputResolver
 
     /**
      * Step có phải outline producer không (không phải content run mới nhất).
+     * Chỉ role / hook / persists_as_outline / structured ports — không title heuristic.
      *
      * @param  array<string, mixed>  $step
      */
     public function isOutlineProducerStep(array $step): bool
     {
+        $role = \App\Addons\SeoContentAi\Enums\WorkflowExecutionRole::tryFromMixed(
+            $step['execution_role'] ?? null,
+        );
+        if ($role === \App\Addons\SeoContentAi\Enums\WorkflowExecutionRole::ArticleOutlineGenerate) {
+            return true;
+        }
+        if (
+            $role === \App\Addons\SeoContentAi\Enums\WorkflowExecutionRole::ArticleContentGenerate
+            || $role === \App\Addons\SeoContentAi\Enums\WorkflowExecutionRole::ArticleContentImprove
+        ) {
+            return false;
+        }
+
         $hookKey = trim((string) ($step['hook_key'] ?? ''));
         if ($hookKey === self::OUTLINE_HOOK_KEY) {
             return true;
@@ -217,36 +231,7 @@ final class ArticleGenerationInputResolver
             return true;
         }
 
-        $haystack = mb_strtolower(
-            trim((string) ($step['title'] ?? '')).' '
-            .trim((string) ($step['prompt_name'] ?? ''))
-        );
-        $looksLikeContent = str_contains($haystack, 'viết bài')
-            || str_contains($haystack, 'viet bai')
-            || str_contains($haystack, 'nội dung')
-            || str_contains($haystack, 'noi dung')
-            || str_contains($haystack, 'rewrite')
-            || str_contains($haystack, 'viết lại');
-        $looksLikeOutline = str_contains($haystack, 'outline')
-            || str_contains($haystack, 'dàn ý')
-            || str_contains($haystack, 'dan y');
-
-        // Cùng thứ tự catalog: content trước outline («Viết bài theo dàn ý» = content).
-        if ($looksLikeContent) {
-            return false;
-        }
-
-        if ($looksLikeOutline) {
-            return true;
-        }
-
-        // Cuối cùng: payload có đúng 2 marker outline.
-        foreach ($this->candidatePayloadsFromStep($step) as $candidate) {
-            if ($this->isValidArtifact($candidate)) {
-                return true;
-            }
-        }
-
+        // Không: title/label heuristic; không: bare artifact làm producer (tránh lấy content mới nhất).
         return false;
     }
 

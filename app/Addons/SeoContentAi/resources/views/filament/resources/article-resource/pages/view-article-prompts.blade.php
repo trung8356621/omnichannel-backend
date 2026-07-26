@@ -76,6 +76,15 @@
                             $model = trim((string) ($promptItem['model'] ?? ''));
                             $promptText = trim((string) ($promptItem['prompt'] ?? ''));
                             $resultText = trim((string) ($promptItem['result'] ?? ''));
+                            $sourceBadge = trim((string) ($promptItem['source_badge'] ?? ''));
+                            $ownerBadge = trim((string) ($promptItem['owner_badge'] ?? ''));
+                            $promptName = trim((string) ($promptItem['prompt_name'] ?? ''));
+                            $workflowNode = trim((string) ($promptItem['workflow_node_title'] ?? ''));
+                            $executionTypeLabel = trim((string) ($promptItem['execution_type_label'] ?? ''));
+                            $statusLabel = trim((string) ($promptItem['status_label'] ?? $status));
+                            $sourceRunId = $promptItem['source_run_id'] ?? null;
+                            $sourceRunItemId = $promptItem['source_run_item_id'] ?? null;
+                            $articleLengthMeta = $promptItem['article_length'] ?? null;
                         @endphp
 
                         <div
@@ -92,6 +101,34 @@
                                     <span class="seo-run-history-item__index">{{ $index + 1 }}</span>
                                     <span>
                                         <span class="seo-run-history-item__type">{{ $promptType }}</span>
+                                        @if ($executionTypeLabel !== '')
+                                            <span class="seo-run-history-item__model" title="Execution type">{{ $executionTypeLabel }}</span>
+                                        @endif
+                                        @if ($statusLabel !== '')
+                                            <span class="seo-run-history-item__model" title="Status">{{ $statusLabel }}</span>
+                                        @endif
+                                        @if ($sourceBadge !== '')
+                                            <span class="seo-run-history-item__model" title="Article writing source">{{ $sourceBadge }}</span>
+                                        @endif
+                                        @if ($ownerBadge !== '')
+                                            <span class="seo-run-history-item__model" title="Prompt owner">{{ $ownerBadge }}</span>
+                                        @endif
+                                        @if ($promptName !== '')
+                                            <span class="seo-run-history-item__model" title="Prompt">Prompt: {{ $promptName }}</span>
+                                        @endif
+                                        @if ($workflowNode !== '' && $ownerBadge === 'Owner: Workflow')
+                                            <span class="seo-run-history-item__model" title="Workflow node">Node: {{ $workflowNode }}</span>
+                                        @endif
+                                        @if ($sourceRunId || $sourceRunItemId)
+                                            <span class="seo-run-history-item__model" title="Source artifact">
+                                                Artifact:
+                                                @if ($sourceRunId) run {{ $sourceRunId }}@endif
+                                                @if ($sourceRunItemId) / item {{ $sourceRunItemId }}@endif
+                                            </span>
+                                        @endif
+                                        @if ($articleLengthMeta !== null && $articleLengthMeta !== '')
+                                            <span class="seo-run-history-item__model" title="Article length">Length: {{ $articleLengthMeta }}</span>
+                                        @endif
                                         @if ($renderModel !== '')
                                             <span class="seo-run-history-item__model" title="Render model">{{ $renderModel }}</span>
                                         @elseif ($model !== '')

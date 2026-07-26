@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\PromptHooks\Exceptions\ProviderFailed;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\ProviderRefused;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\ProviderTimeout;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\UnsupportedProviderCapability;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookRenderedPromptCompiler;
 use App\Addons\SeoContentAi\PromptHooks\Runtime\RenderedPromptRequest;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use Illuminate\Http\Client\ConnectionException;
@@ -24,6 +25,7 @@ final class PromptRunnerProviderAdapter implements PromptProviderAdapter
     public function __construct(
         private readonly PromptRunnerService $promptRunner,
         private readonly PromptProviderUsageNormalizer $usageNormalizer = new PromptProviderUsageNormalizer,
+        private readonly PromptHookRenderedPromptCompiler $renderedCompiler = new PromptHookRenderedPromptCompiler,
     ) {}
 
     public function capabilities(): PromptProviderCapabilities
@@ -61,7 +63,7 @@ final class PromptRunnerProviderAdapter implements PromptProviderAdapter
             throw new ProviderFailed('AI connection missing or has no credential (resolved outside hook JSON).');
         }
 
-        $compiled = $this->compileRequest($request, $strategy);
+        $compiled = $this->renderedCompiler->compile($request, $strategy);
         $variables = is_array($request->metadata['variables'] ?? null)
             ? $request->metadata['variables']
             : [];
@@ -103,45 +105,6 @@ final class PromptRunnerProviderAdapter implements PromptProviderAdapter
                 'retry_owner' => 'PromptRunner/AiModelRouter',
             ],
         );
-    }
-
-    private function compileRequest(RenderedPromptRequest $request, PromptStructuredStrategy $strategy): string
-    {
-        $legacy = trim((string) ($request->metadata['legacy_compiled_prompt'] ?? ''));
-        if ($legacy !== '') {
-            $compiled = $legacy;
-            if ($strategy === PromptStructuredStrategy::PromptEnforcedJson
-                || $strategy === PromptStructuredStrategy::JsonMode) {
-                $compiled .= "\n\nReturn valid JSON only. Do not wrap in markdown fences.";
-            }
-
-            return $compiled;
-        }
-
-        $parts = [];
-        if (trim($request->system) !== '') {
-            $parts[] = trim($request->system);
-        }
-        foreach ($request->messages as $message) {
-            $role = (string) ($message['role'] ?? 'user');
-            $content = trim((string) ($message['content'] ?? ''));
-            if ($content === '') {
-                continue;
-            }
-            $parts[] = strtoupper($role).":\n".$content;
-        }
-
-        $compiled = trim(implode("\n\n", $parts));
-        if ($strategy === PromptStructuredStrategy::PromptEnforcedJson
-            || $strategy === PromptStructuredStrategy::JsonMode) {
-            $compiled .= "\n\nReturn valid JSON only. Do not wrap in markdown fences.";
-        }
-
-        if ($compiled === '') {
-            throw new ProviderFailed('Compiled prompt is empty.');
-        }
-
-        return $compiled;
     }
 
     private function looksLikeTimeout(string $message): bool

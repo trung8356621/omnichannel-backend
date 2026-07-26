@@ -10,12 +10,13 @@ use App\Addons\SeoContentAi\Support\RenderingPreference;
 use App\Addons\SeoContentAi\Support\TypographyValidationLevel;
 use App\Models\WpOption;
 
-final class SeoCreateArticleSettingsService
+final class SeoCreateArticleSettingsService implements \App\Addons\SeoContentAi\Contracts\SeoCreateArticleSettingsReader
 {
     public const OPTION_KEY = 'seo_create_article_task';
 
     public const KEY_PUBLISH_ARTICLE = 'publish_article_task_id';
 
+    /** @deprecated Phase 1.0 — deprecated_since=1.0; runtime_reads=0; planned_drop=release sau khi adapter log=0. Không drop trong phase này. */
     public const KEY_REWRITE_ARTICLE = 'rewrite_article_task_id';
 
     public const KEY_POST_REVIEW = 'post_review_task_id';
@@ -68,6 +69,30 @@ final class SeoCreateArticleSettingsService
 
     /** Prompt Hook: gợi ý thẻ mô tả SEO (article.meta_description_suggestion). */
     public const KEY_ARTICLE_META_DESCRIPTION_SUGGESTION_PROMPT_ID = 'article_meta_description_suggestion_prompt_id';
+
+    /**
+     * Ownership map: hook_key → prompt_id.
+     * Runtime source of truth for Settings capabilities (legacy keys kept for rollback).
+     *
+     * @var string
+     */
+    public const KEY_PROMPT_HOOK_BINDINGS = 'prompt_hook_bindings';
+
+    /**
+     * Legacy prompt_id field → hook_key (migrate-on-read into KEY_PROMPT_HOOK_BINDINGS).
+     *
+     * @var array<string, string>
+     */
+    public const LEGACY_PROMPT_FIELD_TO_HOOK = [
+        self::KEY_ARTICLE_TITLE_SUGGESTION_PROMPT_ID => 'article.title_suggestion',
+        self::KEY_ARTICLE_META_DESCRIPTION_SUGGESTION_PROMPT_ID => 'article.meta_description_suggestion',
+        self::KEY_RENEW_FAQ_PROMPT_ID => 'article.faq.generate',
+        self::KEY_FEATURED_SNIPPET_PROMPT_ID => 'article.featured_snippet.generate',
+        self::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID => 'article.outline.generate',
+        self::KEY_TRANSLATE_ARTICLE_PROMPT_ID => 'article.content.translate',
+        self::KEY_CREATE_PRODUCT_GALLERY_IMAGE => 'product.gallery.generate',
+        self::KEY_PROJECT_KEYWORDS_PROMPT_ID => 'keyword.discovery.structured',
+    ];
 
     /** Thứ tự ưu tiên model sinh ảnh thường (General Image) — AI Advanced. */
     public const KEY_IMAGE_MODEL_PRIORITY = 'image_model_priority';
@@ -517,9 +542,9 @@ final class SeoCreateArticleSettingsService
 
     public function getFeaturedSnippetPromptId(): ?int
     {
-        $fromWorkflow = $this->getSettings()[self::KEY_FEATURED_SNIPPET_PROMPT_ID];
-        if ($fromWorkflow !== null) {
-            return $fromWorkflow;
+        $fromBinding = $this->getBoundPromptId('article.featured_snippet.generate');
+        if ($fromBinding !== null) {
+            return $fromBinding;
         }
 
         return app(SeoPromptSettingsService::class)->getFeaturedSnippetPromptId();
@@ -527,17 +552,17 @@ final class SeoCreateArticleSettingsService
 
     public function getOutlineHeadingRegeneratorPromptId(): ?int
     {
-        return $this->getSettings()[self::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID];
+        return $this->getBoundPromptId('article.outline.generate');
     }
 
     public function getProjectKeywordsPromptId(): ?int
     {
-        return $this->getSettings()[self::KEY_PROJECT_KEYWORDS_PROMPT_ID];
+        return $this->getBoundPromptId('keyword.discovery.structured');
     }
 
     public function getRenewFaqPromptId(): ?int
     {
-        return $this->getSettings()[self::KEY_RENEW_FAQ_PROMPT_ID];
+        return $this->getBoundPromptId('article.faq.generate');
     }
 
     /**
@@ -548,6 +573,9 @@ final class SeoCreateArticleSettingsService
         return $this->getSettings()[self::KEY_PUBLISH_ARTICLE];
     }
 
+    /**
+     * @deprecated Phase 0.3+ — legacy DB field only. Runtime KHÔNG gọi. Giữ để rollback/Settings preserve.
+     */
     public function getRewriteArticleTaskId(): ?int
     {
         return $this->getSettings()[self::KEY_REWRITE_ARTICLE];
@@ -598,7 +626,7 @@ final class SeoCreateArticleSettingsService
 
     public function getCreateProductGalleryImagePromptId(): ?int
     {
-        return $this->getSettings()[self::KEY_CREATE_PRODUCT_GALLERY_IMAGE];
+        return $this->getBoundPromptId('product.gallery.generate');
     }
 
     public function getCreateProductGalleryImageTaskId(): ?int
@@ -643,17 +671,206 @@ final class SeoCreateArticleSettingsService
 
     public function getTranslateArticlePromptId(): ?int
     {
-        return $this->getSettings()[self::KEY_TRANSLATE_ARTICLE_PROMPT_ID];
+        return $this->getBoundPromptId('article.content.translate');
     }
 
     public function getArticleTitleSuggestionPromptId(): ?int
     {
-        return $this->getSettings()[self::KEY_ARTICLE_TITLE_SUGGESTION_PROMPT_ID];
+        return $this->getBoundPromptId('article.title_suggestion');
     }
 
     public function getArticleMetaDescriptionSuggestionPromptId(): ?int
     {
-        return $this->getSettings()[self::KEY_ARTICLE_META_DESCRIPTION_SUGGESTION_PROMPT_ID];
+        return $this->getBoundPromptId('article.meta_description_suggestion');
+    }
+
+    /**
+     * Filament/Livewire treats `.` as nested path. Hook keys contain dots — encode for form state.
+     */
+    public static function encodeHookKeyForForm(string $hookKey): string
+    {
+        return str_replace('.', '__', trim($hookKey));
+    }
+
+    public static function decodeHookKeyFromForm(string $encoded): string
+    {
+        return str_replace('__', '.', trim($encoded));
+    }
+
+    /**
+     * @param  array<string, mixed>  $raw  form map with encoded keys
+     * @return array<string, int>
+     */
+    public function decodePromptHookBindingsFromForm(array $raw): array
+    {
+        $decoded = [];
+        foreach ($raw as $encodedKey => $promptId) {
+            if (is_array($promptId)) {
+                // Legacy bug: nested path from unencoded hook keys — skip garbage.
+                continue;
+            }
+            $hookKey = self::decodeHookKeyFromForm((string) $encodedKey);
+            if ($hookKey === '' || ! str_contains($hookKey, '.')) {
+                continue;
+            }
+            $id = $this->positiveIntOrNull($promptId);
+            if ($id === null) {
+                continue;
+            }
+            $decoded[$hookKey] = $id;
+        }
+
+        return $decoded;
+    }
+
+    /**
+     * @param  array<string, int|null|string>  $bindings  hook_key => prompt_id
+     * @return array<string, int|null> encoded form map (null clears select)
+     */
+    public function encodePromptHookBindingsForForm(array $bindings): array
+    {
+        $encoded = [];
+        foreach ($bindings as $hookKey => $promptId) {
+            $key = self::encodeHookKeyForForm((string) $hookKey);
+            if ($key === '') {
+                continue;
+            }
+            $encoded[$key] = $this->positiveIntOrNull($promptId);
+        }
+
+        return $encoded;
+    }
+
+    /**
+     * @param  array<string, int>  $bindings
+     *
+     * @throws \Illuminate\Validation\ValidationException
+     */
+    public function assertValidPromptHookBindings(array $bindings): void
+    {
+        $errors = [];
+        foreach ($bindings as $hookKey => $promptId) {
+            $hookKey = trim((string) $hookKey);
+            $id = $this->positiveIntOrNull($promptId);
+            if ($hookKey === '' || $id === null) {
+                continue;
+            }
+
+            $prompt = \App\Addons\SeoContentAi\Models\SeoPrompt::query()->find($id);
+            if ($prompt === null) {
+                $errors[self::KEY_PROMPT_HOOK_BINDINGS.'.'.self::encodeHookKeyForForm($hookKey)] = [
+                    "Prompt #{$id} không tồn tại cho Hook [{$hookKey}].",
+                ];
+                continue;
+            }
+
+            $promptHook = trim((string) ($prompt->hook_key ?? ''));
+            if ($promptHook !== '' && $promptHook !== $hookKey) {
+                $errors[self::KEY_PROMPT_HOOK_BINDINGS.'.'.self::encodeHookKeyForForm($hookKey)] = [
+                    "Prompt «{$prompt->name}» thuộc Hook [{$promptHook}], không khớp [{$hookKey}].",
+                ];
+            }
+        }
+
+        if ($errors !== []) {
+            throw \Illuminate\Validation\ValidationException::withMessages($errors);
+        }
+    }
+
+    /**
+     * @return array<string, int> hook_key => prompt_id
+     */
+    public function getPromptHookBindings(): array
+    {
+        $data = WpOption::get(self::OPTION_KEY, []);
+        if (! is_array($data)) {
+            $data = [];
+        }
+
+        $bindings = $this->normalizePromptHookBindings($data[self::KEY_PROMPT_HOOK_BINDINGS] ?? null);
+
+        foreach (self::LEGACY_PROMPT_FIELD_TO_HOOK as $legacyField => $hookKey) {
+            if (isset($bindings[$hookKey])) {
+                continue;
+            }
+            $legacyId = $this->positiveIntOrNull($data[$legacyField] ?? null);
+            if ($legacyId !== null) {
+                $bindings[$hookKey] = $legacyId;
+            }
+        }
+
+        return $bindings;
+    }
+
+    public function getBoundPromptId(string $hookKey): ?int
+    {
+        $hookKey = trim($hookKey);
+        if ($hookKey === '') {
+            return null;
+        }
+
+        $bindings = $this->getPromptHookBindings();
+
+        return $bindings[$hookKey] ?? null;
+    }
+
+    public function hasLegacyBindingSource(string $hookKey): bool
+    {
+        return in_array($hookKey, self::LEGACY_PROMPT_FIELD_TO_HOOK, true)
+            || $hookKey === 'article.comment.generate';
+    }
+
+    /**
+     * Partial merge bindings only.
+     *
+     * @param  array<string, mixed>  $bindings
+     */
+    public function savePromptHookBindings(array $bindings): void
+    {
+        $normalized = $this->normalizePromptHookBindings($bindings);
+        $existing = $this->getPromptHookBindings();
+        $merged = array_merge($existing, $normalized);
+
+        // Explicit null/empty in patch clears binding.
+        foreach ($bindings as $hookKey => $value) {
+            $key = trim((string) $hookKey);
+            if ($key === '') {
+                continue;
+            }
+            $id = $this->positiveIntOrNull($value);
+            if ($id === null) {
+                unset($merged[$key]);
+            } else {
+                $merged[$key] = $id;
+            }
+        }
+
+        $this->saveSettings([
+            self::KEY_PROMPT_HOOK_BINDINGS => $merged,
+        ]);
+    }
+
+    /**
+     * @param  mixed  $raw
+     * @return array<string, int>
+     */
+    public function normalizePromptHookBindings(mixed $raw): array
+    {
+        if (! is_array($raw)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($raw as $hookKey => $promptId) {
+            $key = trim((string) $hookKey);
+            $id = $this->positiveIntOrNull($promptId);
+            if ($key === '' || $id === null) {
+                continue;
+            }
+            $out[$key] = $id;
+        }
+
+        return $out;
     }
 
     /**
@@ -714,6 +931,20 @@ final class SeoCreateArticleSettingsService
         ] as $intKey) {
             if (array_key_exists($intKey, $settings)) {
                 $patch[$intKey] = $this->positiveIntOrNull($settings[$intKey] ?? null);
+            }
+        }
+
+        if (array_key_exists(self::KEY_PROMPT_HOOK_BINDINGS, $settings)) {
+            $incoming = $this->normalizePromptHookBindings($settings[self::KEY_PROMPT_HOOK_BINDINGS]);
+            $existingBindings = $this->normalizePromptHookBindings($merged[self::KEY_PROMPT_HOOK_BINDINGS] ?? null);
+            // Full replace of map when key present (Settings form owns the map).
+            $patch[self::KEY_PROMPT_HOOK_BINDINGS] = $incoming !== [] || is_array($settings[self::KEY_PROMPT_HOOK_BINDINGS])
+                ? $incoming
+                : $existingBindings;
+
+            // Mirror into legacy fields for rollback (single source still bindings at runtime).
+            foreach (self::LEGACY_PROMPT_FIELD_TO_HOOK as $legacyField => $hookKey) {
+                $patch[$legacyField] = $incoming[$hookKey] ?? null;
             }
         }
 

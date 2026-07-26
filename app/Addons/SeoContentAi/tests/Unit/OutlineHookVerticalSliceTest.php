@@ -34,6 +34,12 @@ use Tests\TestCase;
 
 final class OutlineHookVerticalSliceTest extends TestCase
 {
+    protected function tearDown(): void
+    {
+        \Mockery::close();
+        parent::tearDown();
+    }
+
     private function catalog(): PromptHookEditorCatalog
     {
         $loader = new PromptHookDefinitionLoader(
@@ -169,6 +175,9 @@ final class OutlineHookVerticalSliceTest extends TestCase
             $registry,
             new PromptHookMigrationFlags,
             $runner,
+            new \App\Addons\SeoContentAi\Services\ArticleWritingLegacyRewriteAdapter(
+                new \App\Addons\SeoContentAi\Services\ArticleWritingInputFormatter,
+            ),
         );
 
         $prompt = new SeoPrompt;
@@ -233,6 +242,9 @@ final class OutlineHookVerticalSliceTest extends TestCase
             $registry,
             new PromptHookMigrationFlags,
             $runner,
+            new \App\Addons\SeoContentAi\Services\ArticleWritingLegacyRewriteAdapter(
+                new \App\Addons\SeoContentAi\Services\ArticleWritingInputFormatter,
+            ),
         );
         $prompt = new SeoPrompt;
         $prompt->forceFill(['id' => 1, 'hook_key' => 'article.outline.generate', 'hook_version' => '0.1.0']);

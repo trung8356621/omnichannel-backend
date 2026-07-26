@@ -8,7 +8,9 @@ use App\Addons\SeoContentAi\PromptHooks\Canonical\PromptHookDefinition;
 use App\Addons\SeoContentAi\PromptHooks\Canonical\PromptHookStatus;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\DefinitionNotFound;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\VersionNotFound;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookDefinitionLoader;
 use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookEditorCatalog;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookRuntimeRegistry;
 use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookRuntimeSettingsResolver;
 use App\Addons\SeoContentAi\Support\ImageToolType;
 use Filament\Forms;
@@ -23,6 +25,8 @@ use Illuminate\Validation\ValidationException;
 final class PromptHookFormSchema
 {
     /**
+     * Hook selector + settings only (short fields).
+     *
      * @return list<Forms\Components\Component>
      */
     public static function section(): array
@@ -41,10 +45,12 @@ final class PromptHookFormSchema
                     Forms\Components\Select::make('hook_key')
                         ->label(__('seo-content-ai::filament.prompt.hook'))
                         ->helperText(__('seo-content-ai::filament.prompt.hook_helper'))
-                        ->options(fn (PromptHookEditorCatalog $catalog): array => array_merge(
-                            ['' => (string) __('seo-content-ai::prompt_hooks.none')],
-                            $catalog->selectOptions(),
-                        ))
+                        ->options(function (PromptHookEditorCatalog $catalog, Get $get): array {
+                            return array_merge(
+                                ['' => (string) __('seo-content-ai::prompt_hooks.none')],
+                                $catalog->selectOptionsForEditing((string) ($get('hook_key') ?? '')),
+                            );
+                        })
                         ->placeholder(__('seo-content-ai::prompt_hooks.none'))
                         ->nullable()
                         ->searchable()
@@ -56,59 +62,17 @@ final class PromptHookFormSchema
 
                     Forms\Components\Hidden::make('hook_version'),
 
+                    Forms\Components\Placeholder::make('hook_legacy_rewrite_warning')
+                        ->label('')
+                        ->content(__('seo-content-ai::filament.prompt.hook_legacy_rewrite_warning'))
+                        ->visible(fn (Get $get, PromptHookEditorCatalog $catalog): bool => $catalog->isLegacyCompatibilityHook(
+                            (string) ($get('hook_key') ?? ''),
+                        )),
+
                     Forms\Components\Placeholder::make('hook_experimental_warning')
                         ->label('')
                         ->content(fn (Get $get): string => self::experimentalWarning((string) ($get('hook_key') ?? ''), (string) ($get('hook_version') ?? '')))
                         ->visible(fn (Get $get): bool => self::isExperimentalSelected((string) ($get('hook_key') ?? ''), (string) ($get('hook_version') ?? ''))),
-
-                    Forms\Components\Placeholder::make('hook_template_owns_prompt')
-                        ->label('')
-                        ->content(fn (Get $get): string => self::templateSourceNote(
-                            (string) ($get('hook_key') ?? ''),
-                            (string) ($get('hook_version') ?? ''),
-                        ))
-                        ->visible(fn (Get $get): bool => filled($get('hook_key'))),
-
-                    Forms\Components\Placeholder::make('hook_description_display')
-                        ->label(__('seo-content-ai::filament.prompt.hook_description'))
-                        ->content(fn (Get $get): string => self::hookDescription(
-                            (string) ($get('hook_key') ?? ''),
-                            (string) ($get('hook_version') ?? ''),
-                        ))
-                        ->visible(fn (Get $get): bool => filled($get('hook_key'))),
-
-                    Forms\Components\Placeholder::make('hook_contract_display')
-                        ->label(__('seo-content-ai::filament.prompt.hook_contract'))
-                        ->content(fn (Get $get): HtmlString => new HtmlString(
-                            nl2br(e(self::hookContractSummary(
-                                (string) ($get('hook_key') ?? ''),
-                                (string) ($get('hook_version') ?? ''),
-                            ))),
-                        ))
-                        ->visible(fn (Get $get): bool => filled($get('hook_key'))),
-
-                    Forms\Components\Placeholder::make('hook_markdown_sections_contract')
-                        ->label(__('seo-content-ai::filament.prompt.hook_sections_contract'))
-                        ->content(fn (Get $get): HtmlString => new HtmlString(
-                            nl2br(e(self::markdownSectionsContract(
-                                (string) ($get('hook_key') ?? ''),
-                                (string) ($get('hook_version') ?? ''),
-                            ))),
-                        ))
-                        ->visible(fn (Get $get): bool => self::isMarkdownSectionsHook(
-                            (string) ($get('hook_key') ?? ''),
-                            (string) ($get('hook_version') ?? ''),
-                        )),
-
-                    Forms\Components\Placeholder::make('hook_input_mapping')
-                        ->label(__('seo-content-ai::filament.prompt.hook_input_mapping'))
-                        ->content(fn (Get $get): HtmlString => new HtmlString(
-                            nl2br(e(self::inputMappingHelp(
-                                (string) ($get('hook_key') ?? ''),
-                                (string) ($get('hook_version') ?? ''),
-                            ))),
-                        ))
-                        ->visible(fn (Get $get): bool => filled($get('hook_key'))),
 
                     Forms\Components\Group::make()
                         ->schema(fn (Get $get): array => self::settingsFields(
@@ -118,6 +82,78 @@ final class PromptHookFormSchema
                         ->visible(fn (Get $get): bool => filled($get('hook_key'))),
                 ]),
         ];
+    }
+
+    /**
+     * Collapsed Hook guidance under composed preview.
+     *
+     * @return list<Forms\Components\Component>
+     */
+    public static function guidanceSection(): array
+    {
+        return [
+            Forms\Components\Section::make(__('seo-content-ai::filament.prompt.hook_guidance_section'))
+                ->description(__('seo-content-ai::filament.prompt.hook_guidance_section_description'))
+                ->schema([
+                    Forms\Components\Placeholder::make('hook_description_display')
+                        ->label(__('seo-content-ai::filament.prompt.hook_description'))
+                        ->content(fn (Get $get): string => self::presentationFor((string) ($get('hook_key') ?? ''))['description']
+                            ?? self::hookDescription(
+                                (string) ($get('hook_key') ?? ''),
+                                (string) ($get('hook_version') ?? ''),
+                            ))
+                        ->visible(fn (Get $get): bool => filled($get('hook_key'))),
+
+                    Forms\Components\Placeholder::make('hook_default_instructions_display')
+                        ->label(fn (Get $get): string => (string) (self::presentationFor((string) ($get('hook_key') ?? ''))['default_instructions_title']
+                            ?? __('seo-content-ai::filament.prompt.hook_default_instructions_title')))
+                        ->content(fn (Get $get): HtmlString => self::presentationInstructionsHtml((string) ($get('hook_key') ?? '')))
+                        ->visible(fn (Get $get): bool => self::presentationHasInstructions((string) ($get('hook_key') ?? ''))),
+
+                    Forms\Components\Placeholder::make('hook_output_format_display')
+                        ->label(fn (Get $get): string => (string) (self::presentationFor((string) ($get('hook_key') ?? ''))['output_format_title']
+                            ?? __('seo-content-ai::filament.prompt.hook_output_format_title')))
+                        ->content(fn (Get $get): HtmlString => self::presentationOutputHtml((string) ($get('hook_key') ?? '')))
+                        ->visible(fn (Get $get): bool => self::presentationHasOutput((string) ($get('hook_key') ?? ''))),
+
+                    Forms\Components\Placeholder::make('hook_input_data_display')
+                        ->label(fn (Get $get): string => (string) (self::presentationFor((string) ($get('hook_key') ?? ''))['input_data_title']
+                            ?? __('seo-content-ai::filament.prompt.hook_input_data_title')))
+                        ->content(fn (Get $get): HtmlString => self::presentationInputsHtml((string) ($get('hook_key') ?? '')))
+                        ->visible(fn (Get $get): bool => self::presentationHasInputs((string) ($get('hook_key') ?? ''))),
+
+                    Forms\Components\Placeholder::make('hook_notes_display')
+                        ->label(fn (Get $get): string => (string) (self::presentationFor((string) ($get('hook_key') ?? ''))['notes_title']
+                            ?? __('seo-content-ai::filament.prompt.hook_notes_title')))
+                        ->content(fn (Get $get): HtmlString => self::presentationNotesHtml((string) ($get('hook_key') ?? '')))
+                        ->visible(fn (Get $get): bool => self::presentationHasNotes((string) ($get('hook_key') ?? ''))),
+                ])
+                ->collapsible()
+                ->collapsed()
+                ->visible(fn (Get $get): bool => filled($get('hook_key'))
+                    && self::hasAnyGuidance((string) ($get('hook_key') ?? ''))),
+        ];
+    }
+
+    public static function composedPreviewHtml(Get $get): HtmlString
+    {
+        return app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptCompositionSummaryPresenter::class)
+            ->renderHtml(
+                (string) ($get('hook_key') ?? ''),
+                (string) ($get('hook_version') ?? ''),
+                (string) ($get('markdown_content') ?? ''),
+                is_array($get('hook_settings')) ? $get('hook_settings') : [],
+                (bool) ($get('composed_preview_expanded') ?? false),
+            );
+    }
+
+    private static function hasAnyGuidance(string $hookKey): bool
+    {
+        return self::presentationHasInstructions($hookKey)
+            || self::presentationHasOutput($hookKey)
+            || self::presentationHasInputs($hookKey)
+            || self::presentationHasNotes($hookKey)
+            || filled(self::presentationFor($hookKey)['description'] ?? null);
     }
 
     /**
@@ -217,13 +253,33 @@ final class PromptHookFormSchema
 
         try {
             return self::resolveDefinitionForSave(
-                app(PromptHookEditorCatalog::class),
+                self::editorCatalog(),
                 $hookKey,
                 trim($version),
             );
         } catch (\Throwable) {
             return null;
         }
+    }
+
+    /**
+     * Prefer container catalog; fall back to filesystem registry for pure PHPUnit.
+     */
+    private static function editorCatalog(): PromptHookEditorCatalog
+    {
+        try {
+            if (function_exists('app') && app()->bound(PromptHookEditorCatalog::class)) {
+                return app(PromptHookEditorCatalog::class);
+            }
+        } catch (\Throwable) {
+        }
+
+        $loader = new PromptHookDefinitionLoader(
+            PromptHookDefinitionLoader::defaultV01Directory(),
+            PromptHookDefinitionLoader::defaultPhase1Directory(),
+        );
+
+        return new PromptHookEditorCatalog(new PromptHookRuntimeRegistry($loader));
     }
 
     /**
@@ -326,9 +382,112 @@ final class PromptHookFormSchema
     public static function usesLegacyPromptTemplate(string $hookKey, string $version): bool
     {
         $definition = self::resolveDefinition($hookKey, $version);
+        if ($definition === null) {
+            return false;
+        }
 
-        return $definition !== null
-            && ($definition->template['source'] ?? '') === 'legacy_prompt_content';
+        $source = trim((string) ($definition->template['source'] ?? ''));
+        $mode = trim((string) ($definition->template['mode'] ?? ''));
+
+        return $source === 'legacy_prompt_content' || $mode === 'legacy_prompt_content';
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private static function presentationFor(string $hookKey): ?array
+    {
+        $hookKey = trim($hookKey);
+        if ($hookKey === '') {
+            return null;
+        }
+
+        try {
+            return app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptHookPresentationService::class)
+                ->forHook($hookKey);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private static function presentationHasInstructions(string $hookKey): bool
+    {
+        $view = self::presentationFor($hookKey);
+
+        return is_array($view) && ($view['default_instructions'] ?? []) !== [];
+    }
+
+    private static function presentationHasOutput(string $hookKey): bool
+    {
+        $view = self::presentationFor($hookKey);
+
+        return is_array($view) && ($view['output_format'] ?? []) !== [];
+    }
+
+    private static function presentationHasInputs(string $hookKey): bool
+    {
+        $view = self::presentationFor($hookKey);
+
+        return is_array($view) && ($view['inputs'] ?? []) !== [];
+    }
+
+    private static function presentationHasNotes(string $hookKey): bool
+    {
+        $view = self::presentationFor($hookKey);
+
+        return is_array($view) && ($view['notes'] ?? []) !== [];
+    }
+
+    private static function presentationInstructionsHtml(string $hookKey): HtmlString
+    {
+        $view = self::presentationFor($hookKey);
+        if ($view === null) {
+            return new HtmlString('');
+        }
+
+        return new HtmlString(
+            app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptHookPresentationService::class)
+                ->formatBulletHtml($view['default_instructions']),
+        );
+    }
+
+    private static function presentationOutputHtml(string $hookKey): HtmlString
+    {
+        $view = self::presentationFor($hookKey);
+        if ($view === null) {
+            return new HtmlString('');
+        }
+
+        return new HtmlString(
+            app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptHookPresentationService::class)
+                ->formatBulletHtml($view['output_format']),
+        );
+    }
+
+    private static function presentationInputsHtml(string $hookKey): HtmlString
+    {
+        $view = self::presentationFor($hookKey);
+        if ($view === null) {
+            return new HtmlString('');
+        }
+
+        return new HtmlString(
+            app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptHookPresentationService::class)
+                ->formatInputsHtml($view['inputs']),
+        );
+    }
+
+    private static function presentationNotesHtml(string $hookKey): HtmlString
+    {
+        $view = self::presentationFor($hookKey);
+        if ($view === null) {
+            return new HtmlString('');
+        }
+
+        return new HtmlString(
+            app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptHookPresentationService::class)
+                ->formatBulletHtml($view['notes']),
+        );
     }
 
     private static function isMarkdownSectionsHook(string $hookKey, string $version): bool
@@ -424,7 +583,8 @@ final class PromptHookFormSchema
         if (in_array($type, ['boolean', 'bool'], true)) {
             return Forms\Components\Toggle::make('hook_settings.'.$key)
                 ->label($label)
-                ->default((bool) ($schema['default'] ?? false));
+                ->default((bool) ($schema['default'] ?? false))
+                ->live();
         }
 
         if (in_array($type, ['integer', 'int', 'number', 'float'], true)) {
@@ -432,7 +592,8 @@ final class PromptHookFormSchema
                 ->label($label)
                 ->numeric()
                 ->required()
-                ->default($schema['default'] ?? null);
+                ->default($schema['default'] ?? null)
+                ->live(onBlur: true);
 
             if (isset($schema['min'])) {
                 $input->minValue((float) $schema['min']);
@@ -446,6 +607,7 @@ final class PromptHookFormSchema
 
         return Forms\Components\TextInput::make('hook_settings.'.$key)
             ->label($label)
-            ->default($schema['default'] ?? null);
+            ->default($schema['default'] ?? null)
+            ->live(onBlur: true);
     }
 }

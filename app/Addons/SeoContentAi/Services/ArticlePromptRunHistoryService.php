@@ -99,12 +99,27 @@ final class ArticlePromptRunHistoryService
                     $matchingItems = $dbItems
                         ->map(static function (SeoProjectRunItem $item): array {
                             $output = is_array($item->output_snapshot) ? $item->output_snapshot : [];
+                            $input = is_array($item->input_snapshot) ? $item->input_snapshot : [];
 
                             return [
                                 'run_item_id' => (int) $item->id,
                                 'task_id' => $item->task_id !== null ? (int) $item->task_id : 0,
                                 'article_id' => $item->article_id !== null ? (int) $item->article_id : null,
                                 'status' => (string) $item->status,
+                                'action' => (string) ($item->action ?? ''),
+                                'execution_type' => (string) ($input['execution_type'] ?? (
+                                    str_starts_with((string) ($item->action ?? ''), 'step:rr:')
+                                        ? 'rerun'
+                                        : ((int) ($item->attempt ?? 1) > 1 ? 'retry' : 'first')
+                                )),
+                                'attempt' => (int) ($item->attempt ?? 1),
+                                'target_node_id' => (string) ($input['target_node_id'] ?? $input['node_id'] ?? ''),
+                                'target_execution_role' => $input['target_execution_role'] ?? null,
+                                'step_label' => (string) ($input['step_label'] ?? ''),
+                                'source_run_id' => $input['source_run_id'] ?? null,
+                                'source_run_item_id' => $input['source_run_item_id'] ?? null,
+                                'persist_status' => (string) ($output['persist_status'] ?? $input['persist_status'] ?? ''),
+                                'created_at' => $item->created_at,
                                 'steps' => is_array($output['steps'] ?? null) ? $output['steps'] : [],
                             ];
                         })
@@ -213,6 +228,21 @@ final class ArticlePromptRunHistoryService
                             'is_array',
                         ));
 
+                        if ($steps === [] && (
+                            trim((string) ($item['execution_type'] ?? '')) !== ''
+                            || trim((string) ($item['step_label'] ?? '')) !== ''
+                        )) {
+                            $steps = [[
+                                'type' => 'prompt',
+                                'title' => (string) ($item['step_label'] ?? 'Workflow step'),
+                                'status' => (string) ($item['status'] ?? ''),
+                                'execution_role' => $item['target_execution_role'] ?? null,
+                                'execution_type' => $item['execution_type'] ?? null,
+                                'persist_status' => $item['persist_status'] ?? null,
+                                'node_id' => $item['target_node_id'] ?? null,
+                            ]];
+                        }
+
                         return collect($steps)
                             ->filter(fn (array $step): bool => ! $this->isHiddenWorkflowStep($step))
                             ->map(function (array $step, int $index) use ($item, $run, $results, &$seenResultIds): array {
@@ -223,13 +253,25 @@ final class ArticlePromptRunHistoryService
                                     $seenResultIds[$resultId] = true;
                                 }
 
-                                return $this->normalizePromptItem(
+                                $step['execution_type'] = $step['execution_type']
+                                    ?? $item['execution_type']
+                                    ?? null;
+                                $step['persist_status'] = $step['persist_status']
+                                    ?? $item['persist_status']
+                                    ?? null;
+                                $step['source_run_id'] = $item['source_run_id'] ?? null;
+                                $step['source_run_item_id'] = $item['source_run_item_id'] ?? null;
+                                $step['run_item_created_at'] = $item['created_at'] ?? null;
+
+                                $normalized = $this->normalizePromptItem(
                                     $step,
                                     $result instanceof PromptResult ? $result : null,
                                     (int) $run->id,
                                     (int) ($item['task_id'] ?? 0),
                                     $index,
                                 );
+
+                                return $normalized;
                             })
                             ->all();
                     })
@@ -430,13 +472,72 @@ final class ArticlePromptRunHistoryService
 
         $debug = array_filter([
             'article_generation_source' => $snapshotVariables['article_generation_source'] ?? null,
+            'article_writing_source_type' => $snapshotVariables['article_writing_source_type']
+                ?? $snapshotVariables['source_type']
+                ?? null,
+            'source_type' => $snapshotVariables['source_type']
+                ?? $snapshotVariables['article_writing_source_type']
+                ?? null,
+            'source_hash' => $snapshotVariables['source_hash'] ?? null,
             'source_run_id' => $snapshotVariables['source_run_id'] ?? null,
             'source_run_item_id' => $snapshotVariables['source_run_item_id'] ?? null,
             'source_prompt_result_id' => $snapshotVariables['source_prompt_result_id'] ?? null,
+            'article_length' => $snapshotVariables['article_length'] ?? null,
+            'description_present' => $snapshotVariables['description_present'] ?? null,
             'outline_marker_found' => $snapshotVariables['outline_marker_found'] ?? null,
             'writing_instructions_marker_found' => $snapshotVariables['writing_instructions_marker_found'] ?? null,
             'artifact_version' => $snapshotVariables['artifact_version'] ?? null,
+            'prompt_owner_type' => $snapshotVariables['prompt_owner_type'] ?? null,
+            'prompt_owner_id' => $snapshotVariables['prompt_owner_id'] ?? null,
+            'hook_key' => $snapshotVariables['hook_key'] ?? $step['hook_key'] ?? null,
+            'workflow_node_title' => $snapshotVariables['workflow_node_title']
+                ?? $step['title']
+                ?? $step['prompt_name']
+                ?? null,
+            'execution_role' => $snapshotVariables['execution_role']
+                ?? $step['execution_role']
+                ?? null,
         ], static fn (mixed $value): bool => $value !== null && $value !== '');
+
+        $sourceTypeRaw = trim((string) (
+            $debug['article_writing_source_type']
+            ?? $debug['source_type']
+            ?? ''
+        ));
+        $sourceBadge = match ($sourceTypeRaw) {
+            'outline' => 'Source: Outline',
+            'existing_article' => 'Source: Existing article',
+            'brief' => 'Source: Brief',
+            default => null,
+        };
+
+        $ownerTypeRaw = trim((string) ($debug['prompt_owner_type'] ?? ''));
+        $ownerBadge = match ($ownerTypeRaw) {
+            'settings_binding' => 'Owner: Settings',
+            'workflow_node' => 'Owner: Workflow',
+            default => null,
+        };
+
+        $executionType = strtolower(trim((string) ($step['execution_type'] ?? '')));
+        if ($executionType === '') {
+            $executionType = 'first';
+        }
+        $executionTypeLabel = match ($executionType) {
+            'rerun' => 'Chạy lại',
+            'retry' => 'Thử lại',
+            default => 'Lần chạy đầu',
+        };
+
+        $persistStatus = strtolower(trim((string) ($step['persist_status'] ?? '')));
+        $rawStatus = strtolower(trim((string) ($step['status'] ?? $result?->status ?? '')));
+        $uiStatus = match (true) {
+            $persistStatus === 'ignored_stale' => 'Bỏ qua vì bài đã thay đổi',
+            $rawStatus === 'blocked' || $persistStatus === 'blocked' => 'Bị chặn do bước trước lỗi',
+            in_array($rawStatus, ['pending', 'processing', 'running'], true) => 'Đang chạy',
+            in_array($rawStatus, ['failed', 'error'], true) => 'Lỗi',
+            in_array($rawStatus, ['success', 'completed'], true) => 'Thành công',
+            default => trim((string) ($step['status'] ?? $result?->status ?? '')),
+        };
 
         return [
             'key' => $result !== null
@@ -448,7 +549,10 @@ final class ArticlePromptRunHistoryService
             'prompt_name' => $name,
             'prompt' => $prompt,
             'result' => $output,
-            'status' => trim((string) ($step['status'] ?? $result?->status ?? '')),
+            'status' => $rawStatus,
+            'status_label' => $uiStatus,
+            'execution_type' => $executionType,
+            'execution_type_label' => $executionTypeLabel,
             'message' => trim((string) ($step['message'] ?? $result?->error_message ?? '')),
             'model' => $primaryModel,
             'render_model' => $renderModel,
@@ -458,8 +562,17 @@ final class ArticlePromptRunHistoryService
             'candidate_count' => $snapshot['candidate_count'] ?? null,
             'winner_score' => $snapshot['winner_score'] ?? null,
             'validation_passed' => $snapshot['validation_passed'] ?? null,
-            'ran_at' => $result?->started_at ?? $result?->created_at,
+            'ran_at' => $result?->started_at ?? $result?->created_at ?? ($step['run_item_created_at'] ?? null),
             'variables' => $debug !== [] ? $debug : null,
+            'source_badge' => $sourceBadge,
+            'owner_badge' => $ownerBadge,
+            'prompt_owner_type' => $ownerTypeRaw !== '' ? $ownerTypeRaw : null,
+            'prompt_owner_id' => $debug['prompt_owner_id'] ?? null,
+            'hook_key' => $debug['hook_key'] ?? null,
+            'workflow_node_title' => $debug['workflow_node_title'] ?? null,
+            'execution_role' => $debug['execution_role'] ?? null,
+            'article_length' => $debug['article_length'] ?? null,
+            'article_writing_source_type' => $sourceTypeRaw !== '' ? $sourceTypeRaw : null,
             'article_generation_source' => $debug['article_generation_source'] ?? null,
             'source_run_id' => $debug['source_run_id'] ?? null,
             'source_run_item_id' => $debug['source_run_item_id'] ?? null,

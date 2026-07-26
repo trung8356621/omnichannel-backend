@@ -14,6 +14,9 @@ use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Models\SeoTask;
+use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
+use App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionSnapshotBuilder;
 use App\Addons\SeoContentAi\Support\ContentProjectRunSettings;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoProjectRunErrorFormatter;
@@ -43,6 +46,10 @@ final class SeoProjectWorkflowRunService
     public function startRun(SeoProject $project, string $mode, ?array $settings = null): SeoProjectRun
     {
         $snapshot = ContentProjectRunSettings::fromArray($settings)->toArray();
+        $workflowSnap = $this->capturePublishWorkflowSnapshot();
+        if ($workflowSnap !== null) {
+            $snapshot['workflow_execution_snapshot'] = $workflowSnap;
+        }
 
         $run = SeoProjectRun::query()->create([
             'project_id' => (int) $project->id,
@@ -63,9 +70,37 @@ final class SeoProjectWorkflowRunService
         return $run;
     }
 
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function capturePublishWorkflowSnapshot(): ?array
+    {
+        try {
+            $taskId = app(SeoCreateArticleSettingsService::class)->getPublishArticleTaskId();
+            if ($taskId === null || $taskId <= 0) {
+                return null;
+            }
+            $task = SeoTask::query()->find($taskId);
+            if (! $task instanceof SeoTask) {
+                return null;
+            }
+
+            return app(WorkflowExecutionSnapshotBuilder::class)->fromTask($task)->toArray();
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
     public function updateRunSettings(SeoProjectRun $run, array $settings): SeoProjectRun
     {
         $snapshot = ContentProjectRunSettings::fromUserInput($settings)->toArray();
+        $existing = is_array($run->settings) ? $run->settings : [];
+        if (
+            isset($existing['workflow_execution_snapshot'])
+            && ! isset($snapshot['workflow_execution_snapshot'])
+        ) {
+            $snapshot['workflow_execution_snapshot'] = $existing['workflow_execution_snapshot'];
+        }
         $run->update(['settings' => $snapshot]);
 
         return $run->fresh() ?? $run;

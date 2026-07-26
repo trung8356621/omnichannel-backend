@@ -110,23 +110,32 @@ Lang: `filament.settings_recommendations` (`lang/en|vi/filament.php`).
 
 ## 2. Workflow Settings (`SeoSettingsWorkflows`)
 
-Page cấu hình workflow quan trọng nhất — cho phép Manager **gán từng workflow (SeoTask) cho từng bước xử lý**. Dùng service `SeoCreateArticleSettingsService` để lưu.
+Page cấu hình workflow quan trọng nhất. **Prompt ownership model (2026-07):**
+
+- **Hook** = loại/capability contract (`settings_visible` trong Runtime Registry).
+- **Settings binding** = `prompt_hook_bindings` map `hook_key → prompt_id` (runtime SoT).
+- **Form encoding:** Filament coi `.` là nested path — form dùng `article__title_suggestion` rồi decode về `article.title_suggestion` khi save (`encodeHookKeyForForm` / `decodePromptHookBindingsFromForm`).
+- **Presentation metadata** (optional trên Hook JSON): `presentation.default_instructions`, `output_format`, `variables[].label` — UI Settings/Prompt Edit; không ảnh hưởng resolver.
+- **Task Prompt Block** = `prompt_id` trực tiếp trong workflow graph.
+- **Prompt không còn status** (`is_active` legacy column giữ DB, app không đọc để gate runtime).
+- Unassigned Prompt (không Hook, không binding, không Task) vẫn hợp lệ — không tự chạy.
 
 ### 2.1 Form Schema
 
-| Section | Field | Key (SeoCreateArticleSettingsService) | Mô tả |
-|---------|-------|---------------------------------------|-------|
-| **Task Workflows** | Publish article | `KEY_PUBLISH_ARTICLE` | Workflow chạy khi publish bài mới từ keyword |
-| | Rewrite article | `KEY_REWRITE_ARTICLE` | Workflow chạy khi viết lại bài |
-| | Post review | `KEY_POST_REVIEW` | Workflow chạy sau khi review |
-| **Editor Media** | Typography / Infographic | `KEY_CREATE_TYPOGRAPHY_*` | Prompt\|Workflow cho nút **Tạo ảnh** trong editor (tool `image_typography`). **Không còn** field «Ảnh bài viết» riêng. |
-| | Product gallery | `KEY_CREATE_PRODUCT_GALLERY_*` | Prompt\|Workflow gallery sản phẩm |
-| | Video | `KEY_CREATE_VIDEO_*` | Prompt\|Workflow video |
-| **Project Keywords** | Project keywords prompt | `KEY_PROJECT_KEYWORDS_PROMPT_ID` | Prompt sinh keyword cho project |
-| **FAQ** | Renew FAQ prompt | `KEY_RENEW_FAQ_PROMPT_ID` | Prompt tạo FAQ |
-| **Featured Snippet** | Featured snippet prompt | `KEY_FEATURED_SNIPPET_PROMPT_ID` | Prompt sinh featured snippet |
-| **Outline** | Outline heading regenerator | `KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID` | Prompt tạo lại heading |
-| **Translate** | Translate article prompt | `KEY_TRANSLATE_ARTICLE_PROMPT_ID` | Prompt dịch bài viết |
+| Section | Field | Key / Hook | Mô tả |
+|---------|-------|------------|-------|
+| **Task Workflows** | Publish / Rewrite / Post comment | `KEY_*_TASK` | Task orchestration — không phải Prompt binding |
+| **Prompt Hooks** | Dynamic selectors | `KEY_PROMPT_HOOK_BINDINGS` | Render từ `PromptHookEditorCatalog::settingsVisibleHooks()` |
+| **Editor Media** | Typography / Video | `KEY_CREATE_TYPOGRAPHY_*`, `KEY_CREATE_VIDEO_*` | Prompt\|Workflow (chưa Hook-hóa hết) |
+| | Product gallery source | `KEY_CREATE_PRODUCT_GALLERY_SOURCE` + binding `product.gallery.generate` | Prompt path dùng Settings binding |
+
+Legacy fields (`article_title_suggestion_prompt_id`, `renew_faq_prompt_id`, …) còn trong option JSON để rollback; **runtime đọc bindings** (migrate-on-read).
+
+Resolver: `SettingsPromptBindingResolver` — không tìm “active prompt by hook”.
+
+Used by / delete safety: `PromptUsageLocator`, `PromptDeleteGuard`.
+
+Default comment: `DefaultCommentPromptInstaller` + hook `article.comment.generate`.
 
 ### 2.2 Service: `SeoCreateArticleSettingsService`
 
@@ -134,10 +143,13 @@ Page cấu hình workflow quan trọng nhất — cho phép Manager **gán từn
 // Lưu và đọc settings cho workflows
 SeoCreateArticleSettingsService::KEY_PUBLISH_ARTICLE  // => trả về task_id
 SeoCreateArticleSettingsService::getPublishArticleTaskId()
+SeoCreateArticleSettingsService::KEY_PROMPT_HOOK_BINDINGS
+SeoCreateArticleSettingsService::getBoundPromptId('article.title_suggestion')
 ```
 
 Dùng trong:
 - `CreateArticlesFromTaskService.runFromKeywords()` — lấy task_id để chạy workflow tạo bài từ keyword
+- `SettingsPromptBindingResolver` — capability Settings → Prompt
 - `TaskWorkflowTestRunner` — resolve task/workflow cho từng action node
 
 ---
@@ -170,7 +182,10 @@ Layout 2 cột (4 + 8):
 - `ai_connection_id` (Select: chọn API connection) + nút "Sync models"
 - `model_category` (Select: model category từ connection — gemini_pro, gemini_flash, ...)
 - `tool` (Radio: `text` | `image`) — quyết định hiển thị post-processing section
-- `is_active` (Toggle)
+- Name, Hook (Unassigned nếu null), AI connection, **Used by**, Actions (Test/Edit/Delete)
+- **Không còn** cột Status / Toggle `is_active`
+- Delete bị chặn nếu Settings binding hoặc Task Prompt Block đang tham chiếu
+- Đổi Hook bị chặn nếu Prompt đang bị Settings binding theo Hook cũ
 - `variables` (Repeater: key + label + required + type) — **auto-sync từ nội dung markdown**
 
 **Cột phải (8): Nội dung**

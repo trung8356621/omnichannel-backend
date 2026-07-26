@@ -387,8 +387,10 @@ flowchart TB
 
 | Service | File | Mô tả |
 |---------|------|-------|
-| **CreateArticlesFromTaskService** | `CreateArticlesFromTaskService.php` | `runPublishWorkflowForContext()`: chạy workflow → resolve/create `SeoArticle` local; `ensureArticlePostType()` theo `TaskTestContext.postType` (skip REWRITE). Không gọi WP sync. |
-| **TaskWorkflowTestRunner** | `TaskWorkflowTestRunner.php` | Engine workflow: AI → `PromptTestPublishService.publishArticle` (chỉ Laravel). Gallery product chỉ khi `isProductWorkflowContext`. Tạo bài qua `createArticleFromContext()` dùng `context.postType`. |
+| **CreateArticlesFromTaskService** | `CreateArticlesFromTaskService.php` | Phase 0.6: CREATE → `ArticleWritingExecutionService` PublishGraph; TYPE_REWRITE «Tạo lại bài từ dàn ý» → ContentNode (không chạy lại outline); TYPE_IMPROVE → `ArticleImproveExecutionService` (không Publish). `runOutlineThenArticleForContext()` = outline mới + article. Không đọc `rewrite_article_task_id`. |
+| **ArticleWritingExecutionService** | `ArticleWritingExecutionService.php` | Entry duy nhất `article.content.generate`: validate source → provider → format → Prompt owner XOR → execute (publish_graph / content_node / direct_generate) → persist + history. |
+| **ArticleImproveExecutionService** | `ArticleImproveExecutionService.php` | Improve riêng (`article.content.improve` Settings binding). Không generate / không outline / không `article_length` full / không `getPublishArticleTaskId()`. |
+| **TaskWorkflowTestRunner** | `TaskWorkflowTestRunner.php` | Engine workflow: AI → `PromptTestPublishService.publishArticle` (chỉ Laravel). Content generate stamp `prompt_owner_type=workflow_node`. Gallery product chỉ khi `isProductWorkflowContext`. |
 | **TaskTestInputResolver** | `TaskTestInputResolver.php` | `resolveForProjectTask()`: Create → `contextForNewArticleOnSite` (không copy keyword↔title); inject optional Keyword/Title/`secondary_description`. Rewrite/Improve → `resolveExistingArticleRewrite()` (body Markdown + notes); thiếu bài → **throw**. |
 | **SeoProjectTaskSyncDataNormalizer** | `Support/SeoProjectTaskSyncDataNormalizer.php` | Chuẩn hóa Create/Rewrite/Improve; derive `source_content`; `allowedSiteIds()` = `SeoAccessControl::accessibleSiteIds()`. |
 | **PromptTestPublishService** | `PromptTestPublishService.php` | `publishArticle()` lưu title/body/meta Laravel + `markLocalEditPending` — **không** `WordPressArticleSyncService`. |
@@ -560,6 +562,247 @@ Edit repeater: `extraItemActions` **Di chuyển** item sang project tháng/archi
 
 ---
 
+## Phase 0.7 — Workflow execution roles + bulk 3 action + Improve default
+
+### Storage
+
+`SeoTask.flow_data.nodes[].data.execution_role` — không migration DB.
+
+### Registry
+
+`WorkflowExecutionRoleRegistry` + enum `WorkflowExecutionRole`:
+
+| Role | Label VI |
+|---|---|
+| `article.outline.generate` | Tạo dàn ý |
+| `article.content.generate` | Viết bài |
+| `article.content.improve` | Cải thiện bài viết |
+| `article.image.generate` | Tạo hình ảnh |
+
+Runtime lookup: `WorkflowExecutionRoleResolver` — **không** title/hook heuristic.
+
+### Migration command
+
+```text
+php artisan seo:workflow:assign-execution-roles
+php artisan seo:workflow:assign-execution-roles --apply
+```
+
+Auto-assign chỉ khi hook map 1-1 và không duplicate. Ambiguous → null (operator chọn trong Builder).
+
+Improve default binding (plain `php`, không dùng `$PHP_BIN`):
+
+```text
+php artisan seo:prompt:install-default-improve
+```
+Ba action (`ContentProjectBulkRerunService`):
+
+1. `regenerate_outline` — chỉ outline role
+2. `regenerate_article` — chỉ content role (dàn ý hiện tại)
+3. `regenerate_outline_and_article` — outline mới → artifact hash → content; outline fail → article blocked
+
+### Improve default
+
+`DefaultImprovePromptInstaller` + migration `2026_07_26_140000_*` — Prompt + Settings binding nếu thiếu; không overwrite binding đã có.
+
+Scope: `article|section|selection` — hiện chỉ `article` persist an toàn; selection/section reject rõ.
+
+### Heuristic đã xóa (runtime)
+
+- `ArticleWritingExecutionService::resolveContentNodeId` title/2nd-prompt fallback
+- `SeoProjectWorkflowStepCatalogService::detectKind` title haystack
+
+Giữ suggester title-free; only hook trong `WorkflowRoleMigrationSuggester`.
+
+---
+
+## Phase 0.9 — Remove remaining heuristics + lock Article Writing contract
+
+### Runtime contract only
+
+`execution_role` / `source_type` / execution snapshot / explicit `node_id` / prompt owner.
+
+Heuristic title/position **đã xóa** khỏi:
+
+- `TaskWorkflowTestRunner` (`captureOutlinePromptOutput`, filter hydrate, merge-outline support)
+- `ArticleGenerationInputResolver::isOutlineProducerStep`
+- `WorkflowExistingAiOutputService::outputType`
+- Builder `isWriteFromOutlinePrompt` (hook / `supports_merge_outline_save`)
+
+Heuristic **chỉ còn** `WorkflowRoleMigrationSuggester` (migration/audit).
+
+### Legacy
+
+- `rewrite_article_task_id` DB **giữ**; runtime không đọc `getRewriteArticleTaskId()`
+- `ArticleWritingLegacyRewriteAdapter` mỏng: remap hook + map existing_article + log + delegate
+
+### Retry
+
+Thiếu snapshot → `Không thể thử lại lần chạy cũ. Hãy chọn «Chạy lại bằng cấu hình hiện tại».` — không vá live.
+
+### Tests
+
+`ArticleWritingPhase09Test` + cập nhật ExistingAiOutput / PipelineRerun detectKind.
+
+---
+
+## Phase 1.0 — Stable lock + legacy surface cleanup
+
+### Contract cuối
+
+`article.content.generate` + `source_type` ∈ {outline, existing_article, brief}  
+`article.content.improve` tách riêng  
+`article.content.rewrite` = **DEPRECATED COMPATIBILITY ONLY** → remap generate + existing_article
+
+### UI
+
+- Settings: không render rewrite selector; save **preserve** `rewrite_article_task_id`
+- Hook selector: không cho tạo mới rewrite; Prompt cũ xem được + warning/badge Legacy
+- Duplicate Prompt rewrite → remap generate
+- Builder: merge-outline chỉ `article.content.generate`
+
+### Stable Gate
+
+`ArticleWritingStableHealthService` + `seo:workflow:doctor` in:
+
+`Article Writing Stable Gate: PASS|WARN|FAIL`
+
+### Adapter callers
+
+- `PromptHookExplicitBindingExecutor` — chỉ khi hook rewrite
+- `TaskWorkflowTestRunner` — chỉ khi hook rewrite  
+Generate binding **không** log `article_writing.legacy_adapter_used`
+
+### DB
+
+`rewrite_article_task_id` — deprecated_since Phase 1.0; planned_drop sau khi adapter log=0; **không drop** release này.
+
+### Tests
+
+`ArticleWritingStablePhase10Test`
+
+---
+
+## Phase 0.8 — Production canary + workflow configuration enforcement
+
+### Settings bind validation
+
+`WorkflowAssignmentValidator` + enum `WorkflowCapability`:
+
+| Capability | Roles bắt buộc |
+|---|---|
+| Publish article | outline + content |
+| Content-only | content |
+| Improve (nếu Workflow) | improve |
+| Media/gallery/video | không ép `article.image.generate` cứng |
+
+Save Settings fail rõ (tên WF + role thiếu + link Builder) — không toast success.
+
+### Builder save
+
+`WorkflowExecutionRoleResolver::validateFlowData` + `validateFlowPreservesSettingsBindings`:
+
+- duplicate unique role, wrong node type, hook mismatch
+- broken edges, role thiếu Prompt / Prompt missing
+- Settings đang bind → không cho xóa role bắt buộc
+
+### Snapshot
+
+`WorkflowExecutionSnapshot` / `WorkflowExecutionSnapshotBuilder`:
+
+- `workflow_id`, `flow_data_hash`, nodes[`node_id`,`execution_role`,`prompt_id`]
+- Gắn vào `SeoProjectRun.settings.workflow_execution_snapshot` lúc `startRun`
+- Stamp vào CreateArticles / retry snapshot (`content_node_id`)
+
+Retry: dùng node/prompt/length từ snapshot — thiếu node → lỗi rõ (không nhảy live).  
+Rerun: config hiện tại.
+
+### Doctor
+
+```text
+php artisan seo:workflow:doctor
+php artisan seo:workflow:doctor {workflowId}
+```
+
+Exit 0 = không blocking; ≠0 = có blocking.
+
+### Settings health UI
+
+Placeholder dưới Publish: `✓ Workflow hợp lệ` / `⚠ Thiếu vai trò: …` + link Builder.
+
+### Legacy log
+
+`article_writing.legacy_adapter_used` từ `ArticleWritingLegacyRewriteAdapter::logLegacyAdapterUsed`.
+
+### Canary evidence
+
+`docs/audits/ARTICLE_WRITING_PHASE08_CANARY.md` — operator paste. Verdict **Stable candidate** chỉ khi canary A–F pass trên host.
+
+### Remaining risks
+
+- `TaskWorkflowTestRunner` / `ArticleGenerationInputResolver` còn title haystack phụ — audit Phase 0.9
+- Image role hooks (gallery/typography/video) chưa tách role riêng
+- Legacy DB `rewrite_article_task_id` + adapter giữ
+
+---
+
+## Phase 0.6 — Article Writing runtime stabilization
+
+### Source contract (`article.content.generate`)
+
+| `source_type` | Provider | Caller chính |
+|---|---|---|
+| `outline` | `OutlineArticleWritingSourceProvider` | First-run CREATE; CP «Tạo lại bài từ dàn ý» |
+| `existing_article` | `ExistingArticleWritingSourceProvider` | Editor «Viết lại toàn bộ bài hiện có»; legacy rewrite adapter |
+| `brief` | `BriefArticleWritingSourceProvider` | Manual Task Test raw input (stamp bắt buộc) |
+
+Improve **không** dùng source contract này — capability `article.content.improve`.
+
+### Workflow mapping
+
+| Flow | Mode | Notes |
+|---|---|---|
+| First-run / CREATE | `publish_graph` | Outline node rồi content node (artifact vừa tạo) |
+| CP regenerate article | `content_node` | Không chạy lại outline |
+| CP outline + article | `publish_graph` via `runOutlineThenArticleForContext` | Outline mới → article |
+| Editor full rewrite | `direct_generate` | Settings-owned; không Publish graph; `EditArticle::queueEditorFullRewrite` → `resolveEditorFullRewrite` |
+| Improve | `ArticleImproveExecutionService` | Settings `article.content.improve` |
+
+### Prompt owner
+
+- Ngoài workflow: `settings_binding` → `PromptBindingResolver` / `article.content.generate`
+- Content node: `workflow_node` + `prompt_id` node — **không** resolve Settings song song
+- History: `prompt_owner_type`, `prompt_owner_id`, `prompt_id`, `hook_key` (+ source badge / length / artifact ids trên `/articles/{id}/prompts`)
+
+### Retry vs rerun
+
+- **Retry same execution:** `ArticleWritingExecutionContext.useRetrySnapshot=true` — giữ source_type, source hash/artifact refs, prompt owner/id, `article_length`
+- **Rerun / new execution:** resolve lại Settings, binding, length, outline artifact hiện tại
+
+### Persistence + stale write
+
+- Canonical body/title/meta: `PromptTestPublishService::publishArticle` (+ conflict guard `expected_updated_at` / content hash)
+- Late result: `persist_status=ignored_stale` — history có thể ghi, canonical article không overwrite manual edit
+- Editor/CP pass `expectedUpdatedAt` vào execution context
+
+### Legacy
+
+- `ArticleWritingLegacyRewriteAdapter`: map → `existing_article` → `ArticleWritingExecutionService` (mỏng; không tự persist/workflow)
+- `rewrite_article_task_id`: DB legacy only — runtime không đọc
+
+### Manual verification
+
+```text
+A CP «Tạo lại bài từ dàn ý» → Source Outline; không chạy outline node
+B Editor «Viết lại toàn bộ…» → Source Existing article; Settings owner
+C Brief Task Test → Source Brief; labels đúng
+D Retry after Settings change → snapshot cũ
+E Rerun → config mới
+F Stale: user sửa khi job pending → late result ignored_stale
+```
+
+---
+
 ## Hướng dẫn prompt — Content Projects
 
 ```
@@ -569,7 +812,7 @@ Pages: ListSeoProjects, CreateSeoProject, EditSeoProject, ViewSeoProject,
 Models: SeoProject, SeoProjectTask, SeoProjectRun, SeoProjectRunItem, SeoProjectTaskEvent
 Core Service: SeoProjectWorkflowRunService
 Run items SoT: SeoProjectRunItemService + SeoProjectRunItemsReader (DB XOR JSON)
-Task Execution: CreateArticlesFromTaskService → TaskWorkflowTestRunner
+Task Execution: CreateArticlesFromTaskService → ArticleWritingExecutionService / ArticleImproveExecutionService → TaskWorkflowTestRunner
 Preflight: SeoProjectRunPreflightService
 Consolidation: SeoProjectRunConsolidationService (mark consolidated, không hard-delete)
 Run table display: SeoProjectRunItemsDisplayPresenter (1 task = 1 row)
@@ -584,4 +827,5 @@ Keyword AI Gen: SeoProjectKeywordAiGeneratorService
 Approval: SeoProjectApprovalService
 Article Owner Sync: SeoProjectArticleOwnerSyncService
 Link History: PromptResultLinkService, ArticlePromptRunHistoryService
+Article Writing: ArticleWritingExecutionService + source providers; Improve: ArticleImproveExecutionService
 ```

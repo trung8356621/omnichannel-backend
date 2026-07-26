@@ -6,6 +6,9 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 
+/**
+ * Prompt option lists for Settings — no is_active filter (ownership model).
+ */
 final class SeoPromptSettingsOptionsService
 {
     /**
@@ -13,7 +16,7 @@ final class SeoPromptSettingsOptionsService
      */
     public function activePromptOptions(): array
     {
-        return $this->activePromptOptionsForTools(null);
+        return $this->promptOptionsForTools(null);
     }
 
     /**
@@ -21,17 +24,15 @@ final class SeoPromptSettingsOptionsService
      */
     public function activeImagePromptOptions(): array
     {
-        return $this->activePromptOptionsForTools(['image']);
+        return $this->promptOptionsForTools(['image']);
     }
 
     /**
-     * Image + Image Typography (editor general image source).
-     *
      * @return array<int, string>
      */
     public function activeAnyImagePromptOptions(): array
     {
-        return $this->activePromptOptionsForTools(['image', 'image_typography']);
+        return $this->promptOptionsForTools(['image', 'image_typography']);
     }
 
     /**
@@ -39,27 +40,7 @@ final class SeoPromptSettingsOptionsService
      */
     public function activeTypographyImagePromptOptions(): array
     {
-        return $this->activePromptOptionsForTools(['image_typography']);
-    }
-
-    /**
-     * Prompt đang gắn đúng hook_key (Prompt Hook Phase 1).
-     *
-     * @return array<int, string>
-     */
-    public function activePromptOptionsForHook(string $hookKey): array
-    {
-        $hookKey = trim($hookKey);
-        if ($hookKey === '') {
-            return [];
-        }
-
-        return SeoPrompt::query()
-            ->where('is_active', true)
-            ->where('hook_key', $hookKey)
-            ->orderBy('name')
-            ->pluck('name', 'id')
-            ->all();
+        return $this->promptOptionsForTools(['image_typography']);
     }
 
     /**
@@ -67,16 +48,43 @@ final class SeoPromptSettingsOptionsService
      */
     public function activeVideoPromptOptions(): array
     {
-        return $this->activePromptOptionsForTools(['video']);
+        return $this->promptOptionsForTools(['video']);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public function activePromptOptionsForHook(string $hookKey): array
+    {
+        return $this->promptOptionsForHook($hookKey);
+    }
+
+    /**
+     * Prompt gắn đúng hook_key (Settings binding dropdown).
+     *
+     * @return array<int, string>
+     */
+    public function promptOptionsForHook(string $hookKey): array
+    {
+        $hookKey = trim($hookKey);
+        if ($hookKey === '') {
+            return [];
+        }
+
+        return SeoPrompt::query()
+            ->where('hook_key', $hookKey)
+            ->orderBy('name')
+            ->pluck('name', 'id')
+            ->all();
     }
 
     /**
      * @param  list<string>|null  $tools
      * @return array<int, string>
      */
-    private function activePromptOptionsForTools(?array $tools): array
+    public function promptOptionsForTools(?array $tools): array
     {
-        $query = SeoPrompt::query()->where('is_active', true);
+        $query = SeoPrompt::query();
 
         if ($tools !== null && $tools !== []) {
             $query->whereIn('tools', $tools);
@@ -86,5 +94,14 @@ final class SeoPromptSettingsOptionsService
             ->orderBy('name')
             ->pluck('name', 'id')
             ->all();
+    }
+
+    /**
+     * @param  list<string>|null  $tools
+     * @return array<int, string>
+     */
+    private function activePromptOptionsForTools(?array $tools): array
+    {
+        return $this->promptOptionsForTools($tools);
     }
 }

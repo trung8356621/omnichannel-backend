@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Enums\ArticleWritingSourceType;
+use App\Addons\SeoContentAi\Enums\WorkflowExecutionRole;
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
@@ -43,6 +45,8 @@ final class TaskWorkflowTestRunner
         private readonly ArticleMediaLocalService $articleMediaLocal,
         private readonly PromptHookExplicitBindingExecutor $hookBindingExecutor,
         private readonly ArticleGenerationInputResolver $articleGenerationInput,
+        private readonly ArticleWritingAssembler $articleWritingAssembler,
+        private readonly ArticleWritingLegacyRewriteAdapter $legacyRewriteAdapter,
         private readonly PromptHookUiFailureMapper $hookFailureMapper = new PromptHookUiFailureMapper,
     ) {}
 
@@ -272,12 +276,9 @@ final class TaskWorkflowTestRunner
 
         $data = is_array($node['data'] ?? null) ? $node['data'] : [];
         $filterType = (string) ($data['filterType'] ?? $data['filter_type'] ?? $data['type'] ?? '');
-        $title = mb_strtolower(trim((string) ($node['title'] ?? '')));
+        // Explicit filter type only — không title heuristic.
         $isOutlineFilter = $filterType === 'parse_outline'
-            || str_contains($filterType, 'outline')
-            || str_contains($title, 'outline')
-            || str_contains($title, 'dàn ý')
-            || str_contains($title, 'dan y');
+            || str_contains($filterType, 'outline');
 
         if (! $isOutlineFilter) {
             return;
@@ -588,14 +589,70 @@ final class TaskWorkflowTestRunner
 
             try {
                 if ($this->isArticleContentGenerationPrompt($node, $prompt)) {
-                    $resolved = $this->resolveArticleGenerationInputForPrompt(
+                    $outlineFromWorkflow = $this->resolveOutlineArtifactForPrompt(
                         $nodeId,
                         $edges,
                         $state,
                         $context,
                         $variables,
                     );
-                    if ($resolved === null) {
+
+                    // DEPRECATED COMPATIBILITY ONLY — chỉ khi Hook thật sự là rewrite.
+                    try {
+                        $binding = PromptHookBinding::tryFromPrompt($prompt);
+                        $hookKey = trim((string) ($binding?->hookKey ?? ''));
+                        if ($this->legacyRewriteAdapter->isLegacyRewriteHook($hookKey)
+                            && ArticleWritingSourceType::tryFromMixed(
+                                $variables['article_writing_source_type'] ?? $variables['source_type'] ?? null,
+                            ) === null
+                        ) {
+                            $this->legacyRewriteAdapter->logLegacyAdapterUsed(
+                                caller: self::class.'::runPromptNode',
+                                articleId: ($state->article ?? $context->article) !== null
+                                    ? (int) ($state->article ?? $context->article)->getKey()
+                                    : null,
+                                mappedSourceType: ArticleWritingSourceType::ExistingArticle->value,
+                            );
+                            $variables['legacy_rewrite_adapter'] = true;
+                            $variables['legacy_caller'] = self::class;
+                            $variables['article_writing_source_type'] = ArticleWritingSourceType::ExistingArticle->value;
+                            $variables['source_type'] = ArticleWritingSourceType::ExistingArticle->value;
+                        }
+                    } catch (\InvalidArgumentException) {
+                        // ignore
+                    }
+
+                    $assembled = $this->articleWritingAssembler->assembleForPrompt(
+                        $variables,
+                        $context,
+                        $outlineFromWorkflow,
+                    );
+                    if ($assembled !== null) {
+                        // Workflow content node owns Prompt — không Settings binding song song.
+                        $variables = $assembled['variables'];
+                        $variables['prompt_owner_type'] = 'workflow_node';
+                        $variables['prompt_owner_id'] = $nodeId;
+                        $variables['prompt_id'] = (int) $prompt->id;
+                        $variables['hook_key'] = ArticleWritingExecutionService::HOOK_KEY;
+                        $variables['workflow_node_title'] = $title;
+                        $roleRaw = is_array($node['data'] ?? null)
+                            ? trim((string) ($node['data']['execution_role'] ?? ''))
+                            : '';
+                        if ($roleRaw !== '') {
+                            $variables['execution_role'] = $roleRaw;
+                        }
+                        $assembled['variables'] = $variables;
+                    }
+                    if ($assembled === null) {
+                        $sourceType = ArticleWritingSourceType::tryFromMixed(
+                            $variables['article_writing_source_type'] ?? $variables['source_type'] ?? null,
+                        );
+                        $failMessage = $sourceType === ArticleWritingSourceType::ExistingArticle
+                            ? 'Bài viết không có nội dung để viết lại toàn bộ.'
+                            : ($sourceType === ArticleWritingSourceType::Brief
+                                ? 'Thiếu tiêu đề / từ khóa / mô tả để viết bài từ brief.'
+                                : ArticleGenerationInputResolver::REJECT_MESSAGE);
+
                         return [
                             'node_id' => $nodeId,
                             'type' => $type,
@@ -603,12 +660,14 @@ final class TaskWorkflowTestRunner
                             'status' => 'failed',
                             'prompt_id' => $prompt->id,
                             'prompt_name' => (string) $prompt->name,
-                            'message' => ArticleGenerationInputResolver::REJECT_MESSAGE,
+                            'message' => $failMessage,
                         ];
                     }
-                    $input = $resolved->rawArtifact;
-                    $variables['input'] = $input;
-                    $variables = array_merge($variables, $resolved->toDebugVariables());
+                    $variables = $assembled['variables'];
+                    $input = (string) $variables['input'];
+                    if ($assembled['writing']->sourceType === ArticleWritingSourceType::Outline) {
+                        $state->meta['direct_publish_outline_markdown'] = $assembled['writing']->input;
+                    }
                 } else {
                     $input = $this->resolveInputForNode($nodeId, $edges, $state);
                     if ($input === '') {
@@ -647,6 +706,8 @@ final class TaskWorkflowTestRunner
                         'status' => 'skipped',
                         'prompt_id' => $prompt->id,
                         'prompt_name' => (string) $prompt->name,
+                        'hook_key' => $this->promptHookKey($prompt),
+                        'execution_role' => $this->nodeExecutionRoleValue($node),
                         'output' => $output,
                         'outputs' => $state->nodeOutputs[$nodeId],
                         'outline_markdown' => $outlinePersistedMarkdown !== '' ? $outlinePersistedMarkdown : null,
@@ -746,6 +807,7 @@ final class TaskWorkflowTestRunner
                         'prompt_name' => (string) $prompt->name,
                         'hook_key' => $hookResult['hook_key'],
                         'hook_version' => $hookResult['hook_version'],
+                        'execution_role' => $this->nodeExecutionRoleValue($node),
                         'execution_source' => $hookResult['execution_source'],
                         'correlation_id' => $hookResult['correlation_id'],
                         'ai_model' => $hookResult['model'],
@@ -831,6 +893,8 @@ final class TaskWorkflowTestRunner
                     'status' => $result->status === 'completed' ? 'completed' : 'failed',
                     'prompt_id' => $prompt->id,
                     'prompt_name' => (string) $prompt->name,
+                    'hook_key' => $this->promptHookKey($prompt),
+                    'execution_role' => $this->nodeExecutionRoleValue($node),
                     'ai_model' => $isImagePipeline
                         ? null
                         : ($model !== '' ? $model : null),
@@ -1653,7 +1717,8 @@ final class TaskWorkflowTestRunner
     }
 
     /**
-     * Outline prompt (không phải «viết bài theo dàn ý»): ghi output vào state để persist seo_article_outline.
+     * Outline role / hook: ghi output vào state để persist seo_article_outline.
+     * Không đoán theo title Prompt.
      *
      * @param  array<string, mixed>  $node
      */
@@ -1667,18 +1732,8 @@ final class TaskWorkflowTestRunner
             return '';
         }
 
-        if ($this->existingAiOutput->outputType($node, $prompt) !== WorkflowExistingAiOutputService::TYPE_OUTLINE) {
-            $haystack = mb_strtolower(trim((string) ($node['title'] ?? '')).' '.trim((string) ($prompt->name ?? '')));
-            $looksLikeOutline = str_contains($haystack, 'outline')
-                || str_contains($haystack, 'dàn ý')
-                || str_contains($haystack, 'dan y');
-            $looksLikeContent = str_contains($haystack, 'viết bài')
-                || str_contains($haystack, 'viet bai')
-                || str_contains($haystack, 'nội dung')
-                || str_contains($haystack, 'noi dung');
-            if (! $looksLikeOutline || $looksLikeContent) {
-                return '';
-            }
+        if (! $this->isOutlineExecutionNode($node, $prompt)) {
+            return '';
         }
 
         // Prefer raw artifact (markers preserved). Fallback cleaned chỉ khi output không đúng contract.
@@ -1707,8 +1762,46 @@ final class TaskWorkflowTestRunner
     /**
      * @param  array<string, mixed>  $node
      */
+    private function isOutlineExecutionNode(array $node, SeoPrompt $prompt): bool
+    {
+        $role = WorkflowExecutionRole::tryFromMixed($node['data']['execution_role'] ?? null);
+        if ($role === WorkflowExecutionRole::ArticleOutlineGenerate) {
+            return true;
+        }
+        if (
+            $role === WorkflowExecutionRole::ArticleContentGenerate
+            || $role === WorkflowExecutionRole::ArticleContentImprove
+        ) {
+            return false;
+        }
+
+        if ($this->existingAiOutput->outputType($node, $prompt) === WorkflowExistingAiOutputService::TYPE_OUTLINE) {
+            return true;
+        }
+
+        try {
+            $binding = PromptHookBinding::tryFromPrompt($prompt);
+            $hookKey = trim((string) ($binding?->hookKey ?? ''));
+
+            return $hookKey === ArticleGenerationInputResolver::OUTLINE_HOOK_KEY;
+        } catch (\InvalidArgumentException) {
+            return false;
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $node
+     */
     private function isArticleContentGenerationPrompt(array $node, SeoPrompt $prompt): bool
     {
+        $role = WorkflowExecutionRole::tryFromMixed($node['data']['execution_role'] ?? null);
+        if ($role === WorkflowExecutionRole::ArticleContentGenerate) {
+            return true;
+        }
+        if ($role === WorkflowExecutionRole::ArticleOutlineGenerate) {
+            return false;
+        }
+
         if ($this->existingAiOutput->outputType($node, $prompt) === WorkflowExistingAiOutputService::TYPE_CONTENT) {
             return true;
         }
@@ -1728,6 +1821,56 @@ final class TaskWorkflowTestRunner
         }
 
         return false;
+    }
+
+    /**
+     * Resolve raw outline artifact cho source=outline (edge / meta / vars / article).
+     * Không format — ArticleWritingAssembler lo phần format.
+     *
+     * @param  list<array<string, mixed>>  $edges
+     * @param  array<string, mixed>  $variables
+     */
+    private function resolveOutlineArtifactForPrompt(
+        string $targetNodeId,
+        array $edges,
+        WorkflowExecutionState $state,
+        TaskTestContext $context,
+        array $variables,
+    ): ?ArticleGenerationSourceResult {
+        $sourceType = ArticleWritingSourceType::tryFromMixed(
+            $variables['article_writing_source_type'] ?? $variables['source_type'] ?? null,
+        );
+
+        // existing_article / brief: không resolve outline, không fallback body→outline.
+        if ($sourceType === ArticleWritingSourceType::ExistingArticle
+            || $sourceType === ArticleWritingSourceType::Brief
+        ) {
+            return null;
+        }
+
+        $rawPrefill = trim((string) ($variables['article_writing_raw_input'] ?? ''));
+        if ($rawPrefill !== '') {
+            $fromPrefill = $this->articleGenerationInput->tryResolveFromRawArtifact(
+                $rawPrefill,
+                (string) ($variables['article_generation_source'] ?? ArticleGenerationSourceResult::SOURCE_RAW_ARTIFACT),
+                isset($variables['source_run_id']) ? (int) $variables['source_run_id'] : null,
+                isset($variables['source_run_item_id']) ? (int) $variables['source_run_item_id'] : null,
+                isset($variables['source_prompt_result_id']) ? (int) $variables['source_prompt_result_id'] : null,
+            );
+            if ($fromPrefill instanceof ArticleGenerationSourceResult) {
+                $state->meta['direct_publish_outline_markdown'] = $fromPrefill->rawArtifact;
+
+                return $fromPrefill;
+            }
+        }
+
+        return $this->resolveArticleGenerationInputForPrompt(
+            $targetNodeId,
+            $edges,
+            $state,
+            $context,
+            $variables,
+        );
     }
 
     /**
@@ -1798,19 +1941,38 @@ final class TaskWorkflowTestRunner
         return null;
     }
 
+    /**
+     * @param  array<string, mixed>  $node
+     */
+    private function nodeExecutionRoleValue(array $node): ?string
+    {
+        return WorkflowExecutionRole::tryFromMixed($node['data']['execution_role'] ?? null)?->value;
+    }
+
+    private function promptHookKey(SeoPrompt $prompt): ?string
+    {
+        try {
+            $binding = PromptHookBinding::tryFromPrompt($prompt);
+            $hook = trim((string) ($binding?->hookKey ?? ''));
+
+            return $hook !== '' ? $hook : null;
+        } catch (\InvalidArgumentException) {
+            return null;
+        }
+    }
+
     private function promptSupportsMergeOutlineSave(SeoPrompt $prompt): bool
     {
-        $name = mb_strtolower(trim((string) $prompt->name));
+        try {
+            $binding = PromptHookBinding::tryFromPrompt($prompt);
+            $hook = trim((string) ($binding?->hookKey ?? ''));
 
-        if ($name === '') {
+            return $hook === ArticleWritingExecutionService::HOOK_KEY
+                || $hook === ArticleWritingLegacyRewriteAdapter::LEGACY_REWRITE_HOOK
+                || $hook === 'article.content.generate';
+        } catch (\InvalidArgumentException) {
             return false;
         }
-
-        if (str_contains($name, 'theo dàn')) {
-            return true;
-        }
-
-        return str_contains($name, 'viết') && str_contains($name, 'dàn ý');
     }
 
     /**
@@ -2770,16 +2932,15 @@ final class TaskWorkflowTestRunner
         }
 
         if (is_numeric($promptId)) {
-            return SeoPrompt::query()->where('is_active', true)->find((int) $promptId);
+            return SeoPrompt::query()->find((int) $promptId);
         }
 
         $idString = (string) $promptId;
         if (preg_match('/^p(\d+)$/', $idString, $matches)) {
-            return SeoPrompt::query()->where('is_active', true)->find((int) $matches[1]);
+            return SeoPrompt::query()->find((int) $matches[1]);
         }
 
         return SeoPrompt::query()
-            ->where('is_active', true)
             ->where('id', $idString)
             ->first();
     }
@@ -2801,7 +2962,7 @@ final class TaskWorkflowTestRunner
             return 'Không tìm thấy prompt «'.(string) $promptId.'». Mở Builder → gắn lại prompt cho widget này.';
         }
 
-        $inactive = SeoPrompt::query()->whereKey($numericId)->where('is_active', false)->exists();
+        $inactive = false;
         if ($inactive) {
             return 'Prompt #'.$numericId.' đang tắt (is_active=0). Bật lại prompt hoặc chọn prompt khác trong Builder.';
         }

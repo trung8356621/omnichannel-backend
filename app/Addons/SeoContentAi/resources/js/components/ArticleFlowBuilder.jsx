@@ -79,8 +79,30 @@ function isWriteFromOutlinePrompt(promptId) {
     return true;
   }
 
-  const name = String(config.name ?? '').toLowerCase();
-  return name.includes('theo dàn') || (name.includes('viết') && name.includes('dàn ý'));
+  const hook = String(config.hook_key ?? '').trim();
+  return hook === 'article.content.generate';
+}
+
+function defaultWorkflowRoleOptions() {
+  return [
+    { value: '', label: 'Không gán vai trò' },
+    { value: 'article.outline.generate', label: 'Tạo dàn ý' },
+    { value: 'article.content.generate', label: 'Viết bài' },
+    { value: 'article.content.improve', label: 'Cải thiện bài viết' },
+    { value: 'article.image.generate', label: 'Tạo hình ảnh' },
+  ];
+}
+
+function getWorkflowRoleOptions() {
+  const fromWindow = typeof window !== 'undefined' ? window.__SEO_WORKFLOW_ROLES__ : null;
+  if (Array.isArray(fromWindow) && fromWindow.length > 0) {
+    return fromWindow.map((row) => ({
+      value: String(row?.value ?? ''),
+      label: String(row?.label ?? row?.value ?? ''),
+    }));
+  }
+
+  return defaultWorkflowRoleOptions();
 }
 
 function defaultPromptNodeData(promptId) {
@@ -89,6 +111,7 @@ function defaultPromptNodeData(promptId) {
   return {
     promptId: config?.id ?? 'p1',
     mergeOutlineToSave: false,
+    execution_role: '',
   };
 }
 
@@ -229,9 +252,11 @@ function normalizeNodes(nodes) {
     }
 
     if (next.type === 'prompt') {
+      const roleRaw = next.data?.execution_role;
       const promptData = {
         ...next.data,
         mergeOutlineToSave: Boolean(next.data?.mergeOutlineToSave),
+        execution_role: roleRaw == null ? '' : String(roleRaw),
       };
       // Model routing thống nhất AI Advanced / PromptRunner — không lưu aiModel trên node.
       delete promptData.aiModel;
@@ -983,6 +1008,34 @@ export default function ArticleFlowBuilder({
                       className="w-full"
                       options={mockPrompts.map((p) => ({ value: p.id, label: p.name }))}
                     />
+                  </div>
+                  <div>
+                    <label className={`text-xs block mb-1 ${t.label}`}>Vai trò thực thi</label>
+                    <SeoSelect
+                      value={selectedNode.data.execution_role ?? ''}
+                      onChange={(e) => updateNodeData(selectedNode.id, 'execution_role', e.target.value)}
+                      className="w-full"
+                      options={getWorkflowRoleOptions()}
+                    />
+                    {(() => {
+                      const role = String(selectedNode.data.execution_role ?? '').trim();
+                      if (role === '') {
+                        return null;
+                      }
+                      const dup = nodes.some(
+                        (n) => n.id !== selectedNode.id
+                          && n.type === 'prompt'
+                          && String(n.data?.execution_role ?? '').trim() === role,
+                      );
+                      if (!dup) {
+                        return null;
+                      }
+                      return (
+                        <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
+                          Vai trò này đã gán cho Prompt Block khác — mỗi workflow chỉ nên một node / role.
+                        </p>
+                      );
+                    })()}
                   </div>
                   {isWriteFromOutlinePrompt(selectedNode.data.promptId) ? (
                     <div className="bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 p-3 rounded-lg">

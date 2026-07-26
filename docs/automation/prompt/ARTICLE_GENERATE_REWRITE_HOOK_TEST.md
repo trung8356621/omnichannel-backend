@@ -1,8 +1,9 @@
 # Article Generate + Rewrite Hook Vertical Slice — Hosting Checklist
 
 **Hooks:**
-- `article.content.generate@0.1.0` — **Viết bài viết**
-- `article.content.rewrite@0.1.0` — **Viết lại bài viết**
+- `article.content.generate@0.1.0` — **Viết bài viết** (sources: outline | existing_article | brief via `ArticleWritingExecutionService`)
+- `article.content.improve@0.1.0` — **Improve** (Settings-visible; `ArticleImproveExecutionService` — không full generation)
+- `article.content.rewrite@0.1.0` — **Legacy** → adapter `existing_article` + generate (không bind Prompt mới)
 
 **Template:** `legacy_prompt_content` (Prompt DB markdown = AI template)  
 **Output:** `markdown`  

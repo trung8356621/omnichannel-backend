@@ -49,6 +49,9 @@ class CreatePrompt extends SeoCreateRecord
             is_array($settings['post_processing'] ?? null) ? $settings['post_processing'] : [],
         );
 
+        // Legacy column kept; ownership model ignores it at runtime.
+        $data['is_active'] = true;
+
         return PromptHookFormSchema::normalizeForSave($data);
     }
 }

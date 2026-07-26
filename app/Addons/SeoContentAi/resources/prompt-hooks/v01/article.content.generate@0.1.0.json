@@ -3,8 +3,10 @@
   "key": "article.content.generate",
   "version": "0.1.0",
   "status": "experimental",
+  "settings_visible": true,
+  "category": "article_writing",
   "name": "Generate article content",
-  "description": "Generate a complete SEO article from structured planning inputs using the current Prompt record as template.",
+  "description": "Settings binding cho Editor «Viết lại toàn bộ» (source=existing_article) và direct generate. Content Project Publish vẫn dùng Prompt trên Workflow node.",
   "enabled": true,
   "classification": "NORMALIZE_NOW",
 
@@ -176,12 +178,33 @@
     "capability": "text"
   },
 
+  "presentation": {
+    "default_instructions": [
+      "Generate full article markdown from outline, existing article, or brief (source_type).",
+      "Respect outline structure when source is outline; do not invent conflicting facts.",
+      "Settings binding used by Editor full rewrite (source=existing_article) and direct generate."
+    ],
+    "output_format": [
+      "Markdown article body (no surrounding code fence)."
+    ],
+    "notes": [
+      "Hook key: article.content.generate — Content Project Publish still uses Workflow node Prompt.",
+      "Legacy article.content.rewrite is compatibility-only; do not bind new Prompts to it."
+    ]
+  },
+
   "metadata": {
-    "prompt_concern": "full article generation",
+    "prompt_concern": "full article generation (outline | existing_article | brief)",
     "workflow_concern": "consume planning outputs and expose article markdown",
     "domain_action_concern": "article persistence belongs to workflow action",
     "ui_concern": "Prompt Editor and Workflow Prompt block",
-    "article_length_unit": "words"
+    "article_length_unit": "words",
+    "source_type_rules": {
+      "outline": "Dàn ý và hướng dẫn viết là cấu trúc bắt buộc.",
+      "existing_article": "Viết lại toàn bộ bài hiện có, giữ thông tin đúng và hữu ích, không paraphrase từng câu, không giữ cấu trúc yếu chỉ vì bài cũ có.",
+      "brief": "Tự xây cấu trúc phù hợp từ tiêu đề/từ khóa/mô tả."
+    },
+    "replaces_hook": "article.content.rewrite"
   },
 
   "side_effects": []

@@ -5,7 +5,8 @@
     min-height: 28rem;
     border: 1px solid rgb(var(--gray-200));
     border-radius: 0.75rem;
-    overflow: hidden;
+    /* visible: Filament Choices dropdown must not be clipped by card */
+    overflow: visible;
     background: #fff;
 }
 
@@ -76,6 +77,15 @@
     flex: 1;
     min-width: 0;
     padding: 1.75rem 2rem 2rem;
+    overflow: visible;
+    position: relative;
+    z-index: 1;
+}
+
+/* Choices menus on Settings Workflows — sit above cards/footer when flipped up */
+.seo-settings-main .choices__list--dropdown,
+.seo-settings-main .choices__list[aria-expanded] {
+    z-index: 80;
 }
 
 .seo-ai-models-panel {

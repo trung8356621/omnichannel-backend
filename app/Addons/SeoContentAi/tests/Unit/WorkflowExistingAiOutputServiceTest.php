@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Tests\Unit;
 
+use App\Addons\SeoContentAi\Enums\WorkflowExecutionRole;
 use App\Addons\SeoContentAi\Models\ArticleMeta;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
@@ -21,9 +22,13 @@ final class WorkflowExistingAiOutputServiceTest extends TestCase
                 'meta_value' => '# Dàn ý đã có',
             ]),
         ]));
-        $prompt = (new SeoPrompt)->forceFill(['name' => 'Dàn ý bài viết']);
+        $prompt = (new SeoPrompt)->forceFill(['name' => 'Anything']);
 
-        $reuse = (new WorkflowExistingAiOutputService)->resolve([], $prompt, $article);
+        $reuse = (new WorkflowExistingAiOutputService)->resolve(
+            ['data' => ['execution_role' => WorkflowExecutionRole::ArticleOutlineGenerate->value]],
+            $prompt,
+            $article,
+        );
 
         self::assertSame(WorkflowExistingAiOutputService::TYPE_OUTLINE, $reuse['type']);
         self::assertSame('# Dàn ý đã có', $reuse['output']);
@@ -32,28 +37,22 @@ final class WorkflowExistingAiOutputServiceTest extends TestCase
     public function test_it_reuses_existing_content_for_the_article_writer_node(): void
     {
         $article = (new SeoArticle)->forceFill(['body' => '<p>Nội dung đã có</p>']);
-        $prompt = (new SeoPrompt)->forceFill(['name' => 'Viết bài theo dàn ý']);
+        $prompt = (new SeoPrompt)->forceFill(['name' => 'Anything']);
 
         $reuse = (new WorkflowExistingAiOutputService)->resolve([
-            'data' => ['mergeOutlineToSave' => true],
+            'data' => [
+                'execution_role' => WorkflowExecutionRole::ArticleContentGenerate->value,
+                'mergeOutlineToSave' => true,
+            ],
         ], $prompt, $article);
 
         self::assertSame(WorkflowExistingAiOutputService::TYPE_CONTENT, $reuse['type']);
         self::assertSame('<p>Nội dung đã có</p>', $reuse['output']);
     }
 
-    public function test_it_does_not_reuse_existing_content_when_regeneration_is_required(): void
+    public function test_prompt_name_alone_does_not_detect_outline(): void
     {
-        $article = (new SeoArticle)->forceFill(['body' => '<p>Existing content</p>']);
-        $prompt = (new SeoPrompt)->forceFill(['name' => 'Article writer']);
-
-        $reuse = (new WorkflowExistingAiOutputService)->resolve(
-            ['data' => ['mergeOutlineToSave' => true]],
-            $prompt,
-            $article,
-            allowReuse: false,
-        );
-
-        self::assertNull($reuse);
+        $prompt = (new SeoPrompt)->forceFill(['name' => 'Dàn ý bài viết outline']);
+        self::assertNull((new WorkflowExistingAiOutputService)->outputType([], $prompt));
     }
 }

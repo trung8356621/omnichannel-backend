@@ -6,6 +6,8 @@
   "description": "Experimental meta description — pinned 0.1.0",
   "enabled": true,
   "status": "experimental",
+  "settings_visible": true,
+  "category": "article_editor",
   "classification": "EXPERIMENTAL",
   "model": {
     "provider": "prompt_connection",
@@ -31,6 +33,23 @@
   "template": {
     "system": "Suggest one SEO meta description.",
     "user": "Title: {{title}}\nOld: {{old_description}}\nBetween {{min_length}} and {{max_length}} chars."
+  },
+  "presentation": {
+    "description": "Suggest an SEO meta description from the article title and current description.",
+    "default_instructions": [
+      "Return exactly one meta description paragraph as plain text.",
+      "Summarize the content accurately based on the title context.",
+      "Include the topic naturally — do not keyword-stuff.",
+      "Do not invent facts that are not present in the input.",
+      "Target length between the configured minimum and maximum characters."
+    ],
+    "output_format": [
+      "One complete meta description — no prefix, list, or explanation."
+    ],
+    "variables": [
+      { "key": "title", "required": true },
+      { "key": "old_description", "required": false }
+    ]
   },
   "retry": { "max": 0 },
   "logging": { "store_full_prompt": false, "redact_sensitive": true },

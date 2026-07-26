@@ -115,7 +115,7 @@ final class ArticleFaqEditorService
             );
         }
 
-        $prompt = SeoPrompt::query()->where('is_active', true)->find($promptId);
+        $prompt = SeoPrompt::query()->find($promptId);
         if ($prompt === null) {
             throw new \InvalidArgumentException('Prompt làm mới FAQ không tồn tại hoặc đã tắt.');
         }

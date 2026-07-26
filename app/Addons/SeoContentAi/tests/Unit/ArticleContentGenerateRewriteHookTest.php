@@ -35,6 +35,12 @@ use Tests\TestCase;
 
 final class ArticleContentGenerateRewriteHookTest extends TestCase
 {
+    protected function tearDown(): void
+    {
+        \Mockery::close();
+        parent::tearDown();
+    }
+
     private function catalog(): PromptHookEditorCatalog
     {
         $loader = new PromptHookDefinitionLoader(
@@ -48,7 +54,8 @@ final class ArticleContentGenerateRewriteHookTest extends TestCase
 
     private function longMarkdown(string $prefix = '# Article'): string
     {
-        return $prefix."\n\n".str_repeat('Nội dung bài viết mẫu cho validation. ', 20);
+        // article.content.generate validates against article_length (settings default ~1800).
+        return $prefix."\n\n".str_repeat('Nội dung bài viết mẫu cho validation word. ', 400);
     }
 
     /**
@@ -84,6 +91,9 @@ final class ArticleContentGenerateRewriteHookTest extends TestCase
             $registry,
             new PromptHookMigrationFlags,
             $runner,
+            new \App\Addons\SeoContentAi\Services\ArticleWritingLegacyRewriteAdapter(
+                new \App\Addons\SeoContentAi\Services\ArticleWritingInputFormatter,
+            ),
         );
     }
 
@@ -97,14 +107,13 @@ final class ArticleContentGenerateRewriteHookTest extends TestCase
         }
 
         self::assertArrayHasKey('article.content.generate', $byKey);
-        self::assertArrayHasKey('article.content.rewrite', $byKey);
+        // Phase 1.0: rewrite không còn trong selector tạo mới.
+        self::assertArrayNotHasKey('article.content.rewrite', $byKey);
         self::assertSame('0.1.0', $byKey['article.content.generate']['version']);
-        self::assertSame('0.1.0', $byKey['article.content.rewrite']['version']);
         self::assertTrue($byKey['article.content.generate']['experimental']);
-        self::assertTrue($byKey['article.content.rewrite']['experimental']);
         self::assertSame('Viết bài viết', $byKey['article.content.generate']['display_name']);
-        self::assertSame('Viết lại bài viết', $byKey['article.content.rewrite']['display_name']);
         self::assertStringContainsString('Thử nghiệm', $byKey['article.content.generate']['option_label']);
+        self::assertStringContainsString('[article.content.generate]', $byKey['article.content.generate']['option_label']);
         self::assertSame('markdown', $byKey['article.content.generate']['output_type']);
         self::assertSame(count($options), count(array_unique(array_column($options, 'hook_key'))));
     }
@@ -187,7 +196,10 @@ final class ArticleContentGenerateRewriteHookTest extends TestCase
         ], ['site_id' => 1, 'locale' => 'vi']);
 
         self::assertCount(1, $provider->calls);
-        self::assertSame('LEGACY COMPILED ARTICLE PROMPT {{input}}', $provider->calls[0]->messages[0]['content'] ?? null);
+        self::assertStringStartsWith(
+            'LEGACY COMPILED ARTICLE PROMPT {{input}}',
+            (string) ($provider->calls[0]->messages[0]['content'] ?? ''),
+        );
         self::assertSame(PromptHookExecutionIntent::ExplicitBinding->value, $result['execution_source']);
         self::assertStringContainsString('Generated', $result['output']);
         self::assertStringNotContainsString('```', $result['output']);
@@ -221,11 +233,14 @@ final class ArticleContentGenerateRewriteHookTest extends TestCase
             'rewrite_notes' => 'viết chi tiết hơn, giữ heading',
             'preserve_headings' => true,
             'language' => 'vi',
+            'article_length' => 300,
         ], ['site_id' => 2]);
 
         self::assertCount(1, $provider->calls);
         self::assertStringContainsString('Rewritten', $result['output']);
-        self::assertSame('article.content.rewrite', $result['hook_key']);
+        // Phase 0.3: runtime remaps rewrite → generate.
+        self::assertSame('article.content.generate', $result['hook_key']);
+        self::assertSame('article.content.rewrite', $result['legacy_hook_key'] ?? null);
     }
 
     public function test_generate_missing_required_input_fails_before_provider(): void

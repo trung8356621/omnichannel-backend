@@ -36,7 +36,45 @@ class EditPrompt extends SeoEditRecord
                         ? PromptResource::getUrl('test', ['record' => $record])
                         : SeoSettingsOverview::getUrl(),
                 ),
-            Actions\DeleteAction::make(),
+            Actions\DeleteAction::make()
+                ->form(function (): array {
+                    $record = $this->getRecord();
+                    $locator = app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptUsageLocator::class);
+                    if (! $locator->isReferenced((int) $record->id)) {
+                        return [];
+                    }
+
+                    $lines = $locator->summarize((int) $record->id);
+
+                    return [
+                        \Filament\Forms\Components\Placeholder::make('usage_list')
+                            ->label(__('seo-content-ai::filament.prompt.delete_in_use_title'))
+                            ->content(new \Illuminate\Support\HtmlString(
+                                '<ul class="list-disc pl-5 text-sm space-y-1">'
+                                .implode('', array_map(
+                                    static fn (string $line): string => '<li>'.e($line).'</li>',
+                                    $lines,
+                                ))
+                                .'</ul>'
+                            )),
+                        \Filament\Forms\Components\Checkbox::make('force_detach')
+                            ->label(__('seo-content-ai::filament.prompt.force_detach'))
+                            ->helperText(__('seo-content-ai::filament.prompt.force_detach_help'))
+                            ->required(),
+                    ];
+                })
+                ->before(function (array $data): void {
+                    $record = $this->getRecord();
+                    $guard = app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptDeleteGuard::class);
+                    $locator = app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptUsageLocator::class);
+                    if (! $locator->isReferenced((int) $record->id)) {
+                        return;
+                    }
+                    if (! (bool) ($data['force_detach'] ?? false)) {
+                        $guard->assertDeletable((int) $record->id);
+                    }
+                    $guard->detachUsages((int) $record->id);
+                }),
         ];
     }
 
@@ -124,6 +162,11 @@ class EditPrompt extends SeoEditRecord
             $postProcessing,
             (int) ($this->record->id ?? 0) ?: null,
         );
+
+        $oldHook = trim((string) ($this->record->hook_key ?? ''));
+        $newHook = trim((string) ($data['hook_key'] ?? ''));
+        app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptDeleteGuard::class)
+            ->assertHookChangeAllowed((int) $this->record->id, $oldHook !== '' ? $oldHook : null, $newHook !== '' ? $newHook : null);
 
         return PromptHookFormSchema::normalizeForSave($data);
     }

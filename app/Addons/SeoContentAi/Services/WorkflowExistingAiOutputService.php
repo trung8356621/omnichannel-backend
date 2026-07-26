@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Enums\WorkflowExecutionRole;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookBinding;
 
 final class WorkflowExistingAiOutputService
 {
@@ -71,13 +73,32 @@ final class WorkflowExistingAiOutputService
      */
     public function outputType(array $node, SeoPrompt $prompt): ?string
     {
+        $role = WorkflowExecutionRole::tryFromMixed(
+            $node['data']['execution_role'] ?? null,
+        );
+        if ($role === WorkflowExecutionRole::ArticleContentGenerate) {
+            return self::TYPE_CONTENT;
+        }
+        if ($role === WorkflowExecutionRole::ArticleOutlineGenerate) {
+            return self::TYPE_OUTLINE;
+        }
+
+        // Explicit Builder flag (content node) — không đoán theo tên Prompt.
         if ((bool) ($node['data']['mergeOutlineToSave'] ?? false)) {
             return self::TYPE_CONTENT;
         }
 
-        $name = mb_strtolower(trim((string) $prompt->name));
-        if ($name !== '' && (str_contains($name, 'dàn ý') || str_contains($name, 'outline'))) {
-            return self::TYPE_OUTLINE;
+        try {
+            $binding = PromptHookBinding::tryFromPrompt($prompt);
+            $hook = trim((string) ($binding?->hookKey ?? ''));
+            if ($hook === 'article.outline.generate') {
+                return self::TYPE_OUTLINE;
+            }
+            if (str_starts_with($hook, 'article.content.')) {
+                return self::TYPE_CONTENT;
+            }
+        } catch (\InvalidArgumentException) {
+            // legacy prompt không có hook
         }
 
         return null;

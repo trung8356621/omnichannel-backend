@@ -224,6 +224,9 @@ final class PromptHookDefinitionLoader
             outputContract: isset($data['output_contract'])
                 ? trim((string) $data['output_contract'])
                 : null,
+            settingsVisible: self::resolveSettingsVisible($data),
+            category: self::resolveCategory($data),
+            presentation: self::resolvePresentation($data),
         );
     }
 
@@ -263,5 +266,53 @@ final class PromptHookDefinitionLoader
             sections: $sections,
             totalPort: $totalPort,
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private static function resolveSettingsVisible(array $data): bool
+    {
+        if (array_key_exists('settings_visible', $data)) {
+            return (bool) $data['settings_visible'];
+        }
+
+        $metadata = is_array($data['metadata'] ?? null) ? $data['metadata'] : [];
+        if (array_key_exists('settings_visible', $metadata)) {
+            return (bool) $metadata['settings_visible'];
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private static function resolveCategory(array $data): string
+    {
+        $category = trim((string) ($data['category'] ?? ''));
+        if ($category !== '') {
+            return $category;
+        }
+
+        $metadata = is_array($data['metadata'] ?? null) ? $data['metadata'] : [];
+        $fromMeta = trim((string) ($metadata['category'] ?? ''));
+
+        return $fromMeta !== '' ? $fromMeta : 'general';
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    private static function resolvePresentation(array $data): array
+    {
+        $presentation = $data['presentation'] ?? null;
+        if (! is_array($presentation)) {
+            $metadata = is_array($data['metadata'] ?? null) ? $data['metadata'] : [];
+            $presentation = is_array($metadata['presentation'] ?? null) ? $metadata['presentation'] : [];
+        }
+
+        return $presentation;
     }
 }

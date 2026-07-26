@@ -14,7 +14,6 @@ use App\Addons\SeoContentAi\PromptHooks\Exceptions\PromptHookException;
 use App\Addons\SeoContentAi\PromptHooks\Support\PromptHookErrorCode;
 use App\Addons\SeoContentAi\Services\PromptResultAttachService;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
-use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
 use App\Addons\SeoContentAi\Support\ImageToolType;
 
 final class PromptHookExecutionService
@@ -28,7 +27,6 @@ final class PromptHookExecutionService
         private readonly PromptHookOutputNormalizer $outputNormalizer,
         private readonly PromptRunnerService $promptRunner,
         private readonly PromptResultAttachService $promptResultAttach,
-        private readonly SeoCreateArticleSettingsService $workflowSettings,
     ) {}
 
     /**
@@ -157,28 +155,8 @@ final class PromptHookExecutionService
 
     public function resolveConfiguredPrompt(PromptHookDefinition $definition): SeoPrompt
     {
-        $promptId = match ($definition->key) {
-            'article.title_suggestion' => $this->workflowSettings->getArticleTitleSuggestionPromptId(),
-            'article.meta_description_suggestion' => $this->workflowSettings->getArticleMetaDescriptionSuggestionPromptId(),
-            default => null,
-        };
-
-        if ($promptId === null) {
-            throw new PromptHookException(
-                PromptHookErrorCode::HookPromptNotConfigured,
-                "No prompt configured for hook [{$definition->key}].",
-            );
-        }
-
-        $prompt = SeoPrompt::query()->where('is_active', true)->find($promptId);
-        if ($prompt === null) {
-            throw new PromptHookException(
-                PromptHookErrorCode::HookPromptNotConfigured,
-                "Configured prompt #{$promptId} for hook [{$definition->key}] is missing or inactive.",
-            );
-        }
-
-        return $prompt;
+        return app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptBindingResolver::class)
+            ->resolveSettingsHook($definition->key);
     }
 
     private function assertPromptMatchesHook(SeoPrompt $prompt, PromptHookDefinition $definition): void

@@ -876,12 +876,26 @@ class TestPrompt extends Page implements HasForms
         $this->getRecord()->refresh();
 
         $normalized = $this->normalizedVariableValues();
+        $prompt = $this->getPrompt();
 
         try {
-            $this->compiledPreview = app(PromptRunnerService::class)->compilePrompt(
-                $this->getPrompt(),
-                $normalized,
-            );
+            $hookKey = trim((string) ($prompt->hook_key ?? ''));
+            if ($hookKey !== '') {
+                $preview = app(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookCompositionPreviewService::class)
+                    ->preview(
+                        $hookKey,
+                        (string) ($prompt->hook_version ?? ''),
+                        (string) ($prompt->markdown_content ?? ''),
+                        is_array($prompt->hook_settings) ? $prompt->hook_settings : [],
+                    );
+                // Preview keeps {{placeholders}}; Test execution substitutes $normalized later.
+                $this->compiledPreview = $preview['final_prompt'];
+            } else {
+                $this->compiledPreview = app(PromptRunnerService::class)->compilePrompt(
+                    $prompt,
+                    $normalized,
+                );
+            }
         } catch (\Throwable) {
             $this->compiledPreview = null;
         }

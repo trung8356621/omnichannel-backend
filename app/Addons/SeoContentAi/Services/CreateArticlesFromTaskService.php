@@ -10,9 +10,17 @@ use App\Addons\SeoContentAi\Automation\Migration\AutomationMigrationWriteExcepti
 use App\Addons\SeoContentAi\Automation\Migration\ProjectArticleCreateCallerBridge;
 use App\Addons\SeoContentAi\Automation\Runtime\ActionRunner;
 use App\Addons\SeoContentAi\Automation\Support\ArticleCreateOriginResolver;
+use App\Addons\SeoContentAi\Enums\ArticleWritingExecutionMode;
+use App\Addons\SeoContentAi\Enums\ArticleWritingPromptOwnerType;
+use App\Addons\SeoContentAi\Enums\ArticleWritingSourceType;
+use App\Addons\SeoContentAi\Enums\WorkflowExecutionRole;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoTask;
+use App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionRoleResolver;
+use App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionSnapshotBuilder;
+use App\Addons\SeoContentAi\Support\ArticleWritingExecutionContext;
+use App\Addons\SeoContentAi\Support\ArticleWritingInput;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\ProjectTaskOriginVariables;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -32,6 +40,11 @@ final class CreateArticlesFromTaskService
         private readonly ProjectArticleCreateCallerBridge $articleCreateBridge,
         private readonly ActionRunner $actionRunner,
         private readonly ArticleCreateOriginResolver $originResolver,
+        private readonly ArticleWritingExecutionService $articleWriting,
+        private readonly ArticleImproveExecutionService $articleImprove,
+        private readonly WorkflowExecutionRoleResolver $roleResolver,
+        private readonly ArticleGenerationInputResolver $outlineResolver,
+        private readonly WorkflowExecutionSnapshotBuilder $workflowSnapshotBuilder,
     ) {}
 
     /**
@@ -96,21 +109,26 @@ final class CreateArticlesFromTaskService
 
         foreach ($keywords as $keyword) {
             try {
-                $context = $this->inputResolver->resolve(null, $keyword, $keyword, $scope);
-                $steps = $this->workflowRunner->run($task, $context);
+                $context = $this->inputResolver->resolve(null, $keyword, $keyword, $scope)
+                    ->withProjectTaskType(SeoProjectTask::TYPE_CREATE);
+                $result = $this->runArticleWritingForContext(
+                    $context,
+                    $task,
+                    $siteId,
+                    $keyword,
+                    ArticleWritingExecutionMode::PublishGraph,
+                    ArticleWritingSourceType::Outline,
+                );
 
-                $stepFailed = collect($steps)->contains(fn (array $step): bool => ($step['status'] ?? '') === 'failed');
-                if ($stepFailed) {
+                if (! ($result['success'] ?? false)) {
                     $failed++;
-                    $messages[] = '«'.$keyword.'»: quy trình có bước lỗi.';
+                    $messages[] = '«'.$keyword.'»: '.(string) ($result['message'] ?? 'quy trình lỗi.');
 
                     continue;
                 }
 
-                $article = $this->resolveArticleFromWorkflow($context, $steps, $siteId, $keyword, $context->variables);
-                $this->workflowRunner->applyParsedMetaFromSteps($article, $steps);
                 $created++;
-                $articleIds[] = (int) $article->id;
+                $articleIds[] = (int) ($result['article_id'] ?? 0);
                 $messages[] = '«'.$keyword.'»: đã tạo bài nháp và chạy quy trình.';
             } catch (\Throwable $exception) {
                 $failed++;
@@ -141,20 +159,21 @@ final class CreateArticlesFromTaskService
      */
     public function runPublishWorkflowForContext(TaskTestContext $context, int $siteId): array
     {
+        $projectType = SeoProjectTask::normalizeType((string) ($context->projectTaskType ?? ''));
+
+        // Improve tách hoàn toàn — không Publish / article.content.generate.
+        if ($projectType === SeoProjectTask::TYPE_IMPROVE) {
+            return $this->articleImprove->executeFromTaskContext($context);
+        }
+
         $isContentRewrite = $context->rewriteMode === SeoProjectTask::REWRITE_MODE_CONTENT
-            || in_array((string) ($context->projectTaskType ?? ''), [
-                SeoProjectTask::TYPE_REWRITE,
-                SeoProjectTask::TYPE_IMPROVE,
-            ], true);
-        $taskId = $isContentRewrite
-            ? ($this->settings->getRewriteArticleTaskId() ?? $this->settings->getPublishArticleTaskId())
-            : $this->settings->getPublishArticleTaskId();
+            || $projectType === SeoProjectTask::TYPE_REWRITE;
+        // Phase 0.6: CREATE/REWRITE dùng ArticleWritingExecutionService. Không đọc rewrite_article_task_id.
+        $taskId = $this->settings->getPublishArticleTaskId();
 
         if ($taskId === null) {
             throw new \InvalidArgumentException(
-                $isContentRewrite
-                    ? 'Chưa cấu hình quy trình Viết lại bài. Vào SEO → Cài đặt → Quy trình để chọn task.'
-                    : 'Chưa cấu hình quy trình Đăng bài viết. Vào SEO → Tùy chỉnh để chọn task.',
+                'Chưa cấu hình quy trình Đăng bài viết. Vào SEO → Cài đặt → Quy trình để chọn task.',
             );
         }
 
@@ -172,7 +191,6 @@ final class CreateArticlesFromTaskService
         $this->syncDomainLinkListKeywords($resolvedSiteId);
 
         if ($isContentRewrite) {
-            // TYPE_REWRITE: variables.input = outline markdown — không dùng làm keyword.
             $keyword = trim((string) ($context->variables['focus_keyword'] ?? ''));
             if ($keyword === '') {
                 $keyword = trim((string) ($context->variables['post_title'] ?? ''));
@@ -205,30 +223,27 @@ final class CreateArticlesFromTaskService
         $steps = [];
 
         try {
-            $steps = $this->workflowRunner->run($task, $context);
-            $stepFailed = collect($steps)->contains(fn (array $step): bool => ($step['status'] ?? '') === 'failed');
-            if ($stepFailed) {
-                $failure = $this->summarizeWorkflowFailure($steps);
-                $articleId = $this->resolveArticleIdFromSteps($context, $steps);
-
-                return [
-                    'success' => false,
-                    'article_id' => $articleId,
-                    'message' => $failure['message'],
-                    'failed_step' => $failure['failed_step'],
-                    'steps' => $steps,
-                ];
+            if ($projectType === SeoProjectTask::TYPE_REWRITE) {
+                // «Tạo lại bài từ dàn ý» — content node only, không chạy lại outline.
+                return $this->runArticleWritingForContext(
+                    $context,
+                    $task,
+                    $resolvedSiteId,
+                    $keyword,
+                    ArticleWritingExecutionMode::ContentNode,
+                    ArticleWritingSourceType::Outline,
+                );
             }
 
-            $article = $this->resolveArticleFromWorkflow($context, $steps, $resolvedSiteId, $keyword, $context->variables);
-            $this->workflowRunner->applyParsedMetaFromSteps($article, $steps);
-
-            return [
-                'success' => true,
-                'article_id' => (int) $article->id,
-                'steps' => $steps,
-                'message' => 'Đã chạy quy trình và tạo/cập nhật bài.',
-            ];
+            // First-run / CREATE: Publish graph đầy đủ.
+            return $this->runArticleWritingForContext(
+                $context,
+                $task,
+                $resolvedSiteId,
+                $keyword,
+                ArticleWritingExecutionMode::PublishGraph,
+                ArticleWritingSourceType::Outline,
+            );
         } catch (\Throwable $exception) {
             return [
                 'success' => false,
@@ -237,6 +252,253 @@ final class CreateArticlesFromTaskService
                 'message' => $exception->getMessage(),
             ];
         }
+    }
+
+    /**
+     * Tạo lại outline + bài: outline node trước → artifact mới → content node.
+     * Outline fail → article không chạy; không fallback outline cũ.
+     *
+     * @return array{success: bool, article_id: ?int, message: string, steps: list<array<string, mixed>>}
+     */
+    public function runOutlineThenArticleForContext(TaskTestContext $context, int $siteId): array
+    {
+        $taskId = $this->settings->getPublishArticleTaskId();
+        if ($taskId === null) {
+            throw new \InvalidArgumentException(
+                'Chưa cấu hình quy trình Đăng bài viết. Vào SEO → Cài đặt → Quy trình để chọn task.',
+            );
+        }
+        $task = SeoTask::query()->find($taskId);
+        if (! $task instanceof SeoTask || ! $task->is_active) {
+            throw new \InvalidArgumentException('Quy trình Đăng bài viết không khả dụng.');
+        }
+
+        $resolvedSiteId = (int) ($context->siteId ?? $siteId);
+        $this->assertSiteAccessible($resolvedSiteId);
+        $keyword = trim((string) ($context->variables['focus_keyword'] ?? $context->variables['post_title'] ?? 'rewrite'));
+        if ($keyword === '') {
+            $keyword = 'rewrite';
+        }
+
+        $outlineNodeId = $this->roleResolver->requireNodeId(
+            $task,
+            WorkflowExecutionRole::ArticleOutlineGenerate,
+        );
+        $contentNodeId = $this->roleResolver->requireNodeId(
+            $task,
+            WorkflowExecutionRole::ArticleContentGenerate,
+        );
+
+        $outlineStep = $this->workflowRunner->runSingleStep($task, $context, $outlineNodeId);
+        $steps = [$outlineStep];
+        if (($outlineStep['status'] ?? '') === 'failed') {
+            return [
+                'success' => false,
+                'article_id' => $context->article?->id,
+                'steps' => $steps,
+                'message' => 'Outline fail — article không chạy. '
+                    .trim((string) ($outlineStep['message'] ?? '')),
+                'article_blocked' => true,
+            ];
+        }
+
+        $artifact = $this->extractOutlineArtifactFromStep($outlineStep);
+        if ($artifact === null || ! $this->outlineResolver->isValidArtifact($artifact)) {
+            return [
+                'success' => false,
+                'article_id' => $context->article?->id,
+                'steps' => $steps,
+                'message' => 'Outline xong nhưng artifact không hợp lệ — article không chạy.',
+                'article_blocked' => true,
+            ];
+        }
+
+        $artifactHash = hash('sha256', $artifact);
+        $variables = array_merge($context->variables, [
+            'article_writing_source_type' => ArticleWritingSourceType::Outline->value,
+            'source_type' => ArticleWritingSourceType::Outline->value,
+            'article_writing_raw_input' => $artifact,
+            'input' => $artifact,
+            'outline_artifact_hash' => $artifactHash,
+            'article_source_artifact_hash' => $artifactHash,
+            'outline_source_run_item_id' => $outlineStep['run_item_id'] ?? null,
+            'execution_role' => WorkflowExecutionRole::ArticleContentGenerate->value,
+        ]);
+        $context = $context->withVariables($variables);
+
+        $articleResult = $this->runArticleWritingForContext(
+            $context,
+            $task,
+            $resolvedSiteId,
+            $keyword,
+            ArticleWritingExecutionMode::ContentNode,
+            ArticleWritingSourceType::Outline,
+            $contentNodeId,
+        );
+
+        $articleSteps = is_array($articleResult['steps'] ?? null) ? $articleResult['steps'] : [];
+        $articleResult['steps'] = array_merge($steps, $articleSteps);
+        $articleResult['outline_artifact_hash'] = $artifactHash;
+        $articleResult['article_source_artifact_hash'] = $artifactHash;
+
+        return $articleResult;
+    }
+
+    /**
+     * @param  array<string, mixed>  $step
+     */
+    private function extractOutlineArtifactFromStep(array $step): ?string
+    {
+        $outputs = is_array($step['outputs'] ?? null) ? $step['outputs'] : [];
+        $candidates = [
+            $outputs['task_1_outline'] ?? null,
+            $outputs['out_main'] ?? null,
+            $step['output'] ?? null,
+            $step['result'] ?? null,
+        ];
+        foreach ($candidates as $candidate) {
+            $raw = trim((string) $candidate);
+            if ($raw !== '' && $this->outlineResolver->isValidArtifact($raw)) {
+                return $raw;
+            }
+            // Có thể outline + vocabulary đã ghép sẵn.
+            if ($raw !== '' && isset($outputs['task_2_vocabulary'])) {
+                $merged = $raw."\n".trim((string) $outputs['task_2_vocabulary']);
+                if ($this->outlineResolver->isValidArtifact($merged)) {
+                    return $merged;
+                }
+            }
+        }
+
+        $fromParsed = $this->outlineResolver->tryResolveFromRawArtifact(
+            trim((string) ($step['ai_output'] ?? $step['message'] ?? '')),
+        );
+
+        return $fromParsed?->rawArtifact;
+    }
+
+    /**
+     * @return array{success: bool, article_id: ?int, message: string, steps: list<array<string, mixed>>}
+     */
+    private function runArticleWritingForContext(
+        TaskTestContext $context,
+        SeoTask $task,
+        int $resolvedSiteId,
+        string $keyword,
+        ArticleWritingExecutionMode $mode,
+        ArticleWritingSourceType $sourceType,
+        ?string $contentNodeId = null,
+    ): array {
+        if ($contentNodeId === null && $mode === ArticleWritingExecutionMode::ContentNode) {
+            $contentNodeId = $this->roleResolver->requireNodeId(
+                $task,
+                WorkflowExecutionRole::ArticleContentGenerate,
+            );
+        }
+
+        $variables = $context->variables;
+        $rawInput = trim((string) (
+            $variables['article_writing_raw_input']
+            ?? (! empty($variables['article_writing_formatted']) ? '' : ($variables['input'] ?? ''))
+        ));
+
+        $writing = new ArticleWritingInput(
+            sourceType: $sourceType,
+            input: $rawInput,
+            title: trim((string) ($variables['post_title'] ?? '')),
+            keyword: trim((string) ($variables['focus_keyword'] ?? $keyword)),
+            description: trim((string) ($variables['secondary_description'] ?? '')),
+            articleId: $context->article !== null ? (int) $context->article->getKey() : null,
+            runId: isset($variables['source_run_id']) ? (int) $variables['source_run_id'] : null,
+            runItemId: isset($variables['source_run_item_id']) ? (int) $variables['source_run_item_id'] : null,
+            sourcePromptResultId: isset($variables['source_prompt_result_id'])
+                ? (int) $variables['source_prompt_result_id']
+                : null,
+            metadata: [
+                'article_length' => $variables['article_length'] ?? null,
+                'outline_artifact_hash' => $variables['outline_artifact_hash'] ?? null,
+                'article_source_artifact_hash' => $variables['article_source_artifact_hash'] ?? null,
+                'execution_role' => $mode === ArticleWritingExecutionMode::ContentNode
+                    ? WorkflowExecutionRole::ArticleContentGenerate->value
+                    : null,
+                'workflow_execution_snapshot' => $this->workflowSnapshotBuilder->fromTask($task)->toArray(),
+                'content_node_id' => $contentNodeId,
+            ],
+        );
+
+        $contentFound = $contentNodeId !== null
+            ? $this->roleResolver->findNode($task, WorkflowExecutionRole::ArticleContentGenerate)
+            : null;
+
+        $wfSnap = $this->workflowSnapshotBuilder->fromTask($task)->toArray();
+        $variables['workflow_execution_snapshot'] = $wfSnap;
+        $variables['flow_data_hash'] = $wfSnap['flow_data_hash'] ?? null;
+        if ($contentNodeId !== null) {
+            $variables['content_node_id'] = $contentNodeId;
+        }
+
+        $result = $this->articleWriting->execute(
+            $writing,
+            new ArticleWritingExecutionContext(
+                mode: $mode,
+                promptOwnerType: ArticleWritingPromptOwnerType::WorkflowNode,
+                siteId: $resolvedSiteId,
+                promptId: $contentFound['prompt_id'] ?? null,
+                promptOwnerId: $contentNodeId,
+                workflowTask: $task,
+                contentNodeId: $contentNodeId,
+                taskContext: $context,
+                expectedUpdatedAt: $context->article?->updated_at?->toIso8601String(),
+                baseVariables: $variables,
+            ),
+        );
+
+        $payload = $result->toLegacyWorkflowArray();
+        $steps = $payload['steps'];
+
+        if (! $result->success) {
+            $failure = $this->summarizeWorkflowFailure($steps);
+
+            return [
+                'success' => false,
+                'article_id' => $payload['article_id'] ?? $this->resolveArticleIdFromSteps($context, $steps),
+                'message' => $failure['message'] !== 'Quy trình có bước lỗi.'
+                    ? $failure['message']
+                    : $result->message,
+                'failed_step' => $failure['failed_step'],
+                'steps' => $steps,
+                'persist_status' => $result->persistStatus,
+            ];
+        }
+
+        if ($result->persistStatus === \App\Addons\SeoContentAi\Support\ArticleWritingExecutionResult::PERSIST_IGNORED_STALE) {
+            return [
+                'success' => true,
+                'article_id' => $payload['article_id'],
+                'steps' => $steps,
+                'message' => $result->message,
+                'persist_status' => $result->persistStatus,
+            ];
+        }
+
+        $article = $this->resolveArticleFromWorkflow(
+            $context,
+            $steps,
+            $resolvedSiteId,
+            $keyword,
+            $context->variables,
+        );
+        $this->workflowRunner->applyParsedMetaFromSteps($article, $steps);
+
+        return [
+            'success' => true,
+            'article_id' => (int) $article->id,
+            'steps' => $steps,
+            'message' => 'Đã chạy quy trình và tạo/cập nhật bài.',
+            'persist_status' => $result->persistStatus,
+            'source_type' => $result->sourceType->value,
+            'prompt_owner_type' => $result->promptOwnerType->value,
+        ];
     }
 
     /**

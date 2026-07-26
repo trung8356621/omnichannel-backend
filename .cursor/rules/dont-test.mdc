@@ -58,6 +58,8 @@ Thay vì chạy command, luôn in ra block:
 ```text
 Manual verification:
 
+$PHP_BIN vendor/bin/phpunit --filter=RelevantTestName
+
 php artisan optimize:clear
 
 php artisan migrate
@@ -67,3 +69,6 @@ php artisan queue:restart
 php artisan config:clear
 
 php artisan cache:clear
+```
+
+Không gợi ý `php artisan test`. Dùng `$PHP_BIN vendor/bin/phpunit --filter=...` (xem `phpunit-remote.mdc`).

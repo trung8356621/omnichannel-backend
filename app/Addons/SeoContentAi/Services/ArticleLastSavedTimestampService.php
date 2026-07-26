@@ -28,6 +28,15 @@ final class ArticleLastSavedTimestampService
         $article->forceFill(['last_synced_at' => now()])->saveQuietly();
     }
 
+    /**
+     * Touch sau khi AI persist canonical article body thành công.
+     * Không gọi cho outline/FAQ/meta/image-only / ignored_stale / fail.
+     */
+    public function touchAiContent(SeoArticle $article): void
+    {
+        $article->forceFill(['last_ai_content_at' => now()])->saveQuietly();
+    }
+
     public function shouldTouchManualFromOrigin(?string $origin): bool
     {
         return in_array(trim((string) $origin), self::MANUAL_SAVE_ORIGINS, true);

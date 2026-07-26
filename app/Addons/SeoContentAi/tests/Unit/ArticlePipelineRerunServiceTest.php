@@ -134,15 +134,38 @@ final class ArticlePipelineRerunServiceTest extends TestCase
         self::assertSame(4, $method->getNumberOfParameters());
     }
 
-    public function test_detect_kind_treats_viet_bai_theo_dan_y_as_content_not_outline(): void
+    public function test_detect_kind_uses_execution_role_not_title(): void
     {
         $ref = new ReflectionClass(SeoProjectWorkflowStepCatalogService::class);
         $service = $ref->newInstanceWithoutConstructor();
+        $resolverProp = $ref->getProperty('roleResolver');
+        $resolverProp->setValue(
+            $service,
+            new \App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionRoleResolver(
+                new \App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionRoleRegistry,
+            ),
+        );
         $detect = $ref->getMethod('detectKind');
         $detect->setAccessible(true);
 
-        self::assertSame('content', $detect->invoke($service, ['title' => 'Viết bài theo dàn ý'], null));
-        self::assertSame('outline', $detect->invoke($service, ['title' => 'Tạo dàn ý SEO'], null));
+        self::assertSame(
+            'content',
+            $detect->invoke($service, [
+                'title' => 'Tạo dàn ý SEO',
+                'data' => ['execution_role' => 'article.content.generate'],
+            ], null),
+        );
+        self::assertSame(
+            'outline',
+            $detect->invoke($service, [
+                'title' => 'Viết bài theo dàn ý',
+                'data' => ['execution_role' => 'article.outline.generate'],
+            ], null),
+        );
+        self::assertSame(
+            'prompt',
+            $detect->invoke($service, ['title' => 'Tạo dàn ý SEO'], null),
+        );
     }
 
     public function test_editor_watches_rerun_and_notifies_on_complete(): void

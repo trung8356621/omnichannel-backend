@@ -35,7 +35,7 @@ final class SeoProjectKeywordAiGeneratorService
             );
         }
 
-        $prompt = SeoPrompt::query()->where('is_active', true)->find($promptId);
+        $prompt = SeoPrompt::query()->find($promptId);
         if ($prompt === null) {
             throw new \InvalidArgumentException('Prompt AI từ khóa dự án không tồn tại hoặc đã tắt.');
         }

@@ -15,7 +15,24 @@ article.title_suggestion@0.1.0
 
 No implicit latest. Experimental never auto-promotes to stable.
 
-Registered (v01): title, meta, outline, **content.generate**, **content.rewrite**, faq, keyword.discovery — all **experimental@0.1.0**.
+Registered (v01): title, meta, outline, faq, featured_snippet, **comment.generate**, **content.translate**, **product.gallery.generate**, content.generate, content.rewrite, keyword.discovery — experimental@0.1.0.
+
+**Ownership (2026-07):** `settings_visible=true` → Settings binding selector. `settings_visible=false` → Task/editor only (no global Settings slot). Hook does **not** activate a Prompt; Settings/Task reference does.
+
+| Hook | settings_visible |
+|---|---|
+| article.title_suggestion | true |
+| article.meta_description_suggestion | true |
+| article.faq.generate | true |
+| article.featured_snippet.generate | true |
+| article.outline.generate | true |
+| article.content.translate | true |
+| article.comment.generate | true |
+| product.gallery.generate | true |
+| keyword.discovery.structured | true |
+| article.content.generate | false |
+| article.content.rewrite | false |
+
 
 ## Vertical slice status — `article.outline.generate@0.1.0`
 

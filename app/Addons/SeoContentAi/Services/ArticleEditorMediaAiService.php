@@ -869,16 +869,40 @@ final class ArticleEditorMediaAiService
         $target = trim($target);
 
         if ($target === 'product-gallery') {
+            $source = $this->workflowSettings->getCreateProductGallerySource();
+            $taskId = $this->workflowSettings->getCreateProductGalleryImageTaskId();
+
+            if ($source === SeoCreateArticleSettingsService::SOURCE_WORKFLOW) {
+                if ($taskId === null) {
+                    throw new \InvalidArgumentException(
+                        (string) __('seo-content-ai::filament.settings_workflows.product_gallery_workflow_required'),
+                    );
+                }
+
+                return [
+                    'source' => $source,
+                    'prompt' => $this->imageTaskResolver->resolveImagePrompt($taskId),
+                    'task_id' => $taskId,
+                    'tool_type' => ImageToolType::Image->value,
+                    'media_target' => $target,
+                ];
+            }
+
+            $promptId = $this->workflowSettings->getCreateProductGalleryImagePromptId();
+            if ($promptId === null) {
+                throw new \InvalidArgumentException(
+                    (string) __('seo-content-ai::filament.settings_workflows.product_gallery_prompt_required'),
+                );
+            }
+
             return [
-                'source' => $this->workflowSettings->getCreateProductGallerySource(),
-                'prompt' => $this->resolveConfiguredMediaSource(
-                    source: $this->workflowSettings->getCreateProductGallerySource(),
-                    promptId: $this->workflowSettings->getCreateProductGalleryImagePromptId(),
-                    taskId: $this->workflowSettings->getCreateProductGalleryImageTaskId(),
-                    label: 'Tạo ảnh Product gallery',
-                    imagePipeline: true,
+                'source' => SeoCreateArticleSettingsService::SOURCE_PROMPT,
+                'prompt' => $this->resolvePrompt(
+                    $promptId,
+                    'Gallery sản phẩm',
+                    'image',
                 ),
-                'task_id' => $this->workflowSettings->getCreateProductGalleryImageTaskId(),
+                'task_id' => null,
                 'tool_type' => ImageToolType::Image->value,
                 'media_target' => $target,
             ];
@@ -1008,7 +1032,7 @@ final class ArticleEditorMediaAiService
             );
         }
 
-        $prompt = SeoPrompt::query()->where('is_active', true)->find($promptId);
+        $prompt = SeoPrompt::query()->find($promptId);
         if ($prompt === null) {
             throw new \InvalidArgumentException("Prompt «{$label}» không tồn tại hoặc đã tắt.");
         }

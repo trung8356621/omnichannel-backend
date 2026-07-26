@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages;
 
 use App\Addons\SeoContentAi\Enums\ArticleReviewActionType;
 use App\Addons\SeoContentAi\Enums\ArticleReviewStatus;
+use App\Addons\SeoContentAi\Enums\WorkflowExecutionRole;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
@@ -13,8 +14,14 @@ use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ArticleEditorReadinessService;
+use App\Addons\SeoContentAi\Services\ArticleLastContentChangeResolver;
 use App\Addons\SeoContentAi\Services\ArticleLastSavedTimestampService;
 use App\Addons\SeoContentAi\Services\ArticleReviewService;
+use App\Addons\SeoContentAi\Services\ContentProjectArticleRowStatusResolver;
+use App\Addons\SeoContentAi\Services\ContentProjectBulkRerunService;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectStepRerunService;
+use App\Addons\SeoContentAi\Enums\ContentProjectStepRerunMode;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectStepRerunRequest;
 use App\Addons\SeoContentAi\Services\Exceptions\ArticleReviewException;
 use App\Addons\SeoContentAi\Services\SeoProjectRunItemService;
 use App\Addons\SeoContentAi\Services\SeoProjectRunItemsReader;
@@ -175,19 +182,27 @@ class ViewSeoProjectRun extends Page
         );
 
         try {
-            $result = app(SeoProjectWorkflowStepRetryService::class)->retryOne(
+            $request = new ContentProjectStepRerunRequest(
+                projectRunId: (int) $this->projectRun->id,
+                projectTaskId: $taskId,
+                articleId: null,
+                targetNodeId: $nodeId,
+                targetExecutionRole: null,
+                mode: ContentProjectStepRerunMode::SingleStep,
+                requestedBy: auth()->id() !== null ? (int) auth()->id() : null,
+            );
+            $result = app(ContentProjectStepRerunService::class)->rerun(
                 $this->projectRun,
                 $this->projectRun->project,
-                $taskId,
-                $nodeId,
+                $request,
             );
             $this->projectRun->refresh()->loadMissing(['project.site', 'user', 'project.tasks']);
             $this->skipRender();
 
             return [
-                'success' => (bool) ($result['success'] ?? false),
-                'message' => (string) ($result['message'] ?? ''),
-                'item' => is_array($result['item'] ?? null) ? $result['item'] : null,
+                'success' => $result->success,
+                'message' => $result->message,
+                'item' => $result->toArray(),
             ];
         } catch (\Throwable $exception) {
             try {
@@ -212,6 +227,109 @@ class ViewSeoProjectRun extends Page
                 'message' => $exception->getMessage(),
             ];
         }
+    }
+
+    /**
+     * @return array{success: bool, message: string, preview?: array<string, mixed>}
+     */
+    public function previewBulkGenericStep(array $taskIds, string $nodeId): array
+    {
+        if ($this->projectRun === null) {
+            $this->skipRender();
+
+            return ['success' => false, 'message' => 'Run không tồn tại.'];
+        }
+
+        abort_unless(
+            SeoAccessControl::canRetryProjectRunItem($this->projectRun->project),
+            403,
+        );
+
+        $preview = app(ContentProjectStepRerunService::class)->previewBulk(
+            $this->projectRun,
+            $this->projectRun->project,
+            $taskIds,
+            $nodeId,
+        );
+        $this->skipRender();
+
+        return [
+            'success' => (bool) $preview['can_execute'],
+            'message' => (string) $preview['message'],
+            'preview' => $preview,
+        ];
+    }
+
+    /**
+     * @return array{success: bool, message: string, created?: int, skipped?: int, failed?: int}
+     */
+    public function bulkRerunGenericStep(array $taskIds, string $nodeId, bool $allowPartial = false): array
+    {
+        if ($this->projectRun === null) {
+            $this->skipRender();
+
+            return ['success' => false, 'message' => 'Run không tồn tại.'];
+        }
+
+        if ($this->shouldBlockPhpEngineArticleMutation('bulkRerunGenericStep')) {
+            $this->skipRender();
+
+            return [
+                'success' => false,
+                'message' => 'PHP engine đang chạy — không bulk rerun khi run còn active.',
+            ];
+        }
+
+        abort_unless(
+            SeoAccessControl::canRetryProjectRunItem($this->projectRun->project),
+            403,
+        );
+
+        $result = app(ContentProjectStepRerunService::class)->executeBulkSerial(
+            $this->projectRun,
+            $this->projectRun->project,
+            $taskIds,
+            $nodeId,
+            ContentProjectStepRerunMode::SingleStep,
+            $allowPartial,
+            auth()->id() !== null ? (int) auth()->id() : null,
+        );
+        $this->projectRun->refresh()->loadMissing(['project.site', 'user', 'project.tasks']);
+        $this->skipRender();
+
+        return [
+            'success' => (bool) ($result['success'] ?? false),
+            'message' => (string) ($result['message'] ?? ''),
+            'created' => (int) ($result['created'] ?? 0),
+            'skipped' => (int) ($result['skipped'] ?? 0),
+            'failed' => (int) ($result['failed'] ?? 0),
+        ];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function getGenericPickerSteps(): array
+    {
+        if ($this->projectRun === null) {
+            return [];
+        }
+
+        $task = $this->projectRun->project?->tasks?->first();
+        if (! $task instanceof SeoProjectTask) {
+            $task = SeoProjectTask::query()
+                ->where('project_id', (int) $this->projectRun->project_id)
+                ->orderBy('id')
+                ->first();
+        }
+        if (! $task instanceof SeoProjectTask) {
+            return [];
+        }
+
+        return array_map(
+            static fn ($d) => $d->toArray(),
+            app(SeoProjectWorkflowStepCatalogService::class)->listGenericPickerSteps($task),
+        );
     }
 
     /**
@@ -342,6 +460,151 @@ class ViewSeoProjectRun extends Page
     }
 
     /**
+     * @param  list<int|string>  $taskIds
+     * @return array<string, mixed>
+     */
+    public function previewBulkRerunByAction(array $taskIds, string $action): array
+    {
+        if ($this->projectRun === null) {
+            $this->skipRender();
+
+            return [
+                'success' => false,
+                'message' => 'Run không tồn tại.',
+                'can_execute' => false,
+                'valid_count' => 0,
+                'invalid_count' => 0,
+            ];
+        }
+
+        abort_unless(
+            SeoAccessControl::canRetryProjectRunItem($this->projectRun->project),
+            403,
+        );
+
+        try {
+            $preview = app(ContentProjectBulkRerunService::class)->preview(
+                $this->projectRun,
+                $this->projectRun->project,
+                $taskIds,
+                $action,
+            );
+            $this->skipRender();
+
+            return array_merge(['success' => true], $preview);
+        } catch (\Throwable $exception) {
+            RuntimeLogger::report($exception, [
+                'endpoint' => 'seo.project_run.preview_bulk_rerun_by_action',
+                'run_id' => (int) $this->projectRun->id,
+            ]);
+            $this->skipRender();
+
+            return [
+                'success' => false,
+                'message' => $exception->getMessage(),
+                'can_execute' => false,
+                'valid_count' => 0,
+                'invalid_count' => 0,
+            ];
+        }
+    }
+
+    /**
+     * @param  list<int|string>  $taskIds
+     * @return array{success: bool, message: string, created: int, skipped: int, failed: int}
+     */
+    public function bulkRerunByAction(array $taskIds, string $action, bool $allowPartial = false): array
+    {
+        if ($this->projectRun === null) {
+            $this->skipRender();
+
+            return [
+                'success' => false,
+                'message' => 'Run không tồn tại.',
+                'created' => 0,
+                'skipped' => 0,
+                'failed' => 0,
+            ];
+        }
+
+        abort_unless(
+            SeoAccessControl::canRetryProjectRunItem($this->projectRun->project),
+            403,
+        );
+
+        try {
+            $result = app(ContentProjectBulkRerunService::class)->execute(
+                $this->projectRun,
+                $this->projectRun->project,
+                $taskIds,
+                $action,
+                $allowPartial,
+            );
+            $this->projectRun->refresh()->loadMissing(['project.site', 'user', 'project.tasks']);
+            $this->skipRender();
+
+            return [
+                'success' => (bool) ($result['success'] ?? false),
+                'message' => (string) ($result['message'] ?? ''),
+                'created' => (int) ($result['created'] ?? 0),
+                'skipped' => (int) ($result['skipped'] ?? 0),
+                'failed' => (int) ($result['failed'] ?? 0),
+            ];
+        } catch (\Throwable $exception) {
+            RuntimeLogger::report($exception, [
+                'endpoint' => 'seo.project_run.bulk_rerun_by_action',
+                'run_id' => (int) $this->projectRun->id,
+            ]);
+            $this->skipRender();
+
+            return [
+                'success' => false,
+                'message' => $exception->getMessage(),
+                'created' => 0,
+                'skipped' => 0,
+                'failed' => 0,
+            ];
+        }
+    }
+
+    /**
+     * @return array{has_outline_role: bool, has_content_role: bool}
+     */
+    public function getBulkRerunRoleAvailability(): array
+    {
+        $project = $this->projectRun?->project;
+        if ($project === null) {
+            return [
+                'has_outline_role' => false,
+                'has_content_role' => false,
+            ];
+        }
+
+        $catalog = app(SeoProjectWorkflowStepCatalogService::class);
+        foreach ($project->tasks ?? [] as $task) {
+            if (! $task instanceof SeoProjectTask) {
+                continue;
+            }
+            if (SeoProjectTask::isManualRunType((string) $task->type)) {
+                continue;
+            }
+            if ($catalog->resolveSeoTaskForStepRetry($task) === null) {
+                continue;
+            }
+
+            return [
+                'has_outline_role' => $catalog->hasRole($task, WorkflowExecutionRole::ArticleOutlineGenerate),
+                'has_content_role' => $catalog->hasRole($task, WorkflowExecutionRole::ArticleContentGenerate),
+            ];
+        }
+
+        return [
+            'has_outline_role' => false,
+            'has_content_role' => false,
+        ];
+    }
+
+    /**
      * @return list<int>
      */
     public function getQueueTaskIds(): array
@@ -435,6 +698,31 @@ class ViewSeoProjectRun extends Page
             'canRerunAll' => false,
             'canRetryWorkflowSteps' => $this->canRetryWorkflowSteps(),
             'workflowSteps' => $this->getBulkWorkflowSteps(),
+            'genericPickerSteps' => $this->getGenericPickerSteps(),
+            'roleAvailability' => $this->getBulkRerunRoleAvailability(),
+            'bulkActions' => [
+                ContentProjectBulkRerunService::ACTION_OUTLINE => [
+                    'value' => ContentProjectBulkRerunService::ACTION_OUTLINE,
+                    'label' => 'Tạo lại dàn ý',
+                    'description' => 'Chạy lại node outline. Không chạy lại bài viết.',
+                    'requires_outline' => true,
+                    'requires_content' => false,
+                ],
+                ContentProjectBulkRerunService::ACTION_ARTICLE => [
+                    'value' => ContentProjectBulkRerunService::ACTION_ARTICLE,
+                    'label' => 'Tạo lại bài từ dàn ý',
+                    'description' => 'Dùng dàn ý hiện tại, chỉ chạy node viết bài.',
+                    'requires_outline' => false,
+                    'requires_content' => true,
+                ],
+                ContentProjectBulkRerunService::ACTION_OUTLINE_AND_ARTICLE => [
+                    'value' => ContentProjectBulkRerunService::ACTION_OUTLINE_AND_ARTICLE,
+                    'label' => 'Tạo lại dàn ý và bài viết',
+                    'description' => 'Tạo outline mới rồi viết bài từ artifact đó.',
+                    'requires_outline' => true,
+                    'requires_content' => true,
+                ],
+            ],
             'canSyncAll' => $this->canSyncAllItems(),
             'canArchiveItems' => false,
             'runSettings' => ContentProjectRunSettings::fromRun($this->projectRun)->toArray(),
@@ -453,8 +741,15 @@ class ViewSeoProjectRun extends Page
                 'bulkSelected' => 'Đã chọn :count bài',
                 'bulkPickPrompt' => 'Chọn prompt',
                 'bulkExecute' => 'Thực hiện',
-                'bulkConfirmHeading' => 'Xác nhận chạy lại prompt',
-                'bulkConfirmBody' => 'Bạn sắp tạo lại :steps công đoạn cho :articles bài. Tổng số task sẽ được tạo: :total.',
+                'bulkConfirmHeading' => 'Xác nhận tạo lại',
+                'bulkConfirmBody' => 'Action: :action — Hợp lệ: :valid — Không hợp lệ: :invalid. Workflow: :workflow.',
+                'bulkActionOutline' => 'Tạo lại dàn ý',
+                'bulkActionArticle' => 'Tạo lại bài từ dàn ý',
+                'bulkActionOutlineAndArticle' => 'Tạo lại dàn ý và bài viết',
+                'bulkActionOutlineHelp' => 'Chạy lại node outline. Không chạy lại bài viết.',
+                'bulkActionArticleHelp' => 'Dùng dàn ý hiện tại, chỉ chạy node viết bài.',
+                'bulkActionOutlineAndArticleHelp' => 'Tạo outline mới rồi viết bài từ artifact đó.',
+                'bulkActionGenericStep' => 'Chạy lại bước...',
                 'bulkArchive' => __('seo-content-ai::filament.projects.archive_item'),
                 'runSettingsHeading' => __('seo-content-ai::filament.projects.run_settings_heading'),
                 'runSettingsGeneratePostImages' => __('seo-content-ai::filament.projects.run_settings_generate_post_images'),
@@ -807,14 +1102,27 @@ class ViewSeoProjectRun extends Page
      */
     private function enrichItemLastSaved(array $item): array
     {
-        $resolved = app(ArticleLastSavedTimestampService::class)->resolve([
+        $change = app(ArticleLastContentChangeResolver::class)->resolve([
             'last_manual_saved_at' => $item['last_manual_saved_at'] ?? null,
             'last_synced_at' => $item['last_synced_at'] ?? null,
+            'last_ai_content_at' => $item['last_ai_content_at'] ?? null,
         ]);
 
-        $item['last_saved_display'] = $resolved['display'];
-        $item['last_saved_source'] = $resolved['source'];
-        $item['last_saved_source_label'] = $resolved['source_label'];
+        $item['last_saved_display'] = $change->relative !== '—'
+            ? $change->relative
+            : $change->display;
+        $item['last_saved_absolute'] = $change->absolute;
+        $item['last_saved_source'] = $change->source;
+        $item['last_saved_source_label'] = $change->sourceLabel;
+        $item['last_saved_tooltip'] = $change->absolute !== null
+            ? ($change->absolute.($change->sourceLabel ? ' · Nguồn: '.$change->sourceLabel : ''))
+            : null;
+
+        $rowStatus = app(ContentProjectArticleRowStatusResolver::class)->resolve($item);
+        $item['row_status'] = $rowStatus->toArray();
+        $item['row_status_label'] = $rowStatus->label;
+        $item['row_status_code'] = $rowStatus->code;
+        $item['row_status_tooltip'] = $rowStatus->tooltip;
 
         return $item;
     }

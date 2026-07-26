@@ -75,7 +75,7 @@ class GenerateMediaJob implements ShouldQueue
             $media = SeoMedia::query()->find($this->seoMediaId);
         }
 
-        $prompt = SeoPrompt::query()->where('is_active', true)->find($this->promptId);
+        $prompt = SeoPrompt::query()->find($this->promptId);
 
         if (! $media instanceof SeoMedia || ! $prompt instanceof SeoPrompt) {
             return;

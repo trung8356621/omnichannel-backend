@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Models\ArticleMeta;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleGenerationInputResolver;
 use App\Addons\SeoContentAi\Services\ArticleOutlineResolver;
+use App\Addons\SeoContentAi\Services\WorkflowParserService;
 use App\Addons\SeoContentAi\Support\ArticleGenerationSourceResult;
 use Illuminate\Database\Eloquent\Collection;
 use Mockery;
@@ -244,7 +245,7 @@ final class ArticleGenerationInputResolverTest extends TestCase
 
     private function resolver(string $canonical): ArticleGenerationInputResolver
     {
-        $outline = Mockery::mock(ArticleOutlineResolver::class);
+        $outline = \Mockery::mock(ArticleOutlineResolver::class);
         $outline->shouldReceive('resolveMarkdown')->andReturn($canonical);
 
         return new ArticleGenerationInputResolver($outline);
@@ -252,7 +253,7 @@ final class ArticleGenerationInputResolverTest extends TestCase
 
     private function resolverNoRunLookup(string $canonical): ArticleGenerationInputResolver
     {
-        $outline = Mockery::mock(ArticleOutlineResolver::class);
+        $outline = \Mockery::mock(ArticleOutlineResolver::class);
         $outline->shouldReceive('resolveMarkdown')->andReturn($canonical);
 
         return new class($outline) extends ArticleGenerationInputResolver

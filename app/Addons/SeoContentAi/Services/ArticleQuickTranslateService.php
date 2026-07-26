@@ -131,7 +131,7 @@ final class ArticleQuickTranslateService
             );
         }
 
-        $prompt = SeoPrompt::query()->where('is_active', true)->find($promptId);
+        $prompt = SeoPrompt::query()->find($promptId);
         if ($prompt === null) {
             throw new \InvalidArgumentException(
                 __('seo-content-ai::filament.article_edit.translate_prompt_missing'),

@@ -12,7 +12,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
  *
  * Article {{input}} (rewrite / first-run / content retry) → ArticleGenerationInputResolver.
  */
-final class ArticleOutlineResolver
+class ArticleOutlineResolver
 {
     public const META_KEY = 'seo_article_outline';
 

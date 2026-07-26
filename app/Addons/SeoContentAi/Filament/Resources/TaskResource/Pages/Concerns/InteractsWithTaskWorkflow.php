@@ -5,18 +5,22 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\TaskResource\Pages\Concerns;
 
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookBinding;
+use App\Addons\SeoContentAi\Services\ArticleWritingExecutionService;
+use App\Addons\SeoContentAi\Services\ArticleWritingLegacyRewriteAdapter;
+use App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowAssignmentValidator;
+use App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionRoleResolver;
 use App\Addons\SeoContentAi\Services\WorkflowTagExtractorService;
 use App\Addons\SeoContentAi\Support\AiModelCatalog;
 
 trait InteractsWithTaskWorkflow
 {
     /**
-     * @return list<array{id: string, name: string, defaultModel: string, models: array<string, string>, tasks: list<array{id: string, name: string}>}>
+     * @return list<array{id: string, name: string, hook_key: string, defaultModel: string, models: array<string, string>, tasks: list<array{id: string, name: string}>}>
      */
     public function getPromptsForBuilder(): array
     {
         return SeoPrompt::query()
-            ->where('is_active', true)
             ->with('aiConnection')
             ->orderBy('name')
             ->get()
@@ -53,6 +57,7 @@ trait InteractsWithTaskWorkflow
                 return [
                     'id' => (string) $prompt->id,
                     'name' => (string) $prompt->name,
+                    'hook_key' => trim((string) ($prompt->hook_key ?? '')),
                     'defaultModel' => AiModelCatalog::defaultForConnection($prompt->aiConnection),
                     'models' => AiModelCatalog::optionsForConnection($prompt->aiConnection),
                     'tasks' => $tasks,
@@ -94,9 +99,29 @@ trait InteractsWithTaskWorkflow
      */
     public function saveFlow(array $data): void
     {
+        $flowData = $this->normalizeFlowPayload($data['flow_data'] ?? null);
+        $roleErrors = app(WorkflowExecutionRoleResolver::class)->validateFlowData($flowData);
+
+        $record = method_exists($this, 'getRecord') ? $this->getRecord() : null;
+        if ($record instanceof \App\Addons\SeoContentAi\Models\SeoTask) {
+            $roleErrors = array_merge(
+                $roleErrors,
+                app(WorkflowAssignmentValidator::class)->validateFlowPreservesSettingsBindings($record, $flowData),
+            );
+        }
+
+        if ($roleErrors !== []) {
+            $this->dispatch(
+                'task-flow-save-failed',
+                message: 'Không thể lưu quy trình: '.implode(' ', $roleErrors),
+            );
+
+            return;
+        }
+
         $saved = $this->persistTaskFlow(
             trim((string) ($data['name'] ?? '')),
-            $this->normalizeFlowPayload($data['flow_data'] ?? null),
+            $flowData,
         );
 
         $this->dispatch(
@@ -109,16 +134,14 @@ trait InteractsWithTaskWorkflow
 
     private function promptSupportsMergeOutlineSave(SeoPrompt $prompt): bool
     {
-        $name = mb_strtolower(trim((string) $prompt->name));
+        try {
+            $binding = PromptHookBinding::tryFromPrompt($prompt);
+            $hook = trim((string) ($binding?->hookKey ?? ''));
 
-        if ($name === '') {
+            return $hook === ArticleWritingExecutionService::HOOK_KEY
+                || $hook === ArticleWritingLegacyRewriteAdapter::LEGACY_REWRITE_HOOK;
+        } catch (\InvalidArgumentException) {
             return false;
         }
-
-        if (str_contains($name, 'theo dàn')) {
-            return true;
-        }
-
-        return str_contains($name, 'viết') && str_contains($name, 'dàn ý');
     }
 }

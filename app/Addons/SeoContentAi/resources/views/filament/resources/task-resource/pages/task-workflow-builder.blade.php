@@ -5,6 +5,7 @@
 
     <script>
         window.__SEO_PROMPTS__ = @json($this->getPromptsForBuilder());
+        window.__SEO_WORKFLOW_ROLES__ = @json(app(\App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionRoleRegistry::class)->builderOptions());
     </script>
 
     <div

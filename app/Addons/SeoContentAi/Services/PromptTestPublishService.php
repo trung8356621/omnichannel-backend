@@ -183,6 +183,12 @@ final class PromptTestPublishService
 
         app(ArticleEditorReadinessService::class)->syncWpPostContentFromBody($article->fresh());
 
+        $fresh = $article->fresh() ?? $article;
+        $newHash = $this->contentConflictGuard->contentHash((string) ($fresh->body ?? ''));
+        if ($newHash !== $expectedHash) {
+            app(ArticleLastSavedTimestampService::class)->touchAiContent($fresh);
+        }
+
         return [
             'success' => true,
             'message' => sprintf(

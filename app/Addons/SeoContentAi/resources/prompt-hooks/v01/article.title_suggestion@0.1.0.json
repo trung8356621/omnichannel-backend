@@ -6,6 +6,8 @@
   "description": "Experimental title suggestion — pinned 0.1.0",
   "enabled": true,
   "status": "experimental",
+  "settings_visible": true,
+  "category": "article_editor",
   "classification": "EXPERIMENTAL",
   "model": {
     "provider": "prompt_connection",
@@ -31,6 +33,26 @@
   "template": {
     "system": "Suggest one SEO title.",
     "user": "Keyword: {{keyword}}\nOld title: {{old_title}}\nMax length: {{max_length}}"
+  },
+  "presentation": {
+    "description": "Suggest a new article title from the focus keyword and current title.",
+    "default_instructions": [
+      "Return exactly one article title as plain text.",
+      "Stay close to the topic and focus keyword.",
+      "If an old title is provided, improve it — do not copy it blindly.",
+      "Keep the title within the configured maximum length when possible.",
+      "Do not add explanations, prefixes, markdown, or wrapping quotes."
+    ],
+    "output_format": [
+      "One complete title line only — no list and no extra commentary."
+    ],
+    "notes": [
+      "Preserve-meaning and max-length settings on the Prompt Hook still apply."
+    ],
+    "variables": [
+      { "key": "keyword", "required": true },
+      { "key": "old_title", "required": false }
+    ]
   },
   "validation": { "not_empty": true },
   "retry": { "max": 0 },

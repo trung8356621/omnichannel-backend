@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Enums\ArticleWritingSourceType;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
@@ -24,7 +25,7 @@ final class TaskTestInputResolver
         private readonly SeoPromptSettingsService $promptSettings,
         private readonly WorkflowParserService $workflowParser,
         private readonly WordPressArticleContentService $wordPressContent,
-        private readonly ArticleGenerationInputResolver $articleGenerationInput,
+        private readonly ArticleWritingAssembler $articleWritingAssembler,
     ) {}
 
     /**
@@ -57,6 +58,9 @@ final class TaskTestInputResolver
             variables: [
                 'input' => $input,
                 'user_brief' => $input,
+                'brief_free_input' => $input,
+                'article_writing_source_type' => ArticleWritingSourceType::Brief->value,
+                'source_type' => ArticleWritingSourceType::Brief->value,
             ],
             summary: sprintf('Input test — «%s»', $preview),
         );
@@ -215,7 +219,7 @@ final class TaskTestInputResolver
             $variables = $context->variables;
 
             if ($type === SeoProjectTask::TYPE_IMPROVE) {
-                // Improve / editor-style: được dùng article body.
+                // Improve: body + instruction — KHÔNG stamp article writing source / generate.
                 $html = trim($this->wordPressContent->resolveEditorHtml($article));
                 $markdown = $this->workflowParser->convertHtmlFragmentToMarkdown($html);
                 if ($markdown === '') {
@@ -230,9 +234,15 @@ final class TaskTestInputResolver
                 $variables['improve_instruction'] = $notes;
                 $variables['rewrite_instruction'] = $notes;
                 $variables['rewrite_notes'] = $notes;
+                $variables['article_improve_capability'] = ArticleImproveExecutionService::HOOK_KEY;
+                unset(
+                    $variables['article_writing_source_type'],
+                    $variables['source_type'],
+                    $variables['article_writing_formatted'],
+                );
             } else {
-                // TYPE_REWRITE / «Viết lại nội dung»: raw outline artifact — cùng path first-run.
-                $variables = $this->applyArticleGenerationSource($variables, $article);
+                // TYPE_REWRITE / «Tạo lại bài từ dàn ý»: outline → article.content.generate.
+                $variables = $this->articleWritingAssembler->applyOutlineFromArticle($article, $variables);
                 $variables['rewrite_instruction'] = $notes;
                 $variables['rewrite_notes'] = $notes;
             }
@@ -343,8 +353,8 @@ final class TaskTestInputResolver
                 ->withProjectTaskType(SeoProjectTask::TYPE_REWRITE)
                 ->withRewriteOptions(SeoProjectTask::REWRITE_MODE_CONTENT, $notes !== '' ? $notes : null);
 
-            // Legacy helper — cùng ArticleGenerationInputResolver như TYPE_REWRITE.
-            $variables = $this->applyArticleGenerationSource($context->variables, $article);
+            // Legacy helper — đồng bộ CP outline path (không dùng article body).
+            $variables = $this->articleWritingAssembler->applyOutlineFromArticle($article, $context->variables);
             $variables['rewrite_instruction'] = $notes;
             $variables['rewrite_notes'] = $notes;
 
@@ -405,21 +415,48 @@ final class TaskTestInputResolver
     /**
      * @param  array<string, mixed>  $variables
      * @return array<string, mixed>
+     *
+     * @deprecated Use ArticleWritingAssembler::applyOutlineFromArticle
      */
     private function applyArticleGenerationSource(array $variables, SeoArticle $article): array
     {
-        $source = $this->articleGenerationInput->resolveForArticle($article);
-        $variables['input'] = $source->rawArtifact;
-        unset($variables['post_content'], $variables['existing_body'], $variables['article_content']);
+        return $this->articleWritingAssembler->applyOutlineFromArticle($article, $variables);
+    }
 
-        return array_merge($variables, $source->toDebugVariables(), [
-            // BC keys cho initialState seed trong TaskWorkflowTestRunner.
-            'outline_id' => $source->sourceRunItemId !== null
-                ? 'run_item:'.$source->sourceRunItemId.':outline'
-                : 'article:'.(int) $article->getKey().':'.ArticleOutlineResolver::META_KEY,
-            'outline_version' => $source->artifactVersion,
-            'outline_source' => $source->sourceType,
-        ]);
+    /**
+     * Editor: Viết lại toàn bộ bài hiện có → article.content.generate (existing_article).
+     *
+     * @param  null|callable(Builder): void  $scopeArticles
+     */
+    public function resolveEditorFullRewrite(
+        SeoArticle $article,
+        ?string $notes = null,
+        ?callable $scopeArticles = null,
+    ): TaskTestContext {
+        $this->articleScope = $scopeArticles;
+
+        try {
+            $article->loadMissing(['articleMetas', 'site']);
+            $notes = trim((string) $notes);
+            $context = $this->contextFromArticle($article, 'id')
+                ->withProjectTaskType(SeoProjectTask::TYPE_REWRITE)
+                ->withRewriteOptions(SeoProjectTask::REWRITE_MODE_CONTENT, $notes !== '' ? $notes : null);
+
+            $variables = $this->articleWritingAssembler->applyExistingArticleFromArticle(
+                $article,
+                $context->variables,
+            );
+            if ($notes !== '') {
+                $variables['rewrite_instruction'] = $notes;
+                $variables['rewrite_notes'] = $notes;
+            }
+
+            return $context
+                ->withVariables($variables)
+                ->withRewriteOptions(SeoProjectTask::REWRITE_MODE_CONTENT, $notes !== '' ? $notes : null);
+        } finally {
+            $this->articleScope = null;
+        }
     }
 
     private function contextFromArticle(SeoArticle $article, string $matchedBy): TaskTestContext

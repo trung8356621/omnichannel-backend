@@ -695,6 +695,27 @@
                     type="button"
                     class="seo-editor-menu-item"
                     role="menuitem"
+                    data-seo-page-action="editor-full-rewrite"
+                    title="{{ __('seo-content-ai::filament.projects.type_rewrite_editor') }}"
+                    aria-label="{{ __('seo-content-ai::filament.projects.type_rewrite_editor') }}"
+                    wire:loading.attr="disabled"
+                    wire:target="queueEditorFullRewrite"
+                    wire:click="queueEditorFullRewrite"
+                    x-on:click="moreOpen = false"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
+                    </svg>
+                    <span wire:loading.remove wire:target="queueEditorFullRewrite">{{ __('seo-content-ai::filament.projects.type_rewrite_editor') }}</span>
+                    <span wire:loading wire:target="queueEditorFullRewrite" class="inline-flex items-center gap-1">
+                        <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>
+                        Đang viết lại…
+                    </span>
+                </button>
+                <button
+                    type="button"
+                    class="seo-editor-menu-item"
+                    role="menuitem"
                     data-seo-pipeline-rerun="1"
                     data-seo-page-action="pipeline-rerun"
                     title="{{ __('seo-content-ai::filament.article_pipeline_rerun.menu') }}"

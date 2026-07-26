@@ -48,7 +48,7 @@
 | **Editor chính** | `resources/js/components/SeoArticleEditor.jsx` | Core TipTap + editor-hosted heavy modules (seo/images/reviews) one-at-a-time via `activeHeavyModule`. |
 | **Module host**  | `resources/js/components/ArticleEditorModuleHost.jsx` | Links / FAQ / CTA / AI Chat — dynamic import + portal + AbortController. |
 | **Blade host**   | `resources/views/.../edit-article.blade.php`   | `#seo-article-editor-root` (`wire:ignore`) + `#seo-article-core-bootstrap`. |
-| **Backend page** | `Filament/.../EditArticle.php`                 | Livewire `/seo/articles/{record}/edit`. SSR core bootstrap + lazy `/editor/*`. |
+| **Backend page** | `Filament/.../EditArticle.php`                 | Livewire `/seo/articles/{record}/edit`. SSR core bootstrap + lazy `/editor/*`. Menu **Viết lại toàn bộ bài hiện có** → `queueEditorFullRewrite()` → `TaskTestInputResolver::resolveEditorFullRewrite` → `ArticleWritingExecutionService` (`existing_article`, DirectGenerate). Không Publish graph. |
 
 **Image block picker:** `ImageBlockPickerBox` chờ 2×`requestAnimationFrame` mới enable nút. `handleClickOutside` giữ block active khi click trong slot block đang chọn; guard ~360ms sau activate/insert image; whitelist outline rail, media/generate modal. Outline focus clear khi click ra ngoài heading (`headingCommand.action=clear`).
 

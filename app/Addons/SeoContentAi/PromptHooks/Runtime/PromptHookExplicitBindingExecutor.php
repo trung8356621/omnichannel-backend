@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\InvalidInput;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\PromptHookFailure;
+use App\Addons\SeoContentAi\Services\ArticleWritingLegacyRewriteAdapter;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -24,6 +25,7 @@ final class PromptHookExplicitBindingExecutor
         private readonly PromptHookRuntimeRegistry $registry,
         private readonly PromptHookMigrationFlags $flags,
         private readonly PromptRunnerService $promptRunner,
+        private readonly ArticleWritingLegacyRewriteAdapter $legacyRewriteAdapter,
     ) {}
 
     /**
@@ -60,7 +62,26 @@ final class PromptHookExplicitBindingExecutor
             throw new InvalidArgumentException('Prompt has no explicit hook binding.');
         }
 
-        $definition = $this->registry->get($binding->hookKey, $binding->hookVersion);
+        // DEPRECATED COMPATIBILITY ONLY: article.content.rewrite → generate.
+        // Binding generate mới không đi qua adapter / không log legacy.
+        $effectiveHookKey = $binding->hookKey;
+        $effectiveVersion = $binding->hookVersion;
+        if ($this->legacyRewriteAdapter->isLegacyRewriteHook($binding->hookKey)) {
+            $effectiveHookKey = $this->legacyRewriteAdapter->canonicalizeHookKey($binding->hookKey);
+            $effectiveVersion = '0.1.0';
+            $this->legacyRewriteAdapter->logLegacyAdapterUsed(
+                caller: self::class.'::execute',
+                articleId: isset($contextExtras['article_id']) ? (int) $contextExtras['article_id'] : null,
+                runId: isset($contextExtras['run_id']) ? (int) $contextExtras['run_id'] : null,
+                oldHook: $binding->hookKey,
+                mappedSourceType: (string) ($variables['article_writing_source_type']
+                    ?? $variables['source_type']
+                    ?? 'existing_article'),
+                destinationCapability: $effectiveHookKey,
+            );
+        }
+
+        $definition = $this->registry->get($effectiveHookKey, $effectiveVersion);
         $this->registry->assertExecutable(
             $definition,
             true, // explicit editor selection allows experimental
@@ -101,8 +122,8 @@ final class PromptHookExplicitBindingExecutor
 
         try {
             $result = $this->engine->execute(
-                $binding->hookKey,
-                $binding->hookVersion,
+                $effectiveHookKey,
+                $effectiveVersion,
                 $envelope,
                 $correlationId,
             );
@@ -138,8 +159,9 @@ final class PromptHookExplicitBindingExecutor
         $outputText = $this->normalizeWorkflowText($result->output, $ports);
 
         Log::info('prompt_hook.explicit_binding_executed', [
-            'hook_key' => $binding->hookKey,
-            'hook_version' => $binding->hookVersion,
+            'hook_key' => $effectiveHookKey,
+            'hook_version' => $effectiveVersion,
+            'legacy_hook_key' => $effectiveHookKey !== $binding->hookKey ? $binding->hookKey : null,
             'execution_source' => PromptHookExecutionIntent::ExplicitBinding->value,
             'prompt_id' => (int) $prompt->id,
             'node_id' => $contextExtras['node_id'] ?? null,
@@ -171,10 +193,13 @@ final class PromptHookExplicitBindingExecutor
             ],
             'duration_ms' => $durationMs,
             'execution_source' => PromptHookExecutionIntent::ExplicitBinding->value,
-            'hook_key' => $binding->hookKey,
-            'hook_version' => $binding->hookVersion,
+            'hook_key' => $effectiveHookKey,
+            'hook_version' => $effectiveVersion,
             'audit_fingerprint' => $result->auditFingerprint,
         ];
+        if ($effectiveHookKey !== $binding->hookKey) {
+            $payload['legacy_hook_key'] = $binding->hookKey;
+        }
         if ($sections !== null) {
             $payload['sections'] = $sections;
         }

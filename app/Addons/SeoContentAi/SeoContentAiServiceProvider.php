@@ -179,6 +179,14 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
             \App\Addons\SeoContentAi\Automation\Contracts\ActionExecutionLoggerContract::class,
             \App\Addons\SeoContentAi\Automation\Runtime\ActionExecutionLogger::class,
         );
+        $this->app->bind(
+            \App\Addons\SeoContentAi\Contracts\SeoCreateArticleSettingsReader::class,
+            \App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService::class,
+        );
+        $this->app->bind(
+            \App\Addons\SeoContentAi\Contracts\ResolvesSettingsPromptHook::class,
+            \App\Addons\SeoContentAi\Services\PromptOwnership\PromptBindingResolver::class,
+        );
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Runtime\AutomationSiteContextResolver::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Registry\ActionCatalogBootstrap::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Registry\ActionHandlerRegistrar::class);
@@ -262,6 +270,9 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 \App\Addons\SeoContentAi\Console\WordpressSyncLeaseWatchdogCommand::class,
                 \App\Addons\SeoContentAi\Console\MigrateSeoArticleReviewsCommand::class,
                 \App\Addons\SeoContentAi\Console\RepairArchivedArticleActiveTasksCommand::class,
+                \App\Addons\SeoContentAi\Console\AssignWorkflowExecutionRolesCommand::class,
+                \App\Addons\SeoContentAi\Console\WorkflowDoctorCommand::class,
+                \App\Addons\SeoContentAi\Console\InstallDefaultImprovePromptCommand::class,
             ]);
         }
     }

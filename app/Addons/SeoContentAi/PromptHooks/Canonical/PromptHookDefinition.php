@@ -36,6 +36,11 @@ final class PromptHookDefinition
         public readonly string $manifestPath = '',
         public readonly bool $strictTemplateVariables = true,
         public readonly ?string $outputContract = null,
+        /** Settings UI selector — Hook type only; ownership stays in Settings binding. */
+        public readonly bool $settingsVisible = false,
+        public readonly string $category = 'general',
+        /** UI-only guidance; never used by runtime resolver. */
+        public readonly array $presentation = [],
     ) {}
 
     public function outputContractKey(): ?string

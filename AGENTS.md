@@ -95,10 +95,11 @@
 
 ## Verification
 
-- Run the smallest relevant test set first.
-- For PHP changes, run focused tests such as:
-  - `php artisan test --filter=<TestName>`
-  - `php artisan test app/Addons/SeoContentAi/tests`
+- Prefer remote PHPUnit (host dùng `$PHP_BIN`), không dùng `php artisan test` làm mặc định.
+- Smallest related set first, e.g.:
+  - `$PHP_BIN vendor/bin/phpunit --filter=PromptOwnershipModelTest`
+  - `$PHP_BIN vendor/bin/phpunit app/Addons/SeoContentAi/tests/Unit`
+- Do not treat `php artisan test --filter=...` as the project standard — many SEO unit tests extend plain `PHPUnit\Framework\TestCase` and are run via `vendor/bin/phpunit` on production hosts.
 - Run Laravel Pint on changed PHP files when practical.
 - For JavaScript or CSS changes, run the relevant frontend build or checks, normally `npm run build`.
 - For migration changes, inspect both `up()` and `down()` behavior and verify the intended database connection.

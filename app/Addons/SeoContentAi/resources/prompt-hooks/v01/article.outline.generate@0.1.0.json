@@ -3,6 +3,8 @@
   "key": "article.outline.generate",
   "version": "0.1.0",
   "status": "experimental",
+  "settings_visible": true,
+  "category": "article_editor",
   "name": "Generate article outline and vocabulary",
   "description": "Generate an SEO article outline and semantic vocabulary in one provider call, then expose each task through separate workflow output ports.",
   "enabled": true,
@@ -139,7 +141,30 @@
     "system": null,
     "user": null
   },
-
+  "presentation": {
+    "description": "Generate an article outline and writing vocabulary from the topic and keyword.",
+    "default_instructions": [
+      "Build a clear outline structure that matches search intent.",
+      "Keep headings distinct — avoid overlapping ideas.",
+      "Do not write the full article body in this step.",
+      "Include semantic vocabulary / writing guidance in the second section."
+    ],
+    "output_format": [
+      "Structured Markdown with two declared sections:",
+      "Task 1 — Outline between the outline markers.",
+      "Task 2 — Vocabulary / writing instructions between the vocabulary markers."
+    ],
+    "notes": [
+      "Prompt Markdown is the template sent to the model for this Hook."
+    ],
+    "variables": [
+      { "key": "post_title", "required": true },
+      { "key": "keyword", "required": false },
+      { "key": "site_description", "required": false },
+      { "key": "tone", "required": false },
+      { "key": "language", "required": false }
+    ]
+  },
   "validation": {
     "not_empty": true
   },

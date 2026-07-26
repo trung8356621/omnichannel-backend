@@ -101,6 +101,12 @@ final class PromptHookPhase1DualReadAdapter
             ],
             manifestPath: $path,
             strictTemplateVariables: true,
+            settingsVisible: in_array($key, [
+                'article.title_suggestion',
+                'article.meta_description_suggestion',
+            ], true),
+            category: 'article_editor',
+            presentation: [],
         );
     }
 }

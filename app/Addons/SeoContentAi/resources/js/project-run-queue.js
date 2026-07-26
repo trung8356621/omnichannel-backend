@@ -38,8 +38,15 @@ function registerSeoProjectRunQueue() {
         syncAllOpen: false,
         bulkConfirmOpen: false,
         bulkBusy: false,
+        genericStepOpen: false,
+        genericStepLoading: false,
+        genericSelectedNodeId: '',
+        genericPreview: null,
+        genericPreviewError: null,
         selectedTaskIds: [],
         selectedNodeIds: [],
+        bulkAction: null,
+        bulkPreview: null,
         generatePostImages: Boolean(config?.runSettings?.generate_post_images ?? false),
         runSettingsSubmitting: false,
         forceStopBusy: false,
@@ -357,52 +364,219 @@ function registerSeoProjectRunQueue() {
             return template.replace(':count', String(this.selectedTaskIds.length));
         },
 
-        selectedStepLabels() {
-            const steps = Array.isArray(this.config.workflowSteps) ? this.config.workflowSteps : [];
-            return steps
-                .filter((step) => this.selectedNodeIds.includes(step.node_id))
-                .map((step) => step.label || step.title || step.node_id);
+        bulkActionLabel(action = null) {
+            const key = action || this.bulkAction;
+            const actions = this.config.bulkActions || {};
+            if (actions[key]?.label) {
+                return String(actions[key].label);
+            }
+
+            if (key === 'regenerate_outline') {
+                return this.config.labels?.bulkActionOutline ?? 'Tạo lại dàn ý';
+            }
+            if (key === 'regenerate_article') {
+                return this.config.labels?.bulkActionArticle ?? 'Tạo lại bài từ dàn ý';
+            }
+            if (key === 'regenerate_outline_and_article') {
+                return this.config.labels?.bulkActionOutlineAndArticle ?? 'Tạo lại dàn ý và bài viết';
+            }
+
+            return key || '';
+        },
+
+        canBulkAction(action) {
+            if (! this.config.canRetryWorkflowSteps) {
+                return false;
+            }
+            const roles = this.config.roleAvailability || {};
+            if (action === 'regenerate_outline') {
+                return Boolean(roles.has_outline_role);
+            }
+            if (action === 'regenerate_article') {
+                return Boolean(roles.has_content_role);
+            }
+            if (action === 'regenerate_outline_and_article') {
+                return Boolean(roles.has_outline_role) && Boolean(roles.has_content_role);
+            }
+
+            return false;
         },
 
         bulkConfirmText() {
             const template = this.config.labels?.bulkConfirmBody
-                ?? 'Bạn sắp tạo lại :steps công đoạn cho :articles bài. Tổng số task sẽ được tạo: :total.';
-            const steps = this.selectedNodeIds.length;
-            const articles = this.selectedTaskIds.length;
+                ?? 'Action: :action — Hợp lệ: :valid — Không hợp lệ: :invalid. Workflow: :workflow.';
+            const preview = this.bulkPreview || {};
 
             return template
-                .replace(':steps', String(steps))
-                .replace(':articles', String(articles))
-                .replace(':total', String(steps * articles));
+                .replace(':action', this.bulkActionLabel())
+                .replace(':valid', String(preview.valid_count ?? 0))
+                .replace(':invalid', String(preview.invalid_count ?? 0))
+                .replace(':workflow', String(preview.workflow_name || '—'))
+                .replace(':articles', String(this.selectedTaskIds.length));
         },
 
-        openBulkConfirm() {
-            if (this.selectedTaskIds.length === 0 || this.selectedNodeIds.length === 0) {
+        async openBulkRerunPreview(action) {
+            if (this.selectedTaskIds.length === 0 || this.bulkBusy) {
                 return;
             }
-            this.bulkConfirmOpen = true;
-        },
+            if (! this.canBulkAction(action)) {
+                window.alert('Workflow chưa gán đủ vai trò thực thi cho action này.');
+                return;
+            }
 
-        async confirmBulkRetry() {
             const wire = this.resolveWire();
-            if (! wire?.bulkRetryWorkflowSteps) {
-                window.alert('Không kết nối được Livewire (bulkRetryWorkflowSteps). Hard refresh (Ctrl+F5).');
+            if (! wire?.previewBulkRerunByAction) {
+                window.alert('Không kết nối được Livewire (previewBulkRerunByAction). Hard refresh (Ctrl+F5).');
                 return;
             }
 
             this.bulkBusy = true;
+            this.bulkAction = action;
             try {
-                const response = await wire.bulkRetryWorkflowSteps(
+                const preview = await wire.previewBulkRerunByAction(this.selectedTaskIds, action);
+                this.bulkPreview = preview || null;
+                if (! preview?.success && preview?.message) {
+                    window.alert(String(preview.message));
+                    return;
+                }
+                this.bulkConfirmOpen = true;
+            } catch (error) {
+                window.alert(error?.message ? String(error.message) : 'Không tải được preview bulk.');
+            } finally {
+                this.bulkBusy = false;
+            }
+        },
+
+        openBulkConfirm() {
+            // Legacy no-op — dùng openBulkRerunPreview.
+        },
+
+        async confirmBulkRetry() {
+            const wire = this.resolveWire();
+            if (! wire?.bulkRerunByAction) {
+                window.alert('Không kết nối được Livewire (bulkRerunByAction). Hard refresh (Ctrl+F5).');
+                return;
+            }
+            if (! this.bulkAction || ! this.bulkPreview?.can_execute) {
+                return;
+            }
+
+            const allowPartial = Number(this.bulkPreview?.invalid_count ?? 0) > 0
+                && Number(this.bulkPreview?.valid_count ?? 0) > 0;
+
+            this.bulkBusy = true;
+            try {
+                const response = await wire.bulkRerunByAction(
                     this.selectedTaskIds,
-                    this.selectedNodeIds,
+                    this.bulkAction,
+                    allowPartial,
                 );
-                window.alert(response?.message ?? 'Đã xử lý bulk retry.');
+                window.alert(response?.message ?? 'Đã xử lý bulk rerun.');
                 this.bulkConfirmOpen = false;
                 this.selectedTaskIds = [];
-                this.selectedNodeIds = [];
+                this.bulkAction = null;
+                this.bulkPreview = null;
                 window.location.reload();
             } catch (error) {
-                window.alert(error?.message ? String(error.message) : 'Bulk retry thất bại.');
+                window.alert(error?.message ? String(error.message) : 'Bulk rerun thất bại.');
+            } finally {
+                this.bulkBusy = false;
+            }
+        },
+
+        async openGenericStepPicker() {
+            const steps = Array.isArray(this.config?.genericPickerSteps)
+                ? this.config.genericPickerSteps
+                : [];
+            if (! steps.length) {
+                window.alert('Không có bước generic trong workflow hiện tại.');
+                return;
+            }
+            this.genericStepOpen = true;
+            this.genericSelectedNodeId = String(steps[0]?.node_id || '');
+            this.genericPreview = null;
+            this.genericPreviewError = null;
+            if (this.genericSelectedNodeId) {
+                await this.refreshGenericStepPreview();
+            }
+        },
+
+        closeGenericStepPicker() {
+            this.genericStepOpen = false;
+            this.genericPreview = null;
+            this.genericPreviewError = null;
+            this.genericSelectedNodeId = '';
+        },
+
+        genericPickerSteps() {
+            return Array.isArray(this.config?.genericPickerSteps)
+                ? this.config.genericPickerSteps
+                : [];
+        },
+
+        genericSelectedStep() {
+            const id = String(this.genericSelectedNodeId || '');
+            return this.genericPickerSteps().find((s) => String(s.node_id) === id) || null;
+        },
+
+        async refreshGenericStepPreview() {
+            const nodeId = String(this.genericSelectedNodeId || '');
+            if (! nodeId) {
+                this.genericPreview = null;
+                this.genericPreviewError = 'Chưa chọn bước.';
+                return;
+            }
+            const wire = this.resolveWire();
+            if (! wire?.previewBulkGenericStep) {
+                this.genericPreviewError = 'Thiếu Livewire previewBulkGenericStep. Hard refresh.';
+                return;
+            }
+            this.genericStepLoading = true;
+            this.genericPreviewError = null;
+            try {
+                const previewWrap = await wire.previewBulkGenericStep(this.selectedTaskIds, nodeId);
+                this.genericPreview = previewWrap?.preview || previewWrap || null;
+                if (! this.genericPreview?.can_execute && (this.genericPreview?.invalid || []).length === 0) {
+                    this.genericPreviewError = previewWrap?.message
+                        || this.genericPreview?.message
+                        || 'Không thể chạy lại bước này.';
+                }
+            } catch (error) {
+                this.genericPreview = null;
+                this.genericPreviewError = error?.message
+                    ? String(error.message)
+                    : 'Không tải được preview.';
+            } finally {
+                this.genericStepLoading = false;
+            }
+        },
+
+        async confirmGenericStepRerun() {
+            const nodeId = String(this.genericSelectedNodeId || '');
+            const preview = this.genericPreview;
+            if (! nodeId || ! preview?.can_execute) {
+                return;
+            }
+            const wire = this.resolveWire();
+            if (! wire?.bulkRerunGenericStep) {
+                window.alert('Thiếu Livewire bulkRerunGenericStep. Hard refresh.');
+                return;
+            }
+            const invalidCount = Number(preview.invalid_count || 0);
+            const allowPartial = invalidCount > 0 && Number(preview.valid_count || 0) > 0;
+            this.bulkBusy = true;
+            try {
+                const response = await wire.bulkRerunGenericStep(
+                    this.selectedTaskIds,
+                    nodeId,
+                    allowPartial,
+                );
+                window.alert(response?.message ?? 'Đã xử lý.');
+                this.closeGenericStepPicker();
+                this.selectedTaskIds = [];
+                window.location.reload();
+            } catch (error) {
+                window.alert(error?.message ? String(error.message) : 'Generic step rerun thất bại.');
             } finally {
                 this.bulkBusy = false;
             }
@@ -659,6 +833,10 @@ function registerSeoProjectRunQueue() {
                         retryWorkflowStep: (taskId, nodeId) => component.call('retryWorkflowStep', taskId, nodeId),
                         cancelWorkflowStep: (taskId, nodeId) => component.call('cancelWorkflowStep', taskId, nodeId),
                         bulkRetryWorkflowSteps: (taskIds, nodeIds) => component.call('bulkRetryWorkflowSteps', taskIds, nodeIds),
+                        previewBulkRerunByAction: (taskIds, action) => component.call('previewBulkRerunByAction', taskIds, action),
+                        bulkRerunByAction: (taskIds, action, allowPartial = false) => component.call('bulkRerunByAction', taskIds, action, allowPartial),
+                        previewBulkGenericStep: (taskIds, nodeId) => component.call('previewBulkGenericStep', taskIds, nodeId),
+                        bulkRerunGenericStep: (taskIds, nodeId, allowPartial = false) => component.call('bulkRerunGenericStep', taskIds, nodeId, allowPartial),
                         beginRunQueue: () => component.call('beginRunQueue'),
                         finalizePartialQueue: () => component.call('finalizePartialQueue'),
                         completeRunQueue: (stopped) => component.call('completeRunQueue', stopped),
@@ -688,6 +866,10 @@ function registerSeoProjectRunQueue() {
                     retryWorkflowStep: (taskId, nodeId) => this.$wire.retryWorkflowStep(taskId, nodeId),
                     cancelWorkflowStep: (taskId, nodeId) => this.$wire.cancelWorkflowStep(taskId, nodeId),
                     bulkRetryWorkflowSteps: (taskIds, nodeIds) => this.$wire.bulkRetryWorkflowSteps(taskIds, nodeIds),
+                    previewBulkRerunByAction: (taskIds, action) => this.$wire.previewBulkRerunByAction(taskIds, action),
+                    bulkRerunByAction: (taskIds, action, allowPartial = false) => this.$wire.bulkRerunByAction(taskIds, action, allowPartial),
+                    previewBulkGenericStep: (taskIds, nodeId) => this.$wire.previewBulkGenericStep(taskIds, nodeId),
+                    bulkRerunGenericStep: (taskIds, nodeId, allowPartial = false) => this.$wire.bulkRerunGenericStep(taskIds, nodeId, allowPartial),
                     beginRunQueue: () => this.$wire.beginRunQueue(),
                     finalizePartialQueue: () => this.$wire.finalizePartialQueue(),
                     completeRunQueue: (stopped) => this.$wire.completeRunQueue(stopped),

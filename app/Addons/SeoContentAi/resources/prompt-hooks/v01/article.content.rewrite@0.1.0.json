@@ -3,12 +3,14 @@
   "key": "article.content.rewrite",
   "version": "0.1.0",
   "status": "experimental",
+  "settings_visible": false,
+  "category": "article_writing",
   "name": "Rewrite article content",
-  "description": "Rewrite an existing article using explicit revision instructions while preserving source facts and search intent.",
+  "description": "LEGACY — runtime adapts to article.content.generate + source=existing_article. Do not bind new Prompts to this hook.",
   "enabled": true,
   "classification": "NORMALIZE_NOW",
 
-  "legacy_binding": "rewrite_article_task_id → TaskWorkflowTestRunner / TaskTestInputResolver → article.content.update",
+  "legacy_binding": "Phase 0.3 adapter → article.content.generate (existing_article). DB rewrite_article_task_id kept, not read at runtime.",
 
   "model": {
     "provider": "prompt_connection",

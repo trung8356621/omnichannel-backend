@@ -6,6 +6,8 @@ namespace App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 
 use App\Addons\SeoContentAi\Enums\ArticleReviewActionType;
 use App\Addons\SeoContentAi\Enums\ArticleReviewStatus;
+use App\Addons\SeoContentAi\Enums\ArticleWritingExecutionMode;
+use App\Addons\SeoContentAi\Enums\ArticleWritingPromptOwnerType;
 use App\Addons\SeoContentAi\Exceptions\FaqManualExtractException;
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsWorkflows;
@@ -40,6 +42,7 @@ use App\Addons\SeoContentAi\Services\ArticleKeywordLinkReconcileService;
 use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;
 use App\Addons\SeoContentAi\Services\ArticlePendingInternalLinkService;
 use App\Addons\SeoContentAi\Services\ArticlePipelineRerunService;
+use App\Addons\SeoContentAi\Services\ArticleWritingExecutionService;
 use App\Addons\SeoContentAi\Services\ArticlePolylangSyncService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
 use App\Addons\SeoContentAi\Services\ArticleQuickPostReviewService;
@@ -73,6 +76,9 @@ use App\Addons\SeoContentAi\Services\WordPressAttachmentRenameService;
 use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
 use App\Addons\SeoContentAi\Services\WorkflowParserService;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
+use App\Addons\SeoContentAi\Support\ArticleWritingExecutionContext;
+use App\Addons\SeoContentAi\Support\ArticleWritingExecutionResult;
+use App\Addons\SeoContentAi\Support\ArticleWritingInput;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\RankMathSeoValueNormalizer;
 use App\Addons\SeoContentAi\Automation\Support\ArticleContentConflictGuard;
@@ -3352,6 +3358,114 @@ class EditArticle extends SeoEditRecord
         app(ArticleKeywordLinkReconcileService::class)->reconcileForArticle($this->record->fresh(), $html);
 
         return $html;
+    }
+
+    /**
+     * Editor: «Viết lại toàn bộ bài hiện có» — existing_article → ArticleWritingExecutionService.
+     * Không chạy Publish graph / Content Project orchestration.
+     */
+    public function queueEditorFullRewrite(?string $notes = null): void
+    {
+        abort_unless(SeoAccessControl::canAccessManagerFeatures(), 403);
+
+        $article = $this->record;
+        if (! $article instanceof SeoArticle) {
+            Notification::make()
+                ->title('Không thể viết lại bài')
+                ->body('Thiếu bài viết.')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $activeWriting = SeoProjectTask::query()
+            ->where('article_id', (int) $article->getKey())
+            ->where('status', SeoProjectTask::STATUS_WRITING)
+            ->exists();
+        if ($activeWriting) {
+            Notification::make()
+                ->title('Không thể viết lại bài')
+                ->body('Bài đang thuộc Content Project run đang chạy. Chờ xong hoặc hủy run trước khi viết lại từ editor.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $this->pipelineRerunBusy = true;
+
+        try {
+            $context = app(TaskTestInputResolver::class)->resolveEditorFullRewrite(
+                $article,
+                $notes,
+            );
+            $writing = ArticleWritingInput::fromExistingArticleBody(
+                bodyMarkdown: (string) ($context->variables['article_writing_raw_input'] ?? ''),
+                title: trim((string) ($context->variables['post_title'] ?? '')),
+                keyword: trim((string) ($context->variables['focus_keyword'] ?? '')),
+                description: trim((string) ($context->variables['secondary_description'] ?? '')),
+                articleId: (int) $article->getKey(),
+            );
+
+            $result = app(ArticleWritingExecutionService::class)->execute(
+                $writing,
+                new ArticleWritingExecutionContext(
+                    mode: ArticleWritingExecutionMode::DirectGenerate,
+                    promptOwnerType: ArticleWritingPromptOwnerType::SettingsBinding,
+                    siteId: (int) ($article->site_id ?? 0),
+                    taskContext: $context,
+                    expectedUpdatedAt: $article->updated_at?->toIso8601String(),
+                    baseVariables: $context->variables,
+                ),
+            );
+        } catch (\Throwable $exception) {
+            $this->pipelineRerunBusy = false;
+            Notification::make()
+                ->title('Không thể viết lại bài')
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $this->pipelineRerunBusy = false;
+
+        if (! $result->success) {
+            Notification::make()
+                ->title('Không thể viết lại bài')
+                ->body($result->message)
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        if ($result->persistStatus === ArticleWritingExecutionResult::PERSIST_IGNORED_STALE) {
+            Notification::make()
+                ->title('Đã bỏ qua kết quả cũ')
+                ->body($result->message)
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.projects.type_rewrite_editor'))
+            ->body($result->message)
+            ->success()
+            ->send();
+
+        $this->record->refresh();
+        $this->record->load('articleMetas');
+        $this->hydrateArticleState();
+        $articleId = (int) $this->record->id;
+        $this->js(sprintf(
+            'window.dispatchEvent(new CustomEvent("seo-article-pipeline-rerun-completed", { detail: { articleId: %d } }))',
+            $articleId,
+        ));
     }
 
     public function queueArticlePipelineRerun(string $from = 'outline'): void

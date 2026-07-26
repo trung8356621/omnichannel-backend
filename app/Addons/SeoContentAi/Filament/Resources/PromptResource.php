@@ -1,6 +1,6 @@
 <?php
 
-declare(strict_types=1);
+declare(strict_types=1); // @codeCoverageIgnore
 
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
@@ -93,7 +93,7 @@ class PromptResource extends SeoPanelResource
                                             ->maxLength(255),
                                         Forms\Components\Textarea::make('description')
                                             ->label(__('seo-content-ai::filament.prompt.description'))
-                                            ->rows(3)
+                                            ->rows(2)
                                             ->columnSpanFull(),
                                         Forms\Components\Select::make('ai_connection_id')
                                             ->label(__('seo-content-ai::filament.prompt.ai_connection'))
@@ -109,71 +109,82 @@ class PromptResource extends SeoPanelResource
                                             ->default('default')
                                             ->inline()
                                             ->live(),
-                                        Forms\Components\Toggle::make('is_active')
-                                            ->label(__('seo-content-ai::filament.prompt.active'))
-                                            ->default(true),
                                     ]),
                                 ...PromptHookFormSchema::section(),
-                                Forms\Components\Section::make(__('seo-content-ai::filament.prompt.variables'))
-                                    ->description('Auto-sync from {{variable_name}} in Markdown. Runtime mặc định: {{input}}, {{loai_san_pham}}, {{tone}}, {{site_cta}}, {{keyword_density}}, {{article_length}}, ... — không cần khai báo.')
-                                    ->schema([
-                                        Forms\Components\Repeater::make('variables')
-                                            ->label('')
-                                            ->schema([
-                                                Forms\Components\TextInput::make('name')
-                                                    ->label('Variable name (e.g. focus_keyword)')
-                                                    ->required()
-                                                    ->maxLength(128),
-                                                Forms\Components\TextInput::make('description')
-                                                    ->label('Note')
-                                                    ->maxLength(255),
-                                            ])
-                                            ->defaultItems(0)
-                                            ->addActionLabel(__('seo-content-ai::filament.prompt.add_variable'))
-                                            ->reorderable()
-                                            ->collapsible(),
-                                    ]),
                             ])
-                            ->columnSpan(4),
+                            ->columnSpan(['default' => 12, 'lg' => 4]),
 
                         Forms\Components\Group::make()
-                            ->columnSpan(8)
                             ->schema([
                                 Forms\Components\Section::make(
-                                    fn (Get $get): string => filled($get('hook_key'))
-                                        && ! \App\Addons\SeoContentAi\PromptHooks\PromptHookFormSchema::usesLegacyPromptTemplate(
-                                            (string) ($get('hook_key') ?? ''),
+                                    function (Get $get): string {
+                                        $hookKey = (string) ($get('hook_key') ?? '');
+                                        if (blank($hookKey)) {
+                                            return (string) __('seo-content-ai::filament.prompt.content_markdown');
+                                        }
+
+                                        $legacy = PromptHookFormSchema::usesLegacyPromptTemplate(
+                                            $hookKey,
                                             (string) ($get('hook_version') ?? ''),
-                                        )
-                                        ? (string) __('seo-content-ai::filament.prompt.content_when_hook')
-                                        : (string) __('seo-content-ai::filament.prompt.content_markdown')
+                                        );
+
+                                        return $legacy
+                                            ? (string) __('seo-content-ai::filament.prompt.content_prompt_own')
+                                            : (string) __('seo-content-ai::filament.prompt.content_managed_by_hook');
+                                    }
                                 )
-                                    ->description(fn (Get $get): string => filled($get('hook_key'))
-                                        ? (
-                                            \App\Addons\SeoContentAi\PromptHooks\PromptHookFormSchema::usesLegacyPromptTemplate(
-                                                (string) ($get('hook_key') ?? ''),
-                                                (string) ($get('hook_version') ?? ''),
-                                            )
-                                                ? (string) __('seo-content-ai::prompt_hooks.hook_legacy_prompt_template_note')
-                                                : (string) __('seo-content-ai::prompt_hooks.hook_template_owns_prompt')
-                                        )
-                                        : 'Use H1 (#) to split blocks: # Role, # Context, # Task: ..., # Sub-task: ...')
+                                    ->description(function (Get $get): string {
+                                        $hookKey = (string) ($get('hook_key') ?? '');
+                                        if (blank($hookKey)) {
+                                            return (string) __('seo-content-ai::filament.prompt.content_markdown_hint');
+                                        }
+
+                                        $legacy = PromptHookFormSchema::usesLegacyPromptTemplate(
+                                            $hookKey,
+                                            (string) ($get('hook_version') ?? ''),
+                                        );
+
+                                        return $legacy
+                                            ? (string) __('seo-content-ai::filament.prompt.content_prompt_own_hint')
+                                            : (string) __('seo-content-ai::filament.prompt.content_prompt_locked_hint');
+                                    })
                                     ->schema([
+                                        Forms\Components\Placeholder::make('hook_inline_template_notice')
+                                            ->label('')
+                                            ->content(new \Illuminate\Support\HtmlString(
+                                                '<p class="text-sm text-gray-600 dark:text-gray-300">'
+                                                .e((string) __('seo-content-ai::filament.prompt.content_prompt_locked_body'))
+                                                .'</p>'
+                                            ))
+                                            ->visible(fn (Get $get): bool => filled($get('hook_key'))
+                                                && ! PromptHookFormSchema::usesLegacyPromptTemplate(
+                                                    (string) ($get('hook_key') ?? ''),
+                                                    (string) ($get('hook_version') ?? ''),
+                                                )),
                                         Forms\Components\MarkdownEditor::make('markdown_content')
                                             ->label('')
                                             ->required(fn (Get $get): bool => blank($get('hook_key'))
-                                                || \App\Addons\SeoContentAi\PromptHooks\PromptHookFormSchema::usesLegacyPromptTemplate(
+                                                || PromptHookFormSchema::usesLegacyPromptTemplate(
                                                     (string) ($get('hook_key') ?? ''),
                                                     (string) ($get('hook_version') ?? ''),
                                                 ))
                                             ->disabled(fn (Get $get): bool => filled($get('hook_key'))
-                                                && ! \App\Addons\SeoContentAi\PromptHooks\PromptHookFormSchema::usesLegacyPromptTemplate(
+                                                && ! PromptHookFormSchema::usesLegacyPromptTemplate(
                                                     (string) ($get('hook_key') ?? ''),
                                                     (string) ($get('hook_version') ?? ''),
                                                 ))
-                                            ->dehydrated()
+                                            ->hidden(fn (Get $get): bool => filled($get('hook_key'))
+                                                && ! PromptHookFormSchema::usesLegacyPromptTemplate(
+                                                    (string) ($get('hook_key') ?? ''),
+                                                    (string) ($get('hook_version') ?? ''),
+                                                ))
+                                            ->dehydrated(true)
+                                            ->live(onBlur: true)
                                             ->columnSpanFull()
-                                            ->minHeight('440px')
+                                            ->minHeight('420px')
+                                            ->extraAttributes([
+                                                'class' => 'seo-prompt-markdown-editor',
+                                            ])
                                             ->toolbarButtons([
                                                 'bold',
                                                 'italic',
@@ -190,12 +201,72 @@ class PromptResource extends SeoPanelResource
                                                 ."# Task: Main image\nCapture product image...\n\n"
                                                 ."# Sub-task: Side shot\n..."
                                             ),
+                                        Forms\Components\Placeholder::make('prompt_editor_height_css')
+                                            ->label('')
+                                            ->content(new \Illuminate\Support\HtmlString(
+                                                '<style>'
+                                                .'.seo-prompt-markdown-editor .ProseMirror,'
+                                                .'.seo-prompt-markdown-editor .fi-fo-markdown-editor,'
+                                                .'.seo-prompt-markdown-editor .cm-editor,'
+                                                .'.seo-prompt-markdown-editor textarea{'
+                                                .'min-height:420px!important;max-height:480px!important;overflow-y:auto!important;'
+                                                .'}'
+                                                .'</style>'
+                                            ))
+                                            ->visible(fn (Get $get): bool => blank($get('hook_key'))
+                                                || PromptHookFormSchema::usesLegacyPromptTemplate(
+                                                    (string) ($get('hook_key') ?? ''),
+                                                    (string) ($get('hook_version') ?? ''),
+                                                )),
                                     ]),
+
+                                Forms\Components\Section::make(__('seo-content-ai::filament.prompt.composed_preview_title'))
+                                    ->description(__('seo-content-ai::filament.prompt.composed_preview_description'))
+                                    ->schema([
+                                        Forms\Components\Toggle::make('composed_preview_expanded')
+                                            ->label(__('seo-content-ai::filament.prompt.composed_preview_expand'))
+                                            ->helperText(__('seo-content-ai::filament.prompt.composed_preview_expand_help'))
+                                            ->default(false)
+                                            ->live()
+                                            ->dehydrated(false),
+                                        Forms\Components\Placeholder::make('composed_prompt_preview')
+                                            ->label('')
+                                            ->extraAttributes(['class' => 'seo-prompt-composed-preview'])
+                                            ->content(fn (Get $get): \Illuminate\Support\HtmlString => PromptHookFormSchema::composedPreviewHtml($get)),
+                                    ])
+                                    ->visible(fn (Get $get): bool => filled($get('hook_key'))
+                                        || filled(trim((string) ($get('markdown_content') ?? '')))),
+
+                                ...PromptHookFormSchema::guidanceSection(),
+
+                                Forms\Components\Section::make(__('seo-content-ai::filament.prompt.variables'))
+                                    ->description(__('seo-content-ai::filament.prompt.variables_hint'))
+                                    ->schema([
+                                        Forms\Components\Repeater::make('variables')
+                                            ->label('')
+                                            ->schema([
+                                                Forms\Components\TextInput::make('name')
+                                                    ->label(__('seo-content-ai::filament.prompt.variable_name'))
+                                                    ->required()
+                                                    ->maxLength(128),
+                                                Forms\Components\TextInput::make('description')
+                                                    ->label(__('seo-content-ai::filament.prompt.variable_note'))
+                                                    ->maxLength(255),
+                                            ])
+                                            ->defaultItems(0)
+                                            ->addActionLabel(__('seo-content-ai::filament.prompt.add_variable'))
+                                            ->reorderable()
+                                            ->collapsible(),
+                                    ])
+                                    ->collapsed()
+                                    ->collapsible(),
+
                                 Forms\Components\Section::make(__('seo-content-ai::filament.prompt.post_processing.title'))
                                     ->description(__('seo-content-ai::filament.prompt.post_processing.description'))
                                     ->visible(fn (Get $get): bool => \App\Addons\SeoContentAi\Support\ImageToolType::fromMixed($get('tools'))->isImagePipeline())
                                     ->schema(self::postProcessingFormSchema()),
-                            ]),
+                            ])
+                            ->columnSpan(['default' => 12, 'lg' => 8]),
                     ]),
             ]);
     }
@@ -563,22 +634,88 @@ class PromptResource extends SeoPanelResource
                     ->label(__('seo-content-ai::filament.prompt.hook'))
                     ->formatStateUsing(function (?string $state): string {
                         if ($state === null || trim($state) === '') {
-                            return '—';
+                            return (string) __('seo-content-ai::filament.prompt.hook_unassigned');
+                        }
+                        $key = trim($state);
+                        $catalog = app(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookEditorCatalog::class);
+                        if ($catalog->isLegacyCompatibilityHook($key)) {
+                            return $catalog->labelWithHookKey('Rewrite article content (Legacy)', $key);
                         }
                         try {
-                            return app(\App\Addons\SeoContentAi\PromptHooks\PromptHookRegistry::class)
-                                ->get($state)
-                                ->label();
+                            $name = $catalog->latestPinnedOrFail($key)->name;
+
+                            return $catalog->labelWithHookKey($name !== '' ? $name : $key, $key);
                         } catch (\Throwable) {
-                            return $state;
+                            try {
+                                $name = app(\App\Addons\SeoContentAi\PromptHooks\PromptHookRegistry::class)
+                                    ->get($key)
+                                    ->label();
+
+                                return $catalog->labelWithHookKey($name, $key);
+                            } catch (\Throwable) {
+                                return '['.$key.']';
+                            }
                         }
                     })
+                    ->badge()
+                    ->color(fn (?string $state): string => app(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookEditorCatalog::class)
+                        ->isLegacyCompatibilityHook((string) $state)
+                        ? 'warning'
+                        : 'gray')
+                    ->searchable()
                     ->toggleable(),
                 Tables\Columns\TextColumn::make('aiConnection.name')
                     ->label(__('seo-content-ai::filament.prompt.ai_connection'))
                     ->placeholder('—'),
-                Tables\Columns\ToggleColumn::make('is_active')
-                    ->label(__('seo-content-ai::filament.prompt.status')),
+                Tables\Columns\TextColumn::make('usage')
+                    ->label(__('seo-content-ai::filament.prompt.usage'))
+                    ->state(function (SeoPrompt $record): string {
+                        return app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptUsageLocator::class)
+                            ->badge((int) $record->id)['badge'];
+                    })
+                    ->tooltip(function (SeoPrompt $record): ?string {
+                        return app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptUsageLocator::class)
+                            ->badge((int) $record->id)['tooltip'];
+                    })
+                    ->badge()
+                    ->color(function (SeoPrompt $record): string {
+                        $kind = app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptUsageLocator::class)
+                            ->badge((int) $record->id)['kind'];
+
+                        return match ($kind) {
+                            'workflow' => 'info',
+                            'settings' => 'success',
+                            'mixed' => 'warning',
+                            default => 'gray',
+                        };
+                    })
+                    ->toggleable(),
+                Tables\Columns\TextColumn::make('prompt_results_count')
+                    ->label(__('seo-content-ai::filament.prompt.usage_count'))
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\TextColumn::make('prompt_results_max_started_at')
+                    ->label(__('seo-content-ai::filament.prompt.last_used'))
+                    ->dateTime('d/m/Y H:i')
+                    ->placeholder('—')
+                    ->sortable()
+                    ->toggleable(),
+                Tables\Columns\TextColumn::make('created_at')
+                    ->label(__('seo-content-ai::filament.prompt.created_at'))
+                    ->dateTime('d/m/Y H:i')
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\TextColumn::make('updated_at')
+                    ->label(__('seo-content-ai::filament.prompt.updated_at'))
+                    ->dateTime('d/m/Y H:i')
+                    ->sortable()
+                    ->toggleable(),
+            ])
+            ->filters([
+                Tables\Filters\SelectFilter::make('hook_key')
+                    ->label(__('seo-content-ai::filament.prompt.hook'))
+                    ->options(fn (): array => app(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookEditorCatalog::class)->selectOptions())
+                    ->searchable(),
             ])
             ->defaultSort('updated_at', 'desc')
             ->actions([
@@ -595,12 +732,82 @@ class PromptResource extends SeoPanelResource
                     ->url(fn (SeoPrompt $record): string => app(AiModelsReadinessService::class)->isPromptReady($record)
                         ? static::getUrl('test', ['record' => $record])
                         : SeoSettingsOverview::getUrl()),
+                Tables\Actions\Action::make('duplicate')
+                    ->label(__('seo-content-ai::filament.prompt.duplicate'))
+                    ->icon('heroicon-o-document-duplicate')
+                    ->color('gray')
+                    ->requiresConfirmation()
+                    ->action(function (SeoPrompt $record): void {
+                        $copy = $record->replicate([
+                            'deleted_at',
+                        ]);
+                        $copy->name = trim((string) $record->name).' (copy)';
+                        $copy->is_active = true;
+                        $wasLegacy = app(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookEditorCatalog::class)
+                            ->isLegacyCompatibilityHook((string) ($record->hook_key ?? ''));
+                        if ($wasLegacy) {
+                            // Phase 1.0: duplicate không giữ legacy rewrite hook.
+                            $copy->hook_key = \App\Addons\SeoContentAi\Services\ArticleWritingExecutionService::HOOK_KEY;
+                            $copy->hook_version = '0.1.0';
+                        }
+                        $copy->save();
+
+                        \Filament\Notifications\Notification::make()
+                            ->title(__('seo-content-ai::filament.prompt.duplicate_success'))
+                            ->body($wasLegacy
+                                ? (string) __('seo-content-ai::filament.prompt.duplicate_legacy_remapped')
+                                : null)
+                            ->success()
+                            ->send();
+                    }),
                 Tables\Actions\EditAction::make(),
-                Tables\Actions\DeleteAction::make(),
+                Tables\Actions\DeleteAction::make()
+                    ->form(function (SeoPrompt $record): array {
+                        $locator = app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptUsageLocator::class);
+                        if (! $locator->isReferenced((int) $record->id)) {
+                            return [];
+                        }
+
+                        $lines = $locator->summarize((int) $record->id);
+
+                        return [
+                            Forms\Components\Placeholder::make('usage_list')
+                                ->label(__('seo-content-ai::filament.prompt.delete_in_use_title'))
+                                ->content(new \Illuminate\Support\HtmlString(
+                                    '<ul class="list-disc pl-5 text-sm space-y-1">'
+                                    .implode('', array_map(
+                                        static fn (string $line): string => '<li>'.e($line).'</li>',
+                                        $lines,
+                                    ))
+                                    .'</ul>'
+                                )),
+                            Forms\Components\Checkbox::make('force_detach')
+                                ->label(__('seo-content-ai::filament.prompt.force_detach'))
+                                ->helperText(__('seo-content-ai::filament.prompt.force_detach_help'))
+                                ->required(),
+                        ];
+                    })
+                    ->before(function (SeoPrompt $record, array $data): void {
+                        $guard = app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptDeleteGuard::class);
+                        $locator = app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptUsageLocator::class);
+                        if (! $locator->isReferenced((int) $record->id)) {
+                            return;
+                        }
+                        if (! (bool) ($data['force_detach'] ?? false)) {
+                            $guard->assertDeletable((int) $record->id);
+                        }
+                        $guard->detachUsages((int) $record->id);
+                    }),
             ])
             ->bulkActions(static::seoPanelBulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\DeleteBulkAction::make()
+                        ->before(function ($records): void {
+                            $guard = app(\App\Addons\SeoContentAi\Services\PromptOwnership\PromptDeleteGuard::class);
+                            foreach ($records as $record) {
+                                $guard->assertDeletable((int) $record->id);
+                            }
+                        }),
                 ]),
             ]));
     }
@@ -608,7 +815,9 @@ class PromptResource extends SeoPanelResource
     public static function getEloquentQuery(): Builder
     {
         $query = parent::getEloquentQuery()
-            ->with('aiConnection');
+            ->with('aiConnection')
+            ->withCount('promptResults')
+            ->withMax('promptResults', 'started_at');
 
         if (SeoAccessControl::shouldScopeToAccountOwner()) {
             $query->where('user_id', SeoAccessControl::accountSiteOwnerId());

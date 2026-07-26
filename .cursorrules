@@ -96,7 +96,13 @@ Ngoại lệ CSRF (validateCsrfTokens) chỉ được cấu hình hẹp theo rou
 
 8. VERIFY SAU KHI SỬA
 
-PHP: chạy test nhỏ nhất liên quan trước (`php artisan test --filter=...` hoặc `php artisan test app/Addons/SeoContentAi/tests`).
+PHP (remote / production host): chạy test nhỏ nhất qua PHPUnit, không dùng `php artisan test` làm chuẩn:
+
+`$PHP_BIN vendor/bin/phpunit --filter=ClassOrMethodName`
+
+hoặc
+
+`$PHP_BIN vendor/bin/phpunit app/Addons/SeoContentAi/tests/Unit`
 
 Frontend addon: sau khi đổi JS/CSS, chạy build/check phù hợp (`npm run build` khi cần).
 

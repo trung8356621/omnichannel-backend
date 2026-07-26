@@ -130,7 +130,7 @@ final class ArticleHeadingAiGenerateService
             );
         }
 
-        $prompt = SeoPrompt::query()->where('is_active', true)->find($promptId);
+        $prompt = SeoPrompt::query()->find($promptId);
         if ($prompt === null) {
             throw new RuntimeException(
                 __('seo-content-ai::filament.article_edit.outline_heading_generate_prompt_missing'),

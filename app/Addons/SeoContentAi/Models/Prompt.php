@@ -44,6 +44,7 @@ class Prompt extends Model
 
     public function promptResults(): HasMany
     {
-        return $this->hasMany(PromptResult::class);
+        // Explicit FK: SeoPrompt child would otherwise guess seo_prompt_id.
+        return $this->hasMany(PromptResult::class, 'prompt_id');
     }
 }

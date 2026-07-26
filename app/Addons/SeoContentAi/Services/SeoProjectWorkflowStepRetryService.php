@@ -53,7 +53,10 @@ final class SeoProjectWorkflowStepRetryService
 
         $catalog = $this->catalog->listRerunnableSteps($task);
         $activeByAction = $this->activeStepStatuses((int) $run->id, (int) $task->id);
+        $activeByNode = $this->activeStepStatusesByNode((int) $run->id, (int) $task->id);
         $latestByAction = $this->latestStepFinishes((int) $run->id, (int) $task->id);
+        $latestByNode = $this->latestStepFinishesByNode((int) $run->id, (int) $task->id);
+        $taskHasAnyActive = $activeByNode !== [] || $activeByAction !== [];
         $runTerminal = in_array((string) $run->status, [
             SeoProjectRun::STATUS_COMPLETED,
             SeoProjectRun::STATUS_CANCELLED,
@@ -62,11 +65,17 @@ final class SeoProjectWorkflowStepRetryService
 
         $rows = [];
         foreach ($catalog as $step) {
-            $action = $this->stepAction($step['node_id']);
-            $status = $activeByAction[$action] ?? ($latestByAction[$action]['status'] ?? null);
-            // Busy CHỈ từ row active (pending|processing) khớp action chính xác step:{nodeId}.
-            // Terminal run luôn thắng stale pending helper/step — không hiện Đang chạy / Ngắt.
-            $busy = ! $runTerminal && isset($activeByAction[$action]);
+            $nodeId = (string) $step['node_id'];
+            $action = $this->stepAction($nodeId);
+            // Busy theo node_id (gồm cả append-only step:rr:* có cùng node trong snapshot).
+            $status = $activeByNode[$nodeId]
+                ?? $activeByAction[$action]
+                ?? ($latestByNode[$nodeId]['status'] ?? ($latestByAction[$action]['status'] ?? null));
+            $busy = ! $runTerminal && (
+                isset($activeByNode[$nodeId])
+                || isset($activeByAction[$action])
+                || $taskHasAnyActive
+            );
 
             $rows[] = [
                 'node_id' => $step['node_id'],
@@ -74,10 +83,14 @@ final class SeoProjectWorkflowStepRetryService
                 'label' => $step['label'],
                 'kind' => $step['kind'],
                 'prompt_id' => $step['prompt_id'],
+                'execution_role' => $step['execution_role'] ?? null,
+                'hook_key' => $step['hook_key'] ?? null,
                 'status' => $status,
-                'last_finished_at' => $latestByAction[$action]['finished_at'] ?? null,
+                'last_finished_at' => $latestByNode[$nodeId]['finished_at']
+                    ?? ($latestByAction[$action]['finished_at'] ?? null),
                 'busy' => $busy,
                 'can_retry' => ! $busy,
+                'rerunnable' => (bool) ($step['rerunnable'] ?? true),
             ];
         }
 
@@ -333,6 +346,20 @@ final class SeoProjectWorkflowStepRetryService
             'item' => $first,
             'bulk' => $bulk,
         ];
+    }
+
+    /**
+     * Phase 2.0: chạy item append-only đã tạo sẵn (rerun) — không gọi prepareStepRunItem.
+     *
+     * @return array<string, mixed>
+     */
+    public function executePreparedStepItem(
+        SeoProjectRun $run,
+        int $taskId,
+        string $nodeId,
+        int $runItemId,
+    ): array {
+        return $this->executePreparedStep($run, $taskId, $nodeId, $runItemId);
     }
 
     /**
@@ -1542,5 +1569,89 @@ final class SeoProjectWorkflowStepRetryService
         }
 
         return $map;
+    }
+
+    /**
+     * @return array<string, string> node_id => status
+     */
+    private function activeStepStatusesByNode(int $runId, int $taskId): array
+    {
+        $rows = SeoProjectRunItem::query()
+            ->where('run_id', $runId)
+            ->where('task_id', $taskId)
+            ->where('action', 'like', 'step:%')
+            ->whereIn('status', self::ACTIVE_STATUSES)
+            ->get(['action', 'status', 'input_snapshot']);
+
+        $map = [];
+        foreach ($rows as $row) {
+            $nodeId = $this->nodeIdFromStepItem($row);
+            if ($nodeId === null) {
+                continue;
+            }
+            $map[$nodeId] = (string) $row->status;
+        }
+
+        return $map;
+    }
+
+    /**
+     * @return array<string, array{status: string, finished_at: string|null}>
+     */
+    private function latestStepFinishesByNode(int $runId, int $taskId): array
+    {
+        $rows = SeoProjectRunItem::query()
+            ->where('run_id', $runId)
+            ->where('task_id', $taskId)
+            ->where('action', 'like', 'step:%')
+            ->whereNotNull('finished_at')
+            ->orderByDesc('finished_at')
+            ->get(['action', 'status', 'finished_at', 'input_snapshot']);
+
+        $map = [];
+        foreach ($rows as $row) {
+            $nodeId = $this->nodeIdFromStepItem($row);
+            if ($nodeId === null) {
+                continue;
+            }
+            $status = (string) $row->status;
+            if (! isset($map[$nodeId])) {
+                $map[$nodeId] = [
+                    'status' => $status,
+                    'finished_at' => null,
+                ];
+            }
+            if (
+                $map[$nodeId]['finished_at'] === null
+                && $status === SeoProjectRunItemStatus::Success->value
+            ) {
+                $map[$nodeId]['finished_at'] = $row->finished_at
+                    ?->timezone(config('app.timezone'))
+                    ->format('H:i');
+            }
+        }
+
+        return $map;
+    }
+
+    private function nodeIdFromStepItem(SeoProjectRunItem $row): ?string
+    {
+        $snapshot = is_array($row->input_snapshot) ? $row->input_snapshot : [];
+        $fromSnap = trim((string) ($snapshot['node_id'] ?? $snapshot['target_node_id'] ?? ''));
+        if ($fromSnap !== '') {
+            return $fromSnap;
+        }
+
+        $action = (string) $row->action;
+        if (str_starts_with($action, 'step:rr:')) {
+            return null;
+        }
+        if (str_starts_with($action, 'step:')) {
+            $nodeId = substr($action, strlen('step:'));
+
+            return $nodeId !== '' ? $nodeId : null;
+        }
+
+        return null;
     }
 }
