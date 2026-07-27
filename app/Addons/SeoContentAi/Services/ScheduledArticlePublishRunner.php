@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\BusinessEventName;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueRunner;
 use App\Models\SeoDatabaseConnection;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
@@ -15,12 +16,14 @@ use Throwable;
 
 /**
  * Cron due-scheduled articles: emit business event only — never direct WordPress mutate.
+ * Content Project items dùng scheduled_publish_at (SaaS queue), không WP future/cron.
  */
 final class ScheduledArticlePublishRunner
 {
     public function __construct(
         private readonly SeoDatabaseConnectionService $databaseConnection,
         private readonly BusinessHookEmitter $emitter,
+        private readonly ContentProjectPublishingQueueRunner $contentProjectQueue,
     ) {}
 
     /**
@@ -74,6 +77,11 @@ final class ScheduledArticlePublishRunner
      */
     private function dispatchDueArticles(array &$stats): void
     {
+        $projectStats = $this->contentProjectQueue->dispatchDue();
+        $stats['processed'] += $projectStats['processed'];
+        $stats['published'] += $projectStats['published'];
+        $stats['failed'] += $projectStats['failed'];
+
         $this->dueArticles()->each(function (SeoArticle $article) use (&$stats): void {
             $stats['processed']++;
 
@@ -97,6 +105,9 @@ final class ScheduledArticlePublishRunner
     }
 
     /**
+     * Legacy/non-project schedule: articles.status=scheduled + published_at.
+     * Bỏ qua bài đang thuộc active Content Project (chúng đi qua scheduled_publish_at trên task).
+     *
      * @return Collection<int, SeoArticle>
      */
     private function dueArticles(): Collection
@@ -106,6 +117,12 @@ final class ScheduledArticlePublishRunner
             ->whereNotNull('published_at')
             ->where('published_at', '<=', now())
             ->where('wp_post_id', '>', 0)
+            ->whereDoesntHave('projectTasks', static function ($query): void {
+                $query->whereNull('archived_at')
+                    ->whereHas('project', static function ($projectQuery): void {
+                        $projectQuery->whereNull('archived_at');
+                    });
+            })
             ->orderBy('published_at')
             ->orderBy('id')
             ->limit(50)

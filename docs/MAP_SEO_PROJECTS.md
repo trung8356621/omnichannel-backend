@@ -166,7 +166,11 @@ Lưu kết quả test workflow cho một task. Columns: `task_id` (FK → `seo_t
 /seo/{connection_hash}/content-projects/{record}/runs → ListSeoProjectRuns
 /seo/{connection_hash}/content-projects/runs/{run}     → ViewSeoProjectRun
 /seo/{connection_hash}/content-projects/runs/{run}/items/{article} → ViewSeoProjectRunStep
+/seo/{connection_hash}/content-operations          → ContentProjectOperationsCenter (manager+)
+/admin/content-operations                          → ContentOperationsRedirect → SEO ops
 ```
+
+Docs: [CONTENT_PROJECT_OPERATIONS.md](CONTENT_PROJECT_OPERATIONS.md) — dashboard, metrics, replay, health, analytics.
 
 ### 3.2 SeoProjectResource (`Filament/Resources/SeoProjectResource.php`)
 

@@ -150,7 +150,7 @@ class SeoTeam extends SeoPanelPage implements HasTable
                         $record->update([
                             'parent_id' => null,
                             'role' => User::ROLE_OWNER,
-                            'seo_role' => null,
+                            'seo_role' => User::SEO_ROLE_MANAGER,
                             'status' => User::STATUS_NORMAL,
                         ]);
 

@@ -19,13 +19,24 @@ final class SeoArticleRevisionService
     /**
      * @param  array<string, mixed>  $seoMeta
      */
+    /**
+     * @param  array<string, mixed>  $seoMeta
+     * @param  bool  $force  true = luôn snapshot (pipeline rollback), bỏ qua rule WP-owned history
+     */
     public function captureAfterSave(
         SeoArticle $article,
         string $title,
         string $content,
         array $seoMeta,
         ?int $userId = null,
-    ): SeoArticleRevision {
+        bool $force = false,
+    ): ?SeoArticleRevision {
+        // Sau khi bài đã có trên WordPress: lịch sử chỉnh sửa do WP Revision quản lý.
+        // Pipeline rerun vẫn force snapshot tạm để rollback AI.
+        if (! $force && (int) ($article->wp_post_id ?? 0) > 0) {
+            return null;
+        }
+
         $revision = SeoArticleRevision::query()->create([
             'article_id' => (int) $article->id,
             'user_id' => $userId,

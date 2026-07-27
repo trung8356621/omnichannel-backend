@@ -1,6 +1,8 @@
 @php
     /** @var array<string, mixed> $summary */
     $summary = is_array($summary ?? null) ? $summary : [];
+    /** @var array<string, mixed> $gate */
+    $gate = is_array($gate ?? null) ? $gate : [];
 
     $domainName = trim((string) ($summary['domain_name'] ?? ''));
     $month = $summary['month'] ?? null;
@@ -33,6 +35,16 @@
         <li><strong>{{ __('seo-content-ai::filament.projects.archive_modal_unsynced') }}:</strong> {{ $unsynced }}</li>
         <li><strong>{{ __('seo-content-ai::filament.projects.archive_modal_failed') }}:</strong> {{ $failed }}</li>
     </ul>
+
+    @if (! empty($gate['blocked_reason']))
+        <div class="mt-4 rounded-lg border border-danger-300 bg-danger-50 px-3 py-2 text-sm text-danger-900 not-prose dark:border-danger-500/40 dark:bg-danger-500/10 dark:text-danger-100">
+            {{ e((string) $gate['blocked_reason']) }}
+        </div>
+    @elseif (! empty($gate['requires_waiting_publish_confirm']))
+        <div class="mt-4 rounded-lg border border-warning-300 bg-warning-50 px-3 py-2 text-sm text-warning-900 not-prose dark:border-warning-500/40 dark:bg-warning-500/10 dark:text-warning-100">
+            {{ __('seo-content-ai::filament.projects.archive_waiting_publish_notice', ['count' => (int) ($gate['waiting_publish'] ?? 0)]) }}
+        </div>
+    @endif
 
     @if ($showWarning)
         <div class="mt-4 rounded-lg border border-warning-300 bg-warning-50 px-3 py-2 text-sm text-warning-900 not-prose dark:border-warning-500/40 dark:bg-warning-500/10 dark:text-warning-100">

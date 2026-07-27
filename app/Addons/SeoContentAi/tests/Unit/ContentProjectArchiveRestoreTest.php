@@ -35,13 +35,13 @@ final class ContentProjectArchiveRestoreTest extends TestCase
         self::assertStringContainsString("static::getUrl('archive')", $source);
     }
 
-    public function test_list_seo_projects_filters_active_projects_and_opens_archive_vault(): void
+    public function test_list_seo_projects_shows_archived_and_keeps_archive_vault(): void
     {
         $source = (string) file_get_contents((new ReflectionClass(ListSeoProjects::class))->getFileName());
 
         self::assertStringContainsString("Actions\\Action::make('open_site_archive')", $source);
         self::assertStringContainsString('canViewProjectArchives', $source);
-        self::assertStringContainsString('activeProjects()', $source);
+        self::assertStringNotContainsString('activeProjects()', $source);
         self::assertStringContainsString("SeoProjectResource::getUrl('archive')", $source);
     }
 

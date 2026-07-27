@@ -1,0 +1,152 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Tests\Unit;
+
+use App\Addons\SeoContentAi\Filament\Pages\ContentProjectOperationsCenter;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectOperationLogger;
+use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectAiCostAggregateService;
+use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectAuditSearchService;
+use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectCommandBusMonitorService;
+use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectDailyReportService;
+use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectErrorCenterService;
+use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectMetricKeys;
+use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectOpsDashboardService;
+use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectOpsHealthService;
+use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectOpsReplayService;
+use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectPublishAnalyticsService;
+use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectSiteHealthService;
+use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectWpAdapterMetricsService;
+use App\Filament\Pages\ContentOperationsRedirect;
+use PHPUnit\Framework\TestCase;
+use ReflectionClass;
+
+final class ContentProjectOperationsCenterTest extends TestCase
+{
+    public function test_metric_keys_are_prometheus_ready(): void
+    {
+        $keys = ContentProjectMetricKeys::all();
+
+        self::assertContains(ContentProjectMetricKeys::AI_GENERATE_TOTAL, $keys);
+        self::assertContains(ContentProjectMetricKeys::PUBLISH_TOTAL, $keys);
+        self::assertContains(ContentProjectMetricKeys::PUBLISH_RETRY_TOTAL, $keys);
+        self::assertContains(ContentProjectMetricKeys::ARCHIVE_TOTAL, $keys);
+        self::assertContains(ContentProjectMetricKeys::RESTORE_TOTAL, $keys);
+        self::assertContains(ContentProjectMetricKeys::WORKSPACE_DESTROY_TOTAL, $keys);
+        self::assertContains(ContentProjectMetricKeys::QUEUE_WAIT_SECONDS, $keys);
+        self::assertContains(ContentProjectMetricKeys::PUBLISH_DURATION_MS, $keys);
+    }
+
+    public function test_operations_center_page_is_manager_gated_and_read_only_surface(): void
+    {
+        $source = (string) file_get_contents(
+            (new ReflectionClass(ContentProjectOperationsCenter::class))->getFileName(),
+        );
+
+        self::assertStringContainsString("slug = 'content-operations'", $source);
+        self::assertStringContainsString('canAccessContentOperations', $source);
+        self::assertStringContainsString('ContentProjectOpsReplayService', $source);
+        self::assertStringContainsString('ContentProjectCommandBusMonitorService', $source);
+        self::assertStringNotContainsString('SeoProjectRun::', $source);
+    }
+
+    public function test_replay_service_uses_command_bus_only(): void
+    {
+        $source = (string) file_get_contents(
+            (new ReflectionClass(ContentProjectOpsReplayService::class))->getFileName(),
+        );
+
+        self::assertStringContainsString('ContentProjectCommandBus', $source);
+        self::assertStringContainsString('commandBus->dispatch', $source);
+        self::assertStringNotContainsString('ContentPublisher', $source);
+        self::assertStringNotContainsString('WordPressContentPublisher', $source);
+    }
+
+    public function test_ai_cost_aggregate_does_not_select_prompt_text(): void
+    {
+        $source = (string) file_get_contents(
+            (new ReflectionClass(ContentProjectAiCostAggregateService::class))->getFileName(),
+        );
+
+        self::assertStringContainsString('token_usage', $source);
+        self::assertStringNotContainsString('prompt_text', $source);
+        self::assertStringNotContainsString('output_text', $source);
+        self::assertStringNotContainsString('response_text', $source);
+    }
+
+    public function test_audit_search_does_not_read_prompt_or_output(): void
+    {
+        $source = (string) file_get_contents(
+            (new ReflectionClass(ContentProjectAuditSearchService::class))->getFileName(),
+        );
+
+        self::assertStringContainsString('seo_content_project_business_audits', $source);
+        self::assertStringNotContainsString('prompt_results', $source);
+        self::assertStringNotContainsString('prompt_text', $source);
+        self::assertStringNotContainsString('output_text', $source);
+    }
+
+    public function test_ops_services_exist_for_all_surfaces(): void
+    {
+        foreach ([
+            ContentProjectOpsDashboardService::class,
+            ContentProjectCommandBusMonitorService::class,
+            ContentProjectPublishAnalyticsService::class,
+            ContentProjectWpAdapterMetricsService::class,
+            ContentProjectErrorCenterService::class,
+            ContentProjectOpsHealthService::class,
+            ContentProjectSiteHealthService::class,
+            ContentProjectDailyReportService::class,
+            ContentProjectOperationLogger::class,
+            ContentOperationsRedirect::class,
+        ] as $class) {
+            self::assertTrue(class_exists($class), $class.' missing');
+        }
+    }
+
+    public function test_admin_redirect_slug_is_content_operations(): void
+    {
+        $source = (string) file_get_contents(
+            (new ReflectionClass(ContentOperationsRedirect::class))->getFileName(),
+        );
+
+        self::assertStringContainsString("slug = 'content-operations'", $source);
+        self::assertStringContainsString('ContentProjectOperationsCenter', $source);
+    }
+
+    public function test_operations_doc_is_referenced_from_ops_surface(): void
+    {
+        // Remote hosts often sync PHP only — do not require docs/ on disk.
+        $pageSource = (string) file_get_contents(
+            (new ReflectionClass(ContentProjectOperationsCenter::class))->getFileName(),
+        );
+        self::assertStringContainsString('CONTENT_PROJECT_OPERATIONS.md', $pageSource);
+
+        $keysSource = (string) file_get_contents(
+            (new ReflectionClass(ContentProjectMetricKeys::class))->getFileName(),
+        );
+        self::assertStringContainsString('ai_generate_total', $keysSource);
+        self::assertStringContainsString('publish_total', $keysSource);
+
+        $docPath = null;
+        $dir = __DIR__;
+        for ($i = 0; $i < 8; $i++) {
+            $candidate = $dir.DIRECTORY_SEPARATOR.'docs'.DIRECTORY_SEPARATOR.'CONTENT_PROJECT_OPERATIONS.md';
+            if (is_file($candidate)) {
+                $docPath = $candidate;
+                break;
+            }
+            $dir = dirname($dir);
+        }
+
+        if ($docPath === null) {
+            self::markTestSkipped('docs/CONTENT_PROJECT_OPERATIONS.md not present on this host');
+        }
+
+        $body = (string) file_get_contents($docPath);
+        self::assertStringContainsString('Operation Center', $body);
+        self::assertStringContainsString('Replay', $body);
+        self::assertStringContainsString('ai_generate_total', $body);
+    }
+}

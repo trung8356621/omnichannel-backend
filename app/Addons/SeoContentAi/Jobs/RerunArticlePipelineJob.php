@@ -182,7 +182,12 @@ final class RerunArticlePipelineJob implements ShouldBeUnique, ShouldQueue
             (string) $snapshot['content'],
             is_array($snapshot['seo_meta'] ?? null) ? $snapshot['seo_meta'] : [],
             $this->userId,
+            true,
         );
+
+        if (! $revision instanceof \App\Addons\SeoContentAi\Models\SeoArticleRevision) {
+            throw new \RuntimeException('Không tạo được revision rollback cho pipeline rerun.');
+        }
 
         $projectSiteId = (int) ($project->site_id ?? 0);
 

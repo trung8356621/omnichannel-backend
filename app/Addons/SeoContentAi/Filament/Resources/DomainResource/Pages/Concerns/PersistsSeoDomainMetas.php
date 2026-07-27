@@ -73,6 +73,17 @@ trait PersistsSeoDomainMetas
             ['meta_key' => 'seo_platform'],
             ['meta_value' => $platform],
         );
+        $publisherKey = $platform === 'wordpress' ? 'wordpress' : (
+            isset($data['seo_publisher_key']) && is_string($data['seo_publisher_key']) && trim($data['seo_publisher_key']) !== ''
+                ? strtolower(trim($data['seo_publisher_key']))
+                : ''
+        );
+        if ($publisherKey !== '') {
+            $site->metas()->updateOrCreate(
+                ['meta_key' => 'seo_publisher_key'],
+                ['meta_value' => $publisherKey],
+            );
+        }
         $site->metas()->updateOrCreate(
             ['meta_key' => 'seo_domain_type'],
             ['meta_value' => $domainType],

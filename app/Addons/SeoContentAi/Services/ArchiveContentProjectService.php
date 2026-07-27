@@ -5,21 +5,27 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Enums\ArticleReviewStatus;
+use App\Addons\SeoContentAi\Enums\ContentProjectPublishQueueStatus;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectArchive;
 use App\Addons\SeoContentAi\Models\SeoProjectArchiveItem;
+use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\ContentProject\Workspace\ContentProjectAiWorkspaceDestroyer;
+use App\Addons\SeoContentAi\Services\ContentProject\Workspace\ContentProjectWorkspaceCleanupContext;
 use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
 use App\Models\User;
 use App\Support\RuntimeLogger;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 
 /**
- * Lưu trữ / khôi phục cả Content Project (monthly) — không đụng task/article lifecycle.
+ * Archive = Destroy AI Workspace (giữ business article + planning metadata).
+ * Restore = chỉ khôi phục business flag — không phục hồi Runtime/Execution cũ.
  */
 final class ArchiveContentProjectService
 {
@@ -27,6 +33,7 @@ final class ArchiveContentProjectService
         private readonly ArticlePostImagesService $postImages,
         private readonly ArticleLastSavedTimestampService $lastSavedTimestamps,
         private readonly WordPressPermalinkBuilder $permalinkBuilder,
+        private readonly ContentProjectAiWorkspaceDestroyer $workspaceDestroyer,
     ) {}
 
     /**
@@ -87,6 +94,82 @@ final class ArchiveContentProjectService
         return $this->buildSummary($project);
     }
 
+    /**
+     * @return array{
+     *     can_archive: bool,
+     *     blocked_reason: string|null,
+     *     ai_running: bool,
+     *     queue_processing: bool,
+     *     waiting_publish: int,
+     *     requires_waiting_publish_confirm: bool,
+     * }
+     */
+    public function archiveGate(SeoProject $project): array
+    {
+        $projectId = (int) $project->getKey();
+
+        $aiRunning = SeoProjectRun::query()
+            ->where('project_id', $projectId)
+            ->whereIn('status', [SeoProjectRun::STATUS_RUNNING, SeoProjectRun::STATUS_STOPPING])
+            ->exists();
+
+        $queueProcessing = false;
+        $waitingPublish = 0;
+
+        if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_queue_status')) {
+            $queueProcessing = SeoProjectTask::query()
+                ->where('project_id', $projectId)
+                ->active()
+                ->where('publish_queue_status', ContentProjectPublishQueueStatus::Processing->value)
+                ->exists();
+
+            $waitingPublish = (int) SeoProjectTask::query()
+                ->where('project_id', $projectId)
+                ->active()
+                ->where(function ($q): void {
+                    $q->whereNotNull('scheduled_publish_at')
+                        ->orWhereIn('publish_queue_status', ContentProjectPublishQueueStatus::activeValues());
+                })
+                ->count();
+        } else {
+            $waitingPublish = (int) SeoProjectTask::query()
+                ->where('project_id', $projectId)
+                ->active()
+                ->whereNotNull('scheduled_publish_at')
+                ->count();
+        }
+
+        $blockedReason = null;
+        if ($aiRunning) {
+            $blockedReason = __('seo-content-ai::filament.projects.archive_blocked_ai_running');
+        } elseif ($queueProcessing) {
+            $blockedReason = __('seo-content-ai::filament.projects.archive_blocked_queue_processing');
+        }
+
+        return [
+            'can_archive' => $blockedReason === null,
+            'blocked_reason' => $blockedReason,
+            'ai_running' => $aiRunning,
+            'queue_processing' => $queueProcessing,
+            'waiting_publish' => $waitingPublish,
+            'requires_waiting_publish_confirm' => $waitingPublish > 0,
+        ];
+    }
+
+    public function assertCanArchive(SeoProject $project, bool $confirmWaitingPublish = false): void
+    {
+        $gate = $this->archiveGate($project);
+        if (! $gate['can_archive']) {
+            throw new RuntimeException((string) $gate['blocked_reason']);
+        }
+
+        if ($gate['requires_waiting_publish_confirm'] && ! $confirmWaitingPublish) {
+            throw new RuntimeException(__('seo-content-ai::filament.projects.archive_waiting_publish_confirm_required', [
+                'count' => $gate['waiting_publish'],
+            ]));
+        }
+    }
+
     public function getCurrentArchive(SeoProject $project): ?SeoProjectArchive
     {
         $projectId = (int) $project->getKey();
@@ -103,18 +186,25 @@ final class ArchiveContentProjectService
         return $archive instanceof SeoProjectArchive ? $archive : null;
     }
 
-    public function archive(SeoProject $project, int $userId, ?string $note = null): SeoProjectArchive
-    {
+    public function archive(
+        SeoProject $project,
+        int $userId,
+        ?string $note = null,
+        bool $confirmWaitingPublish = false,
+    ): SeoProjectArchive {
         $this->assertValidUserId($userId);
 
         if ($project->isArchive()) {
             throw new RuntimeException(__('seo-content-ai::filament.projects.archive_source_is_archive'));
         }
 
+        $this->assertCanArchive($project, $confirmWaitingPublish);
+
         $note = $this->normalizeNote($note);
         $now = now();
+        $cleanupContext = null;
 
-        return DB::connection('omi_seo_ai')->transaction(function () use ($project, $userId, $note, $now): SeoProjectArchive {
+        $archive = DB::connection('omi_seo_ai')->transaction(function () use ($project, $userId, $note, $now, &$cleanupContext): SeoProjectArchive {
             $lockedProject = $this->lockProject($project);
 
             if ($lockedProject->archived_at !== null) {
@@ -154,6 +244,9 @@ final class ArchiveContentProjectService
 
             $this->syncArchiveItems($archive, $lockedProject, $now);
 
+            // Snapshot xong mới destroy AI Workspace — lỗi = rollback cả archive.
+            $cleanupContext = $this->workspaceDestroyer->destroyInTransaction($lockedProject);
+
             $lockedProject->forceFill([
                 'archived_at' => $archivedAt,
                 'archived_by' => $userId,
@@ -166,10 +259,18 @@ final class ArchiveContentProjectService
                 'total_articles' => $summary['total_articles'],
                 'site_id' => $summary['domain_id'],
                 'archived_at' => $this->toIso8601($archivedAt),
+                'workspace_destroyed' => true,
+                'workspace_stats' => $cleanupContext->stats(),
             ]);
 
             return $archive->fresh(['items']) ?? $archive;
         });
+
+        if ($cleanupContext instanceof ContentProjectWorkspaceCleanupContext) {
+            $this->workspaceDestroyer->releaseDeferredSideEffects($cleanupContext);
+        }
+
+        return $archive;
     }
 
     public function restore(SeoProject $project, int $userId): SeoProjectArchive
@@ -194,6 +295,8 @@ final class ArchiveContentProjectService
                 throw new RuntimeException('Project chưa được lưu trữ.');
             }
 
+            // Restore chỉ business flag — không phục hồi Runtime/Execution/Prompt cũ.
+            // Generate/Review sau này tạo Workspace mới hoàn toàn.
             $lockedProject->forceFill([
                 'archived_at' => null,
                 'archived_by' => null,
@@ -210,6 +313,7 @@ final class ArchiveContentProjectService
                 'user_id' => $userId,
                 'restored_at' => $this->toIso8601($now),
                 'site_id' => $this->nullablePositiveInt($lockedProject->site_id),
+                'workspace_reused' => false,
             ]);
 
             return $archive->fresh() ?? $archive;

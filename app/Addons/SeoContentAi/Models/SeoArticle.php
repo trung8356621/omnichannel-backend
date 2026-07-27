@@ -106,6 +106,11 @@ class SeoArticle extends Model
         return $this->hasMany(SeoArticleRevision::class, 'article_id')->orderByDesc('created_at');
     }
 
+    public function projectTasks(): HasMany
+    {
+        return $this->hasMany(SeoProjectTask::class, 'article_id');
+    }
+
     public function faqs(): HasMany
     {
         return $this->hasMany(SeoFaq::class, 'article_id')->orderBy('sort_order');

@@ -7,23 +7,23 @@ namespace App\Addons\SeoContentAi\Filament\Widgets;
 use App\Addons\SeoContentAi\Services\ContentProjectStaffAvailabilityService;
 use Filament\Widgets\Widget;
 
+/**
+ * @deprecated Card static đã thay bằng planning toolbar trên ListSeoProjects.
+ * Giữ class để tránh break discovery/cache cũ — canView = false.
+ */
 final class UnassignedContentProjectStaffWidget extends Widget
 {
     protected static string $view = 'seo-content-ai::filament.widgets.unassigned-content-project-staff';
 
     protected static ?int $sort = -10;
 
-    protected int|string|array $columnSpan = [
-        'default' => 12,
-        'lg' => 4,
-        'xl' => 3,
-    ];
+    protected int|string|array $columnSpan = 'full';
 
     public bool $showAll = false;
 
     public static function canView(): bool
     {
-        return app(ContentProjectStaffAvailabilityService::class)->canViewUnassignedStaff();
+        return false;
     }
 
     /**
@@ -32,15 +32,15 @@ final class UnassignedContentProjectStaffWidget extends Widget
     protected function getViewData(): array
     {
         $service = app(ContentProjectStaffAvailabilityService::class);
-        $limit = $this->showAll ? 50 : ContentProjectStaffAvailabilityService::WIDGET_LIMIT;
-        $payload = $service->widgetPayload($limit);
+        $payload = $service->widgetPayload(null);
 
         return [
             'total' => $payload['total'],
             'staff' => $payload['staff'],
             'showAll' => $this->showAll,
-            'limit' => $limit,
+            'limit' => ContentProjectStaffAvailabilityService::WIDGET_LIMIT,
             'createUrl' => $service->createProjectUrl(0),
+            'monthDisplay' => $payload['month_display'],
         ];
     }
 

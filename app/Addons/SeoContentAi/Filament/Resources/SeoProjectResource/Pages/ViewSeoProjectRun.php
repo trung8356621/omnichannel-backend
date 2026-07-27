@@ -1700,42 +1700,50 @@ class ViewSeoProjectRun extends Page
             403,
         );
 
-        if ($this->projectRun !== null && ContentProjectRunEngineFeature::enabledFor($this->projectRun)) {
-            app(ContentProjectRunEngine::class)->requestStop(
-                $this->projectRun,
+        $project = $this->projectRun->project;
+        $result = app(\App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus::class)->dispatch(
+            new \App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StopProjectExecutionCommand(
+                projectRef: (int) ($project?->getKey() ?? 0),
+                executionRef: (int) $this->projectRun->getKey(),
+                reason: 'Stopped by user.',
+            ),
+            \App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext::user(
                 auth()->id() !== null ? (int) auth()->id() : null,
-                'Stopped by user.',
-            );
-            $this->projectRun->refresh();
-            $this->skipRender();
+                (int) ($project?->site_id ?? 0) ?: null,
+            ),
+        );
 
+        $this->projectRun->refresh();
+        $this->skipRender();
+
+        if (! $result->success) {
             return [
-                'success' => true,
-                'message' => 'Đã yêu cầu dừng. Run → stopping → cancelled (không map completed).',
+                'success' => false,
+                'message' => $result->message,
                 'cancelled_steps' => 0,
                 'status' => (string) $this->projectRun->status,
             ];
         }
 
+        // Legacy JS orchestration: vẫn cancel active steps nếu Run Engine feature tắt.
         $cancelled = 0;
-        try {
-            $cancelled = app(SeoProjectWorkflowStepRetryService::class)
-                ->cancelAllActiveSteps($this->projectRun);
-        } catch (\Throwable $exception) {
-            RuntimeLogger::report($exception, [
-                'endpoint' => 'seo.project_run.force_stop',
-                'run_id' => (int) $this->projectRun->id,
-            ]);
+        if (! ContentProjectRunEngineFeature::enabledFor($this->projectRun)) {
+            try {
+                $cancelled = app(SeoProjectWorkflowStepRetryService::class)
+                    ->cancelAllActiveSteps($this->projectRun);
+            } catch (\Throwable $exception) {
+                RuntimeLogger::report($exception, [
+                    'endpoint' => 'seo.project_run.force_stop',
+                    'run_id' => (int) $this->projectRun->id,
+                ]);
+            }
         }
-
-        app(SeoProjectWorkflowRunService::class)->markRunCompletedQuietly($this->projectRun);
-        $this->projectRun->refresh();
-        $this->skipRender();
 
         return [
             'success' => true,
-            'message' => 'Đã dừng run. F5 sẽ không tự chạy lại.',
+            'message' => 'Đã yêu cầu dừng. Run → stopping → cancelled (không map completed).',
             'cancelled_steps' => $cancelled,
+            'status' => (string) ($result->metadata['status'] ?? $this->projectRun->status),
         ];
     }
 

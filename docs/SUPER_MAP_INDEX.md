@@ -14,7 +14,25 @@
 | [Article SEO Audit](MAP_SEO_AUDIT.md) | ArticlesOptimal — optimistic skip/assign (Alpine hide row + `skipRender`); project capacity ≤2 toast, 0 ẩn select |
 | [Xử lý Thư viện ảnh, Upload & Watermark](MAP_SEO_MEDIA.md) | `/api/seo/media/*`, SeoMediaController, upload pipeline |
 | [Cơ chế Đồng bộ & Cầu nối WordPress](MAP_SEO_WP.md) | WP bridge inbound, sync outbound, plugin `omi-seo-ai-bridge` ≥1.0.61 (`clear_faqs`) |
-| [Content Projects & Workflow](MAP_SEO_PROJECTS.md) | Archive preview slideOver + Int/Ext; global domain = UI context; unassigned staff; `rebuildArticleRows` |
+| [Content Projects & Workflow](MAP_SEO_PROJECTS.md) | Archive preview; Operation Center `/seo/{hash}/content-operations`; CommandBus cutover |
+| [Content Project Operations](CONTENT_PROJECT_OPERATIONS.md) | Ops dashboard, metrics, replay, health, daily report (admin only) |
+| [Agent Gateway](CONTENT_PROJECT_AGENT_GATEWAY.md) | Agent/MCP → Gateway → Capability → CommandBus |
+| [Extension SDK](EXTENSION_SDK.md) | Plugin platform: registries, manifest, discovery, health |
+| [Publisher SDK](PUBLISHER_SDK.md) | PublisherDriver; WordPress builtin |
+| [AI Provider SDK](AI_PROVIDER_SDK.md) | AiProviderDriver scaffold |
+| [Capability SDK](CAPABILITY_SDK.md) | Extension capability contributors |
+| [Pipeline SDK](PIPELINE_SDK.md) | Pipeline step drivers |
+| [Architecture Decisions](ARCHITECTURE_DECISIONS.md) | ADR-001..017 — Content Project aggregate, CommandBus, Agent capability boundary, Archive/Restore, publish ownership, Extension Cutover |
+| [Architecture Freeze v1.0](ARCHITECTURE_FREEZE_V1.md) | Freeze date 2026-07-27, SDK v1; Allowed-without-ADR / Requires-ADR; public contracts |
+| [Builtin WordPress Extension](BUILTIN_WORDPRESS_EXTENSION.md) | `WordPressPublisher` dưới `Extension/Builtin/Wordpress`, Application chỉ dùng `PublisherResolver` |
+| [Extension Security Boundary](EXTENSION_SECURITY_BOUNDARY.md) | Whitelist discovery, id pattern, `extensions.{id}.*` namespace, event isolation, no credentials |
+| [Agent Planner](CONTENT_PROJECT_AGENT_PLANNER.md) | Plan/Step/Executor; wait_operation; templates |
+| [Automation Policy](CONTENT_PROJECT_AUTOMATION_POLICY.md) | Levels, hard gates, budget, triggers |
+| [Agent Approvals](CONTENT_PROJECT_AGENT_APPROVALS.md) | Human approval gates + Destroy Workspace preview |
+| [Plan Lifecycle](CONTENT_PROJECT_AGENT_PLAN_LIFECYCLE.md) | Status, retry, cancel, retention |
+| [MCP Tools](CONTENT_PROJECT_MCP_TOOLS.md) | content_project.* tool list + schemas |
+| [Agent Security](CONTENT_PROJECT_AGENT_SECURITY.md) | Scopes, policy, rate limit, error codes |
+| [Agent Workflows](CONTENT_PROJECT_AGENT_WORKFLOWS.md) | Create/Generate/Schedule/Archive flows |
 | [Settings, Prompts & AI Connections](MAP_SEO_SETTINGS.md) | Settings, PromptResource, PromptRunnerService, API Connections |
 | [Prompt Hooks](prompt-hooks/README.md) | Contract từng Hook (title / meta description) — Phase 1 (**EXPERIMENTAL** tới khi Spec khóa) |
 | [Prompt Hook / Workflow Audit (5A)](automation/prompt/PROMPT_WORKFLOW_INVENTORY.md) | Inventory + Spec v0.1 |
@@ -29,6 +47,11 @@
 | [Business Automation](automation/AUTOMATION_SERVICE_INVENTORY.md) | Tables `automation_*` + `business_events` trên **core** (`config/automation.php` / `AUTOMATION_DB_CONNECTION`); `automation:migrate-to-core`; [Cutover audit](automation/AUTOMATION_CUTOVER_AUDIT.md) |
 | [Database cleanup misplaced tables](DATABASE_CLEANUP_MISPLACED_TABLES.md) | `database:cleanup-misplaced-tables` — ownership registry; `automation_*` owner = core |
 | [Testing / PHPUnit discovery](TESTING.md) | Convention `*Test.php`, `phpunit.xml` suites (core + SeoContentAi), `php artisan test:doctor`, `composer test:ci` |
+| [Keyword Intelligence](KEYWORD_INTELLIGENCE.md) | Workspace/Keyword/Cluster pipeline, CommandBus + Agent Gateway `keyword_intelligence.*`, Filament `/seo/{hash}/keyword-intelligence` |
+| [Keyword Clustering](KEYWORD_CLUSTERING.md) | `KeywordClusterService` — strategy balanced/tight/loose, cluster enrich fields |
+| [Topical Map](TOPICAL_MAP.md) | `TopicalMapBuilder` — root/pillar theo search_intent, `SeoTopicClusterLink`, `SeoTopicalMapVersion` snapshot |
+| [Keyword Cannibalization](KEYWORD_CANNIBALIZATION.md) | `KeywordCannibalizationService` — keyword/cluster multi-article risk, risk_level, recommended_action |
+| [Keyword → Content Project](KEYWORD_TO_CONTENT_PROJECT.md) | `KeywordToContentProjectConverter` — preview/convert approved cluster → `CreateContentProjectCommand` |
 | [Legacy test audit](testing/LEGACY_TEST_AUDIT.md) | Inventory fail buckets (ENV/CONFIG/FINAL/STALE), infra fixes, server runbook 512M |
 
 **Luồng chia:** UI editor (React + Alpine) → REST media/outline hoặc Livewire save → `omi_seo_ai` → sync WP qua `WordPressArticleSyncService`.

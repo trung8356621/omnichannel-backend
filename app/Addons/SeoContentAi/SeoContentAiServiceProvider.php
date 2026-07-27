@@ -122,11 +122,121 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
         $this->app->singleton(\App\Addons\SeoContentAi\Services\RunEngine\ContentProjectArticleRunner::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\RunEngine\ContentProjectRunEngine::class);
 
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectArticleMembership::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectWorkspaceSaveService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Support\ContentProject\ContentProjectLifecycle::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectDashboardStatsService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectAutoScheduleService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectQueueHealthService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectTimelineService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueRunner::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\ContentPublisherRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\PublisherResolver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Events\ContentProjectDomainEvents::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectBusinessLock::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectIdempotencyStore::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectBusinessAuditor::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPreviewToken::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPublishTransitionGuard::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectOperationLogger::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectOpsMetrics::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectOpsDashboardService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectCommandBusMonitorService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectAiCostAggregateService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectPublishAnalyticsService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectErrorCenterService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectOpsHealthService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectSiteHealthService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectDailyReportService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectOpsReplayService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectWpAdapterMetricsService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectAuditSearchService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Quotas\ContentProjectQuotaGuard::class);
+
+        // Keyword Intelligence — services + application layer.
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\KeywordNormalizationService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\KeywordIntentClassifier::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\KeywordScoringService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\KeywordClusterService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\KeywordImportService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\KeywordExistingContentMapper::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\KeywordCannibalizationService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\TopicalMapBuilder::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\KeywordWorkspaceAnalysisService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\KeywordToContentProjectConverter::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Support\KeywordIntelligenceTenantGuard::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Quotas\KeywordIntelligenceQuotaGuard::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\KeywordIntelligenceReadService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\Agent\KeywordIntelligenceReadService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Capabilities\ContentProjectCapabilityRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Capabilities\CanonicalCapabilityRegistry::class, function ($app): \App\Addons\SeoContentAi\Services\ContentProject\Application\Capabilities\CanonicalCapabilityRegistry {
+            return new \App\Addons\SeoContentAi\Services\ContentProject\Application\Capabilities\CanonicalCapabilityRegistry(
+                $app->make(\App\Addons\SeoContentAi\Services\ContentProject\Application\Capabilities\ContentProjectCapabilityRegistry::class),
+                $app->make(\App\Addons\SeoContentAi\Extension\Registry\ExtensionCapabilityRegistry::class),
+                $app->make(\App\Addons\SeoContentAi\Extension\ExtensionStateStore::class),
+            );
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectReadModelService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResultNotifier::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus::class, function ($app) {
+            $bus = new \App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus(
+                $app->make(\App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectIdempotencyStore::class),
+                $app->make(\App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectBusinessAuditor::class),
+                $app->make(\App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectOperationLogger::class),
+            );
+            $app->make(\App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBusRegistrar::class)->register($bus);
+
+            return $bus;
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentPolicy::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentSchemaValidator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentCommandFactory::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentRateLimiter::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentSessionService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentReadService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentGateway::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectPlanTemplateRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\RuleBasedContentProjectPlanGenerator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\LlmContentProjectPlanGenerator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectCanonicalPlanValidator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectAutomationPolicyService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectAgentConditionRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectAgentBudgetGuard::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectAgentPlanLock::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectAgentApprovalService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectAgentPlanRevalidator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectAgentPlanner::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectAgentPlanApplicationService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectAgentPlanExecutor::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectAgentPlanGateway::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Mcp\ContentProjectMcpToolCatalog::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Mcp\ContentProjectMcpServer::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Workspace\ContentProjectWorkspaceCleanupRegistry::class, function ($app) {
+            return new \App\Addons\SeoContentAi\Services\ContentProject\Workspace\ContentProjectWorkspaceCleanupRegistry([
+                $app->make(\App\Addons\SeoContentAi\Services\ContentProject\Workspace\Cleaners\ExecutionWorkspaceCleaner::class),
+                $app->make(\App\Addons\SeoContentAi\Services\ContentProject\Workspace\Cleaners\PromptWorkspaceCleaner::class),
+                $app->make(\App\Addons\SeoContentAi\Services\ContentProject\Workspace\Cleaners\RuntimeWorkspaceCleaner::class),
+                $app->make(\App\Addons\SeoContentAi\Services\ContentProject\Workspace\Cleaners\LocalMediaWorkspaceCleaner::class),
+                $app->make(\App\Addons\SeoContentAi\Services\ContentProject\Workspace\Cleaners\GalleryExecutionWorkspaceCleaner::class),
+                $app->make(\App\Addons\SeoContentAi\Services\ContentProject\Workspace\Cleaners\EditorRevisionWorkspaceCleaner::class),
+                $app->make(\App\Addons\SeoContentAi\Services\ContentProject\Workspace\Cleaners\PendingArtifactsWorkspaceCleaner::class),
+                $app->make(\App\Addons\SeoContentAi\Services\ContentProject\Workspace\Cleaners\CacheLockWorkspaceCleaner::class),
+            ]);
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Workspace\ContentProjectAiWorkspaceDestroyer::class);
+
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Contracts\AutomationEventDispatcher::class, \App\Addons\SeoContentAi\Automation\BusinessHook\Events\BridgingAutomationEventDispatcher::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Support\SensitivePayloadRedactor::class);
 
         // Business Hook / Automation Rule Engine
         $this->mergeConfigFrom(__DIR__.'/config/automation-modules.php', 'seo-content-ai.automation_modules');
+        $this->mergeConfigFrom(__DIR__.'/config/content_project_agent.php', 'seo-content-ai.content_project_agent');
+        $this->mergeConfigFrom(__DIR__.'/config/extension_sdk.php', 'seo-content-ai.extension_sdk');
+        $this->mergeConfigFrom(__DIR__.'/config/seo_architecture.php', 'seo-content-ai.seo_architecture');
+        $this->mergeConfigFrom(__DIR__.'/config/keyword_intelligence.php', 'seo-content-ai.keyword_intelligence');
+        $this->registerExtensionSdk();
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationInputMapper::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Platform\Registry\AutomationConditionRegistry::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Platform\Registry\AutomationHealthCheckRegistry::class);
@@ -267,6 +377,8 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 \App\Addons\SeoContentAi\Console\InstallDefaultProductGalleryPromptsCommand::class,
                 \App\Addons\SeoContentAi\Console\ProductGalleryCanaryFixtureCommand::class,
                 \App\Addons\SeoContentAi\Console\RepairContentProjectCommand::class,
+                \App\Addons\SeoContentAi\Console\CleanupContentProjectAgentSessionsCommand::class,
+                \App\Addons\SeoContentAi\Console\CleanupContentProjectAgentPlansCommand::class,
                 \App\Addons\SeoContentAi\Console\RepairContentProjectMonthDriftCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationListEventsCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationListActionsCommand::class,
@@ -399,7 +511,97 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                     ->name($wpSyncWatchdogName)
                     ->withoutOverlapping();
             }
+
+            $agentPlanCleanupName = 'seo-content-ai:cleanup-agent-plans';
+            $agentPlanCleanupRegistered = collect($schedule->events())
+                ->contains(static fn ($event): bool => $event->description === $agentPlanCleanupName);
+            if (! $agentPlanCleanupRegistered) {
+                $schedule
+                    ->command(\App\Addons\SeoContentAi\Console\CleanupContentProjectAgentPlansCommand::class)
+                    ->dailyAt('03:10')
+                    ->name($agentPlanCleanupName)
+                    ->withoutOverlapping();
+            }
+
+            $agentPolicyDispatchName = 'seo-content-ai:dispatch-automation-policies';
+            $agentPolicyDispatchRegistered = collect($schedule->events())
+                ->contains(static fn ($event): bool => $event->description === $agentPolicyDispatchName);
+            if (! $agentPolicyDispatchRegistered) {
+                $schedule
+                    ->job(\App\Addons\SeoContentAi\Jobs\DispatchContentProjectAutomationPoliciesJob::class)
+                    ->hourly()
+                    ->name($agentPolicyDispatchName)
+                    ->withoutOverlapping();
+            }
         });
+
+        $this->app->booted(function (): void {
+            try {
+                $discovery = $this->app->make(\App\Addons\SeoContentAi\Extension\ExtensionDiscovery::class);
+                $discovery->discoverAndRegister();
+                $discovery->bootExtensions();
+            } catch (\Throwable) {
+                // Extension SDK không được phá boot addon
+            }
+        });
+    }
+
+    private function registerExtensionSdk(): void
+    {
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\ExtensionEventBus::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\ExtensionStateStore::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Registry\PublisherRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Registry\AiProviderRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Registry\SeoProviderRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Registry\PipelineRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Registry\ExtensionCapabilityRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Registry\PromptHookExtensionRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Registry\MediaProcessorRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Registry\WorkflowExtensionRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Registry\ExtensionRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Registry\ContentPlatformRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\ExtensionContext::class, function ($app): \App\Addons\SeoContentAi\Extension\ExtensionContext {
+            return new \App\Addons\SeoContentAi\Extension\ExtensionContext(
+                $app->make(\App\Addons\SeoContentAi\Extension\Registry\PublisherRegistry::class),
+                $app->make(\App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\ContentPublisherRegistry::class),
+                $app->make(\App\Addons\SeoContentAi\Extension\Registry\AiProviderRegistry::class),
+                $app->make(\App\Addons\SeoContentAi\Extension\Registry\SeoProviderRegistry::class),
+                $app->make(\App\Addons\SeoContentAi\Extension\Registry\PipelineRegistry::class),
+                $app->make(\App\Addons\SeoContentAi\Extension\Registry\ExtensionCapabilityRegistry::class),
+                $app->make(\App\Addons\SeoContentAi\Extension\Registry\PromptHookExtensionRegistry::class),
+                $app->make(\App\Addons\SeoContentAi\Extension\Registry\MediaProcessorRegistry::class),
+                $app->make(\App\Addons\SeoContentAi\Extension\Registry\WorkflowExtensionRegistry::class),
+                $app->make(\App\Addons\SeoContentAi\Extension\ExtensionEventBus::class),
+                $app->make(\App\Addons\SeoContentAi\Extension\Registry\ExtensionRegistry::class),
+            );
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\ExtensionCompatibilityChecker::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\ExtensionDiscovery::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\ExtensionHealthService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\Wordpress\WordPressPublisher::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\Wordpress\WordpressPublisherDriver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\Wordpress\WordpressExtensionProvider::class);
+
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Resolvers\AiProviderResolver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Resolvers\PipelineResolver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\Ai\GeminiGenerateContentClient::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\Ai\ClaudeMessagesClient::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\AiProviders\GeminiAiTextProvider::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\AiProviders\ClaudeAiTextProvider::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\AiProviders\AiProvidersHealthDriver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\AiProviders\AiProvidersExtensionProvider::class);
+
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\ContentPipelines\Definitions\ArticlePipelineDefinition::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\ContentPipelines\Definitions\RewritePipelineDefinition::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\ContentPipelines\Definitions\ImprovePipelineDefinition::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\ContentPipelines\Definitions\TranslatePipelineDefinition::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\ContentPipelines\Definitions\ProductPipelineDefinition::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\ContentPipelines\ContentPipelinesHealthDriver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\ContentPipelines\ContentPipelinesExtensionProvider::class);
+
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\LocalSeo\LocalSeoProvider::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\LocalSeo\LocalSeoHealthDriver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Extension\Builtin\LocalSeo\LocalSeoExtensionProvider::class);
     }
 
     private function bootstrapDefaultSeoConnection(): void
@@ -449,10 +651,27 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 'seo_article_revisions',
                 'seo_article_wp_sync_jobs',
                 'seo_content_archive_items',
+                'seo_content_project_agent_sessions',
+                'seo_content_project_agent_plans',
+                'seo_content_project_agent_plan_steps',
+                'seo_content_project_automation_policies',
+                'seo_content_project_agent_approvals',
+                'seo_content_project_business_audits',
+                'seo_content_project_idempotency_keys',
+                'seo_content_project_operations',
+                'seo_content_project_ops_metrics',
+                'seo_content_project_publish_attempts',
                 'seo_domain_metas',
+                'seo_extension_states',
                 'seo_faqs',
                 'seo_generated_images',
                 'seo_image_optimization_settings',
+                'seo_keyword_analysis_operations',
+                'seo_keyword_article_mappings',
+                'seo_keyword_clusters',
+                'seo_keyword_relationships',
+                'seo_keyword_workspaces',
+                'seo_keywords',
                 'seo_link_audits',
                 'seo_link_maps',
                 'seo_links',
@@ -474,6 +693,9 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 'seo_rank_keyword_groups',
                 'seo_settings',
                 'seo_tasks',
+                'seo_topic_cluster_links',
+                'seo_topical_map_versions',
+                'seo_topics',
                 'seo_watermark_settings',
                 'seo_wp_media_backups',
                 'seo_wp_media_edited_pending',

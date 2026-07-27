@@ -11,6 +11,10 @@ use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectArchive;
 use App\Addons\SeoContentAi\Services\ArchiveContentProjectService;
 use App\Addons\SeoContentAi\Services\ArticleReviewService;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RestoreContentProjectCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResultNotifier;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
 use App\Addons\SeoContentAi\Services\ContentProjectArchiveExportService;
 use App\Addons\SeoContentAi\Services\Exceptions\ArticleReviewException;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -329,7 +333,19 @@ final class ContentProjectArchive extends Page
                 abort(403);
             }
 
-            app(ArchiveContentProjectService::class)->restore($project, (int) $user->id);
+            $result = app(ContentProjectCommandBus::class)->dispatch(
+                new RestoreContentProjectCommand((int) $project->getKey()),
+                ActorContext::user(
+                    (int) $user->id,
+                    (int) ($project->site_id ?? 0) ?: null,
+                ),
+            );
+
+            app(ContentProjectActionResultNotifier::class)->send($result);
+
+            if (! $result->success) {
+                throw new RuntimeException($result->message);
+            }
 
             Notification::make()
                 ->title(__('seo-content-ai::filament.projects.archive_restore_completed'))

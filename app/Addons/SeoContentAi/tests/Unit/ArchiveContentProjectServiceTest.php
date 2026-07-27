@@ -19,15 +19,15 @@ use ReflectionMethod;
  */
 final class ArchiveContentProjectServiceTest extends TestCase
 {
-    public function test_service_public_api_and_constructor_dependencies(): void
+    public function test_archive_service_public_api_and_constructor_dependencies(): void
     {
         $ref = new ReflectionClass(ArchiveContentProjectService::class);
         $ctor = $ref->getConstructor();
 
         self::assertNotNull($ctor);
-        self::assertGreaterThanOrEqual(3, count($ctor->getParameters()));
+        self::assertGreaterThanOrEqual(4, count($ctor->getParameters()));
 
-        foreach (['buildSummary', 'archive', 'restore', 'getCurrentArchive', 'previewStats'] as $method) {
+        foreach (['buildSummary', 'archive', 'restore', 'getCurrentArchive', 'previewStats', 'archiveGate', 'assertCanArchive'] as $method) {
             self::assertTrue($ref->hasMethod($method), "Missing method {$method}");
         }
     }
@@ -41,6 +41,8 @@ final class ArchiveContentProjectServiceTest extends TestCase
         self::assertStringContainsString('lockProject', $source);
         self::assertStringContainsString('archived_at', $source);
         self::assertStringContainsString('content_project_archived', $source);
+        self::assertStringContainsString('workspaceDestroyer', $source);
+        self::assertStringContainsString('destroyInTransaction', $source);
         self::assertStringNotContainsString('taskLifecycle', $source);
         self::assertStringNotContainsString('content_archived_at', $source);
         self::assertStringNotContainsString('SeoProjectTaskLifecycleService', $source);
@@ -54,6 +56,7 @@ final class ArchiveContentProjectServiceTest extends TestCase
         self::assertStringContainsString('restored_at', $source);
         self::assertStringContainsString('restored_by', $source);
         self::assertStringContainsString('content_project_restored', $source);
+        self::assertStringContainsString('workspace_reused', $source);
         self::assertStringNotContainsString('->delete()', $source);
         self::assertStringNotContainsString('taskLifecycle', $source);
     }
@@ -106,7 +109,8 @@ final class ArchiveContentProjectServiceTest extends TestCase
 
         self::assertStringContainsString('ArchiveContentProjectService', $source);
         self::assertStringContainsString("Action::make('archive_project')", $source);
-        self::assertStringContainsString('activeProjects()', $source);
+        self::assertStringContainsString('isProjectArchived()', $source);
+        self::assertStringContainsString("getUrl('archive-preview'", $source);
     }
 
     private function readMethodSource(ReflectionMethod $method): string

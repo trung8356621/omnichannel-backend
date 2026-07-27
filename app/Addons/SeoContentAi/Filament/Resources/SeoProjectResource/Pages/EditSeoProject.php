@@ -7,6 +7,11 @@ namespace App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages;
 use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoEditRecord;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoProject;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SyncContentProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UpdateContentProjectCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionCodes;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
 use App\Addons\SeoContentAi\Services\SeoProjectArticleOwnerSyncService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskMoveService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
@@ -15,7 +20,9 @@ use App\Support\RuntimeLogger;
 use Carbon\Carbon;
 use Filament\Actions;
 use Filament\Notifications\Notification;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Validation\ValidationException;
+use RuntimeException;
 
 class EditSeoProject extends SeoEditRecord
 {
@@ -85,7 +92,7 @@ class EditSeoProject extends SeoEditRecord
                 $month,
                 (int) $record->getKey(),
             )) {
-                throw \Illuminate\Validation\ValidationException::withMessages([
+                throw ValidationException::withMessages([
                     'data.month' => __('seo-content-ai::filament.projects.month_already_exists'),
                 ]);
             }
@@ -106,33 +113,68 @@ class EditSeoProject extends SeoEditRecord
         return $data;
     }
 
-    protected function afterSave(): void
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    protected function handleRecordUpdate(Model $record, array $data): Model
     {
         abort_if(SeoAccessControl::isContentManager(), 403);
 
-        /** @var SeoProject $record */
-        $record = $this->getRecord();
+        /** @var SeoProject $project */
+        $project = $record;
+        $projectId = (int) $project->getKey();
+        $siteId = (int) ($data['site_id'] ?? $project->site_id ?? 0);
+        $authUserId = auth()->id() !== null ? (int) auth()->id() : null;
+        $bus = app(ContentProjectCommandBus::class);
+        $actor = ActorContext::user($authUserId, $siteId > 0 ? $siteId : null);
+        $syncService = app(SeoProjectTaskSyncService::class);
 
-        $monthChanged = $record->wasChanged('month');
-        $record = $record->fresh(['tasks']);
+        $originalMonth = $project->month?->format('Y-m-d');
+        $newMonth = (string) ($data['month'] ?? $originalMonth ?? '');
+        $monthChanged = $originalMonth !== null && $newMonth !== '' && $originalMonth !== $newMonth;
+
+        $updateResult = $bus->dispatch(
+            new UpdateContentProjectCommand($projectId, $data),
+            $actor,
+        );
+
+        if (! $updateResult->success) {
+            if ($updateResult->code === ContentProjectActionCodes::VALIDATION_FAILED) {
+                throw ValidationException::withMessages([
+                    'data' => $updateResult->message,
+                ]);
+            }
+
+            throw new RuntimeException($updateResult->message);
+        }
 
         $tasksData = $this->form->getState()['tasks_data'] ?? [];
-        $syncService = app(SeoProjectTaskSyncService::class);
-        $projectSiteId = $record->site_id !== null ? (int) $record->site_id : null;
+        $projectSiteId = isset($data['site_id']) ? (int) $data['site_id'] : ($project->site_id !== null ? (int) $project->site_id : null);
+        $projectForCompare = $project->fresh(['tasks']) ?? $project;
 
         $incomingSignature = $syncService->tasksSignature($tasksData, $projectSiteId);
         $existingSignature = $syncService->tasksSignature(
-            $syncService->tasksDataFromProject($record),
+            $syncService->tasksDataFromProject($projectForCompare),
             $projectSiteId,
         );
 
         if ($monthChanged || $incomingSignature !== $existingSignature) {
-            $syncService->sync($record, $tasksData);
+            $syncResult = $bus->dispatch(
+                new SyncContentProjectItemsCommand($projectId, $tasksData),
+                $actor,
+            );
 
-            return;
+            if (! $syncResult->success) {
+                throw new RuntimeException($syncResult->message);
+            }
+        } else {
+            app(SeoProjectArticleOwnerSyncService::class)->syncProjectArticles($projectForCompare);
         }
 
-        app(SeoProjectArticleOwnerSyncService::class)->syncProjectArticles($record);
+        /** @var SeoProject $fresh */
+        $fresh = SeoProject::query()->findOrFail($projectId);
+
+        return $fresh;
     }
 
     protected function getHeaderActions(): array
@@ -143,6 +185,11 @@ class EditSeoProject extends SeoEditRecord
         return [
             Actions\ActionGroup::make([
                 SeoProjectResource::makeArchiveProjectPageAction($record),
+                Actions\Action::make('publishing_queue')
+                    ->label(__('seo-content-ai::filament.projects.publishing_queue'))
+                    ->icon('heroicon-o-calendar-days')
+                    ->color('primary')
+                    ->url(fn (): string => SeoProjectResource::getPublishingQueueUrl($this->getRecord())),
                 Actions\Action::make('view_runs')
                     ->label(__('seo-content-ai::filament.projects.view_runs'))
                     ->icon('heroicon-o-queue-list')

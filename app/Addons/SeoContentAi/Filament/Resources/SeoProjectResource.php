@@ -7,10 +7,17 @@ namespace App\Addons\SeoContentAi\Filament\Resources;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
+use App\Addons\SeoContentAi\Models\SeoProjectArchive;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ArchiveContentProjectService;
 use App\Addons\SeoContentAi\Services\ArticleCompletedArchiveQueryService;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveContentProjectCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\GenerateProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResultNotifier;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectPublicRef;
 use App\Addons\SeoContentAi\Services\SeoProjectArchiveService;
 use App\Addons\SeoContentAi\Services\SeoProjectKeywordAiGeneratorService;
 use App\Addons\SeoContentAi\Services\SeoProjectKeywordListParser;
@@ -97,11 +104,39 @@ class SeoProjectResource extends SeoPanelResource
 
     public static function projectRecordUrl(SeoProject $record): string
     {
+        if ($record->isProjectArchived()) {
+            $archiveId = static::currentArchiveIdFor($record);
+            if ($archiveId > 0 && SeoAccessControl::canViewProjectArchives()) {
+                return static::getUrl('archive-preview', ['archive' => $archiveId]);
+            }
+
+            if (SeoAccessControl::canViewProjectArchives()) {
+                return static::getUrl('archive');
+            }
+
+            return static::getUrl('view', ['record' => $record]);
+        }
+
         if (static::canEdit($record)) {
             return static::getUrl('edit', ['record' => $record]);
         }
 
         return static::getUrl('view', ['record' => $record]);
+    }
+
+    public static function currentArchiveIdFor(SeoProject $record): int
+    {
+        if ($record->relationLoaded('currentArchive')) {
+            $loaded = $record->getRelation('currentArchive');
+
+            return $loaded instanceof SeoProjectArchive
+                ? (int) $loaded->getKey()
+                : 0;
+        }
+
+        $archive = app(ArchiveContentProjectService::class)->getCurrentArchive($record);
+
+        return $archive !== null ? (int) $archive->getKey() : 0;
     }
 
     public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
@@ -166,20 +201,29 @@ class SeoProjectResource extends SeoPanelResource
 
                     Forms\Components\Select::make('user_id')
                         ->label(__('seo-content-ai::filament.projects.assign_writer'))
-                        ->options(fn (): array => static::groupedWriterSelectOptions())
+                        ->options(fn (Get $get): array => static::groupedWriterSelectOptions(
+                            is_string($get('month')) || $get('month') instanceof \DateTimeInterface
+                                ? (string) $get('month')
+                                : null,
+                        ))
                         ->searchable()
                         ->preload()
                         ->required()
                         ->disabled(fn (): bool => SeoAccessControl::isContentManager())
                         ->dehydrated()
                         ->native(false)
+                        ->live()
                         ->helperText(__('seo-content-ai::filament.projects.assign_writer_help')),
 
                     Forms\Components\CheckboxList::make('unassigned_staff_ids')
                         ->label(__('seo-content-ai::filament.projects.unassigned_staff_heading'))
-                        ->options(function (): array {
+                        ->options(function (Get $get): array {
+                            $month = is_string($get('month')) || $get('month') instanceof \DateTimeInterface
+                                ? (string) $get('month')
+                                : null;
+
                             return app(\App\Addons\SeoContentAi\Services\ContentProjectStaffAvailabilityService::class)
-                                ->groupedSelectOptions()['unassigned'];
+                                ->groupedSelectOptions($month)['unassigned'];
                         })
                         ->searchable()
                         ->bulkToggleable(false)
@@ -224,9 +268,53 @@ class SeoProjectResource extends SeoPanelResource
                         ->native(false)
                         ->displayFormat('m/Y')
                         ->format('Y-m-d')
-                        ->default(fn (): string => now()->startOfMonth()->format('Y-m-d'))
+                        ->default(function (): string {
+                            $fromQuery = \App\Addons\SeoContentAi\Support\ContentProject\ContentProjectMonthContext::parseOrNull(
+                                is_string(request()->query('month')) ? (string) request()->query('month') : null,
+                            );
+
+                            return $fromQuery !== null
+                                ? \App\Addons\SeoContentAi\Support\ContentProject\ContentProjectMonthContext::toDateString($fromQuery)
+                                : now()->startOfMonth()->format('Y-m-d');
+                        })
                         ->required()
                         ->live()
+                        ->afterStateUpdated(function ($state, callable $set, Get $get): void {
+                            if ($state === null || $state === '') {
+                                return;
+                            }
+
+                            $userId = (int) ($get('user_id') ?? 0);
+                            if ($userId <= 0) {
+                                return;
+                            }
+
+                            $service = app(\App\Addons\SeoContentAi\Services\ContentProjectStaffAvailabilityService::class);
+                            if ($service->isUnassigned($userId, (string) $state)) {
+                                $set('assign_from_unassigned', true);
+                                $set('unassigned_staff_ids', [$userId]);
+
+                                return;
+                            }
+
+                            // Staff đã có project tháng mới — bỏ chọn + cảnh báo.
+                            $set('user_id', null);
+                            $set('unassigned_staff_ids', []);
+                            $set('assign_from_unassigned', false);
+
+                            $user = \App\Models\User::query()->find($userId);
+                            $name = $user instanceof \App\Models\User
+                                ? $service->formatLabel($user)
+                                : '#'.$userId;
+
+                            \Filament\Notifications\Notification::make()
+                                ->warning()
+                                ->title(__('seo-content-ai::filament.projects.unassigned_staff_already_assigned', [
+                                    'name' => $name,
+                                    'month' => \App\Addons\SeoContentAi\Support\ContentProject\ContentProjectMonthContext::display((string) $state),
+                                ]))
+                                ->send();
+                        })
                         ->visible(fn (?SeoProject $record): bool => ! ($record instanceof SeoProject && $record->isArchive()))
                         ->dehydrated(fn (?SeoProject $record): bool => ! ($record instanceof SeoProject && $record->isArchive()))
                         ->rules([
@@ -704,16 +792,24 @@ class SeoProjectResource extends SeoPanelResource
                 Tables\Columns\TextColumn::make('status')
                     ->label(__('seo-content-ai::filament.projects.status'))
                     ->badge()
-                    ->formatStateUsing(fn (string $state): string => SeoProject::statusOptions()[$state] ?? $state)
-                    ->color(fn (string $state): string => match ($state) {
-                        SeoProject::STATUS_PENDING => 'gray',
-                        SeoProject::STATUS_MANUAL => 'info',
-                        SeoProject::STATUS_RUNNING => 'warning',
-                        SeoProject::STATUS_COMPLETED => 'success',
-                        SeoProject::STATUS_PAUSED => 'danger',
-                        SeoProject::STATUS_APPROVED => 'success',
-                        default => 'gray',
-                    }),
+                    ->formatStateUsing(function (string $state, SeoProject $record): string {
+                        if ($record->isProjectArchived()) {
+                            return __('seo-content-ai::filament.projects.status_archived');
+                        }
+
+                        return SeoProject::statusOptions()[$state] ?? $state;
+                    })
+                    ->color(fn (string $state, SeoProject $record): string => $record->isProjectArchived()
+                        ? 'gray'
+                        : match ($state) {
+                            SeoProject::STATUS_PENDING => 'gray',
+                            SeoProject::STATUS_MANUAL => 'info',
+                            SeoProject::STATUS_RUNNING => 'warning',
+                            SeoProject::STATUS_COMPLETED => 'success',
+                            SeoProject::STATUS_PAUSED => 'danger',
+                            SeoProject::STATUS_APPROVED => 'success',
+                            default => 'gray',
+                        }),
 
                 Tables\Columns\TextColumn::make('updated_at')
                     ->label(__('seo-content-ai::filament.projects.updated'))
@@ -767,6 +863,12 @@ class SeoProjectResource extends SeoPanelResource
                         ->color('gray')
                         ->visible(fn (SeoProject $record): bool => SeoAccessControl::canAccessContentProjectRun($record))
                         ->url(fn (SeoProject $record): string => static::getRunHistoryUrl($record)),
+                    Tables\Actions\Action::make('publishing_queue')
+                        ->label(__('seo-content-ai::filament.projects.publishing_queue'))
+                        ->icon('heroicon-o-calendar-days')
+                        ->color('primary')
+                        ->visible(fn (SeoProject $record): bool => ! $record->isProjectArchived() && ! $record->isArchive())
+                        ->url(fn (SeoProject $record): string => static::getPublishingQueueUrl($record)),
                     Tables\Actions\Action::make('archive_project')
                         ->label(__('seo-content-ai::filament.projects.archive_project'))
                         ->icon('heroicon-o-archive-box')
@@ -774,43 +876,68 @@ class SeoProjectResource extends SeoPanelResource
                         ->visible(fn (SeoProject $record): bool => SeoAccessControl::canArchiveContentProjects()
                             && ! $record->isProjectArchived()
                             && ! $record->isArchive())
+                        ->disabled(function (SeoProject $record): bool {
+                            $gate = app(ArchiveContentProjectService::class)->archiveGate($record);
+
+                            return ! $gate['can_archive'];
+                        })
+                        ->tooltip(function (SeoProject $record): ?string {
+                            $gate = app(ArchiveContentProjectService::class)->archiveGate($record);
+
+                            return $gate['can_archive'] ? null : (string) ($gate['blocked_reason'] ?? '');
+                        })
                         ->modalHeading(fn (SeoProject $record): string => __('seo-content-ai::filament.projects.archive_project_heading_named', [
                             'name' => (string) $record->name,
                         ]))
                         ->modalDescription(function (SeoProject $record): HtmlString {
                             $summary = app(ArchiveContentProjectService::class)->buildSummary($record);
+                            $gate = app(ArchiveContentProjectService::class)->archiveGate($record);
 
                             return new HtmlString(view('seo-content-ai::filament.resources.seo-project-resource.partials.archive-project-modal-summary', [
                                 'summary' => $summary,
+                                'gate' => $gate,
                             ])->render());
                         })
                         ->modalSubmitActionLabel(__('seo-content-ai::filament.projects.archive_project_submit'))
-                        ->form([
-                            Forms\Components\Textarea::make('note')
-                                ->label(__('seo-content-ai::filament.projects.archive_note'))
-                                ->placeholder(__('seo-content-ai::filament.projects.archive_note_placeholder'))
-                                ->rows(2)
-                                ->maxLength(500),
-                        ])
+                        ->form(function (SeoProject $record): array {
+                            $gate = app(ArchiveContentProjectService::class)->archiveGate($record);
+                            $fields = [
+                                Forms\Components\Textarea::make('note')
+                                    ->label(__('seo-content-ai::filament.projects.archive_note'))
+                                    ->placeholder(__('seo-content-ai::filament.projects.archive_note_placeholder'))
+                                    ->rows(2)
+                                    ->maxLength(500),
+                            ];
+
+                            if ($gate['requires_waiting_publish_confirm']) {
+                                $fields[] = Forms\Components\Checkbox::make('confirm_waiting_publish')
+                                    ->label(__('seo-content-ai::filament.projects.archive_waiting_publish_confirm', [
+                                        'count' => $gate['waiting_publish'],
+                                    ]))
+                                    ->rule('accepted')
+                                    ->required();
+                            }
+
+                            return $fields;
+                        })
                         ->action(function (SeoProject $record, array $data): void {
                             try {
                                 abort_unless(SeoAccessControl::canArchiveContentProjects(), 403);
                                 abort_unless(SeoAccessControl::canAccessSite((int) ($record->site_id ?? 0)), 403);
 
-                                $archive = app(ArchiveContentProjectService::class)->archive(
-                                    $record,
-                                    (int) auth()->id(),
-                                    isset($data['note']) ? (string) $data['note'] : null,
+                                $result = app(ContentProjectCommandBus::class)->dispatch(
+                                    new ArchiveContentProjectCommand(
+                                        (int) $record->getKey(),
+                                        isset($data['note']) ? (string) $data['note'] : null,
+                                        (bool) ($data['confirm_waiting_publish'] ?? false),
+                                    ),
+                                    ActorContext::user(
+                                        auth()->id() !== null ? (int) auth()->id() : null,
+                                        (int) ($record->site_id ?? 0) ?: null,
+                                    ),
                                 );
 
-                                Notification::make()
-                                    ->title(__('seo-content-ai::filament.projects.archive_completed'))
-                                    ->body(__('seo-content-ai::filament.projects.archive_completed_project_body', [
-                                        'name' => (string) ($archive->project_name ?: $record->name),
-                                        'count' => (int) $archive->total_articles,
-                                    ]))
-                                    ->success()
-                                    ->send();
+                                app(ContentProjectActionResultNotifier::class)->send($result);
                             } catch (\Throwable $exception) {
                                 RuntimeLogger::report($exception, [
                                     'endpoint' => 'content_project.archive',
@@ -876,9 +1003,11 @@ class SeoProjectResource extends SeoPanelResource
                     ->button()
                     ->color('gray'),
                 Tables\Actions\ViewAction::make()
-                    ->visible(fn (SeoProject $record): bool => static::canView($record) && ! static::canEdit($record)),
+                    ->visible(fn (SeoProject $record): bool => static::canView($record) && ! static::canEdit($record))
+                    ->url(fn (SeoProject $record): string => static::projectRecordUrl($record)),
                 Tables\Actions\EditAction::make()
-                    ->visible(fn (SeoProject $record): bool => static::canEdit($record)),
+                    ->visible(fn (SeoProject $record): bool => static::canEdit($record))
+                    ->url(fn (SeoProject $record): string => static::projectRecordUrl($record)),
             ])
             ->bulkActions(static::seoPanelBulkActions([
                 Tables\Actions\BulkActionGroup::make([
@@ -934,10 +1063,11 @@ class SeoProjectResource extends SeoPanelResource
 
     public static function getEloquentQuery(): Builder
     {
+        // List hiện cả project đã archive (click → archive preview). Vault riêng vẫn giữ.
+        // Staff/assign vẫn lọc active ở ContentProjectStaffAvailabilityService.
         $query = static::applyGlobalSiteScopeToProjectQuery(
             parent::getEloquentQuery()
-                ->activeProjects()
-                ->with(['user', 'site'])
+                ->with(['user', 'site', 'currentArchive'])
                 ->withCount([
                     'tasks as active_tasks_count' => static fn (Builder $sub): Builder => $sub->active(),
                     'tasks as active_completed_count' => static fn (Builder $sub): Builder => $sub
@@ -1043,9 +1173,15 @@ class SeoProjectResource extends SeoPanelResource
             'run-history' => Pages\ListSeoProjectRuns::route('/{record}/runs'),
             'view-run-step' => Pages\ViewSeoProjectRunStep::route('/runs/{run}/items/{article}'),
             'view-run' => Pages\ViewSeoProjectRun::route('/runs/{run}'),
+            'publishing-queue' => Pages\ContentProjectPublishingQueue::route('/{record}/publishing-queue'),
             'view' => Pages\ViewSeoProject::route('/{record}'),
             'edit' => Pages\EditSeoProject::route('/{record}/edit'),
         ];
+    }
+
+    public static function getPublishingQueueUrl(SeoProject $project): string
+    {
+        return static::getUrl('publishing-queue', ['record' => $project]);
     }
 
     public static function getRunHistoryUrl(SeoProject $project): string
@@ -1162,11 +1298,44 @@ class SeoProjectResource extends SeoPanelResource
 
     public static function createProjectWorkflowRun(SeoProject $project, string $mode, ?array $settings = null): SeoProjectRun
     {
-        $runner = app(SeoProjectWorkflowRunService::class);
-        $limit = $mode === SeoProjectRun::MODE_TEST ? SeoProjectWorkflowRunService::TEST_RUN_LIMIT : null;
-        $run = $runner->startRun($project, $mode, $settings);
+        $itemRefs = [];
+        if (is_array($settings) && isset($settings['task_ids']) && is_array($settings['task_ids'])) {
+            $itemRefs = array_values($settings['task_ids']);
+        }
 
-        return $runner->prepareRunQueue($project, $run, $limit);
+        $result = app(ContentProjectCommandBus::class)->dispatch(
+            new GenerateProjectItemsCommand(
+                (int) $project->getKey(),
+                $itemRefs,
+                $mode,
+            ),
+            ActorContext::user(
+                auth()->id() !== null ? (int) auth()->id() : null,
+                (int) ($project->site_id ?? 0) ?: null,
+            ),
+        );
+
+        if (! $result->success) {
+            throw new \RuntimeException($result->message);
+        }
+
+        $executionRef = $result->metadata['execution_ref'] ?? null;
+        if (! is_string($executionRef) || $executionRef === '') {
+            throw new \RuntimeException('Generate command did not return execution_ref.');
+        }
+
+        $runId = ContentProjectPublicRef::decodeExecution($executionRef);
+        $run = SeoProjectRun::query()->find($runId);
+        if (! $run instanceof SeoProjectRun) {
+            throw new \RuntimeException('Workflow run not found after generate command.');
+        }
+
+        // prepareRunQueue đã chạy trong GenerateProjectItemsHandler — chỉ update settings nếu cần.
+        if (is_array($settings) && $settings !== []) {
+            $run = app(SeoProjectWorkflowRunService::class)->updateRunSettings($run, $settings);
+        }
+
+        return $run;
     }
 
     public static function dispatchProjectWorkflowRun(SeoProject $project, string $mode): mixed
@@ -1224,10 +1393,10 @@ class SeoProjectResource extends SeoPanelResource
     /**
      * @return array<string, array<int, string>>
      */
-    public static function groupedWriterSelectOptions(): array
+    public static function groupedWriterSelectOptions(?string $month = null): array
     {
         $service = app(\App\Addons\SeoContentAi\Services\ContentProjectStaffAvailabilityService::class);
-        $grouped = $service->groupedSelectOptions();
+        $grouped = $service->groupedSelectOptions($month);
         $result = [];
 
         if ($grouped['unassigned'] !== []) {

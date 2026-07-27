@@ -266,6 +266,48 @@ return [
     ],
 
     /**
+     * Keyword Intelligence — workspace/import/clustering/topical map/conversion.
+     * Xem docs/KEYWORD_INTELLIGENCE.md.
+     */
+    'keyword_intelligence' => [
+        'scoring' => [
+            'version' => '1',
+            'weights' => [
+                'relevance' => 0.30,
+                'business_value' => 0.25,
+                'opportunity' => 0.25,
+                'intent' => 0.10,
+            ],
+            'penalties' => [
+                'cannibalization' => (float) env('SEO_KI_SCORING_PENALTY_CANNIBALIZATION', 15),
+                'existing_coverage' => (float) env('SEO_KI_SCORING_PENALTY_EXISTING_COVERAGE', 10),
+            ],
+        ],
+
+        'limits' => [
+            'max_workspaces_per_site' => (int) env('SEO_KI_MAX_WORKSPACES_PER_SITE', 50),
+            'max_keywords_per_import' => (int) env('SEO_KI_MAX_KEYWORDS_PER_IMPORT', 2000),
+            'max_keywords_per_workspace' => (int) env('SEO_KI_MAX_KEYWORDS_PER_WORKSPACE', 20000),
+            'max_clusters_per_convert' => (int) env('SEO_KI_MAX_CLUSTERS_PER_CONVERT', 200),
+            /** Số cluster trong 1 lần convert vượt ngưỡng này bắt buộc confirmation_token. */
+            'convert_confirmation_threshold' => (int) env('SEO_KI_CONVERT_CONFIRMATION_THRESHOLD', 10),
+        ],
+
+        'clustering' => [
+            'default_strategy' => env('SEO_KI_DEFAULT_CLUSTERING_STRATEGY', 'balanced'),
+        ],
+
+        'topical_map' => [
+            'max_depth' => (int) env('SEO_KI_TOPICAL_MAP_MAX_DEPTH', 3),
+        ],
+
+        'cannibalization' => [
+            /** Số mapping "current_content" trên cùng keyword được coi là rủi ro. */
+            'multi_mapping_threshold' => (int) env('SEO_KI_CANNIBALIZATION_MULTI_MAPPING_THRESHOLD', 2),
+        ],
+    ],
+
+    /**
      * Product Gallery Mode 1 — sprite validator + original fallback.
      * Nghi ngờ → fallback gốc; không chase collage hoàn hảo.
      */

@@ -7,13 +7,17 @@ namespace App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages;
 use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoCreateRecord;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoProject;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CreateContentProjectCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionCodes;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
 use App\Addons\SeoContentAi\Services\ContentProjectStaffAvailabilityService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
-use App\Models\User;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectMonthContext;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
+use RuntimeException;
 
 class CreateSeoProject extends SeoCreateRecord
 {
@@ -25,20 +29,35 @@ class CreateSeoProject extends SeoCreateRecord
      */
     protected function mutateFormDataBeforeFill(array $data): array
     {
-        $writerId = (int) request()->query('writer_id', 0);
-        if ($writerId <= 0) {
+        $monthRaw = request()->query('month');
+        $month = ContentProjectMonthContext::parseOrNull(
+            is_string($monthRaw) ? $monthRaw : null,
+        );
+        if ($month !== null) {
+            $data['month'] = ContentProjectMonthContext::toDateString($month);
+        }
+
+        $staffId = $this->resolveStaffIdFromQuery();
+        if ($staffId <= 0) {
             return $data;
         }
 
         $service = app(ContentProjectStaffAvailabilityService::class);
-        if (! $service->unassignedStaffQuery()->whereKey($writerId)->exists()
-            && ! array_key_exists($writerId, SeoProjectResource::userSelectOptions())) {
+        $monthForCheck = $month ?? ContentProjectMonthContext::normalize(
+            isset($data['month']) ? (string) $data['month'] : null,
+        );
+
+        $isAssignable = $service->baseAssignableStaffQuery()->whereKey($staffId)->exists()
+            || array_key_exists($staffId, SeoProjectResource::userSelectOptions());
+
+        if (! $isAssignable) {
             return $data;
         }
 
-        $data['user_id'] = $writerId;
-        $data['unassigned_staff_ids'] = $service->isUnassigned($writerId) ? [$writerId] : [];
-        $data['assign_from_unassigned'] = $service->isUnassigned($writerId);
+        $data['user_id'] = $staffId;
+        $isUnassigned = $service->isUnassigned($staffId, $monthForCheck);
+        $data['unassigned_staff_ids'] = $isUnassigned ? [$staffId] : [];
+        $data['assign_from_unassigned'] = $isUnassigned;
 
         return $data;
     }
@@ -84,8 +103,9 @@ class CreateSeoProject extends SeoCreateRecord
 
         $userId = (int) ($data['user_id'] ?? 0);
         $fromUnassigned = filter_var($data['assign_from_unassigned'] ?? false, FILTER_VALIDATE_BOOLEAN);
-        if ($fromUnassigned && $userId > 0) {
-            $this->assertStillUnassigned($userId);
+        if ($userId > 0 && ($fromUnassigned || $this->shouldEnforceStaffMonthUniqueness())) {
+            app(ContentProjectStaffAvailabilityService::class)
+                ->assertUnassignedForMonth($userId, $month !== '' ? $month : null);
         }
 
         $tasksData = $data['tasks_data'] ?? [];
@@ -108,22 +128,75 @@ class CreateSeoProject extends SeoCreateRecord
      */
     protected function handleRecordCreation(array $data): Model
     {
-        $tasksData = $this->form->getState()['tasks_data'] ?? [];
+        $formState = $this->form->getState();
+        $tasksData = $formState['tasks_data'] ?? [];
         $userId = (int) ($data['user_id'] ?? 0);
+        $month = (string) ($data['month'] ?? '');
+        $siteId = (int) ($data['site_id'] ?? 0);
         $assignFromUnassigned = filter_var(
-            $this->form->getState()['assign_from_unassigned'] ?? false,
+            $formState['assign_from_unassigned'] ?? false,
             FILTER_VALIDATE_BOOLEAN,
         );
 
-        return DB::connection('omi_seo_ai')->transaction(function () use ($data, $tasksData, $userId, $assignFromUnassigned): Model {
-            if ($assignFromUnassigned && $userId > 0) {
-                $this->assertStillUnassigned($userId);
+        $staffService = app(ContentProjectStaffAvailabilityService::class);
+        $taskSync = app(SeoProjectTaskSyncService::class);
+        $bus = app(ContentProjectCommandBus::class);
+        $authUserId = auth()->id() !== null ? (int) auth()->id() : null;
+
+        return $staffService->withAssignmentLock(function () use (
+            $data,
+            $tasksData,
+            $userId,
+            $month,
+            $siteId,
+            $assignFromUnassigned,
+            $staffService,
+            $taskSync,
+            $bus,
+            $authUserId,
+        ): Model {
+            if ($userId > 0 && ($assignFromUnassigned || $this->shouldEnforceStaffMonthUniqueness())) {
+                $staffService->assertUnassignedForMonth($userId, $month !== '' ? $month : null);
+            }
+
+            $lockToken = substr($taskSync->tasksSignature(
+                $tasksData,
+                $siteId > 0 ? $siteId : null,
+            ), 0, 12);
+            $idempotencyKey = sprintf(
+                'ui:%d:create:%d:%s:%s',
+                $authUserId ?? 0,
+                $siteId,
+                $month,
+                $lockToken,
+            );
+
+            $result = $bus->dispatch(
+                new CreateContentProjectCommand($data, $tasksData),
+                ActorContext::user(
+                    $authUserId,
+                    $siteId > 0 ? $siteId : null,
+                    $idempotencyKey,
+                ),
+            );
+
+            if (! $result->success) {
+                if ($result->code === ContentProjectActionCodes::VALIDATION_FAILED) {
+                    throw ValidationException::withMessages([
+                        'data' => $result->message,
+                    ]);
+                }
+
+                throw new RuntimeException($result->message);
+            }
+
+            $projectId = $result->projectId;
+            if ($projectId === null || $projectId <= 0) {
+                throw new RuntimeException('Project created but ID missing from command result.');
             }
 
             /** @var SeoProject $project */
-            $project = static::getModel()::create($data);
-
-            app(SeoProjectTaskSyncService::class)->sync($project, $tasksData);
+            $project = SeoProject::query()->findOrFail($projectId);
 
             return $project;
         });
@@ -137,22 +210,21 @@ class CreateSeoProject extends SeoCreateRecord
         return SeoProjectResource::getUrl('edit', ['record' => $record]);
     }
 
-    private function assertStillUnassigned(int $userId): void
+    /**
+     * UI + spec: mỗi staff tối đa 1 Content Project / tháng (không unique index DB).
+     */
+    private function shouldEnforceStaffMonthUniqueness(): bool
     {
-        $service = app(ContentProjectStaffAvailabilityService::class);
-        if ($service->isUnassigned($userId)) {
-            return;
+        return true;
+    }
+
+    private function resolveStaffIdFromQuery(): int
+    {
+        $staff = (int) request()->query('staff', 0);
+        if ($staff > 0) {
+            return $staff;
         }
 
-        $user = User::query()->find($userId);
-        $label = $user instanceof User
-            ? $service->formatLabel($user)
-            : '#'.$userId;
-
-        throw ValidationException::withMessages([
-            'data.user_id' => __('seo-content-ai::filament.projects.unassigned_staff_race', [
-                'name' => $label,
-            ]),
-        ]);
+        return (int) request()->query('writer_id', 0);
     }
 }

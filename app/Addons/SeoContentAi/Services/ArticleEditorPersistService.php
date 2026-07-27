@@ -5,8 +5,12 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectArticleMembership;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
+use Carbon\Carbon;
 
 final class ArticleEditorPersistService
 {
@@ -17,6 +21,8 @@ final class ArticleEditorPersistService
         private readonly ArticleWordPressSyncFlagService $syncFlags,
         private readonly ArticleKeywordLinkReconcileService $keywordLinks,
         private readonly SeoArticleRevisionService $revisions,
+        private readonly ContentProjectArticleMembership $contentProjectMembership,
+        private readonly ContentProjectPublishingQueueService $publishingQueue,
     ) {}
 
     /**
@@ -74,6 +80,8 @@ final class ArticleEditorPersistService
             'body' => $html,
             'user_id' => auth()->id(),
         ]);
+
+        $this->syncContentProjectScheduledPublish($article->fresh() ?? $article, $context->status, $publishAt);
 
         $this->postImages->syncFromHtml($article, $html);
         $article->refresh();
@@ -138,5 +146,35 @@ final class ArticleEditorPersistService
         }
 
         return $article->headings()->exists();
+    }
+
+    private function syncContentProjectScheduledPublish(
+        SeoArticle $article,
+        string $status,
+        mixed $publishAt,
+    ): void {
+        $task = $this->contentProjectMembership->activeTaskForArticle($article);
+        if (! $task instanceof SeoProjectTask) {
+            return;
+        }
+
+        $project = SeoProject::query()->find((int) $task->project_id);
+        if (! $project instanceof SeoProject) {
+            return;
+        }
+
+        $taskId = (int) $task->id;
+
+        // Schedule mirror qua Publishing Queue service (không stamp model ad-hoc).
+        if ($status === 'scheduled' && $publishAt !== null) {
+            $at = $publishAt instanceof Carbon ? $publishAt : Carbon::parse((string) $publishAt);
+            $this->publishingQueue->schedule($project, [$taskId], $at);
+
+            return;
+        }
+
+        if ($task->scheduled_publish_at !== null && $status !== 'scheduled') {
+            $this->publishingQueue->unschedule($project, [$taskId]);
+        }
     }
 }

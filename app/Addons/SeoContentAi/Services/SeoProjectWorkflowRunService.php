@@ -45,6 +45,10 @@ final class SeoProjectWorkflowRunService
 
     public function startRun(SeoProject $project, string $mode, ?array $settings = null): SeoProjectRun
     {
+        if ($project->archived_at !== null || $project->isArchive()) {
+            throw new \RuntimeException(__('seo-content-ai::filament.projects.archive_blocked_generate'));
+        }
+
         $snapshot = ContentProjectRunSettings::fromArray($settings)->toArray();
         $workflowSnap = $this->capturePublishWorkflowSnapshot();
         if ($workflowSnap !== null) {

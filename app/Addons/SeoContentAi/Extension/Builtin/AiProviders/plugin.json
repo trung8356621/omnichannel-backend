@@ -1,0 +1,10 @@
+{
+  "id": "ai-providers",
+  "name": "Built-in AI Providers",
+  "version": "1.0.0",
+  "sdk": 1,
+  "provider": "App\\Addons\\SeoContentAi\\Extension\\Builtin\\AiProviders\\AiProvidersExtensionProvider",
+  "providers": ["ai"],
+  "capabilities": [],
+  "requires": []
+}

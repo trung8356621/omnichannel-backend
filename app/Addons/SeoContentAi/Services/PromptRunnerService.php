@@ -5,15 +5,16 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
+use App\Addons\SeoContentAi\Extension\Resolvers\AiProviderResolver;
 use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoPromptPart;
-use App\Addons\SeoContentAi\Support\GeminiModelCatalog;
+use App\Addons\SeoContentAi\Services\Ai\GeminiGenerateContentClient;
 use App\Addons\SeoContentAi\Support\ImageToolType;
 use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Models\ApiConnection;
-use Illuminate\Support\Facades\Http;
+use RuntimeException;
 
 class PromptRunnerService
 {
@@ -23,6 +24,8 @@ class PromptRunnerService
         private readonly PromptMediaStorageService $promptMediaStorage,
         private readonly AiModelRouterService $aiModelRouter,
         private readonly AiModelsReadinessService $aiModelsReadiness,
+        private readonly AiProviderResolver $aiProviderResolver,
+        private readonly GeminiGenerateContentClient $geminiClient,
     ) {}
 
     private const ROLE_HEADINGS = [
@@ -1170,6 +1173,12 @@ class PromptRunnerService
             return [$media['url'], $media['usage'], $media['model_used']];
         }
 
+        try {
+            $this->aiProviderResolver->assertTextReady((string) $connection->provider);
+        } catch (RuntimeException $exception) {
+            throw new PromptRunException($exception->getMessage());
+        }
+
         return match ($connection->provider) {
             'gemini' => $this->callGemini($connection, $compiled, $model),
             'claude' => $this->callClaude($prompt, $variables, $model, $isTaskMode, $compiled),
@@ -1182,103 +1191,7 @@ class PromptRunnerService
      */
     private function callGemini(ApiConnection $connection, string $prompt, string $model): array
     {
-        $modelsToTry = GeminiModelCatalog::modelsToTry($model);
-
-        $lastError = null;
-
-        foreach ($modelsToTry as $model) {
-            foreach (['v1beta', 'v1'] as $apiVersion) {
-                try {
-                    return $this->requestGeminiGenerateContent($connection, $prompt, $model, $apiVersion);
-                } catch (PromptRunException $exception) {
-                    $lastError = $exception;
-                    if (! $this->isGeminiModelNotFoundError($exception->getMessage())
-                        && ! $this->isGeminiRetryableError($exception->getMessage())) {
-                        throw $exception;
-                    }
-                }
-            }
-        }
-
-        throw $lastError ?? new PromptRunException('Không gọi được Gemini API.');
-    }
-
-    private function isGeminiModelNotFoundError(string $message): bool
-    {
-        $lower = strtolower($message);
-
-        return str_contains($lower, 'not found')
-            || str_contains($lower, 'not supported for generatecontent')
-            || str_contains($lower, '404');
-    }
-
-    private function isGeminiRetryableError(string $message): bool
-    {
-        $lower = strtolower($message);
-
-        return str_contains($lower, 'high demand')
-            || str_contains($lower, 'overloaded')
-            || str_contains($lower, 'resource exhausted')
-            || str_contains($lower, '429')
-            || str_contains($lower, '503');
-    }
-
-    /**
-     * @return array{0: string, 1: array<string, mixed>|null}
-     */
-    private function requestGeminiGenerateContent(
-        ApiConnection $connection,
-        string $prompt,
-        string $model,
-        string $apiVersion,
-    ): array {
-        $url = sprintf(
-            'https://generativelanguage.googleapis.com/%s/models/%s:generateContent',
-            $apiVersion,
-            rawurlencode($model),
-        );
-
-        $response = Http::timeout(180)
-            ->acceptJson()
-            ->withQueryParameters(['key' => $connection->api_key])
-            ->post($url, [
-                'contents' => [
-                    [
-                        'parts' => [
-                            ['text' => $prompt],
-                        ],
-                    ],
-                ],
-            ]);
-
-        if (! $response->successful()) {
-            $message = $response->json('error.message')
-                ?? $response->json('error.status')
-                ?? $response->body();
-
-            throw new PromptRunException(
-                'Gemini API lỗi ('.$model.', '.$apiVersion.'): '.$this->truncateError((string) $message),
-            );
-        }
-
-        $text = collect($response->json('candidates.0.content.parts', []))
-            ->pluck('text')
-            ->filter()
-            ->implode("\n");
-
-        if ($text === '') {
-            $blockReason = $response->json('candidates.0.finishReason')
-                ?? $response->json('promptFeedback.blockReason');
-
-            throw new PromptRunException(
-                'Gemini không trả về nội dung'
-                .($blockReason ? ' ('.$blockReason.')' : '').'.',
-            );
-        }
-
-        $usage = $response->json('usageMetadata');
-
-        return [$text, is_array($usage) ? $usage : null];
+        return $this->geminiClient->generate($connection, $prompt, $model);
     }
 
     /**
@@ -1302,11 +1215,6 @@ class PromptRunnerService
             $model !== '' ? $model : null,
             trim($compiled) !== '' ? $compiled : null,
         );
-    }
-
-    private function truncateError(string $message): string
-    {
-        return mb_strlen($message) > 500 ? mb_substr($message, 0, 500).'…' : $message;
     }
 
     private function enforceMediaOnlyOutput(string $output, string $toolType): string

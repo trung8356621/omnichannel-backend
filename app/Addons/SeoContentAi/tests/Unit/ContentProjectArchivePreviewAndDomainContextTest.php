@@ -71,7 +71,25 @@ final class ContentProjectArchivePreviewAndDomainContextTest extends TestCase
         $source = $this->readMethodSource($method);
 
         self::assertStringContainsString('applyGlobalSiteScopeToProjectQuery', $source);
-        self::assertStringContainsString('activeProjects()', $source);
+        self::assertStringContainsString('currentArchive', $source);
+        self::assertStringNotContainsString('activeProjects()', $source);
+    }
+
+    public function test_project_record_url_routes_archived_to_archive_preview(): void
+    {
+        $method = new ReflectionMethod(SeoProjectResource::class, 'projectRecordUrl');
+        $source = $this->readMethodSource($method);
+
+        self::assertStringContainsString('isProjectArchived()', $source);
+        self::assertStringContainsString("getUrl('archive-preview'", $source);
+        self::assertStringContainsString('currentArchiveIdFor', $source);
+
+        $resourceSource = (string) file_get_contents((new ReflectionClass(SeoProjectResource::class))->getFileName());
+        self::assertStringContainsString('ViewAction::make()', $resourceSource);
+        self::assertStringContainsString(
+            '->url(fn (SeoProject $record): string => static::projectRecordUrl($record))',
+            $resourceSource,
+        );
     }
 
     public function test_project_can_view_does_not_use_global_scoped_eloquent_query(): void
@@ -131,11 +149,14 @@ final class ContentProjectArchivePreviewAndDomainContextTest extends TestCase
         self::assertTrue($ref->hasMethod('unassignedStaffQuery'));
         self::assertTrue($ref->hasMethod('isUnassigned'));
         self::assertTrue($ref->hasMethod('widgetPayload'));
+        self::assertTrue($ref->hasMethod('assignedStaffIdsForMonth'));
 
         $source = (string) file_get_contents((string) $ref->getFileName());
         self::assertStringContainsString('ROLE_STAFF', $source);
         self::assertStringContainsString('SEO_ROLE_CONTENT_MANAGER', $source);
         self::assertStringContainsString('activeProjects()', $source);
+        self::assertStringContainsString('assignedStaffIdsForMonth', $source);
+        self::assertStringContainsString('whereDate(\'month\'', $source);
         self::assertStringContainsString('writer_id', $source);
     }
 
@@ -143,18 +164,25 @@ final class ContentProjectArchivePreviewAndDomainContextTest extends TestCase
     {
         $source = (string) file_get_contents((new ReflectionClass(ListSeoProjects::class))->getFileName());
 
-        self::assertStringContainsString('UnassignedContentProjectStaffWidget', $source);
+        self::assertStringContainsString('planningMonth', $source);
+        self::assertStringContainsString('list-seo-projects', $source);
         self::assertTrue(class_exists(UnassignedContentProjectStaffWidget::class));
+        self::assertFalse(UnassignedContentProjectStaffWidget::canView());
     }
 
     public function test_create_project_validates_unassigned_race_in_transaction(): void
     {
-        $source = (string) file_get_contents((new ReflectionClass(CreateSeoProject::class))->getFileName());
+        $createSource = (string) file_get_contents((new ReflectionClass(CreateSeoProject::class))->getFileName());
 
-        self::assertStringContainsString("DB::connection('omi_seo_ai')->transaction", $source);
-        self::assertStringContainsString('assertStillUnassigned', $source);
-        self::assertStringContainsString('unassigned_staff_race', $source);
-        self::assertStringContainsString('writer_id', $source);
+        self::assertStringContainsString('withAssignmentLock', $createSource);
+        self::assertStringContainsString('assertUnassignedForMonth', $createSource);
+        self::assertStringContainsString('writer_id', $createSource);
+        self::assertStringContainsString("request()->query('staff'", $createSource);
+
+        $serviceSource = (string) file_get_contents(
+            (new ReflectionClass(ContentProjectStaffAvailabilityService::class))->getFileName(),
+        );
+        self::assertStringContainsString('unassigned_staff_race', $serviceSource);
     }
 
     public function test_should_apply_global_site_scope_helper_exists(): void

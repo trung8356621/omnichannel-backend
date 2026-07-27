@@ -78,6 +78,12 @@ final class SeoAccessControl
         return self::rank(self::effectiveRole()) >= self::rank(self::ROLE_MANAGER);
     }
 
+    /** Operation Center — manager/admin only, không expose khách. */
+    public static function canAccessContentOperations(): bool
+    {
+        return self::canAccessManagerFeatures();
+    }
+
     public static function canArchiveContentProjects(): bool
     {
         return self::canMutateInSeoPanel() && self::canAccessManagerFeatures();

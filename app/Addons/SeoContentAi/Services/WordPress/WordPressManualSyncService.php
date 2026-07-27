@@ -11,6 +11,11 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleEditorBundleApplyService;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncLeaseService;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\PublishProjectItemsNowCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectArticleMembership;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectWorkspaceSaveService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\User;
@@ -32,6 +37,9 @@ final class WordPressManualSyncService
         private readonly ArticleWpSyncQueueService $syncQueue,
         private readonly ArticleWpSyncLeaseService $lease,
         private readonly BusinessActionDispatcher $actions,
+        private readonly ContentProjectArticleMembership $contentProjectMembership,
+        private readonly ContentProjectWorkspaceSaveService $workspaceSave,
+        private readonly ContentProjectCommandBus $contentProjectCommandBus,
     ) {}
 
     /**
@@ -44,6 +52,11 @@ final class WordPressManualSyncService
         abort_unless(SeoAccessControl::canSyncArticlesToWordPress(), 403);
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
         abort_unless($actor->getKey() > 0, 403);
+
+        // Content Project active: Sync WP = Save Workspace only (no WP API / no publish).
+        if ($this->contentProjectMembership->belongsToActiveContentProject($article)) {
+            return $this->workspaceSave->saveFromEditorBundle($article, $bundle, $actor, $initiatedFrom);
+        }
 
         $bundle = $this->syncQueue->applyPublishImmediatelyToBundle($bundle);
         $context = ArticleEditorSaveContext::fromBundle($article, $bundle);
@@ -110,6 +123,21 @@ final class WordPressManualSyncService
         abort_unless(SeoAccessControl::canSyncArticlesToWordPress(), 403);
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
+        if ($this->contentProjectMembership->belongsToActiveContentProject($article)) {
+            return [
+                'success' => true,
+                'status' => 'workspace_saved',
+                'queued' => false,
+                'workspace_only' => true,
+                'message' => __('seo-content-ai::filament.automation.content_project_workspace_saved'),
+                'notification' => [
+                    'title' => __('seo-content-ai::filament.automation.content_project_workspace_saved_title'),
+                    'body' => __('seo-content-ai::filament.automation.content_project_workspace_saved'),
+                    'status' => 'success',
+                ],
+            ];
+        }
+
         return $this->enqueueManual($article, $actor, $initiatedFrom, ['mode' => 'sync']);
     }
 
@@ -122,6 +150,56 @@ final class WordPressManualSyncService
         abort_if(SeoAccessControl::isContentManager(), 403);
         abort_unless(SeoAccessControl::canSyncArticlesToWordPress(), 403);
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
+
+        // Content Project: publish qua Command Bus (PublishProjectItemsNowCommand).
+        $task = $this->contentProjectMembership->activeTaskForArticle($article);
+        if ($task !== null) {
+            $siteId = (int) ($article->site_id ?? 0) ?: null;
+            $result = $this->contentProjectCommandBus->dispatch(
+                new PublishProjectItemsNowCommand(
+                    projectRef: (int) ($task->project_id ?? 0),
+                    itemRefs: [(int) $task->id],
+                ),
+                ActorContext::user((int) $actor->id, $siteId),
+            );
+
+            RuntimeLogger::info('content_project_publish_queued', [
+                'article_id' => (int) $article->id,
+                'task_id' => (int) $task->id,
+                'project_id' => (int) ($task->project_id ?? 0) ?: null,
+                'actor_id' => (int) $actor->id,
+                'initiated_from' => $initiatedFrom,
+                'result_code' => $result->code,
+            ]);
+
+            if (! $result->success) {
+                return [
+                    'success' => false,
+                    'status' => 'failed',
+                    'queued' => false,
+                    'workspace_only' => false,
+                    'message' => $result->message,
+                    'notification' => [
+                        'title' => __('seo-content-ai::filament.automation.content_project_publish_queued_title'),
+                        'body' => $result->message,
+                        'status' => 'danger',
+                    ],
+                ];
+            }
+
+            return [
+                'success' => true,
+                'status' => 'queued_for_publish',
+                'queued' => true,
+                'workspace_only' => false,
+                'message' => __('seo-content-ai::filament.automation.content_project_publish_queued'),
+                'notification' => [
+                    'title' => __('seo-content-ai::filament.automation.content_project_publish_queued_title'),
+                    'body' => __('seo-content-ai::filament.automation.content_project_publish_queued'),
+                    'status' => 'success',
+                ],
+            ];
+        }
 
         return $this->enqueueManual(
             $article,
