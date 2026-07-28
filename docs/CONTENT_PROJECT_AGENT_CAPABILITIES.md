@@ -26,3 +26,13 @@ Filament `user`: UI auth may skip preview token.
 - WordPress client / WP Schedule
 - Direct `publish_queue_status` model updates
 - AI prompt/output in business audit
+
+## Additive namespaces (Keyword / SERP / GSC)
+
+Ngoài `content_project.*`, registry cũng đăng ký write capabilities:
+
+- `keyword_intelligence.*`
+- `serp_intelligence.*`
+- `gsc_intelligence.*` (Phase 5)
+
+Gateway `READ_CAPABILITIES` + MCP catalog expose **read** surfaces cho các namespace này (GSC MCP = read-only list). Chi tiết CommandBus/refs: [KEYWORD_INTELLIGENCE.md](KEYWORD_INTELLIGENCE.md), [SERP_INTELLIGENCE.md](SERP_INTELLIGENCE.md), [GSC_INTELLIGENCE.md](GSC_INTELLIGENCE.md).

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers;
 
-use App\Addons\SeoContentAi\Models\KeywordIntelligence\SeoKeywordWorkspace;
+use App\Addons\SeoContentAi\Models\KeywordIntelligence\SeoKeywordAnalysisOperation;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResult;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Contracts\ContentProjectCommand;
@@ -14,6 +14,7 @@ use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\KeywordInte
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Support\KeywordIntelligenceTenantGuard;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\KeywordWorkspaceAnalysisService;
 use InvalidArgumentException;
+use RuntimeException;
 use Throwable;
 
 final class AnalyzeKeywordWorkspaceHandler extends AbstractKeywordIntelligenceHandler
@@ -37,30 +38,48 @@ final class AnalyzeKeywordWorkspaceHandler extends AbstractKeywordIntelligenceHa
             $this->tenantGuard->assertCanAccessWorkspace($workspace, $actor);
             $this->assertNotArchived($workspace);
 
-            return $this->runAnalysis($workspace, $command);
-        });
-    }
+            $options = array_merge($command->options, [
+                'strategy' => $command->clusteringStrategy,
+                'keyword_refs' => $command->keywordRefs,
+                'idempotency_key' => $command->idempotencyKey,
+                'preserve_manual_overrides' => $command->options['preserve_manual_overrides'] ?? true,
+            ]);
 
-    private function runAnalysis(SeoKeywordWorkspace $workspace, AnalyzeKeywordWorkspaceCommand $command): ContentProjectActionResult
-    {
-        try {
-            $result = $this->analysis->analyze($workspace, $command->clusteringStrategy);
-        } catch (Throwable $e) {
-            return ContentProjectActionResult::fail(
-                KeywordIntelligenceActionCodes::FAILED,
-                'Analysis failed: '.$e->getMessage(),
-                metadata: ['workspace_ref' => $workspace->public_ref],
+            try {
+                $result = $this->analysis->analyze($workspace, $options);
+            } catch (RuntimeException $e) {
+                if (str_contains($e->getMessage(), 'analysis_already_processing')) {
+                    return ContentProjectActionResult::fail(
+                        KeywordIntelligenceActionCodes::ANALYSIS_ALREADY_PROCESSING,
+                        $e->getMessage(),
+                        metadata: ['workspace_ref' => $workspace->public_ref],
+                    );
+                }
+
+                throw $e;
+            } catch (Throwable $e) {
+                return ContentProjectActionResult::fail(
+                    KeywordIntelligenceActionCodes::FAILED,
+                    'Analysis failed: '.$e->getMessage(),
+                    metadata: ['workspace_ref' => $workspace->public_ref],
+                );
+            }
+
+            $code = (string) ($result['result_code'] ?? KeywordIntelligenceActionCodes::ANALYZED);
+            if (($result['status'] ?? '') === 'partially_completed') {
+                $code = KeywordIntelligenceActionCodes::ANALYSIS_PARTIAL;
+            }
+
+            return ContentProjectActionResult::ok(
+                $code,
+                'Workspace analysis accepted/completed.',
+                metadata: [
+                    'workspace_ref' => $workspace->public_ref,
+                    'operation_ref' => $result['operation_ref'] ?? null,
+                    'summary' => $result['summary'] ?? [],
+                    'status' => $result['status'] ?? null,
+                ],
             );
-        }
-
-        return ContentProjectActionResult::ok(
-            KeywordIntelligenceActionCodes::ANALYZED,
-            'Workspace analysis completed.',
-            metadata: [
-                'workspace_ref' => $workspace->public_ref,
-                'operation_ref' => $result['operation_ref'],
-                'summary' => $result['summary'],
-            ],
-        );
+        });
     }
 }

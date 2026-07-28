@@ -97,3 +97,11 @@ See [CONTENT_PROJECT_AGENT_PLANNER.md](CONTENT_PROJECT_AGENT_PLANNER.md).
 - `CONTENT_PROJECT_COMMAND_BUS_CUTOVER.md`
 - `AGENT_CAPABILITIES.md`
 - `PUBLISHING_DELIVERY.md`
+
+## Phase 4 — SERP collection ops (additive)
+
+SERP collect uses `SerpCollectionLockService` keys `serp-collection:{srpq_ref}` — visible in Command Bus monitor when `serp_intelligence.collect_snapshots` dispatches. Stages: `collecting` → `completed` | `partially_completed` | `failed`. See [SERP_SNAPSHOT_MODEL.md](SERP_SNAPSHOT_MODEL.md).
+
+## Phase 5 — GSC sync ops (additive)
+
+GSC sync uses `GscSyncLockService` keys `gsc-sync:{property_ref}`. Stages via `GscSyncOperationService`: `preparing` → … → `completed` | `partially_completed` | `failed`. See [GSC_SYNC_OPERATIONS.md](GSC_SYNC_OPERATIONS.md).

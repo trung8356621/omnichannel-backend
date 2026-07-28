@@ -10,12 +10,15 @@ namespace App\Addons\SeoContentAi\Enums\KeywordIntelligence;
 enum KeywordAnalysisStage: string
 {
     case Normalizing = 'normalizing';
+    case Deduplicate = 'deduplicate';
     case ClassifyingIntent = 'classifying_intent';
+    case Scoring = 'scoring';
     case MappingContent = 'mapping_content';
     case Clustering = 'clustering';
+    /** @deprecated Phase 2 pipeline skips topical map — kept for BC */
     case BuildingTopics = 'building_topics';
-    case Scoring = 'scoring';
     case DetectingCannibalization = 'detecting_cannibalization';
+    case Finalize = 'finalize';
     case Completed = 'completed';
     case Failed = 'failed';
 }

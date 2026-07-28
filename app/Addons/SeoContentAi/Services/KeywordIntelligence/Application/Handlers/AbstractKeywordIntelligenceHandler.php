@@ -142,6 +142,10 @@ abstract class AbstractKeywordIntelligenceHandler implements ContentProjectComma
             return ContentProjectActionResult::fail(KeywordIntelligenceActionCodes::WORKSPACE_ARCHIVED, $message);
         }
 
+        if (str_starts_with($message, 'topical_map.') || str_starts_with($message, 'keyword.conversion.')) {
+            return ContentProjectActionResult::fail($message, $message);
+        }
+
         return ContentProjectActionResult::fail(KeywordIntelligenceActionCodes::FAILED, $message);
     }
 }

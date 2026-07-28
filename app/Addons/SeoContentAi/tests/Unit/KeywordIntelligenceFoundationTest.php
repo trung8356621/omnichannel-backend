@@ -20,24 +20,36 @@ final class KeywordIntelligenceFoundationTest extends TestCase
     public function test_normalization_trims_punctuation_keeps_vietnamese(): void
     {
         $svc = new KeywordNormalizationService;
-        self::assertSame('dịch vụ seo tổng thể', $svc->normalize('  - Dịch vụ SEO tổng thể:  '));
-        self::assertSame('Dịch vụ SEO tổng thể', $svc->displayKeyword('  - Dịch vụ SEO tổng thể:  '));
-        self::assertStringContainsString('ệ', $svc->displayKeyword('dịch vụ SEO tổng thể'));
+
+        // Use Unicode escapes so FTP/source encoding cannot corrupt expectations.
+        // dịch=d+ị, vụ=v+ụ, tổng=t+ổ+ng, thể=th+ể
+        $input = "  - D\u{1ECB}ch v\u{1EE5} SEO t\u{1ED5}ng th\u{1EC3}:  ";
+        $expectedNormalized = "d\u{1ECB}ch v\u{1EE5} seo t\u{1ED5}ng th\u{1EC3}";
+        $expectedDisplay = "D\u{1ECB}ch v\u{1EE5} SEO t\u{1ED5}ng th\u{1EC3}";
+
+        self::assertSame($expectedNormalized, $svc->normalize($input));
+        self::assertSame($expectedDisplay, $svc->displayKeyword($input));
+
+        $display = $svc->displayKeyword($expectedNormalized);
+        self::assertStringContainsString("\u{1ECB}", $display); // ị in dịch
+        self::assertStringContainsString("\u{1EC3}", $display); // ể in thể
+        self::assertNotSame('dich vu seo tong the', $svc->normalize($input));
     }
 
     public function test_near_duplicate_does_not_merge_different_entities(): void
     {
         $svc = new KeywordNormalizationService;
         self::assertFalse($svc->isNearDuplicate(
-            $svc->normalize('seo là gì'),
-            $svc->normalize('dịch vụ seo'),
+            $svc->normalize("seo l\u{00E0} g\u{00EC}"),
+            $svc->normalize("d\u{1ECB}ch v\u{1EE5} seo"),
         ));
     }
 
     public function test_intent_classifier_local_commercial(): void
     {
         $classifier = new KeywordIntentClassifier;
-        $result = $classifier->classify('dịch vụ seo tphcm', 'dịch vụ seo tphcm');
+        // ASCII markers already in classifier lists — no UTF-8 source dependency.
+        $result = $classifier->classify('dich vu seo tphcm', 'dich vu seo tphcm');
         self::assertContains($result['primary'], [
             KeywordSearchIntent::Local,
             KeywordSearchIntent::Mixed,
@@ -111,8 +123,16 @@ final class KeywordIntelligenceFoundationTest extends TestCase
             'create_workspace' => [$ns.'CreateKeywordWorkspaceCommand', 'keyword_intelligence.create_workspace'],
             'import_keywords' => [$ns.'ImportKeywordsCommand', 'keyword_intelligence.import_keywords'],
             'analyze_workspace' => [$ns.'AnalyzeKeywordWorkspaceCommand', 'keyword_intelligence.analyze_workspace'],
+            'analyze_keywords' => [$ns.'AnalyzeSelectedKeywordsCommand', 'keyword_intelligence.analyze_keywords'],
+            'cancel_analysis' => [$ns.'CancelKeywordAnalysisCommand', 'keyword_intelligence.cancel_analysis'],
             'approve_keywords' => [$ns.'ApproveKeywordsCommand', 'keyword_intelligence.approve_keywords'],
+            'exclude_keywords' => [$ns.'ExcludeKeywordsCommand', 'keyword_intelligence.exclude_keywords'],
+            'update_keyword' => [$ns.'UpdateKeywordClassificationCommand', 'keyword_intelligence.update_keyword'],
             'approve_clusters' => [$ns.'ApproveKeywordClustersCommand', 'keyword_intelligence.approve_clusters'],
+            'merge_clusters' => [$ns.'MergeKeywordClustersCommand', 'keyword_intelligence.merge_clusters'],
+            'split_cluster' => [$ns.'SplitKeywordClusterCommand', 'keyword_intelligence.split_cluster'],
+            'move_keywords' => [$ns.'MoveKeywordsToClusterCommand', 'keyword_intelligence.move_keywords'],
+            'review_cannibalization' => [$ns.'ReviewCannibalizationIssueCommand', 'keyword_intelligence.review_cannibalization'],
             'build_topical_map' => [$ns.'BuildTopicalMapCommand', 'keyword_intelligence.build_topical_map'],
             'preview_convert' => [$ns.'PreviewContentProjectFromClustersCommand', 'keyword_intelligence.preview_convert'],
             'convert_to_content_project' => [$ns.'CreateContentProjectFromKeywordClustersCommand', 'keyword_intelligence.convert_to_content_project'],

@@ -71,6 +71,16 @@ After archive: clear workspace context on session.
 
 CommandBus gắn `operation_id`/`operation_ref` vào result metadata. Agent poll `content_project.get_operation` (rate-limited).
 
+## Additive intelligence namespaces
+
+| Namespace | Gateway | MCP catalog (Phase status) |
+|-----------|---------|----------------------------|
+| `keyword_intelligence.*` | READ list/get + write via registry | Read tools listed; writes via registry auto-include pattern in docs |
+| `serp_intelligence.*` | READ list/get (+ writes registered) | Read tools listed |
+| `gsc_intelligence.*` | READ list/get in `READ_CAPABILITIES`; writes registered on CommandBus | **Read tools only** in `ContentProjectMcpToolCatalog` |
+
+GSC details: [GSC_INTELLIGENCE.md](GSC_INTELLIGENCE.md). SERP: [SERP_INTELLIGENCE.md](SERP_INTELLIGENCE.md).
+
 ## Related
 
 - [CONTENT_PROJECT_MCP_TOOLS.md](CONTENT_PROJECT_MCP_TOOLS.md)

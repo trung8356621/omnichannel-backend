@@ -49,23 +49,67 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\Unsched
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\UpdateContentProjectHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\UpdateContentProjectItemHandler;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\AnalyzeKeywordWorkspaceCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\AnalyzeSelectedKeywordsCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\ApproveKeywordClustersCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\ApproveKeywordsCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\ApproveTopicalMapCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\ArchiveKeywordWorkspaceCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\AttachClusterToTopicCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\BuildTopicalMapCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\CancelKeywordAnalysisCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\CancelTopicalMapBuildCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\CreateContentProjectFromKeywordClustersCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\CreateContentProjectFromTopicalMapCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\CreateKeywordWorkspaceCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\CreateTopicCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\DeleteEmptyTopicCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\DetachClusterFromTopicCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\ExcludeKeywordsCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\ImportKeywordsCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\MergeKeywordClustersCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\MoveClusterPrimaryTopicCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\MoveKeywordsToClusterCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\MoveTopicCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\PreviewContentProjectFromClustersCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\PreviewContentProjectFromTopicalMapCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\ReviewCannibalizationIssueCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\ReviewTopicalMapCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\SaveTopicalMapVersionCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\SetTopicRelationshipCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\SplitKeywordClusterCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\UpdateKeywordClassificationCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\UpdateTopicCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\AnalyzeKeywordWorkspaceHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\AnalyzeSelectedKeywordsHandler;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\ApproveKeywordClustersHandler;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\ApproveKeywordsHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\ApproveTopicalMapHandler;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\ArchiveKeywordWorkspaceHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\AttachClusterToTopicHandler;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\BuildTopicalMapHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\CancelKeywordAnalysisHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\CancelTopicalMapBuildHandler;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\CreateContentProjectFromKeywordClustersHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\CreateContentProjectFromTopicalMapHandler;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\CreateKeywordWorkspaceHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\CreateTopicHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\DeleteEmptyTopicHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\DetachClusterFromTopicHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\ExcludeKeywordsHandler;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\ImportKeywordsHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\MergeKeywordClustersHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\MoveClusterPrimaryTopicHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\MoveKeywordsToClusterHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\MoveTopicHandler;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\PreviewContentProjectFromClustersHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\PreviewContentProjectFromTopicalMapHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\ReviewCannibalizationIssueHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\ReviewTopicalMapHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\SaveTopicalMapVersionHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\SetTopicRelationshipHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\SplitKeywordClusterHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\UpdateKeywordClassificationHandler;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\UpdateTopicHandler;
 use Illuminate\Contracts\Foundation\Application;
 
 final class ContentProjectCommandBusRegistrar
@@ -102,12 +146,83 @@ final class ContentProjectCommandBusRegistrar
             CreateKeywordWorkspaceCommand::class => CreateKeywordWorkspaceHandler::class,
             ImportKeywordsCommand::class => ImportKeywordsHandler::class,
             AnalyzeKeywordWorkspaceCommand::class => AnalyzeKeywordWorkspaceHandler::class,
+            AnalyzeSelectedKeywordsCommand::class => AnalyzeSelectedKeywordsHandler::class,
+            CancelKeywordAnalysisCommand::class => CancelKeywordAnalysisHandler::class,
             ApproveKeywordsCommand::class => ApproveKeywordsHandler::class,
+            ExcludeKeywordsCommand::class => ExcludeKeywordsHandler::class,
+            UpdateKeywordClassificationCommand::class => UpdateKeywordClassificationHandler::class,
             ApproveKeywordClustersCommand::class => ApproveKeywordClustersHandler::class,
+            MergeKeywordClustersCommand::class => MergeKeywordClustersHandler::class,
+            SplitKeywordClusterCommand::class => SplitKeywordClusterHandler::class,
+            MoveKeywordsToClusterCommand::class => MoveKeywordsToClusterHandler::class,
+            ReviewCannibalizationIssueCommand::class => ReviewCannibalizationIssueHandler::class,
             BuildTopicalMapCommand::class => BuildTopicalMapHandler::class,
+            CancelTopicalMapBuildCommand::class => CancelTopicalMapBuildHandler::class,
+            CreateTopicCommand::class => CreateTopicHandler::class,
+            UpdateTopicCommand::class => UpdateTopicHandler::class,
+            MoveTopicCommand::class => MoveTopicHandler::class,
+            DeleteEmptyTopicCommand::class => DeleteEmptyTopicHandler::class,
+            AttachClusterToTopicCommand::class => AttachClusterToTopicHandler::class,
+            DetachClusterFromTopicCommand::class => DetachClusterFromTopicHandler::class,
+            MoveClusterPrimaryTopicCommand::class => MoveClusterPrimaryTopicHandler::class,
+            SetTopicRelationshipCommand::class => SetTopicRelationshipHandler::class,
+            ReviewTopicalMapCommand::class => ReviewTopicalMapHandler::class,
+            ApproveTopicalMapCommand::class => ApproveTopicalMapHandler::class,
+            SaveTopicalMapVersionCommand::class => SaveTopicalMapVersionHandler::class,
             PreviewContentProjectFromClustersCommand::class => PreviewContentProjectFromClustersHandler::class,
+            PreviewContentProjectFromTopicalMapCommand::class => PreviewContentProjectFromTopicalMapHandler::class,
             CreateContentProjectFromKeywordClustersCommand::class => CreateContentProjectFromKeywordClustersHandler::class,
+            CreateContentProjectFromTopicalMapCommand::class => CreateContentProjectFromTopicalMapHandler::class,
             ArchiveKeywordWorkspaceCommand::class => ArchiveKeywordWorkspaceHandler::class,
+
+            // SERP Intelligence — additive.
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\CreateSerpQueriesCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\CreateSerpQueriesHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\UpdateSerpQueryCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\UpdateSerpQueryHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\ArchiveSerpQueriesCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\ArchiveSerpQueriesHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\CollectSerpSnapshotsCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\CollectSerpSnapshotsHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\CancelSerpCollectionCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\CancelSerpCollectionHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\ImportSerpSnapshotCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\ImportSerpSnapshotHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\AnalyzeSerpSnapshotCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\AnalyzeSerpSnapshotHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\FetchSerpPageEvidenceCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\FetchSerpPageEvidenceHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\ReanalyzeSerpPageEvidenceCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\ReanalyzeSerpPageEvidenceHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\ValidateClusterWithSerpCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\ValidateClusterWithSerpHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\ValidateWorkspaceClustersWithSerpCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\ValidateWorkspaceClustersWithSerpHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\ApproveSerpClusterEvidenceCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\ApproveSerpClusterEvidenceHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\RejectSerpClusterEvidenceCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\RejectSerpClusterEvidenceHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\ApplySerpIntentSuggestionCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\ApplySerpIntentSuggestionHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\ApplySerpPageTypeSuggestionCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\ApplySerpPageTypeSuggestionHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\ApplySerpContentActionSuggestionCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\ApplySerpContentActionSuggestionHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\ReviewSerpContentGapCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\ReviewSerpContentGapHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\AcceptSerpContentGapCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\AcceptSerpContentGapHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\IgnoreSerpContentGapCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\IgnoreSerpContentGapHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\ResolveSerpContentGapCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\ResolveSerpContentGapHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\PreviewSplitClusterFromSerpEvidenceCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\PreviewSplitClusterFromSerpEvidenceHandler::class,
+            \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Commands\AddSerpFeatureKeywordsCommand::class => \App\Addons\SeoContentAi\Services\SerpIntelligence\Application\Handlers\AddSerpFeatureKeywordsHandler::class,
+
+            // GSC Intelligence — additive Phase 5.
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\CreateGscPropertyCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\CreateGscPropertyHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\UpdateGscPropertyCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\UpdateGscPropertyHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\PauseGscPropertyCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\PauseGscPropertyHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\ResumeGscPropertyCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\ResumeGscPropertyHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\ArchiveGscPropertyCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\ArchiveGscPropertyHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\SyncGscPerformanceDataCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\SyncGscPerformanceDataHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\CancelGscSyncCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\CancelGscSyncHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\ImportGscPerformanceDataCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\ImportGscPerformanceDataHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\RepairGscDateRangeCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\RepairGscDateRangeHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\MapGscQueryCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\MapGscQueryHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\UnmapGscQueryCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\UnmapGscQueryHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\MapGscPageCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\MapGscPageHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\UnmapGscPageCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\UnmapGscPageHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\RebuildGscAggregatesCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\RebuildGscAggregatesHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\DetectGscOpportunitiesCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\DetectGscOpportunitiesHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\ApproveGscOpportunityCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\ApproveGscOpportunityHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\RejectGscOpportunityCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\RejectGscOpportunityHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\IgnoreGscOpportunityCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\IgnoreGscOpportunityHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\ResolveGscOpportunityCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\ResolveGscOpportunityHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\PreviewAddGscQueriesToKeywordWorkspaceCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\PreviewAddGscQueriesToKeywordWorkspaceHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\AddGscQueriesToKeywordWorkspaceCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\AddGscQueriesToKeywordWorkspaceHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\PreviewCreateContentProjectFromGscOpportunitiesCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\PreviewCreateContentProjectFromGscOpportunitiesHandler::class,
+            \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\CreateContentProjectFromGscOpportunitiesCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\CreateContentProjectFromGscOpportunitiesHandler::class,
         ];
 
         foreach ($map as $command => $handler) {

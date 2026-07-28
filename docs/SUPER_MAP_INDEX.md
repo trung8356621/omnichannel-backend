@@ -30,7 +30,7 @@
 | [Automation Policy](CONTENT_PROJECT_AUTOMATION_POLICY.md) | Levels, hard gates, budget, triggers |
 | [Agent Approvals](CONTENT_PROJECT_AGENT_APPROVALS.md) | Human approval gates + Destroy Workspace preview |
 | [Plan Lifecycle](CONTENT_PROJECT_AGENT_PLAN_LIFECYCLE.md) | Status, retry, cancel, retention |
-| [MCP Tools](CONTENT_PROJECT_MCP_TOOLS.md) | content_project.* tool list + schemas |
+| [MCP Tools](CONTENT_PROJECT_MCP_TOOLS.md) | content_project.* + keyword/serp/gsc **read** tools (+ CP write/plan); schemas from registry/catalog |
 | [Agent Security](CONTENT_PROJECT_AGENT_SECURITY.md) | Scopes, policy, rate limit, error codes |
 | [Agent Workflows](CONTENT_PROJECT_AGENT_WORKFLOWS.md) | Create/Generate/Schedule/Archive flows |
 | [Settings, Prompts & AI Connections](MAP_SEO_SETTINGS.md) | Settings, PromptResource, PromptRunnerService, API Connections |
@@ -43,15 +43,21 @@
 | [Article Generate/Rewrite Hooks](automation/prompt/ARTICLE_GENERATE_REWRITE_HOOK_TEST.md) | `article.content.generate` + `article.content.rewrite` @0.1.0 — legacy Prompt template, markdown output |
 | **[Google Search Console — API Connections](MAP_SEO_GSC_API_CONNECTIONS.md)** | **OAuth GSC riêng, route `{id}`, master/mapping, gap multi-connection, checklist debug** |
 | [Team & Phân quyền](MAP_SEO_TEAM.md) | SeoAccessControl, RBAC, SEO roles, Team management |
-| [Performance & R&D Hub](MAP_SEO_PERFORMANCE_HUB.md) | `/performance-hub` (submenu Keywords), GSC KPI, rank keyword groups + SERP providers (queue `seo`), Quick Wins; Cannibalization tab `/keywords/cannibalization` |
+| [Performance & R&D Hub](MAP_SEO_PERFORMANCE_HUB.md) | `/performance-hub` — legacy GSC snapshot KPI + additive GSC Intelligence overlay; rank keyword groups + SERP providers; Cannibalization tab |
 | [Business Automation](automation/AUTOMATION_SERVICE_INVENTORY.md) | Tables `automation_*` + `business_events` trên **core** (`config/automation.php` / `AUTOMATION_DB_CONNECTION`); `automation:migrate-to-core`; [Cutover audit](automation/AUTOMATION_CUTOVER_AUDIT.md) |
 | [Database cleanup misplaced tables](DATABASE_CLEANUP_MISPLACED_TABLES.md) | `database:cleanup-misplaced-tables` — ownership registry; `automation_*` owner = core |
 | [Testing / PHPUnit discovery](TESTING.md) | Convention `*Test.php`, `phpunit.xml` suites (core + SeoContentAi), `php artisan test:doctor`, `composer test:ci` |
 | [Keyword Intelligence](KEYWORD_INTELLIGENCE.md) | Workspace/Keyword/Cluster pipeline, CommandBus + Agent Gateway `keyword_intelligence.*`, Filament `/seo/{hash}/keyword-intelligence` |
-| [Keyword Clustering](KEYWORD_CLUSTERING.md) | `KeywordClusterService` — strategy balanced/tight/loose, cluster enrich fields |
-| [Topical Map](TOPICAL_MAP.md) | `TopicalMapBuilder` — root/pillar theo search_intent, `SeoTopicClusterLink`, `SeoTopicalMapVersion` snapshot |
+| [Keyword Analysis Ops](KEYWORD_ANALYSIS_OPERATIONS.md) | Phase 2 analysis stages, lock, idempotency, manual override, missing metrics |
+| [Keyword Clustering](KEYWORD_CLUSTERING.md) | `KeywordClusterService` — strategy strict/balanced/broad, merge/split/move, approved protection |
+| [Topical Map](TOPICAL_MAP.md) | Phase 3 builder modes, hierarchy/coverage/conflicts, approve version, convert |
+| [Topical Map Build Ops](TOPICAL_MAP_BUILD_OPERATIONS.md) | Lock `keyword-topical-map-build`, stages, result codes |
+| [Topical Map Versions](TOPICAL_MAP_VERSIONS.md) | Draft/reviewed/approved/superseded + compact snapshot/diff |
+| [Topical Link Suggestions](TOPICAL_INTERNAL_LINK_SUGGESTIONS.md) | `seo_topical_link_suggestions` — suggest only |
+| [Keyword → Content Project](KEYWORD_TO_CONTENT_PROJECT.md) | Approved map version → preview/convert + cluster convert |
 | [Keyword Cannibalization](KEYWORD_CANNIBALIZATION.md) | `KeywordCannibalizationService` — keyword/cluster multi-article risk, risk_level, recommended_action |
-| [Keyword → Content Project](KEYWORD_TO_CONTENT_PROJECT.md) | `KeywordToContentProjectConverter` — preview/convert approved cluster → `CreateContentProjectCommand` |
+| [SERP Intelligence](SERP_INTELLIGENCE.md) | Phase 4 — snapshots, intent evidence, overlap validation, content gaps, provider contract. Satellites: [provider](SERP_PROVIDER_CONTRACT.md), [snapshot](SERP_SNAPSHOT_MODEL.md), [intent](SERP_INTENT_EVIDENCE.md), [cluster](SERP_CLUSTER_VALIDATION.md), [gaps](SERP_CONTENT_GAPS.md), [page fetch](SERP_PAGE_FETCH_SECURITY.md). GSC reconcile: [GSC_INTELLIGENCE.md](GSC_INTELLIGENCE.md) |
+| [GSC Intelligence](GSC_INTELLIGENCE.md) | Phase 5 — PARTIAL: facts/`omi_seo_ai`, CommandBus, providers `manual_import`+`fake_local`, agent/MCP **read** catalog, Performance Hub overlay (Sync CSV preview; other tabs placeholder). Satellites: [data model](GSC_DATA_MODEL.md), [provider](GSC_PROVIDER_CONTRACT.md), [sync](GSC_SYNC_OPERATIONS.md), [mapping](GSC_QUERY_PAGE_MAPPING.md), [opportunities](GSC_OPPORTUNITY_ENGINE.md), [cannibalization](GSC_CANNIBALIZATION.md), [CP performance](GSC_CONTENT_PROJECT_PERFORMANCE.md). OAuth core: [MAP_SEO_GSC_API_CONNECTIONS.md](MAP_SEO_GSC_API_CONNECTIONS.md) |
 | [Legacy test audit](testing/LEGACY_TEST_AUDIT.md) | Inventory fail buckets (ENV/CONFIG/FINAL/STALE), infra fixes, server runbook 512M |
 
 **Luồng chia:** UI editor (React + Alpine) → REST media/outline hoặc Livewire save → `omi_seo_ai` → sync WP qua `WordPressArticleSyncService`.

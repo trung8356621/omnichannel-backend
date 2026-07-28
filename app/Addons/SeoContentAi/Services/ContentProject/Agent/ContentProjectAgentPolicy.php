@@ -137,6 +137,24 @@ final class ContentProjectAgentPolicy
             return 'content-project:read';
         }
 
+        if (str_starts_with($capability, 'serp_intelligence.get_')
+            || str_starts_with($capability, 'serp_intelligence.list_')) {
+            return 'content-project:read';
+        }
+
+        if (str_starts_with($capability, 'serp_intelligence.')) {
+            return 'content-project:write';
+        }
+
+        if (str_starts_with($capability, 'gsc_intelligence.get_')
+            || str_starts_with($capability, 'gsc_intelligence.list_')) {
+            return 'content-project:read';
+        }
+
+        if (str_starts_with($capability, 'gsc_intelligence.')) {
+            return 'content-project:write';
+        }
+
         if (str_starts_with($capability, 'keyword_intelligence.')) {
             return 'content-project:write';
         }

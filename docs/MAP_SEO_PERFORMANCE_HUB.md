@@ -89,7 +89,7 @@ flowchart TB
 
 | Source | URL `source` | Sub-tab `tab` | Dữ liệu |
 |--------|--------------|---------------|--------|
-| **Google Search Console** | `gsc` | `queries`, `quick-wins` | `gsc_query_snapshot` (site meta) — scope theo global domain |
+| **Google Search Console** | `gsc` | `queries`, `quick-wins` | **Legacy:** `gsc_query_snapshot` (site meta). **Additive:** GSC Intelligence overlay (`gsc-intelligence-panel`) — Sync CSV preview; Overview/Queries/Pages/Opportunities placeholder — facts trên `omi_seo_ai` khi import/sync via CommandBus (xem [GSC_INTELLIGENCE.md](GSC_INTELLIGENCE.md)) |
 | **SERP providers** | `serpapi` / `serper` / `searchapi` | `rankings`, `serp-changes` | `KeywordRankSnapshot` + `SeoRankKeywordGroup` (không filter domain header) |
 
 Partials: `source-tabs`, `gsc-connection-strip`, `gsc-kpi-cards`, `gsc-chart`, `gsc-distribution`, `gsc-queries-table`, `rank-connection-strip` (provider icon strip inline), `rank-kpi-cards`, `ranking-distribution`, `rank-toolbar` (Chạy nhóm + group selector, cạnh rank sub-tabs), `rankings-table`, `serp-changes-table`, `advanced-analysis` (toggle Alpine — chứa `visibility-chart` + `provider-comparison` khi eligible), `rank-group-modal`, `gsc-bulk-sync-summary`.

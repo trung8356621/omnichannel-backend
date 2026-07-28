@@ -1,4 +1,12 @@
-# Keyword Intelligence (Phase 1)
+# Keyword Intelligence (Phase 1–2)
+
+Phase 2 adds analysis engine (normalize→dedup→intent→score→map→cluster→cannibalization), operation lock, cluster merge/split/move, cannibalization issues table, and Filament tabs Existing Content + Analysis.
+
+See also: [KEYWORD_ANALYSIS_OPERATIONS.md](KEYWORD_ANALYSIS_OPERATIONS.md), [KEYWORD_CLUSTERING.md](KEYWORD_CLUSTERING.md), [KEYWORD_CANNIBALIZATION.md](KEYWORD_CANNIBALIZATION.md).
+
+## Manual override
+
+`field_sources.{field}.source = manual` wins over analysis.
 
 Bộ tính năng nghiên cứu từ khóa cho addon SEO Content AI: import → normalize → classify intent → score → map nội dung hiện có → cluster → xây topical map → phát hiện cannibalization → convert cluster đã duyệt thành Content Project.
 
@@ -91,3 +99,19 @@ Lang keys: `seo-content-ai::filament.keyword_intelligence.*` (`lang/en/filament.
 $PHP_BIN vendor/bin/phpunit app/Addons/SeoContentAi/tests/Unit
 php artisan optimize:clear
 ```
+
+## Phase 4 — SERP Intelligence (additive)
+
+Public refs thêm prefix `srpq_`, `srps_`, `srpr_`, `srpf_`, `srpe_`, `srpc_`, `srpg_` trên `KeywordIntelligencePublicRef`.
+
+Services: `Services/SerpIntelligence/` — collect, intent evidence, overlap validation, content gaps. CommandBus capabilities `serp_intelligence.*`.
+
+Filament tab **SERP Intelligence** trên `ViewKeywordWorkspace`. Docs: [SERP_INTELLIGENCE.md](SERP_INTELLIGENCE.md).
+
+## Phase 5 — GSC Intelligence (additive)
+
+Public refs thêm `gscp_`, `gscs_`, `gscq_`, `gscm_`, `gsca_`, `gsco_` trên `KeywordIntelligencePublicRef`.
+
+Unmapped query preview → `ImportKeywordsCommand` / `AnalyzeSelectedKeywordsCommand` via `GscKeywordWorkspaceQueryPreviewService` (CommandBus `gsc_intelligence.preview_add_queries` / `add_queries_to_workspace`).
+
+Agent/MCP: GSC **read** tools trên Gateway/MCP catalog; writes trên CommandBus cho app. Status: **PARTIAL** — xem [GSC_INTELLIGENCE.md](GSC_INTELLIGENCE.md).

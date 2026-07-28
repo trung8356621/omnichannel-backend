@@ -85,8 +85,42 @@ final class ContentProjectMcpToolCatalog
             $this->readTool('keyword_intelligence.list_keywords', 'List keywords in a workspace.', ['workspace_ref']),
             $this->readTool('keyword_intelligence.list_clusters', 'List keyword clusters in a workspace.', ['workspace_ref']),
             $this->readTool('keyword_intelligence.get_topical_map', 'Get latest topical map version for a workspace.', ['workspace_ref']),
+            $this->readTool('keyword_intelligence.list_topics', 'List topics in a keyword workspace topical map.', ['workspace_ref']),
+            $this->readTool('keyword_intelligence.get_topic', 'Get a topic by topic_ref.', ['workspace_ref', 'topic_ref']),
+            $this->readTool('keyword_intelligence.list_map_conflicts', 'List topical map conflicts for a workspace.', ['workspace_ref']),
+            $this->readTool('keyword_intelligence.list_link_suggestions', 'List topical link suggestions for a workspace.', ['workspace_ref']),
+            $this->readTool('keyword_intelligence.list_map_versions', 'List topical map versions for a workspace.', ['workspace_ref']),
+            $this->readTool('keyword_intelligence.compare_map_versions', 'Compare two topical map versions.', ['workspace_ref', 'left_map_version_ref', 'right_map_version_ref']),
+            $this->readTool('keyword_intelligence.get_conversion', 'Get a keyword→content-project conversion by conversion_ref.', ['conversion_ref']),
             $this->readTool('keyword_intelligence.get_cannibalization', 'Get cannibalization risks for a workspace.', ['workspace_ref']),
             $this->readTool('keyword_intelligence.get_analysis_operation', 'Get keyword analysis operation by operation_ref.', ['operation_ref']),
+
+            // SERP Intelligence — additive read surface.
+            $this->readTool('serp_intelligence.list_queries', 'List SERP queries in a workspace.', ['workspace_ref']),
+            $this->readTool('serp_intelligence.get_query', 'Get a SERP query by query_ref.', ['workspace_ref', 'query_ref']),
+            $this->readTool('serp_intelligence.list_snapshots', 'List SERP snapshots for a workspace/query.', ['workspace_ref']),
+            $this->readTool('serp_intelligence.get_snapshot', 'Get a SERP snapshot by snapshot_ref.', ['workspace_ref', 'snapshot_ref']),
+            $this->readTool('serp_intelligence.list_results', 'List SERP results for a snapshot.', ['snapshot_ref']),
+            $this->readTool('serp_intelligence.list_features', 'List SERP features for a snapshot.', ['snapshot_ref']),
+            $this->readTool('serp_intelligence.get_cluster_evidence', 'Get SERP cluster evidence by evidence_ref.', ['workspace_ref', 'evidence_ref']),
+            $this->readTool('serp_intelligence.list_content_gaps', 'List SERP content gaps for a workspace.', ['workspace_ref']),
+            $this->readTool('serp_intelligence.list_competitors', 'List competitor summary for a snapshot.', ['snapshot_ref']),
+            $this->readTool('serp_intelligence.get_operation', 'Get SERP collection operation by operation_ref.', ['operation_ref']),
+
+            // GSC Intelligence — additive read surface.
+            $this->readTool('gsc_intelligence.list_properties', 'List GSC properties for site context.', []),
+            $this->readTool('gsc_intelligence.get_property', 'Get a GSC property by property_ref.', ['property_ref']),
+            $this->readTool('gsc_intelligence.list_sync_runs', 'List GSC sync runs for a property.', ['property_ref']),
+            $this->readTool('gsc_intelligence.get_sync_run', 'Get a GSC sync run by sync_run_ref.', ['property_ref', 'sync_run_ref']),
+            $this->readTool('gsc_intelligence.list_query_mappings', 'List GSC query mappings for a property.', ['property_ref']),
+            $this->readTool('gsc_intelligence.get_query_mapping', 'Get a GSC query mapping by mapping_ref.', ['property_ref', 'mapping_ref']),
+            $this->readTool('gsc_intelligence.list_page_mappings', 'List GSC page mappings for a property.', ['property_ref']),
+            $this->readTool('gsc_intelligence.get_page_mapping', 'Get a GSC page mapping by mapping_ref.', ['property_ref', 'mapping_ref']),
+            $this->readTool('gsc_intelligence.list_aggregates', 'List GSC performance aggregates for a property.', ['property_ref']),
+            $this->readTool('gsc_intelligence.get_aggregate', 'Get a GSC performance aggregate by aggregate_ref.', ['property_ref', 'aggregate_ref']),
+            $this->readTool('gsc_intelligence.list_opportunities', 'List GSC opportunities for a property.', ['property_ref']),
+            $this->readTool('gsc_intelligence.get_opportunity', 'Get a GSC opportunity by opportunity_ref.', ['property_ref', 'opportunity_ref']),
+            $this->readTool('gsc_intelligence.get_operation', 'Get GSC sync operation by operation_ref.', ['operation_ref']),
         ];
     }
 
@@ -150,7 +184,7 @@ final class ContentProjectMcpToolCatalog
     private function readTool(string $name, string $description, array $required): array
     {
         $properties = [];
-        foreach (['project_ref', 'item_ref', 'operation_ref', 'date', 'workspace_ref'] as $field) {
+        foreach (['project_ref', 'item_ref', 'operation_ref', 'date', 'workspace_ref', 'query_ref', 'snapshot_ref', 'evidence_ref', 'gap_ref', 'cluster_ref', 'property_ref', 'sync_run_ref', 'mapping_ref', 'aggregate_ref', 'opportunity_ref'] as $field) {
             $properties[$field] = ['type' => 'string'];
         }
 

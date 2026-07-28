@@ -1,47 +1,54 @@
-# Topical Map
+# Topical Map (Phase 3)
 
-`Services/KeywordIntelligence/TopicalMapBuilder.php` — xây cây topic tối giản cho một workspace.
+Topic ≠ Cluster ≠ Keyword.
 
-## Cấu trúc
+- **Topic** = structural subject grouping (`seo_topics`)
+- **Cluster** = candidate target page (`seo_keyword_clusters`)
+- **Keyword** = search query (`seo_ki_keywords`)
 
-```
-Root (SeoKiTopic, topic_type=root, depth=0)
- └─ Pillar theo search_intent bucket (topic_type=pillar, depth=1)
-     └─ SeoKeywordCluster (gắn qua SeoTopicClusterLink, relationship=primary)
-```
+## Flow
 
-`max_depth` lấy từ config `seo-content-ai.keyword_intelligence.topical_map.max_depth` (mặc định 3) — Phase 1 chỉ dùng tối đa depth 1 cho pillar, chưa sinh sub-topic sâu hơn.
+Approved clusters → `BuildTopicalMap` (draft) → review/resolve conflicts → `ApproveTopicalMap` → immutable version → `PreviewContentProjectFromTopicalMap` → `CreateContentProjectFromTopicalMap` → traceability links.
 
-## `TopicalMapBuilder::build(SeoKeywordWorkspace $workspace, ?int $actorId = null): SeoTopicalMapVersion`
+## Rules
 
-1. `upsertRoot()` — 1 topic root / workspace (`slug = Str::slug(workspace.name)`).
-2. Group toàn bộ `SeoKeywordCluster` của workspace theo `search_intent` (fallback `unknown`).
-3. `upsertPillar()` mỗi nhóm — tên `"{Intent} Intent"`, tổng hợp `keyword_count`/`cluster_count`/`total_search_volume` từ các cluster trong nhóm.
-4. `linkClusterToPillar()` — tạo `SeoTopicClusterLink` (unique `topic_id`+`cluster_id`) nếu chưa có; set `cluster.topic_id = pillar.id`.
-5. `persistVersion()` — tăng `version` (unique theo `workspace_id`+`version`), lưu snapshot compact (chỉ refs + tên + số liệu, **không** lưu keyword thô) vào `SeoTopicalMapVersion.snapshot`, và `summary` (pillar_count/cluster_count/total_search_volume).
+- Builder **does not** re-analyze keywords.
+- Build creates **draft** map version — never auto-approve.
+- Conversion default source = **approved** map version only.
+- Covered clusters excluded by default.
+- Rewrite/improve require evidence + article target; improve needs description.
+- No gallery_description. No auto schedule/publish.
+- After conversion: no live sync map → project.
+- Content Project archive does **not** delete topical planning data.
 
-## Snapshot shape
+## Phase 4 — SERP boundary (additive)
 
-```json
-{
-  "root": { "topic_ref": "kwt_...", "name": "My Workspace" },
-  "pillars": [
-    {
-      "topic_ref": "kwt_...",
-      "name": "Commercial Intent",
-      "keyword_count": 42,
-      "cluster_count": 6,
-      "total_search_volume": 12000
-    }
-  ]
-}
-```
+SERP Intelligence services **do not** call `ApproveTopicalMap` or mutate approved map versions. SERP evidence is advisory input only. See [SERP_INTELLIGENCE.md](SERP_INTELLIGENCE.md).
 
-## Trigger
+## Phase 5 — GSC boundary (additive)
 
-- `BuildTopicalMapCommand` (Filament: nút "Build topical map" trong `ViewKeywordWorkspace`).
-- Tự động chạy trong `KeywordWorkspaceAnalysisService::analyze()` ở stage `BuildingTopics` (sau clustering, trước detecting cannibalization).
+GSC Intelligence services **do not** call `ApproveTopicalMap` or mutate approved map versions. GSC metrics/opportunities are advisory for topical planning. See [GSC_INTELLIGENCE.md](GSC_INTELLIGENCE.md).
 
-## Read
+## Modes
 
-`KeywordIntelligenceReadService::getTopicalMap(siteId, workspaceRef)` trả version mới nhất (`orderByDesc('version')`) hoặc `null` nếu chưa build lần nào. Agent capability: `keyword_intelligence.get_topical_map`.
+| Mode | Depth default | Behavior |
+|------|---------------|----------|
+| conservative | 3 | Fewer pillars, high confidence only |
+| balanced | 4 | Default — entity + intent + funnel |
+| expansive | 5 | More subtopic/faq groups |
+
+## Key classes
+
+- `TopicalMapBuilder::buildFromRequest(TopicalMapBuildRequest, workspace)`
+- `TopicalMapHierarchyValidator`
+- `TopicalCoverageService` (`authority_score_source=internal_proxy`)
+- `TopicalInternalLinkSuggestionService` (suggestions only)
+- `TopicalMapConflictDetector`
+- `TopicalMapVersionDiffService`
+- `KeywordTopicalMapMutationService` (CRUD topics, approve/save version)
+- `KeywordTopicalMapToContentProjectConverter`
+- Lock: `keyword-topical-map-build:{workspace_ref}` via `KeywordTopicalMapBuildLock`
+
+## Commands (CommandBus)
+
+`build_topical_map`, `cancel_topical_map_build`, `create_topic`, `update_topic`, `move_topic`, `delete_empty_topic`, `attach_cluster`, `detach_cluster`, `review_topical_map`, `approve_topical_map`, `save_map_version`, `preview_content_project`, `create_content_project`

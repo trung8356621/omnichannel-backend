@@ -22,7 +22,17 @@ class SeoKeywordAnalysisOperation extends Model
         'site_id' => 'integer',
         'stage' => KeywordAnalysisStage::class,
         'progress' => 'integer',
+        'progress_percent' => 'integer',
+        'total_keywords' => 'integer',
+        'processed_keywords' => 'integer',
+        'failed_keywords' => 'integer',
+        'warnings_count' => 'integer',
+        'cancel_requested' => 'boolean',
+        'options' => 'array',
+        'keyword_scope' => 'array',
         'summary' => 'array',
+        'started_at' => 'datetime',
+        'finished_at' => 'datetime',
         'created_by' => 'integer',
     ];
 

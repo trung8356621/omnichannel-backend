@@ -28,13 +28,14 @@ final class KeywordScoringService
      *   priority_score: float,
      *   confidence: float,
      *   score_version: string,
-     *   score_factors: list<array{label: string, delta: float}>
+     *   score_factors: list<array{label: string, delta: float}>,
+     *   warnings: list<string>
      * }
      */
     public function score(array $input): array
     {
         /** @var array<string, mixed> $cfg */
-        $cfg = (array) config('seo-content-ai.keyword_intelligence.scoring', []);
+        $cfg = $this->scoringConfig();
         $weights = (array) ($cfg['weights'] ?? []);
         $penalties = (array) ($cfg['penalties'] ?? []);
         $version = (string) ($cfg['version'] ?? '1');
@@ -50,6 +51,24 @@ final class KeywordScoringService
         $volume = $input['search_volume'] ?? null;
         $difficulty = $input['keyword_difficulty'] ?? null;
         $competition = $input['competition'] ?? null;
+
+        // Metric thiếu KHÔNG được coi là 0 — chỉ bỏ qua khỏi opportunity + cảnh báo minh bạch.
+        $warnings = [];
+        if (! is_numeric($volume)) {
+            $warnings[] = 'keyword.missing_search_volume';
+        }
+        if (! is_numeric($difficulty)) {
+            $warnings[] = 'keyword.missing_keyword_difficulty';
+        }
+        if (! is_numeric($competition)) {
+            $warnings[] = 'keyword.missing_competition';
+        }
+        if (($input['relevance'] ?? null) === null) {
+            $warnings[] = 'keyword.missing_relevance_input';
+        }
+        if (($input['business_value'] ?? null) === null) {
+            $warnings[] = 'keyword.missing_business_value_input';
+        }
 
         $metricsPresent = 0;
         $opportunity = 50.0;
@@ -124,7 +143,24 @@ final class KeywordScoringService
             'confidence' => round($confidence, 2),
             'score_version' => $version,
             'score_factors' => $factors,
+            'warnings' => $warnings,
         ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function scoringConfig(): array
+    {
+        if (! function_exists('config')) {
+            return [];
+        }
+
+        try {
+            return (array) config('seo-content-ai.keyword_intelligence.scoring', []);
+        } catch (\Throwable) {
+            return [];
+        }
     }
 
     private function clamp(float $value): float

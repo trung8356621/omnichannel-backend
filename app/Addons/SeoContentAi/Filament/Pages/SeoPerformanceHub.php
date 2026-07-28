@@ -89,6 +89,11 @@ final class SeoPerformanceHub extends SeoPanelPage
     /** @var array<string, mixed>|null */
     public ?array $gscBulkSyncResult = null;
 
+    public string $gscImportCsv = '';
+
+    /** @var array<string, mixed>|null */
+    public ?array $gscImportPreview = null;
+
     #[Url(as: 'comparison_batch')]
     public string $comparisonBatchId = '';
 
@@ -288,6 +293,27 @@ final class SeoPerformanceHub extends SeoPanelPage
         }
 
         $this->gscPage = 1;
+    }
+
+    public function previewGscImport(): void
+    {
+        if (trim($this->gscImportCsv) === '') {
+            $this->gscImportPreview = null;
+
+            return;
+        }
+
+        $service = app(\App\Addons\SeoContentAi\Services\GscIntelligence\GscManualImportService::class);
+        $siteId = (int) ($this->resolveSiteId() ?? 0);
+        $previewPropertyRef = $siteId > 0 ? 'preview:site:'.$siteId : 'preview:unscoped';
+        $preview = $service->preview($this->gscImportCsv, $previewPropertyRef);
+
+        $this->gscImportPreview = [
+            'valid' => (int) ($preview->summary['valid'] ?? count($preview->validRows)),
+            'invalid' => (int) ($preview->summary['invalid'] ?? count($preview->invalidRows)),
+            'duplicate' => (int) ($preview->summary['duplicate'] ?? count($preview->duplicateRows)),
+            'total' => (int) ($preview->summary['total'] ?? 0),
+        ];
     }
 
     public function setRankGroup(?int $groupId): void

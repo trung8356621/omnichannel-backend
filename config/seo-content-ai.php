@@ -295,15 +295,179 @@ return [
 
         'clustering' => [
             'default_strategy' => env('SEO_KI_DEFAULT_CLUSTERING_STRATEGY', 'balanced'),
+            /** Số keyword tối đa / 1 cluster trước khi bị needs_split (KeywordClusterValidator). */
+            'max_cluster_size' => (int) env('SEO_KI_CLUSTER_MAX_SIZE', 40),
+        ],
+
+        'normalization' => [
+            'max_keyword_length' => (int) env('SEO_KI_NORMALIZATION_MAX_LENGTH', 255),
+        ],
+
+        'intent' => [
+            'ai_confidence_threshold' => (float) env('SEO_KI_INTENT_AI_CONFIDENCE_THRESHOLD', 0.6),
+            'classifier_version' => env('SEO_KI_INTENT_CLASSIFIER_VERSION', '1'),
+        ],
+
+        'near_duplicate' => [
+            'threshold' => (float) env('SEO_KI_NEAR_DUPLICATE_THRESHOLD', 0.86),
+            'max_candidate_pairs_per_keyword' => (int) env('SEO_KI_NEAR_DUPLICATE_MAX_PAIRS_PER_KEYWORD', 20),
+            'max_bucket_size' => (int) env('SEO_KI_NEAR_DUPLICATE_MAX_BUCKET_SIZE', 200),
+        ],
+
+        'analysis' => [
+            'max_keywords_per_analysis' => (int) env('SEO_KI_ANALYSIS_MAX_KEYWORDS', 5000),
+            'lock_ttl_seconds' => (int) env('SEO_KI_ANALYSIS_LOCK_TTL_SECONDS', 900),
         ],
 
         'topical_map' => [
-            'max_depth' => (int) env('SEO_KI_TOPICAL_MAP_MAX_DEPTH', 3),
+            'max_depth' => (int) env('SEO_KI_TOPICAL_MAP_MAX_DEPTH', 4),
+            'default_mode' => env('SEO_KI_TOPICAL_MAP_DEFAULT_MODE', 'balanced'),
+            'lock_ttl_seconds' => (int) env('SEO_KI_TOPICAL_MAP_LOCK_TTL_SECONDS', 900),
+            'max_topics_per_workspace' => (int) env('SEO_KI_TOPICAL_MAP_MAX_TOPICS', 500),
+            'max_clusters_per_map_build' => (int) env('SEO_KI_TOPICAL_MAP_MAX_CLUSTERS', 500),
+            'max_link_suggestions' => (int) env('SEO_KI_TOPICAL_MAP_MAX_LINK_SUGGESTIONS', 2000),
+            'max_versions_per_workspace' => (int) env('SEO_KI_TOPICAL_MAP_MAX_VERSIONS', 50),
+            'map_build_operations_per_hour' => (int) env('SEO_KI_TOPICAL_MAP_BUILDS_PER_HOUR', 20),
+            'modes' => [
+                'conservative' => ['max_depth' => 3],
+                'balanced' => ['max_depth' => 4],
+                'expansive' => ['max_depth' => 5],
+            ],
+        ],
+
+        'conversion' => [
+            'max_items_per_project' => (int) env('SEO_KI_CONVERSION_MAX_ITEMS_PER_PROJECT', 200),
+            'max_items_per_conversion' => (int) env('SEO_KI_CONVERSION_MAX_ITEMS', 200),
+            'max_projects_per_conversion' => (int) env('SEO_KI_CONVERSION_MAX_PROJECTS', 1),
+            'conversion_operations_per_hour' => (int) env('SEO_KI_CONVERSION_OPS_PER_HOUR', 10),
+            'default_policy' => env('SEO_KI_CONVERSION_DEFAULT_POLICY', 'new_only'),
+            'default_grouping' => env('SEO_KI_CONVERSION_DEFAULT_GROUPING', 'single_project'),
         ],
 
         'cannibalization' => [
             /** Số mapping "current_content" trên cùng keyword được coi là rủi ro. */
             'multi_mapping_threshold' => (int) env('SEO_KI_CANNIBALIZATION_MULTI_MAPPING_THRESHOLD', 2),
+        ],
+    ],
+
+    /**
+     * SERP Intelligence — Phase 4 core services (normalization, overlap, intent evidence, providers).
+     */
+    'serp_intelligence' => [
+        'normalization' => [
+            'max_query_length' => (int) env('SEO_SERP_MAX_QUERY_LENGTH', 500),
+        ],
+        'url' => [
+            'trailing_slash' => (bool) env('SEO_SERP_URL_TRAILING_SLASH', false),
+            'tracking_param_prefixes' => ['utm_', 'utm-'],
+            'tracking_exact_params' => ['gclid', 'fbclid', 'msclkid', 'mc_cid', 'mc_eid', 'yclid', '_ga', 'ref'],
+        ],
+        'own_domain' => [
+            'max_subdomain_depth' => (int) env('SEO_SERP_OWN_DOMAIN_MAX_SUBDOMAIN_DEPTH', 5),
+        ],
+        'overlap' => [
+            'top_n' => (int) env('SEO_SERP_OVERLAP_TOP_N', 10),
+            'min_valid' => (int) env('SEO_SERP_OVERLAP_MIN_VALID', 5),
+            'position_weighted' => (bool) env('SEO_SERP_OVERLAP_POSITION_WEIGHTED', true),
+            'bands' => [
+                'low' => 0.15,
+                'moderate' => 0.35,
+                'high' => 0.55,
+                'very_high' => 0.75,
+            ],
+        ],
+        'freshness' => [
+            'fresh_days' => (int) env('SEO_SERP_FRESH_DAYS', 7),
+            'stale_days' => (int) env('SEO_SERP_STALE_DAYS', 30),
+        ],
+        'sampling' => [
+            'max_queries' => (int) env('SEO_SERP_SAMPLING_MAX', 3),
+            'min_queries' => (int) env('SEO_SERP_SAMPLING_MIN', 1),
+        ],
+        'intent' => [
+            'min_evidence_confidence' => (float) env('SEO_SERP_INTENT_MIN_CONFIDENCE', 0.45),
+            'compatible_mixed_groups' => [
+                ['informational', 'commercial'],
+                ['commercial', 'transactional'],
+                ['local', 'commercial'],
+            ],
+        ],
+        'cluster_validation' => [
+            'outlier_overlap_max' => (float) env('SEO_SERP_CLUSTER_OUTLIER_MAX', 0.2),
+            'split_overlap_max' => (float) env('SEO_SERP_CLUSTER_SPLIT_MAX', 0.25),
+        ],
+        'content_gap' => [
+            'min_frequency' => (float) env('SEO_SERP_GAP_MIN_FREQUENCY', 0.3),
+            'min_confidence' => (float) env('SEO_SERP_GAP_MIN_CONFIDENCE', 0.45),
+            'section_min_frequency' => (float) env('SEO_SERP_GAP_SECTION_MIN_FREQUENCY', 0.4),
+        ],
+        'fetch' => [
+            'mode' => env('SEO_SERP_FETCH_MODE', 'metadata_only'),
+            'allowed_schemes' => ['http', 'https'],
+            'blocked_hosts' => ['localhost', '127.0.0.1', '0.0.0.0', '::1', '169.254.169.254'],
+            'redirect_limit' => (int) env('SEO_SERP_FETCH_REDIRECT_LIMIT', 3),
+            'max_bytes' => (int) env('SEO_SERP_FETCH_MAX_BYTES', 1_048_576),
+            'timeout_seconds' => (int) env('SEO_SERP_FETCH_TIMEOUT', 15),
+        ],
+        'providers' => [
+            'enabled' => array_values(array_filter(array_map(
+                static fn (string $key): string => trim($key),
+                explode(',', (string) env('SEO_SERP_PROVIDERS_ENABLED', 'manual_import')),
+            ))),
+        ],
+        'lock' => [
+            'ttl_seconds' => (int) env('SEO_SERP_LOCK_TTL_SECONDS', 600),
+        ],
+    ],
+
+    'gsc_intelligence' => [
+        'normalization' => [
+            'max_query_length' => (int) env('SEO_GSC_MAX_QUERY_LENGTH', 500),
+        ],
+        'sync' => [
+            'data_delay_days' => (int) env('SEO_GSC_DATA_DELAY_DAYS', 3),
+            'incremental_overlap_days' => (int) env('SEO_GSC_INCREMENTAL_OVERLAP_DAYS', 2),
+            'max_days_per_chunk' => (int) env('SEO_GSC_MAX_DAYS_PER_CHUNK', 28),
+        ],
+        'lock' => [
+            'ttl_seconds' => (int) env('SEO_GSC_LOCK_TTL_SECONDS', 600),
+        ],
+        'providers' => [
+            'enabled' => array_values(array_filter(array_map(
+                static fn (string $key): string => trim($key),
+                explode(',', (string) env('SEO_GSC_PROVIDERS_ENABLED', 'manual_import')),
+            ))),
+        ],
+        'expected_ctr' => [
+            'bands' => [
+                ['position_min' => 1, 'position_max' => 1, 'ctr' => 0.28],
+                ['position_min' => 2, 'position_max' => 3, 'ctr' => 0.15],
+                ['position_min' => 4, 'position_max' => 5, 'ctr' => 0.08],
+                ['position_min' => 6, 'position_max' => 10, 'ctr' => 0.04],
+                ['position_min' => 11, 'position_max' => 20, 'ctr' => 0.02],
+                ['position_min' => 21, 'position_max' => 100, 'ctr' => 0.005],
+            ],
+        ],
+        'opportunity' => [
+            'min_impressions' => (int) env('SEO_GSC_OPP_MIN_IMPRESSIONS', 100),
+            'min_impressions_growth_pct' => (float) env('SEO_GSC_OPP_MIN_GROWTH_PCT', 0.25),
+            'near_page_one_max_position' => (float) env('SEO_GSC_OPP_NEAR_PAGE_ONE_MAX', 15),
+            'low_ctr_gap_min' => (float) env('SEO_GSC_OPP_LOW_CTR_GAP_MIN', 0.02),
+            'decay_clicks_drop_pct' => (float) env('SEO_GSC_OPP_DECAY_DROP_PCT', 0.30),
+            'maturity' => [
+                'new_days' => (int) env('SEO_GSC_OPP_MATURITY_NEW_DAYS', 14),
+                'early_days' => (int) env('SEO_GSC_OPP_MATURITY_EARLY_DAYS', 60),
+            ],
+        ],
+        'cannibalization' => [
+            'min_competing_pages' => (int) env('SEO_GSC_CANNIB_MIN_PAGES', 2),
+            'min_impressions_per_page' => (int) env('SEO_GSC_CANNIB_MIN_IMPRESSIONS', 10),
+        ],
+        'brand' => [
+            'terms' => array_values(array_filter(array_map(
+                static fn (string $term): string => trim($term),
+                explode(',', (string) env('SEO_GSC_BRAND_TERMS', '')),
+            ))),
         ],
     ],
 

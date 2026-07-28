@@ -11,6 +11,8 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCo
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectPublicRef;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPreviewToken;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Agent\KeywordIntelligenceReadService;
+use App\Addons\SeoContentAi\Services\GscIntelligence\Agent\GscIntelligenceReadService;
+use App\Addons\SeoContentAi\Services\SerpIntelligence\Agent\SerpIntelligenceReadService;
 use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
@@ -39,8 +41,42 @@ final class ContentProjectAgentGateway
         'keyword_intelligence.list_keywords',
         'keyword_intelligence.list_clusters',
         'keyword_intelligence.get_topical_map',
+        'keyword_intelligence.list_topics',
+        'keyword_intelligence.get_topic',
+        'keyword_intelligence.list_map_conflicts',
+        'keyword_intelligence.list_link_suggestions',
+        'keyword_intelligence.list_map_versions',
+        'keyword_intelligence.compare_map_versions',
+        'keyword_intelligence.get_conversion',
         'keyword_intelligence.get_cannibalization',
         'keyword_intelligence.get_analysis_operation',
+
+        // SERP Intelligence — additive read surface.
+        'serp_intelligence.list_queries',
+        'serp_intelligence.get_query',
+        'serp_intelligence.list_snapshots',
+        'serp_intelligence.get_snapshot',
+        'serp_intelligence.list_results',
+        'serp_intelligence.list_features',
+        'serp_intelligence.get_cluster_evidence',
+        'serp_intelligence.list_content_gaps',
+        'serp_intelligence.list_competitors',
+        'serp_intelligence.get_operation',
+
+        // GSC Intelligence — additive read surface.
+        'gsc_intelligence.list_properties',
+        'gsc_intelligence.get_property',
+        'gsc_intelligence.list_sync_runs',
+        'gsc_intelligence.get_sync_run',
+        'gsc_intelligence.list_query_mappings',
+        'gsc_intelligence.get_query_mapping',
+        'gsc_intelligence.list_page_mappings',
+        'gsc_intelligence.get_page_mapping',
+        'gsc_intelligence.list_aggregates',
+        'gsc_intelligence.get_aggregate',
+        'gsc_intelligence.list_opportunities',
+        'gsc_intelligence.get_opportunity',
+        'gsc_intelligence.get_operation',
     ];
 
     public function __construct(
@@ -54,6 +90,8 @@ final class ContentProjectAgentGateway
         private readonly ContentProjectPreviewToken $previewToken,
         private readonly ContentProjectCommandBus $commandBus,
         private readonly KeywordIntelligenceReadService $keywordReads,
+        private readonly SerpIntelligenceReadService $serpReads,
+        private readonly GscIntelligenceReadService $gscReads,
     ) {}
 
     /**
@@ -262,8 +300,42 @@ final class ContentProjectAgentGateway
             'keyword_intelligence.list_keywords' => $this->keywordReads->listKeywords($context, $input),
             'keyword_intelligence.list_clusters' => $this->keywordReads->listClusters($context, $input),
             'keyword_intelligence.get_topical_map' => $this->keywordReads->getTopicalMap($context, $input),
+            'keyword_intelligence.list_topics' => $this->keywordReads->listTopics($context, $input),
+            'keyword_intelligence.get_topic' => $this->keywordReads->getTopic($context, $input),
+            'keyword_intelligence.list_map_conflicts' => $this->keywordReads->listMapConflicts($context, $input),
+            'keyword_intelligence.list_link_suggestions' => $this->keywordReads->listLinkSuggestions($context, $input),
+            'keyword_intelligence.list_map_versions' => $this->keywordReads->listMapVersions($context, $input),
+            'keyword_intelligence.compare_map_versions' => $this->keywordReads->compareMapVersions($context, $input),
+            'keyword_intelligence.get_conversion' => $this->keywordReads->getConversion($context, $input),
             'keyword_intelligence.get_cannibalization' => $this->keywordReads->getCannibalization($context, $input),
             'keyword_intelligence.get_analysis_operation' => $this->keywordReads->getAnalysisOperation($context, $input),
+
+            // SERP Intelligence — additive read surface.
+            'serp_intelligence.list_queries' => $this->serpReads->listQueries($context, $input),
+            'serp_intelligence.get_query' => $this->serpReads->getQuery($context, $input),
+            'serp_intelligence.list_snapshots' => $this->serpReads->listSnapshots($context, $input),
+            'serp_intelligence.get_snapshot' => $this->serpReads->getSnapshot($context, $input),
+            'serp_intelligence.list_results' => $this->serpReads->listResults($context, $input),
+            'serp_intelligence.list_features' => $this->serpReads->listFeatures($context, $input),
+            'serp_intelligence.get_cluster_evidence' => $this->serpReads->getClusterEvidence($context, $input),
+            'serp_intelligence.list_content_gaps' => $this->serpReads->listContentGaps($context, $input),
+            'serp_intelligence.list_competitors' => $this->serpReads->listCompetitors($context, $input),
+            'serp_intelligence.get_operation' => $this->serpReads->getOperation($context, $input),
+
+            // GSC Intelligence — additive read surface.
+            'gsc_intelligence.list_properties' => $this->gscReads->listProperties($context, $input),
+            'gsc_intelligence.get_property' => $this->gscReads->getProperty($context, $input),
+            'gsc_intelligence.list_sync_runs' => $this->gscReads->listSyncRuns($context, $input),
+            'gsc_intelligence.get_sync_run' => $this->gscReads->getSyncRun($context, $input),
+            'gsc_intelligence.list_query_mappings' => $this->gscReads->listQueryMappings($context, $input),
+            'gsc_intelligence.get_query_mapping' => $this->gscReads->getQueryMapping($context, $input),
+            'gsc_intelligence.list_page_mappings' => $this->gscReads->listPageMappings($context, $input),
+            'gsc_intelligence.get_page_mapping' => $this->gscReads->getPageMapping($context, $input),
+            'gsc_intelligence.list_aggregates' => $this->gscReads->listAggregates($context, $input),
+            'gsc_intelligence.get_aggregate' => $this->gscReads->getAggregate($context, $input),
+            'gsc_intelligence.list_opportunities' => $this->gscReads->listOpportunities($context, $input),
+            'gsc_intelligence.get_opportunity' => $this->gscReads->getOpportunity($context, $input),
+            'gsc_intelligence.get_operation' => $this->gscReads->getOperation($context, $input),
             default => throw new InvalidArgumentException('Unsupported read capability.'),
         };
 

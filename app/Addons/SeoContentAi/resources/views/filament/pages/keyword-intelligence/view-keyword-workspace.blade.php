@@ -54,8 +54,11 @@
                 'overview' => __('seo-content-ai::filament.keyword_intelligence.tab_overview'),
                 'keywords' => __('seo-content-ai::filament.keyword_intelligence.tab_keywords'),
                 'clusters' => __('seo-content-ai::filament.keyword_intelligence.tab_clusters'),
-                'topical_map' => __('seo-content-ai::filament.keyword_intelligence.tab_topical_map'),
                 'cannibalization' => __('seo-content-ai::filament.keyword_intelligence.tab_cannibalization'),
+                'existing_content' => 'Existing Content',
+                'analysis' => 'Analysis',
+                'topical_map' => __('seo-content-ai::filament.keyword_intelligence.tab_topical_map'),
+                'serp_intelligence' => __('seo-content-ai::filament.keyword_intelligence.tab_serp_intelligence'),
             ] as $name => $label)
                 <button
                     type="button"
@@ -260,20 +263,109 @@
 
         {{-- Topical Map --}}
         <div x-show="tab === 'topical_map'" x-cloak class="space-y-4">
+            <div class="flex flex-wrap items-end gap-3">
+                <div class="min-w-[10rem]">
+                    <label class="mb-1 block text-xs text-gray-500">Mode</label>
+                    <x-select wire:model="topicalMapMode" class="w-full">
+                        <option value="conservative">conservative</option>
+                        <option value="balanced">balanced</option>
+                        <option value="expansive">expansive</option>
+                    </x-select>
+                </div>
+                <x-filament::button type="button" size="sm" color="gray" icon="heroicon-o-squares-plus" wire:click="buildTopicalMap" wire:loading.attr="disabled" wire:target="buildTopicalMap">
+                    <span wire:loading.remove wire:target="buildTopicalMap">{{ __('seo-content-ai::filament.keyword_intelligence.build_map') }}</span>
+                    <span wire:loading wire:target="buildTopicalMap" class="inline-flex items-center gap-1">
+                        <x-filament::loading-indicator class="h-4 w-4" />
+                        …
+                    </span>
+                </x-filament::button>
+                @if ($topicalMap)
+                    <x-filament::button type="button" size="sm" color="gray" wire:click="reviewTopicalMap" wire:loading.attr="disabled" wire:target="reviewTopicalMap">
+                        Review
+                    </x-filament::button>
+                    <x-filament::button type="button" size="sm" color="success" wire:click="approveTopicalMap" wire:loading.attr="disabled" wire:target="approveTopicalMap">
+                        Approve
+                    </x-filament::button>
+                    <x-filament::button type="button" size="sm" color="gray" wire:click="saveTopicalMapVersion" wire:loading.attr="disabled" wire:target="saveTopicalMapVersion">
+                        Save version
+                    </x-filament::button>
+                    @if (($topicalMap['status'] ?? '') === 'approved')
+                        <div class="min-w-[10rem]">
+                            <label class="mb-1 block text-xs text-gray-500">Policy</label>
+                            <x-select wire:model="mapConversionPolicy" class="w-full">
+                                <option value="new_only">new_only</option>
+                                <option value="new_and_rewrite">new_and_rewrite</option>
+                                <option value="all_reviewed_actions">all_reviewed_actions</option>
+                                <option value="manual_selection">manual_selection</option>
+                            </x-select>
+                        </div>
+                        <x-filament::button type="button" size="sm" color="warning" wire:click="previewConvertFromMap" wire:loading.attr="disabled" wire:target="previewConvertFromMap">
+                            Preview CP
+                        </x-filament::button>
+                        <x-filament::button type="button" size="sm" color="primary" wire:click="convertFromMap" wire:loading.attr="disabled" wire:target="convertFromMap">
+                            Create CP
+                        </x-filament::button>
+                    @endif
+                @endif
+            </div>
+
+            @if (!empty($topics))
+                <x-filament::section>
+                    <x-slot name="heading">Topics</x-slot>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
+                            <thead class="bg-gray-50 dark:bg-gray-800">
+                                <tr>
+                                    <th class="px-3 py-2 text-left">Name</th>
+                                    <th class="px-3 py-2 text-left">Type</th>
+                                    <th class="px-3 py-2 text-left">Depth</th>
+                                    <th class="px-3 py-2 text-left">Clusters</th>
+                                    <th class="px-3 py-2 text-left">Keywords</th>
+                                    <th class="px-3 py-2 text-left">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+                                @foreach ($topics as $topic)
+                                    <tr>
+                                        <td class="px-3 py-2" style="padding-left: {{ 12 + ((int) ($topic['depth'] ?? 0) * 12) }}px">{{ $topic['name'] }}</td>
+                                        <td class="px-3 py-2">{{ $topic['topic_type'] }}</td>
+                                        <td class="px-3 py-2">{{ $topic['depth'] }}</td>
+                                        <td class="px-3 py-2">{{ $topic['cluster_count'] }}</td>
+                                        <td class="px-3 py-2">{{ $topic['keyword_count'] }}</td>
+                                        <td class="px-3 py-2">{{ $topic['status'] }}</td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                    </div>
+                </x-filament::section>
+            @endif
+
             @if ($topicalMap)
                 <x-filament::section>
-                    <x-slot name="heading">{{ $topicalMap['snapshot']['root']['name'] ?? __('seo-content-ai::filament.keyword_intelligence.tab_topical_map') }}</x-slot>
+                    <x-slot name="heading">{{ $topicalMap['snapshot']['root']['name'] ?? ($topicalMap['snapshot']['topics'][0]['name'] ?? __('seo-content-ai::filament.keyword_intelligence.tab_topical_map')) }}</x-slot>
                     <div class="mb-3 text-xs text-gray-500">
-                        {{ __('seo-content-ai::filament.keyword_intelligence.map_version') }} v{{ $topicalMap['version'] }} — {{ $topicalMap['generated_at'] }}
+                        {{ __('seo-content-ai::filament.keyword_intelligence.map_version') }} v{{ $topicalMap['version'] }}
+                        · {{ $topicalMap['status'] ?? 'draft' }}
+                        @if (!empty($topicalMap['mode'])) · {{ $topicalMap['mode'] }} @endif
+                        — {{ $topicalMap['generated_at'] }}
+                    </div>
+                    <div class="mb-3 flex flex-wrap gap-4 text-xs text-gray-600 dark:text-gray-300">
+                        <span>topics: {{ $topicalMap['summary']['topic_count'] ?? count($topicalMap['snapshot']['topics'] ?? $topicalMap['snapshot']['pillars'] ?? []) }}</span>
+                        <span>clusters: {{ $topicalMap['summary']['cluster_count'] ?? '—' }}</span>
+                        <span>coverage: {{ $topicalMap['summary']['coverage_score'] ?? '—' }}</span>
+                        <span>gap: {{ $topicalMap['summary']['gap_score'] ?? '—' }}</span>
                     </div>
                     <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                        @foreach ($topicalMap['snapshot']['pillars'] ?? [] as $pillar)
+                        @foreach (($topicalMap['snapshot']['topics'] ?? $topicalMap['snapshot']['pillars'] ?? []) as $node)
+                            @continue(($node['type'] ?? '') === 'root')
                             <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-                                <div class="font-medium">{{ $pillar['name'] }}</div>
+                                <div class="font-medium">{{ $node['name'] ?? '—' }}</div>
                                 <div class="mt-1 text-xs text-gray-500">
-                                    {{ $pillar['cluster_count'] }} {{ __('seo-content-ai::filament.keyword_intelligence.col_clusters') }} ·
-                                    {{ $pillar['keyword_count'] }} {{ __('seo-content-ai::filament.keyword_intelligence.col_keywords') }} ·
-                                    {{ $pillar['total_search_volume'] }} vol
+                                    {{ $node['type'] ?? 'pillar' }}
+                                    @if (isset($node['cluster_count']))
+                                        · {{ $node['cluster_count'] }} {{ __('seo-content-ai::filament.keyword_intelligence.col_clusters') }}
+                                    @endif
                                 </div>
                             </div>
                         @endforeach
@@ -282,6 +374,21 @@
             @else
                 <x-filament::section>
                     <p class="text-sm text-gray-500">{{ __('seo-content-ai::filament.keyword_intelligence.no_topical_map') }}</p>
+                </x-filament::section>
+            @endif
+
+            @if ($mapConvertPreview)
+                <x-filament::section>
+                    <x-slot name="heading">Map → Content Project preview</x-slot>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex flex-wrap gap-4">
+                            <span>write_new: <strong>{{ $mapConvertPreview['write_new_count'] ?? 0 }}</strong></span>
+                            <span>rewrite: <strong>{{ $mapConvertPreview['rewrite_count'] ?? 0 }}</strong></span>
+                            <span>covered: <strong>{{ $mapConvertPreview['covered_count'] ?? 0 }}</strong></span>
+                            <span>blocked: <strong>{{ $mapConvertPreview['blocked_count'] ?? 0 }}</strong></span>
+                            <span>items: <strong>{{ $mapConvertPreview['estimated_total_items'] ?? 0 }}</strong></span>
+                        </div>
+                    </div>
                 </x-filament::section>
             @endif
         </div>
@@ -319,5 +426,26 @@
                 </table>
             </div>
         </div>
+
+        <div x-show="tab === 'existing_content'" x-cloak class="space-y-4">
+            <x-filament::section>
+                <x-slot name="heading">Existing Content Index</x-slot>
+                <p class="text-sm text-gray-500">Compact article index for mapping. Rebuild via analysis option rebuild_content_index. No article body edits here.</p>
+            </x-filament::section>
+        </div>
+
+        <div x-show="tab === 'analysis'" x-cloak class="space-y-4">
+            <x-filament::section>
+                <x-slot name="heading">Analysis</x-slot>
+                <p class="text-sm text-gray-500">Lock blocks parallel runs. Progress in seo_keyword_analysis_operations.</p>
+                <div class="mt-3">
+                    <x-filament::button type="button" wire:click="analyzeWorkspace" wire:loading.attr="disabled" wire:target="analyzeWorkspace">
+                        Run analysis
+                    </x-filament::button>
+                </div>
+            </x-filament::section>
+        </div>
+
+        @include('seo-content-ai::filament.pages.keyword-intelligence.partials.serp-intelligence-tab')
     </div>
 </x-filament-panels::page>

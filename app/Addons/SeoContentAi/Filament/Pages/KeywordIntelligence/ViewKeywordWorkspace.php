@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Pages\KeywordIntelligence;
 use App\Addons\SeoContentAi\Models\KeywordIntelligence\SeoKeywordCluster;
 use App\Addons\SeoContentAi\Models\KeywordIntelligence\SeoKeywordWorkspace;
 use App\Addons\SeoContentAi\Models\KeywordIntelligence\SeoKiKeyword;
+use App\Addons\SeoContentAi\Models\KeywordIntelligence\SeoKiTopic;
 use App\Addons\SeoContentAi\Models\KeywordIntelligence\SeoTopicalMapVersion;
 use App\Addons\SeoContentAi\Filament\Pages\SeoPanelPage;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
@@ -16,15 +17,22 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCo
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\AnalyzeKeywordWorkspaceCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\ApproveKeywordClustersCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\ApproveKeywordsCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\ApproveTopicalMapCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\ArchiveKeywordWorkspaceCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\BuildTopicalMapCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\CreateContentProjectFromKeywordClustersCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\CreateContentProjectFromTopicalMapCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\ImportKeywordsCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\PreviewContentProjectFromClustersCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\PreviewContentProjectFromTopicalMapCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\ReviewTopicalMapCommand;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Commands\SaveTopicalMapVersionCommand;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\KeywordIntelligencePublicRef;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\KeywordCannibalizationService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
-use InvalidArgumentException;
+use App\Addons\SeoContentAi\Services\SerpIntelligence\Providers\ManualImportSerpProvider;
+use App\Addons\SeoContentAi\Services\SerpIntelligence\SerpResultClassifier;
+use App\Addons\SeoContentAi\Services\SerpIntelligence\SerpUrlNormalizationService;
 
 final class ViewKeywordWorkspace extends SeoPanelPage
 {
@@ -51,6 +59,18 @@ final class ViewKeywordWorkspace extends SeoPanelPage
     public ?array $topicalMap = null;
 
     /** @var list<array<string, mixed>> */
+    public array $topics = [];
+
+    public string $topicalMapMode = 'balanced';
+
+    public string $mapConversionPolicy = 'new_only';
+
+    /** @var array<string, mixed>|null */
+    public ?array $mapConvertPreview = null;
+
+    public ?string $mapConvertConfirmationToken = null;
+
+    /** @var list<array<string, mixed>> */
     public array $cannibalizationRisks = [];
 
     public string $importText = '';
@@ -61,6 +81,13 @@ final class ViewKeywordWorkspace extends SeoPanelPage
 
     /** @var array<string, mixed>|null */
     public ?array $importResult = null;
+
+    public string $serpImportPayload = '';
+
+    public string $serpImportFormat = 'json';
+
+    /** @var array<string, mixed>|null */
+    public ?array $serpImportPreview = null;
 
     /** @var list<string> */
     public array $selectedKeywordRefs = [];
@@ -93,7 +120,7 @@ final class ViewKeywordWorkspace extends SeoPanelPage
 
     public function switchTab(string $tab): void
     {
-        $allowed = ['overview', 'keywords', 'clusters', 'topical_map', 'cannibalization'];
+        $allowed = ['overview', 'keywords', 'clusters', 'cannibalization', 'existing_content', 'analysis', 'topical_map', 'serp_intelligence'];
         if (! in_array($tab, $allowed, true)) {
             return;
         }
@@ -107,6 +134,25 @@ final class ViewKeywordWorkspace extends SeoPanelPage
             'cannibalization' => $this->loadCannibalization(),
             default => $this->loadOverview(),
         };
+    }
+
+    public function previewSerpImport(): void
+    {
+        if (trim($this->serpImportPayload) === '') {
+            return;
+        }
+
+        $provider = new ManualImportSerpProvider(new SerpUrlNormalizationService, new SerpResultClassifier);
+        $preview = $provider->preview($this->serpImportPayload, $this->serpImportFormat);
+
+        $this->serpImportPreview = [
+            'summary' => $preview->summary,
+            'valid_rows' => count($preview->validRows),
+            'invalid_rows' => count($preview->invalidRows),
+            'duplicate_rows' => count($preview->duplicateRows),
+            'unknown_types' => count($preview->unknownTypeRows),
+            'missing_urls' => count($preview->missingUrlRows),
+        ];
     }
 
     public function importKeywords(): void
@@ -136,7 +182,15 @@ final class ViewKeywordWorkspace extends SeoPanelPage
 
     public function analyzeWorkspace(): void
     {
-        $result = $this->dispatchCommand(new AnalyzeKeywordWorkspaceCommand($this->workspaceRef));
+        $result = $this->dispatchCommand(new AnalyzeKeywordWorkspaceCommand(
+            workspaceRef: $this->workspaceRef,
+            clusteringStrategy: null,
+            keywordRefs: null,
+            options: [
+                'preserve_manual_overrides' => true,
+                'recluster_draft_only' => true,
+            ],
+        ));
 
         if ($result->success) {
             $this->loadOverview();
@@ -182,11 +236,116 @@ final class ViewKeywordWorkspace extends SeoPanelPage
 
     public function buildTopicalMap(): void
     {
-        $result = $this->dispatchCommand(new BuildTopicalMapCommand($this->workspaceRef));
+        $result = $this->dispatchCommand(new BuildTopicalMapCommand(
+            workspaceRef: $this->workspaceRef,
+            mode: $this->topicalMapMode !== '' ? $this->topicalMapMode : 'balanced',
+            includeReviewedClusters: false,
+            preserveManualTopics: true,
+        ));
 
         if ($result->success) {
             $this->loadOverview();
             $this->loadTopicalMap();
+        }
+    }
+
+    public function reviewTopicalMap(): void
+    {
+        $ref = (string) ($this->topicalMap['map_version_ref'] ?? '');
+        if ($ref === '') {
+            return;
+        }
+
+        $result = $this->dispatchCommand(new ReviewTopicalMapCommand($this->workspaceRef, $ref));
+        if ($result->success) {
+            $this->loadTopicalMap();
+        }
+    }
+
+    public function approveTopicalMap(): void
+    {
+        $ref = (string) ($this->topicalMap['map_version_ref'] ?? '');
+        if ($ref === '') {
+            return;
+        }
+
+        $result = $this->dispatchCommand(new ApproveTopicalMapCommand(
+            $this->workspaceRef,
+            $ref,
+            false,
+            null,
+        ));
+
+        if ($result->success) {
+            $this->loadTopicalMap();
+        } elseif (isset($result->metadata['confirmation_token'])) {
+            $result = $this->dispatchCommand(new ApproveTopicalMapCommand(
+                $this->workspaceRef,
+                $ref,
+                false,
+                (string) $result->metadata['confirmation_token'],
+            ));
+            if ($result->success) {
+                $this->loadTopicalMap();
+            }
+        }
+    }
+
+    public function saveTopicalMapVersion(): void
+    {
+        $result = $this->dispatchCommand(new SaveTopicalMapVersionCommand(
+            $this->workspaceRef,
+            $this->topicalMapMode !== '' ? $this->topicalMapMode : null,
+        ));
+
+        if ($result->success) {
+            $this->loadTopicalMap();
+        }
+    }
+
+    public function previewConvertFromMap(): void
+    {
+        $ref = (string) ($this->topicalMap['map_version_ref'] ?? '');
+        if ($ref === '' || ($this->topicalMap['status'] ?? '') !== 'approved') {
+            return;
+        }
+
+        $result = $this->dispatchCommand(new PreviewContentProjectFromTopicalMapCommand(
+            $this->workspaceRef,
+            $ref,
+            $this->mapConversionPolicy !== '' ? $this->mapConversionPolicy : 'new_only',
+        ));
+
+        if ($result->success) {
+            $this->mapConvertPreview = (array) ($result->metadata['preview'] ?? []);
+            $this->mapConvertConfirmationToken = isset($result->metadata['confirmation_token'])
+                ? (string) $result->metadata['confirmation_token']
+                : null;
+        }
+    }
+
+    public function convertFromMap(): void
+    {
+        $ref = (string) ($this->topicalMap['map_version_ref'] ?? '');
+        if ($ref === '' || ($this->topicalMap['status'] ?? '') !== 'approved') {
+            return;
+        }
+
+        $result = $this->dispatchCommand(new CreateContentProjectFromTopicalMapCommand(
+            workspaceRef: $this->workspaceRef,
+            mapVersionRef: $ref,
+            policy: $this->mapConversionPolicy !== '' ? $this->mapConversionPolicy : 'new_only',
+            confirmationToken: $this->mapConvertConfirmationToken,
+        ));
+
+        if ($result->success) {
+            $this->mapConvertPreview = null;
+            $this->mapConvertConfirmationToken = null;
+            $this->loadTopicalMap();
+            $this->loadClusters();
+        } elseif (isset($result->metadata['confirmation_token'])) {
+            $this->mapConvertConfirmationToken = (string) $result->metadata['confirmation_token'];
+            $this->mapConvertPreview = (array) ($result->metadata['preview'] ?? $this->mapConvertPreview);
         }
     }
 
@@ -358,10 +517,33 @@ final class ViewKeywordWorkspace extends SeoPanelPage
             'map_version_ref' => (string) $version->public_ref,
             'version' => (int) $version->version,
             'status' => (string) $version->status,
+            'mode' => (string) ($version->mode ?? ''),
             'summary' => (array) ($version->summary ?? []),
             'snapshot' => (array) ($version->snapshot ?? []),
             'generated_at' => $version->generated_at?->toIso8601String(),
+            'approved_at' => $version->approved_at?->toIso8601String(),
         ] : null;
+
+        if (is_string($version?->mode) && $version->mode !== '') {
+            $this->topicalMapMode = (string) $version->mode;
+        }
+
+        $this->topics = SeoKiTopic::query()
+            ->where('workspace_id', $workspace->id)
+            ->orderBy('depth')
+            ->orderBy('id')
+            ->limit(300)
+            ->get()
+            ->map(static fn (SeoKiTopic $t): array => [
+                'topic_ref' => (string) $t->public_ref,
+                'name' => (string) $t->name,
+                'topic_type' => $t->topic_type instanceof \BackedEnum ? $t->topic_type->value : (string) $t->topic_type,
+                'status' => $t->status instanceof \BackedEnum ? $t->status->value : (string) $t->status,
+                'depth' => (int) $t->depth,
+                'cluster_count' => (int) $t->cluster_count,
+                'keyword_count' => (int) $t->keyword_count,
+            ])
+            ->all();
     }
 
     private function loadCannibalization(): void

@@ -17,11 +17,16 @@ class SeoTopicalMapVersion extends Model
 
     protected $casts = [
         'workspace_id' => 'integer',
+        'tenant_id' => 'integer',
+        'site_id' => 'integer',
         'version' => 'integer',
         'snapshot' => 'array',
         'summary' => 'array',
         'generated_by' => 'integer',
         'generated_at' => 'datetime',
+        'approved_at' => 'datetime',
+        'approved_by' => 'integer',
+        'superseded_by_version_id' => 'integer',
     ];
 
     /** @return BelongsTo<SeoKeywordWorkspace, $this> */

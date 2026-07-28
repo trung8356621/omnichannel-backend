@@ -42,6 +42,8 @@
                 ])
             @endif
 
+            @include('seo-content-ai::seo.performance-hub.partials.gsc-intelligence-panel')
+
             <nav class="performance-hub-tabs" aria-label="{{ __('seo-content-ai::filament.performance_hub.tabs_label') }}">
                 @foreach ([
                     'queries' => __('seo-content-ai::filament.performance_hub.tab_queries'),

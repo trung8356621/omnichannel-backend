@@ -34,15 +34,21 @@ seo_gsc_master_connections (1 row = 1 Google account / 1 credential set)
 | `seo_gsc_master_connections` | **`mysql` (core)** | name, status, `oauth_client_id`, `oauth_client_secret` (encrypted), `credentials` (encrypted JSON tokens), `account_email`, `metadata.properties` |
 | `seo_gsc_property_mappings` | **`mysql` (core)** | map `site_id` (domain header) → GSC property URL |
 
-**Lưu ý:** Không dùng `omi_seo_ai`. Migration: `app/Addons/SeoContentAi/database/migrations/2026_07_11_100000_create_seo_external_api_connections_tables.php`.
+**Lưu ý:** OAuth/master/mapping tables **không** nằm trên `omi_seo_ai`. Migration: `app/Addons/SeoContentAi/database/migrations/2026_07_11_100000_create_seo_external_api_connections_tables.php`.
 
-### 2.2 Dữ liệu Performance Hub (tách biệt)
+### 2.2 Dữ liệu Performance Hub (legacy snapshot)
 
-KPI/query trên Performance Hub đọc **site meta** `gsc_query_snapshot` (bảng meta site core), **không** đọc trực tiếp `seo_gsc_master_connections`.
+KPI/query **legacy** trên Performance Hub đọc **site meta** `gsc_query_snapshot` (bảng meta site core), **không** đọc trực tiếp `seo_gsc_master_connections`.
 
 Luồng ghi snapshot: `GoogleSearchConsoleSyncService::syncSite()` → GSC API → `Site::setMeta('gsc_query_snapshot', ...)`.
 
 Nếu API fail → fallback `syncFromLegacySnapshot()` (chỉ kiểm tra meta cũ còn hay không).
+
+### 2.3 GSC Intelligence facts (Phase 5 — tách biệt)
+
+Canonical Search Analytics facts / mappings / opportunities nằm trên connection **`omi_seo_ai`** (migration `2026_07_28_180000_create_gsc_intelligence_tables.php`). Không duplicate OAuth credential từ master connections.
+
+Xem [GSC_INTELLIGENCE.md](GSC_INTELLIGENCE.md) + [GSC_DATA_MODEL.md](GSC_DATA_MODEL.md). Overlay UI additive trên Performance Hub — **chưa** thay snapshot legacy.
 
 ---
 

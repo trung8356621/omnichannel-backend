@@ -6,11 +6,15 @@ namespace App\Addons\SeoContentAi\Services\KeywordIntelligence\Application;
 
 use App\Addons\SeoContentAi\Models\KeywordIntelligence\SeoKeywordAnalysisOperation;
 use App\Addons\SeoContentAi\Models\KeywordIntelligence\SeoKeywordCluster;
+use App\Addons\SeoContentAi\Models\KeywordIntelligence\SeoKeywordProjectConversion;
 use App\Addons\SeoContentAi\Models\KeywordIntelligence\SeoKeywordWorkspace;
 use App\Addons\SeoContentAi\Models\KeywordIntelligence\SeoKiKeyword;
+use App\Addons\SeoContentAi\Models\KeywordIntelligence\SeoKiTopic;
+use App\Addons\SeoContentAi\Models\KeywordIntelligence\SeoTopicalLinkSuggestion;
 use App\Addons\SeoContentAi\Models\KeywordIntelligence\SeoTopicalMapVersion;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectPublicRef;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\KeywordCannibalizationService;
+use App\Addons\SeoContentAi\Services\KeywordIntelligence\KeywordTopicalMapMutationService;
 use RuntimeException;
 
 /**
@@ -21,6 +25,7 @@ final class KeywordIntelligenceReadService
 {
     public function __construct(
         private readonly KeywordCannibalizationService $cannibalization,
+        private readonly KeywordTopicalMapMutationService $mapMutations,
     ) {}
 
     /**
@@ -129,9 +134,201 @@ final class KeywordIntelligenceReadService
                 'map_version_ref' => $latest->public_ref,
                 'version' => $latest->version,
                 'status' => $latest->status,
+                'mode' => $latest->mode,
                 'snapshot' => $latest->snapshot,
                 'summary' => $latest->summary,
                 'generated_at' => $latest->generated_at?->toIso8601String(),
+                'approved_at' => $latest->approved_at?->toIso8601String(),
+            ],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    public function listTopics(int $siteId, string $workspaceRef, array $input = []): array
+    {
+        $workspace = $this->resolveWorkspace($siteId, $workspaceRef);
+        $limit = max(1, min(500, (int) ($input['limit'] ?? 200)));
+
+        $rows = SeoKiTopic::query()
+            ->where('workspace_id', $workspace->id)
+            ->orderBy('depth')
+            ->orderBy('id')
+            ->limit($limit)
+            ->get()
+            ->map(fn (SeoKiTopic $t): array => $this->serializeTopic($t))
+            ->all();
+
+        return ['workspace_ref' => $workspace->public_ref, 'topics' => $rows];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getTopic(int $siteId, string $workspaceRef, string $topicRef): array
+    {
+        $workspace = $this->resolveWorkspace($siteId, $workspaceRef);
+        $topic = $this->mapMutations->resolveTopic($workspace, $topicRef);
+
+        return ['workspace_ref' => $workspace->public_ref, 'topic' => $this->serializeTopic($topic, true)];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function listMapConflicts(int $siteId, string $workspaceRef): array
+    {
+        $workspace = $this->resolveWorkspace($siteId, $workspaceRef);
+
+        return [
+            'workspace_ref' => $workspace->public_ref,
+            'conflicts' => $this->mapMutations->detectConflicts($workspace),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    public function listLinkSuggestions(int $siteId, string $workspaceRef, array $input = []): array
+    {
+        $workspace = $this->resolveWorkspace($siteId, $workspaceRef);
+        $limit = max(1, min(500, (int) ($input['limit'] ?? 100)));
+
+        $query = SeoTopicalLinkSuggestion::query()->where('workspace_id', $workspace->id)->orderByDesc('priority');
+        $mapRef = trim((string) ($input['map_version_ref'] ?? ''));
+        if ($mapRef !== '') {
+            $query->where('topical_map_version_id', KeywordIntelligencePublicRef::resolveMapVersionIdStrict($mapRef));
+        }
+
+        $rows = $query->limit($limit)->get()->map(static function (SeoTopicalLinkSuggestion $s): array {
+            return [
+                'link_suggestion_ref' => $s->public_ref,
+                'relationship' => $s->relationship,
+                'status' => $s->status,
+                'priority' => $s->priority !== null ? (float) $s->priority : null,
+                'confidence' => $s->confidence !== null ? (float) $s->confidence : null,
+                'reason_codes' => $s->reason_codes,
+                'source_cluster_ref' => $s->source_cluster_id !== null
+                    ? KeywordIntelligencePublicRef::cluster((int) $s->source_cluster_id)
+                    : null,
+                'target_cluster_ref' => $s->target_cluster_id !== null
+                    ? KeywordIntelligencePublicRef::cluster((int) $s->target_cluster_id)
+                    : null,
+                'map_version_ref' => $s->topical_map_version_id !== null
+                    ? KeywordIntelligencePublicRef::mapVersion((int) $s->topical_map_version_id)
+                    : null,
+            ];
+        })->all();
+
+        return ['workspace_ref' => $workspace->public_ref, 'link_suggestions' => $rows];
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    public function listMapVersions(int $siteId, string $workspaceRef, array $input = []): array
+    {
+        $workspace = $this->resolveWorkspace($siteId, $workspaceRef);
+        $limit = max(1, min(100, (int) ($input['limit'] ?? 50)));
+
+        $rows = SeoTopicalMapVersion::query()
+            ->where('workspace_id', $workspace->id)
+            ->orderByDesc('version')
+            ->limit($limit)
+            ->get()
+            ->map(static fn (SeoTopicalMapVersion $v): array => [
+                'map_version_ref' => $v->public_ref,
+                'version' => $v->version,
+                'status' => $v->status,
+                'mode' => $v->mode,
+                'summary' => $v->summary,
+                'generated_at' => $v->generated_at?->toIso8601String(),
+                'approved_at' => $v->approved_at?->toIso8601String(),
+            ])
+            ->all();
+
+        return ['workspace_ref' => $workspace->public_ref, 'map_versions' => $rows];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function compareMapVersions(
+        int $siteId,
+        string $workspaceRef,
+        string $leftMapVersionRef,
+        string $rightMapVersionRef,
+    ): array {
+        $workspace = $this->resolveWorkspace($siteId, $workspaceRef);
+        $left = $this->mapMutations->resolveMapVersion($workspace, $leftMapVersionRef);
+        $right = $this->mapMutations->resolveMapVersion($workspace, $rightMapVersionRef);
+
+        $leftPillars = collect((array) (($left->snapshot['pillars'] ?? []) ?: []))->keyBy('topic_ref');
+        $rightPillars = collect((array) (($right->snapshot['pillars'] ?? []) ?: []))->keyBy('topic_ref');
+
+        $added = $rightPillars->keys()->diff($leftPillars->keys())->values()->all();
+        $removed = $leftPillars->keys()->diff($rightPillars->keys())->values()->all();
+        $shared = $leftPillars->keys()->intersect($rightPillars->keys());
+        $changed = [];
+        foreach ($shared as $ref) {
+            if (($leftPillars[$ref]['cluster_count'] ?? null) !== ($rightPillars[$ref]['cluster_count'] ?? null)
+                || ($leftPillars[$ref]['name'] ?? null) !== ($rightPillars[$ref]['name'] ?? null)) {
+                $changed[] = $ref;
+            }
+        }
+
+        return [
+            'workspace_ref' => $workspace->public_ref,
+            'left' => [
+                'map_version_ref' => $left->public_ref,
+                'version' => $left->version,
+                'status' => $left->status,
+                'summary' => $left->summary,
+            ],
+            'right' => [
+                'map_version_ref' => $right->public_ref,
+                'version' => $right->version,
+                'status' => $right->status,
+                'summary' => $right->summary,
+            ],
+            'diff' => [
+                'pillars_added' => $added,
+                'pillars_removed' => $removed,
+                'pillars_changed' => $changed,
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getConversion(int $siteId, string $conversionRef): array
+    {
+        $id = KeywordIntelligencePublicRef::resolveConversionIdStrict($conversionRef);
+        $conversion = SeoKeywordProjectConversion::query()->find($id);
+
+        if (! $conversion instanceof SeoKeywordProjectConversion) {
+            throw new RuntimeException('Conversion không tồn tại.');
+        }
+
+        if ($siteId > 0 && (int) $conversion->site_id !== $siteId) {
+            throw new RuntimeException('Conversion không thuộc site hiện tại.');
+        }
+
+        return [
+            'conversion' => [
+                'conversion_ref' => $conversion->public_ref,
+                'workspace_ref' => KeywordIntelligencePublicRef::workspace((int) $conversion->workspace_id),
+                'map_version_ref' => KeywordIntelligencePublicRef::mapVersion((int) $conversion->topical_map_version_id),
+                'content_project_ref' => $conversion->content_project_ref,
+                'status' => $conversion->status,
+                'selected_cluster_refs' => $conversion->selected_cluster_refs,
+                'summary' => $conversion->summary,
+                'created_at' => $conversion->created_at?->toIso8601String(),
             ],
         ];
     }
@@ -240,6 +437,34 @@ final class KeywordIntelligenceReadService
                 : null,
             'is_primary' => (bool) $keyword->is_primary,
         ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function serializeTopic(SeoKiTopic $topic, bool $detailed = false): array
+    {
+        $base = [
+            'topic_ref' => $topic->public_ref,
+            'parent_topic_ref' => $topic->parent_id !== null
+                ? KeywordIntelligencePublicRef::topic((int) $topic->parent_id)
+                : null,
+            'name' => $topic->name,
+            'slug' => $topic->slug,
+            'topic_type' => $topic->topic_type instanceof \BackedEnum ? $topic->topic_type->value : (string) $topic->topic_type,
+            'status' => $topic->status instanceof \BackedEnum ? $topic->status->value : (string) $topic->status,
+            'depth' => (int) $topic->depth,
+            'keyword_count' => (int) $topic->keyword_count,
+            'cluster_count' => (int) $topic->cluster_count,
+            'total_search_volume' => (int) $topic->total_search_volume,
+        ];
+
+        if ($detailed) {
+            $base['path'] = $topic->path;
+            $base['metadata'] = $topic->metadata;
+        }
+
+        return $base;
     }
 
     /**

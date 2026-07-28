@@ -79,3 +79,28 @@ Không phục hồi AI workspace / prompt / execution / media / publish process 
 {"name":"content_project.generate","arguments":{"project_ref":"cpj_...","item_refs":["cpi_..."],"idempotency_key":"gen-1"}}
 {"name":"content_project.get_operation","arguments":{"operation_ref":"..."}}
 ```
+
+## Phase 4 — SERP capabilities (additive)
+
+Future agent flow may include read-only SERP steps before convert:
+
+```
+serp_intelligence.import_snapshot (preview)
+serp_intelligence.validate_cluster
+serp_intelligence.apply_intent_suggestion  (blocked when manual intent locked)
+```
+
+Manual keyword intent (`field_sources.intent=manual`) wins — reconciler never auto-overwrites. See [SERP_INTENT_EVIDENCE.md](SERP_INTENT_EVIDENCE.md).
+
+## Phase 5 — GSC Intelligence (additive)
+
+Future agent flow may include GSC sync/import and opportunity review:
+
+```
+gsc_intelligence.import_performance_data (preview)
+gsc_intelligence.detect_opportunities
+gsc_intelligence.preview_create_content_project
+gsc_intelligence.create_content_project_from_opportunities
+```
+
+Handlers under `Services/GscIntelligence/Application/Handlers/` must not import `Google\Client`. See [GSC_INTELLIGENCE.md](GSC_INTELLIGENCE.md).

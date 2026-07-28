@@ -67,6 +67,81 @@ final class KeywordIntelligenceReadService
      * @param  array<string, mixed>  $input
      * @return array<string, mixed>
      */
+    public function listTopics(AgentExecutionContext $context, array $input): array
+    {
+        return $this->reads->listTopics($this->siteId($context), $this->workspaceRef($input), $input);
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    public function getTopic(AgentExecutionContext $context, array $input): array
+    {
+        return $this->reads->getTopic(
+            $this->siteId($context),
+            $this->workspaceRef($input),
+            trim((string) ($input['topic_ref'] ?? '')),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    public function listMapConflicts(AgentExecutionContext $context, array $input): array
+    {
+        return $this->reads->listMapConflicts($this->siteId($context), $this->workspaceRef($input));
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    public function listLinkSuggestions(AgentExecutionContext $context, array $input): array
+    {
+        return $this->reads->listLinkSuggestions($this->siteId($context), $this->workspaceRef($input), $input);
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    public function listMapVersions(AgentExecutionContext $context, array $input): array
+    {
+        return $this->reads->listMapVersions($this->siteId($context), $this->workspaceRef($input), $input);
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    public function compareMapVersions(AgentExecutionContext $context, array $input): array
+    {
+        return $this->reads->compareMapVersions(
+            $this->siteId($context),
+            $this->workspaceRef($input),
+            trim((string) ($input['left_map_version_ref'] ?? '')),
+            trim((string) ($input['right_map_version_ref'] ?? '')),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    public function getConversion(AgentExecutionContext $context, array $input): array
+    {
+        return $this->reads->getConversion(
+            $this->siteId($context),
+            trim((string) ($input['conversion_ref'] ?? '')),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
     public function getCannibalization(AgentExecutionContext $context, array $input): array
     {
         return $this->reads->listCannibalization($this->siteId($context), $this->workspaceRef($input));
