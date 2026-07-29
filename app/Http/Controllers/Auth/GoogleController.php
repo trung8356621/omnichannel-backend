@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
@@ -45,6 +46,10 @@ class GoogleController extends Controller
             request()->session()->regenerate();
 
             if ($user->isStaff()) {
+                if (SeoAccessControl::canAccessAdminAutomationPanel($user)) {
+                    return redirect()->intended('/admin/automation/flows');
+                }
+
                 return redirect('/');
             }
 
@@ -61,6 +66,10 @@ class GoogleController extends Controller
         $user ??= auth()->user();
 
         if ($user instanceof User && $user->isStaff()) {
+            if (SeoAccessControl::canAccessAdminAutomationPanel($user)) {
+                return '/admin/automation/flows';
+            }
+
             return '/';
         }
 

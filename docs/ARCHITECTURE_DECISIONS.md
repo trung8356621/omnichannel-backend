@@ -58,15 +58,19 @@ Mỗi ADR bất biến sau khi `Status: Accepted`. Muốn đổi hành vi đã k
 
 **Status:** Accepted
 
-**Context:** Run/execution record phục vụ audit và điều phối pipeline execution, không phải public API.
+**Context:** Run/execution record phục vụ audit và điều phối pipeline execution, không phải public API / UX chính.
 
-**Decision:** `SeoProjectRun` (và các bảng execution liên quan) chỉ được truy cập nội bộ trong Services layer. Public API/Agent chỉ thấy dữ liệu qua `operation_ref` / `get_operation` capability, không expose run ID thô hay cấu trúc bảng.
+**Decision:**
+- `SeoProjectRun` (và bảng execution liên quan) chỉ truy cập nội bộ trong Services / RunEngine.
+- Public API/Agent chỉ thấy dữ liệu qua `operation_ref` / `get_operation`.
+- **UI canonical:** Content Project → Project Items → Article (`ViewSeoProject` / `EditSeoProject`).
+- **Không** còn lớp điều hướng Run History / Run Detail như UX chính. Route legacy `/{record}/runs`, `/runs/{run}`, `/runs/{run}/items/{article}` chỉ **redirect** về project workspace (hoặc 404 nếu không resolve được project).
 
-**Consequences:** Đổi schema execution nội bộ không phá contract public.
+**Consequences:** `/content-projects/{id}` = canonical operations workspace (một bảng items: generation + lifecycle + queue). Publishing Queue chỉ còn compatibility redirect + filter query. Semantic status badges (`ContentProjectStatusBadgePresenter`). Generate pending chỉ never-generated. Không phục hồi tầng Run History.
 
-**Forbidden alternatives:** Trả `run_id` số nguyên thô qua Agent/API response; Agent query trực tiếp bảng run.
+**Forbidden alternatives:** Trả `run_id` số nguyên thô qua Agent/API; Agent query bảng run; phục hồi Run History như hub UI chính.
 
-**Enforcement:** `ContentProjectApplicationApiFoundationTest` (public ref format).
+**Enforcement:** `ContentProjectApplicationApiFoundationTest`; Filament redirect stubs `ListSeoProjectRuns` / `ViewSeoProjectRun` / `ViewSeoProjectRunStep`.
 
 ---
 

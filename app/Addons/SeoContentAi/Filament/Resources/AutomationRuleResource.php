@@ -12,19 +12,23 @@ use App\Addons\SeoContentAi\Automation\BusinessHook\Registry\AutomationActionReg
 use App\Addons\SeoContentAi\Automation\BusinessHook\Registry\BusinessEventRegistry;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationRuleService;
 use App\Addons\SeoContentAi\Automation\Exceptions\AutomationException;
+use App\Addons\SeoContentAi\Filament\Concerns\BelongsToAdminAutomationPanel;
 use App\Addons\SeoContentAi\Filament\Resources\AutomationRuleResource\Pages;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
+use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Validation\ValidationException;
 
-class AutomationRuleResource extends SeoPanelResource
+class AutomationRuleResource extends Resource
 {
+    use BelongsToAdminAutomationPanel;
+
     protected static ?string $model = AutomationRule::class;
 
     protected static ?string $slug = 'automation-rules';
@@ -33,31 +37,54 @@ class AutomationRuleResource extends SeoPanelResource
 
     protected static ?string $navigationIcon = 'heroicon-o-bolt';
 
-    protected static ?string $navigationGroup = 'Automation';
+    protected static ?int $navigationSort = 1;
 
-    protected static ?int $navigationSort = 90;
+    /**
+     * @param  array<string, mixed>  $parameters
+     */
+    public static function getUrl(
+        string $name = 'index',
+        array $parameters = [],
+        bool $isAbsolute = true,
+        ?string $panel = null,
+        ?Model $tenant = null,
+    ): string {
+        return parent::getUrl(
+            $name,
+            $parameters,
+            $isAbsolute,
+            $panel ?? self::adminPanelId(),
+            $tenant,
+        );
+    }
 
     public static function getNavigationLabel(): string
     {
         return __('seo-content-ai::filament.automation.nav_rules');
     }
 
+    /**
+     * Hide Rules from Admin sidebar — technical UI; Flows is primary read-only surface.
+     * Route /admin/automation-rules stays registered for direct URL access.
+     */
+    public static function shouldRegisterNavigation(): bool
+    {
+        return false;
+    }
+
     public static function canViewAny(): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures()
-            || SeoAccessControl::canMutateInSeoPanel();
+        return SeoAccessControl::canViewAutomationRules();
     }
 
     public static function canCreate(): bool
     {
-        return static::allowsSeoPanelMutation()
-            && (SeoAccessControl::canAccessPlannerFeatures() || SeoAccessControl::canMutateInSeoPanel());
+        return SeoAccessControl::canManageAutomationRules();
     }
 
     public static function canEdit(Model $record): bool
     {
-        return static::allowsSeoPanelMutation()
-            && (SeoAccessControl::canAccessPlannerFeatures() || SeoAccessControl::canMutateInSeoPanel());
+        return SeoAccessControl::canManageAutomationRules();
     }
 
     public static function canDelete(Model $record): bool

@@ -29,7 +29,7 @@
 | **ListDomains** | `domains` | Danh sách domain + header actions: Global CTA settings, Add domain |
 | **CreateDomain** | `create` | Tạo domain mới với SEO defaults (tone, short_description, CTA) |
 | **EditDomain** | `{record}/edit` | Edit domain + CTA/tone/links + persist SEO meta |
-| **GeneralDomain** | `{record}/general` | **Overview chính** (1044 dòng): API tokens, score distribution, sync stats, top keywords/links, technical SEO summary. Actions: delete, incremental sync, metadata resync, keyword resync, link audit, test sync |
+| **GeneralDomain** | `{record}/general` | **Overview chính**: API tokens, **MCP Markdown** (readonly collapsible từ `McpCapabilityMarkdownPresenter` / Capability Registry — không còn route/page `/mcp-capabilities` riêng), score distribution, sync stats, top keywords/links, technical SEO summary. Actions: delete, incremental sync, metadata resync, keyword resync, link audit, test sync |
 | **ListDomainInternalLinks** | `{record}/internal-links` | Internal links với tab keywords/links |
 | **RedirectDomainInfoToEdit** | `{record}/info` | Redirect `/info` → `/edit` |
 | **DomainGlobalCtaSettings** | `domains/settings` | Global CTA settings (working_hours, zalo...) — lưu WpOption |

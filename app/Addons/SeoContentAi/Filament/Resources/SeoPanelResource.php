@@ -12,6 +12,13 @@ abstract class SeoPanelResource extends Resource
 {
     use InteractsWithSeoConnectionResourceRoutes;
 
+    protected static ?string $navigationGroup = null;
+
+    public static function getNavigationGroup(): ?string
+    {
+        return null;
+    }
+
     protected static function allowsSeoPanelMutation(): bool
     {
         return SeoAccessControl::canMutateInSeoPanel();

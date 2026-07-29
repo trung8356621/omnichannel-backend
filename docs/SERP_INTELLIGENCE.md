@@ -41,6 +41,10 @@ Ví dụ: `CollectSerpSnapshotsCommand`, `ImportSerpSnapshotCommand`, `ValidateC
 
 Filament `ViewKeywordWorkspace` tab **SERP Intelligence** — Alpine sub-tabs (Overview/Queries/Snapshots/…).
 
+## Agent Workspace skills
+
+SERP capabilities qua Agent slash: `/create-serp-queries`, `/import-serp`, `/collect-serp`, `/validate-cluster-serp`, `/list-content-gaps`. `/collect-serp` requires SERP provider configured — xem [AGENT_SKILLS.md](AGENT_SKILLS.md) availability `not_configured`.
+
 ## Docs
 
 - [SERP_PROVIDER_CONTRACT.md](SERP_PROVIDER_CONTRACT.md)

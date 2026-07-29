@@ -17,17 +17,19 @@ final class AiKeywordDiscovery extends SeoPanelPage
 
     protected static ?string $navigationIcon = 'heroicon-o-sparkles';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
+
+    protected static ?string $navigationParentItem = 'Keyword Intelligence';
 
     protected static ?string $navigationLabel = 'AI Keyword Discovery';
 
-    protected static ?int $navigationSort = 12;
+    protected static ?int $navigationSort = 2;
 
     protected static ?string $slug = 'keywords/ai-discovery';
 
     protected static string $view = 'seo-content-ai::seo.ai-keyword-discovery';
 
-    protected static bool $shouldRegisterNavigation = false;
+    protected static bool $shouldRegisterNavigation = true;
 
     public function boot(
         AiKeywordDiscoveryService $discovery,
@@ -40,6 +42,21 @@ final class AiKeywordDiscovery extends SeoPanelPage
     public static function canAccess(array $parameters = []): bool
     {
         return SeoAccessControl::canAccessPlannerFeatures();
+    }
+
+    public static function shouldRegisterNavigation(array $parameters = []): bool
+    {
+        return SeoAccessControl::canAccessPlannerFeatures();
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.keyword.ai_discovery_nav');
+    }
+
+    public static function getNavigationParentItem(): ?string
+    {
+        return __('seo-content-ai::filament.keyword_intelligence.nav');
     }
 
     public function mount(): void

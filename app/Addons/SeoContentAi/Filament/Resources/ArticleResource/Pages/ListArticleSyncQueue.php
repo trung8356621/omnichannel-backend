@@ -21,6 +21,8 @@ class ListArticleSyncQueue extends ListRecords
 
     protected static ?string $navigationIcon = 'heroicon-o-queue-list';
 
+    protected static ?string $navigationGroup = null;
+
     protected static ?int $navigationSort = 3;
 
     protected static ?string $slug = 'queue';

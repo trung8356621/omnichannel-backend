@@ -54,7 +54,15 @@ final class RerunProjectItemsHandler extends AbstractPublishingHandler
                 $this->tenantGuard->assertTasksBelongToProject($project, $itemIds);
             }
 
-            $settings = $itemIds !== [] ? ['task_ids' => $itemIds, 'rerun' => true] : ['rerun' => true];
+            if ($itemIds === []) {
+                return ContentProjectActionResult::fail(
+                    ContentProjectActionCodes::VALIDATION_FAILED,
+                    'Rerun requires explicit item selection.',
+                    $projectId,
+                );
+            }
+
+            $settings = ['task_ids' => $itemIds, 'rerun' => true];
 
             return $this->businessLock->withLock(
                 $this->businessLock->projectGenerate($projectId),

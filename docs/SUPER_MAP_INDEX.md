@@ -14,7 +14,8 @@
 | [Article SEO Audit](MAP_SEO_AUDIT.md) | ArticlesOptimal — optimistic skip/assign (Alpine hide row + `skipRender`); project capacity ≤2 toast, 0 ẩn select |
 | [Xử lý Thư viện ảnh, Upload & Watermark](MAP_SEO_MEDIA.md) | `/api/seo/media/*`, SeoMediaController, upload pipeline |
 | [Cơ chế Đồng bộ & Cầu nối WordPress](MAP_SEO_WP.md) | WP bridge inbound, sync outbound, plugin `omi-seo-ai-bridge` ≥1.0.61 (`clear_faqs`) |
-| [Content Projects & Workflow](MAP_SEO_PROJECTS.md) | Archive preview; Operation Center `/seo/{hash}/content-operations`; CommandBus cutover |
+| **[Site Sync V2](SITE_SYNC_V2.md)** | **Wave4 cutover/shadow/comparison/rollback — CUTOVER/SHADOW/COMPARISON/ROLLBACK/TEST_PLAYBOOK** |
+| [Content Projects & Workflow](MAP_SEO_PROJECTS.md) | Project → Items → Article; SeoProjectRun internal; Run History routes redirect; Operation Center; CommandBus |
 | [Content Project Operations](CONTENT_PROJECT_OPERATIONS.md) | Ops dashboard, metrics, replay, health, daily report (admin only) |
 | [Agent Gateway](CONTENT_PROJECT_AGENT_GATEWAY.md) | Agent/MCP → Gateway → Capability → CommandBus |
 | [Extension SDK](EXTENSION_SDK.md) | Plugin platform: registries, manifest, discovery, health |
@@ -33,6 +34,51 @@
 | [MCP Tools](CONTENT_PROJECT_MCP_TOOLS.md) | content_project.* + keyword/serp/gsc **read** tools (+ CP write/plan); schemas from registry/catalog |
 | [Agent Security](CONTENT_PROJECT_AGENT_SECURITY.md) | Scopes, policy, rate limit, error codes |
 | [Agent Workflows](CONTENT_PROJECT_AGENT_WORKFLOWS.md) | Create/Generate/Schedule/Archive flows |
+| **[Agent Workspace](AGENT_WORKSPACE.md)** | **v1.0 freeze — Phase 1–7 Agent UI; coverage audit + doctor** |
+| [Agent Workspace Handoff](AGENT_WORKSPACE_HANDOFF.md) | UI integration root cause + Quick Assistant vs Agent launcher |
+| [Agent Workspace Phase 2 Handoff](AGENT_WORKSPACE_PHASE_2_HANDOFF.md) | Execution orchestration, confirmation, plans, freeze check |
+| [Agent Workspace Phase 3 Handoff](AGENT_WORKSPACE_PHASE_3_HANDOFF.md) | AI planning, model router/gateway, validator, guarded copilot |
+| [Agent Workspace Phase 4 Handoff](AGENT_WORKSPACE_PHASE_4_HANDOFF.md) | Scoped knowledge, memory proposals, grounding |
+| [Agent Workspace Phase 5 Handoff](AGENT_WORKSPACE_PHASE_5_HANDOFF.md) | Scheduled automations, conditions, approvals, notifications |
+| [Agent Workspace Phase 6 Handoff](AGENT_WORKSPACE_PHASE_6_HANDOFF.md) | Traces, metrics, evaluation, governance, retention |
+| [Agent Workspace Phase 7 Handoff](AGENT_WORKSPACE_PHASE_7_HANDOFF.md) | Skill packs, Skill Studio, import/export, builtin eval datasets |
+| [Agent Workspace v1 Freeze](AGENT_WORKSPACE_V1_FREEZE.md) | v1.0 freeze contracts |
+| [Agent Workspace v1 Final Handoff](AGENT_WORKSPACE_V1_FINAL_HANDOFF.md) | Coverage sweep + E2E readiness |
+| [Agent Workspace v1 Capability Matrix](AGENT_WORKSPACE_V1_CAPABILITY_MATRIX.md) | Inventory matrix |
+| [Agent Workspace v1 Gap Report](AGENT_WORKSPACE_V1_GAP_REPORT.md) | Fixed vs remaining gaps |
+| [Agent Workspace v1 Test Plan](AGENT_WORKSPACE_V1_TEST_PLAN.md) | Manual E2E order |
+| [Agent Capability Coverage](AGENT_CAPABILITY_COVERAGE.md) | Audit service/command |
+| [Agent v1 Doctor](AGENT_V1_DOCTOR.md) | Readiness doctor |
+| [Agent Skills](AGENT_SKILLS.md) | Skill groups/templates |
+| [Agent Packs](AGENT_PACKS.md) | Declarative packs registry/lifecycle |
+| [Agent Pack Manifest](AGENT_PACK_MANIFEST.md) | Pack manifest schema |
+| [Agent Skill Studio](AGENT_SKILL_STUDIO.md) | Declarative skill/template editor + preview |
+| [Agent Pack Compatibility](AGENT_PACK_COMPATIBILITY.md) | Deps/conflicts/load order |
+| [Agent Pack Import/Export](AGENT_PACK_IMPORT_EXPORT.md) | Secure JSON/ZIP packages |
+| [Agent Pack Security](AGENT_PACK_SECURITY.md) | Trust, reject list, no executable upload |
+| [Agent Pack Evaluation](AGENT_PACK_EVALUATION.md) | Pack-namespaced offline datasets |
+| [Agent Evaluation](AGENT_EVALUATION.md) | Builtin datasets + `agent:evaluate` |
+| [Agent Automations](AGENT_AUTOMATIONS.md) | Phase 5 automation types, dispatch, slash skills |
+| [Agent Observability](AGENT_OBSERVABILITY.md) | Phase 6 tracing/metrics/ops dashboard |
+| [Agent Knowledge Base](AGENT_KNOWLEDGE_BASE.md) | Knowledge orchestrator, tables, skills |
+| [Agent Memory](AGENT_MEMORY.md) | Proposal/approve flow — no auto-persist |
+| [Agent Knowledge Retrieval](AGENT_KNOWLEDGE_RETRIEVAL.md) | DB keyword index + grounded package |
+| [Agent Knowledge Citations](AGENT_KNOWLEDGE_CITATIONS.md) | Server [K#] handles |
+| [Agent Knowledge Security](AGENT_KNOWLEDGE_SECURITY.md) | Sanitize, secrets, upload limits |
+| [Agent Planning](AGENT_PLANNING.md) | Structured planning response + confidence policy |
+| [Agent Model Routing](AGENT_MODEL_ROUTING.md) | Registry-based model selection for planning tasks |
+| [Agent Context Budget](AGENT_CONTEXT_BUDGET.md) | Prompt section budget / token estimate |
+| [Agent Conversation Summary](AGENT_CONVERSATION_SUMMARY.md) | Versioned chat summary lifecycle |
+| [Agent Prompt Security](AGENT_PROMPT_SECURITY.md) | Untrusted content + output strip + server authority |
+| [Agent Execution](AGENT_EXECUTION.md) | Orchestrator, state machine, idempotency |
+| [Agent Confirmation](AGENT_CONFIRMATION.md) | `awconf_` tokens — hash-only persistence |
+| [Agent Result Rendering](AGENT_RESULT_RENDERING.md) | Renderer registry — no business queries |
+| [Agent Execution Plans](AGENT_EXECUTION_PLANS.md) | Sequential plan steps — no Run All |
+| [Agent Skills](AGENT_SKILLS.md) | `AgentSkillRegistry`, availability, category catalog |
+| [Agent Slash Commands](AGENT_SLASH_COMMANDS.md) | Slash palette UX + shipped command table |
+| [Agent Chat Templates](AGENT_CHAT_TEMPLATES.md) | Builtin shortcuts → skill_key direct open |
+| [Agent Workspace Security](AGENT_WORKSPACE_SECURITY.md) | Site isolation, confirmation, Phase 5 automation security |
+| [Agent Capability Diagnostics](AGENT_CAPABILITY_DIAGNOSTICS.md) | Manager diagnostics panel — no credentials |
 | [Settings, Prompts & AI Connections](MAP_SEO_SETTINGS.md) | Settings, PromptResource, PromptRunnerService, API Connections |
 | [Prompt Hooks](prompt-hooks/README.md) | Contract từng Hook (title / meta description) — Phase 1 (**EXPERIMENTAL** tới khi Spec khóa) |
 | [Prompt Hook / Workflow Audit (5A)](automation/prompt/PROMPT_WORKFLOW_INVENTORY.md) | Inventory + Spec v0.1 |

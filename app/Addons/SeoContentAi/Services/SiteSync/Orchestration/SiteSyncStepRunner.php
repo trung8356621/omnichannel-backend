@@ -1,0 +1,674 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Services\SiteSync\Orchestration;
+
+use App\Addons\SeoContentAi\Jobs\SiteSync\ProcessSiteSyncStepJob;
+use App\Addons\SeoContentAi\Models\SiteSync\SeoSiteLinkCatalog;
+use App\Addons\SeoContentAi\Models\SiteSync\SeoSiteSyncBatch;
+use App\Addons\SeoContentAi\Models\SiteSync\SeoSiteSyncRun;
+use App\Addons\SeoContentAi\Models\SiteSync\SeoSiteSyncRunStep;
+use App\Addons\SeoContentAi\Services\SiteSync\Capability\SiteCapabilityResolver;
+use App\Addons\SeoContentAi\Services\SiteSync\Contracts\SiteSyncBatchData;
+use App\Addons\SeoContentAi\Services\SiteSync\Contracts\SiteSyncSchema;
+use App\Addons\SeoContentAi\Services\SiteSync\Fallback\WorkspaceFallbackRegistry;
+use App\Addons\SeoContentAi\Services\SiteSync\Inbound\SiteSyncStagingWriter;
+use App\Addons\SeoContentAi\Services\SiteSync\Inbound\WordPressSiteSyncClient;
+use App\Addons\SeoContentAi\Services\SiteSync\Reconciliation\ProviderKeywordReconciler;
+use App\Addons\SeoContentAi\Services\SiteSync\Reconciliation\SiteSyncBatchReconciler;
+use App\Addons\SeoContentAi\Services\SiteSync\Support\SiteSyncSiteMeta;
+use App\Models\Site as CoreSite;
+use App\Support\RuntimeLogger;
+use Illuminate\Support\Facades\Http;
+use Throwable;
+
+final class SiteSyncStepRunner
+{
+    public function __construct(
+        private readonly WordPressSiteSyncClient $client,
+        private readonly SiteCapabilityResolver $capabilities,
+        private readonly SiteSyncStagingWriter $staging,
+        private readonly SiteSyncBatchReconciler $reconciler,
+        private readonly WorkspaceFallbackRegistry $fallbacks,
+        private readonly SiteSyncFeatureFlags $flags,
+    ) {}
+
+    public function runNext(int $runId, bool $dispatchContinue = true): void
+    {
+        $run = SeoSiteSyncRun::query()->with('steps')->find($runId);
+        if ($run === null) {
+            return;
+        }
+
+        if (in_array($run->status, ['completed', 'cancelled', 'canceled'], true)) {
+            return;
+        }
+
+        if (! $this->flags->orchestratorEnabled()) {
+            $run->forceFill([
+                'status' => 'failed',
+                'error_message' => 'Orchestrator disabled',
+                'finished_at' => now(),
+            ])->save();
+
+            return;
+        }
+
+        $site = CoreSite::query()->find((int) $run->site_id);
+        if ($site === null) {
+            $run->forceFill([
+                'status' => 'failed',
+                'error_message' => 'Site not found',
+                'finished_at' => now(),
+            ])->save();
+
+            return;
+        }
+
+        $step = SeoSiteSyncRunStep::query()
+            ->where('run_id', $runId)
+            ->whereIn('status', ['pending', 'failed'])
+            ->orderBy('step_order')
+            ->first();
+
+        if ($step === null) {
+            $run->forceFill([
+                'status' => 'completed',
+                'current_step' => 'finalize',
+                'finished_at' => now(),
+            ])->save();
+            $this->maybeMarkBootstrapComplete($site, $run);
+
+            return;
+        }
+
+        $run->forceFill([
+            'status' => 'running',
+            'current_step' => $step->step_key,
+        ])->save();
+
+        $step->forceFill([
+            'status' => 'running',
+            'started_at' => $step->started_at ?? now(),
+            'error_message' => null,
+        ])->save();
+
+        try {
+            $metrics = $this->executeStep($site, $run, (string) $step->step_key);
+
+            if (! empty($metrics['__defer_step'])) {
+                unset($metrics['__defer_step']);
+                $step->forceFill([
+                    'status' => 'running',
+                    'metrics' => $metrics,
+                    'error_message' => null,
+                ])->save();
+
+                $counters = is_array($run->counters) ? $run->counters : [];
+                foreach ($metrics as $key => $value) {
+                    if (is_int($value) || is_float($value)) {
+                        $counters[$key] = (int) $value;
+                    }
+                }
+                $run->counters = $counters;
+                $run->forceFill([
+                    'status' => 'running',
+                    'current_step' => $step->step_key,
+                ])->save();
+
+                $delaySeconds = max(5, (int) ($metrics['defer_seconds'] ?? 20));
+                if ($dispatchContinue) {
+                    ProcessSiteSyncStepJob::dispatch($runId)->delay(now()->addSeconds($delaySeconds));
+                }
+
+                return;
+            }
+
+            $step->forceFill([
+                'status' => 'completed',
+                'metrics' => $metrics,
+                'finished_at' => now(),
+            ])->save();
+
+            $counters = is_array($run->counters) ? $run->counters : [];
+            foreach ($metrics as $key => $value) {
+                if (! is_int($value) && ! is_float($value)) {
+                    continue;
+                }
+                if (str_starts_with((string) $key, 'scoring_') || str_starts_with((string) $key, 'workspace_scores_')) {
+                    $counters[$key] = (int) $value;
+                } else {
+                    $counters[$key] = (int) (($counters[$key] ?? 0) + (int) $value);
+                }
+            }
+            if (isset($metrics['warnings']) && is_array($metrics['warnings'])) {
+                $warnings = is_array($run->warnings) ? $run->warnings : [];
+                $run->warnings = array_values(array_unique([...$warnings, ...$metrics['warnings']]));
+            }
+            $run->counters = $counters;
+            $run->cursor = isset($metrics['cursor']) ? (string) $metrics['cursor'] : $run->cursor;
+            $run->save();
+
+            $hasMoreBatches = (bool) ($metrics['has_more'] ?? false);
+            if ($hasMoreBatches && $step->step_key === 'request_snapshot_delta') {
+                $meta = is_array($run->meta) ? $run->meta : [];
+                $meta['pending_cursor'] = $metrics['cursor'] ?? null;
+                $meta['has_more_batches'] = true;
+                $run->meta = $meta;
+                $run->save();
+            }
+
+            $next = SeoSiteSyncRunStep::query()
+                ->where('run_id', $runId)
+                ->where('status', 'pending')
+                ->orderBy('step_order')
+                ->first();
+
+            if ($next === null) {
+                $failedScores = (int) ($counters['scoring_failed'] ?? 0);
+                $finalStatus = $failedScores > 0 || (is_array($run->warnings) && $run->warnings !== [])
+                    ? 'completed_with_warnings'
+                    : 'completed';
+                $run->forceFill([
+                    'status' => $finalStatus,
+                    'finished_at' => now(),
+                ])->save();
+
+                return;
+            }
+
+            if ($dispatchContinue) {
+                ProcessSiteSyncStepJob::dispatch($runId);
+            } else {
+                $this->runNext($runId, false);
+            }
+        } catch (Throwable $e) {
+            RuntimeLogger::warning('site_sync.step_failed', [
+                'run_id' => $runId,
+                'step' => $step->step_key,
+                'error' => $e->getMessage(),
+            ]);
+            $step->forceFill([
+                'status' => 'failed',
+                'error_message' => $e->getMessage(),
+                'finished_at' => now(),
+            ])->save();
+            $run->forceFill([
+                'status' => 'failed',
+                'error_message' => $e->getMessage(),
+                'resumable' => true,
+            ])->save();
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function executeStep(CoreSite $site, SeoSiteSyncRun $run, string $stepKey): array
+    {
+        return match ($stepKey) {
+            'detect_capability' => $this->detectCapability($site),
+            'request_snapshot_delta' => $this->requestSnapshotDelta($site, $run),
+            'sync_site_profile' => $this->syncSiteProfile($site, $run),
+            'sync_url_catalog' => $this->syncUrlCatalog($site, $run),
+            'sync_provider_keywords' => $this->syncProviderKeywords($site, $run),
+            'missing_capability_fallback' => $this->missingCapabilityFallback($site),
+            'validate_changed_links' => $this->validateChangedLinks($site, $run),
+            'score_missing_articles' => $this->scoreMissingArticles($site, $run),
+            'finalize' => $this->finalize($run),
+            default => throw new \InvalidArgumentException('Unknown site sync step: '.$stepKey),
+        };
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function detectCapability(CoreSite $site): array
+    {
+        $result = $this->client->fetchCapabilities($site);
+        if (! ($result['success'] ?? false) || ! isset($result['manifest'])) {
+            throw new \RuntimeException((string) ($result['message'] ?? 'Capability detect failed'));
+        }
+
+        $this->capabilities->store($site, $result['manifest']);
+
+        return [
+            'capabilities_stored' => 1,
+            'bridge_version' => $result['manifest']->bridgeVersion,
+            'missing' => $this->capabilities->missingCapabilities($site),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function requestSnapshotDelta(CoreSite $site, SeoSiteSyncRun $run): array
+    {
+        $meta = is_array($run->meta) ? $run->meta : [];
+        $forceFull = $run->mode === SiteSyncSchema::MODE_FORCE_FULL
+            || (bool) ($meta['force_full'] ?? false);
+        $includeUnchanged = $forceFull || (bool) ($meta['include_unchanged'] ?? false);
+
+        $query = [
+            'mode' => $forceFull ? SiteSyncSchema::MODE_FORCE_FULL : $run->mode,
+            'cursor' => $forceFull ? null : $run->cursor,
+            'run_token' => $run->run_token,
+            'include_unchanged' => $includeUnchanged,
+        ];
+
+        // force_full / snapshot: paginated batches from start; never modified-since delta.
+        $result = ($forceFull || $run->mode === SiteSyncSchema::MODE_SNAPSHOT)
+            ? $this->client->fetchBatches($site, $query)
+            : $this->client->fetchDelta($site, $query);
+
+        if (! ($result['success'] ?? false) || ! isset($result['batch'])) {
+            throw new \RuntimeException((string) ($result['message'] ?? 'Delta/snapshot fetch failed'));
+        }
+
+        $batch = $result['batch'];
+        $staged = $this->staging->stage($site, $batch, (int) $run->id);
+
+        $batchIds = is_array($meta['batch_ids'] ?? null) ? $meta['batch_ids'] : [];
+        $batchIds[] = (int) $staged->id;
+        $meta['batch_ids'] = array_values(array_unique($batchIds));
+        if ($forceFull) {
+            $meta['include_unchanged'] = true;
+            $meta['force_full'] = true;
+        }
+        $run->meta = $meta;
+
+        $counters = is_array($run->counters) ? $run->counters : [];
+        $fetched = count($batch->articles);
+        $counters['fetched'] = (int) ($counters['fetched'] ?? 0) + $fetched;
+        $counters['checked'] = (int) ($counters['checked'] ?? 0) + $fetched;
+        $totalFromWp = (int) ($batch->raw['total_count'] ?? 0);
+        if ($forceFull && $totalFromWp > 0) {
+            $counters['total_to_check'] = max((int) ($counters['total_to_check'] ?? 0), $totalFromWp);
+        }
+        $run->counters = $counters;
+        $run->cursor = $batch->cursor;
+        $run->save();
+
+        // Keep pulling while has_more for force_full / snapshot within this step budget.
+        $loops = 0;
+        while (($forceFull || $run->mode === SiteSyncSchema::MODE_SNAPSHOT) && $batch->hasMore && $loops < 40) {
+            $loops++;
+            $run->refresh();
+            if (in_array((string) $run->status, ['canceled', 'cancelled'], true)) {
+                break;
+            }
+            $more = $this->client->fetchBatches($site, [
+                'mode' => $forceFull ? SiteSyncSchema::MODE_FORCE_FULL : $run->mode,
+                'cursor' => $run->cursor,
+                'run_token' => $run->run_token,
+                'include_unchanged' => true,
+            ]);
+            if (! ($more['success'] ?? false) || ! isset($more['batch'])) {
+                break;
+            }
+            $batch = $more['batch'];
+            $staged = $this->staging->stage($site, $batch, (int) $run->id);
+            $meta = is_array($run->meta) ? $run->meta : [];
+            $batchIds = is_array($meta['batch_ids'] ?? null) ? $meta['batch_ids'] : [];
+            $batchIds[] = (int) $staged->id;
+            $meta['batch_ids'] = array_values(array_unique($batchIds));
+            $run->meta = $meta;
+            $counters = is_array($run->counters) ? $run->counters : [];
+            $fetched = count($batch->articles);
+            $counters['fetched'] = (int) ($counters['fetched'] ?? 0) + $fetched;
+            $counters['checked'] = (int) ($counters['checked'] ?? 0) + $fetched;
+            $run->counters = $counters;
+            $run->cursor = $batch->cursor;
+            $run->save();
+        }
+
+        return [
+            'batches_staged' => count(is_array($run->meta['batch_ids'] ?? null) ? $run->meta['batch_ids'] : []),
+            'cursor' => $run->cursor,
+            'has_more' => $batch->hasMore,
+            'urls_changed' => count($batch->links),
+            'articles_in_batch' => (int) ($counters['fetched'] ?? 0),
+            'force_full' => $forceFull,
+            'include_unchanged' => $includeUnchanged,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function syncSiteProfile(CoreSite $site, SeoSiteSyncRun $run): array
+    {
+        $profileResult = $this->client->fetchProfile($site);
+        $profile = ($profileResult['success'] ?? false) ? ($profileResult['profile'] ?? []) : [];
+
+        $contacts = [];
+        $meta = is_array($run->meta) ? $run->meta : [];
+        $batchIds = is_array($meta['batch_ids'] ?? null) ? $meta['batch_ids'] : [];
+        foreach ($batchIds as $batchId) {
+            $batch = \App\Addons\SeoContentAi\Models\SiteSync\SeoSiteSyncBatch::query()->find((int) $batchId);
+            if ($batch === null) {
+                continue;
+            }
+            $data = \App\Addons\SeoContentAi\Services\SiteSync\Contracts\SiteSyncBatchData::fromArray($batch->decodedPayload());
+            if ($data->profile !== null && $profile === []) {
+                $profile = $data->profile;
+            }
+            foreach ($data->contactsSuggest as $contact) {
+                $contacts[] = $contact;
+            }
+        }
+
+        if (is_array($profile['contacts'] ?? null)) {
+            foreach ($profile['contacts'] as $contact) {
+                if (is_array($contact)) {
+                    $contacts[] = $contact;
+                }
+            }
+        }
+
+        if ($profile === [] && $contacts === []) {
+            return ['profile_synced' => 0];
+        }
+
+        $this->reconciler->applyProfileSuggestOnly($site, $profile !== [] ? $profile : null, $contacts);
+
+        return ['profile_synced' => 1];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function syncUrlCatalog(CoreSite $site, SeoSiteSyncRun $run): array
+    {
+        $meta = is_array($run->meta) ? $run->meta : [];
+        $forceFull = $run->mode === SiteSyncSchema::MODE_FORCE_FULL || (bool) ($meta['force_full'] ?? false);
+        $batchIds = is_array($meta['batch_ids'] ?? null) ? $meta['batch_ids'] : [];
+        $totals = [
+            'articles' => 0,
+            'urls_synced' => 0,
+            'scores' => 0,
+            'provider_keywords' => 0,
+            'created' => 0,
+            'updated' => 0,
+            'unchanged' => 0,
+            'failed' => 0,
+        ];
+
+        foreach ($batchIds as $batchId) {
+            $batch = SeoSiteSyncBatch::query()->find((int) $batchId);
+            if ($batch === null || $batch->applied_at !== null) {
+                continue;
+            }
+            $counters = $this->reconciler->apply($site, $batch);
+            $totals['articles'] += (int) ($counters['articles'] ?? 0);
+            $totals['urls_synced'] += (int) ($counters['urls_synced'] ?? 0);
+            $totals['scores'] += (int) ($counters['scores'] ?? 0);
+            $totals['provider_keywords'] += (int) ($counters['provider_keywords'] ?? 0);
+            $totals['created'] += (int) ($counters['created'] ?? 0);
+            $totals['updated'] += (int) ($counters['updated'] ?? 0);
+            $totals['unchanged'] += (int) ($counters['unchanged'] ?? 0);
+            $totals['failed'] += (int) ($counters['failed'] ?? 0);
+        }
+
+        $cursor = $run->cursor;
+        $loops = 0;
+        while ($loops < 20) {
+            $loops++;
+            $run->refresh();
+            if (in_array((string) $run->status, ['canceled', 'cancelled'], true)) {
+                break;
+            }
+            $result = $this->client->fetchBatches($site, [
+                'mode' => $forceFull ? SiteSyncSchema::MODE_FORCE_FULL : $run->mode,
+                'cursor' => $cursor,
+                'run_token' => $run->run_token,
+                'include_unchanged' => $forceFull || (bool) ($meta['include_unchanged'] ?? false),
+            ]);
+            if (! ($result['success'] ?? false) || ! isset($result['batch'])) {
+                break;
+            }
+            $batchData = $result['batch'];
+            $staged = $this->staging->stage($site, $batchData, (int) $run->id);
+            $counters = $this->reconciler->apply($site, $staged);
+            $totals['articles'] += (int) ($counters['articles'] ?? 0);
+            $totals['urls_synced'] += (int) ($counters['urls_synced'] ?? 0);
+            $totals['scores'] += (int) ($counters['scores'] ?? 0);
+            $totals['provider_keywords'] += (int) ($counters['provider_keywords'] ?? 0);
+            $totals['created'] += (int) ($counters['created'] ?? 0);
+            $totals['updated'] += (int) ($counters['updated'] ?? 0);
+            $totals['unchanged'] += (int) ($counters['unchanged'] ?? 0);
+            $totals['failed'] += (int) ($counters['failed'] ?? 0);
+
+            $runCounters = is_array($run->counters) ? $run->counters : [];
+            $fetched = count($batchData->articles);
+            $runCounters['fetched'] = (int) ($runCounters['fetched'] ?? 0) + $fetched;
+            $runCounters['checked'] = (int) ($runCounters['checked'] ?? 0) + $fetched;
+            $run->counters = $runCounters;
+            $cursor = $batchData->cursor;
+            $run->cursor = $cursor;
+            $run->save();
+
+            if (! $batchData->hasMore) {
+                break;
+            }
+        }
+
+        $run->refresh();
+        $runCounters = is_array($run->counters) ? $run->counters : [];
+        foreach (['created', 'updated', 'unchanged', 'failed', 'urls_synced', 'provider_keywords', 'scores'] as $key) {
+            $runCounters[$key] = (int) ($runCounters[$key] ?? 0) + (int) ($totals[$key] ?? 0);
+        }
+        $run->counters = $runCounters;
+        $run->save();
+
+        return $totals;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function syncProviderKeywords(CoreSite $site, SeoSiteSyncRun $run): array
+    {
+        $meta = is_array($run->meta) ? $run->meta : [];
+        $batchIds = is_array($meta['batch_ids'] ?? null) ? $meta['batch_ids'] : [];
+        $updated = 0;
+        $skipped = 0;
+        $keywordReconciler = app(ProviderKeywordReconciler::class);
+
+        foreach ($batchIds as $batchId) {
+            $batch = SeoSiteSyncBatch::query()->find((int) $batchId);
+            if ($batch === null) {
+                continue;
+            }
+            $data = SiteSyncBatchData::fromArray($batch->decodedPayload());
+            if ($data->providerKeywords === []) {
+                continue;
+            }
+            $result = $keywordReconciler->reconcile($site, $data->providerKeywords);
+            $updated += $result['provider_updated'];
+            $skipped += $result['skipped_manual'];
+        }
+
+        return [
+            'provider_keywords' => $updated,
+            'skipped_manual_keywords' => $skipped,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function missingCapabilityFallback(CoreSite $site): array
+    {
+        $result = $this->fallbacks->runMissing($site);
+
+        return [
+            'warnings' => $result['warnings'],
+            'workspace_keywords' => (int) ($result['metrics']['focus_keyword']['workspace_keywords_generated'] ?? 0),
+            'fallback_404_checked' => (int) ($result['metrics']['http_404']['checked'] ?? 0),
+            'fallback_404_broken' => (int) ($result['metrics']['http_404']['broken'] ?? 0),
+            'fallback_metrics' => $result['metrics'],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function validateChangedLinks(CoreSite $site, SeoSiteSyncRun $run): array
+    {
+        $since = $run->started_at ?? now()->subHour();
+        $links = SeoSiteLinkCatalog::query()
+            ->forSite((int) $site->id)
+            ->where('source', SiteSyncSchema::SOURCE_WORDPRESS)
+            ->where('updated_at', '>=', $since)
+            ->limit(100)
+            ->get();
+
+        $checked = 0;
+        $broken = 0;
+        foreach ($links as $link) {
+            $checked++;
+            try {
+                $response = Http::timeout(8)->head((string) $link->url);
+                if ($response->status() >= 400) {
+                    $broken++;
+                    $meta = is_array($link->meta) ? $link->meta : [];
+                    $meta['last_http_status'] = $response->status();
+                    $link->forceFill(['meta' => $meta])->save();
+                }
+            } catch (Throwable) {
+                $broken++;
+            }
+        }
+
+        return [
+            'urls_changed' => $checked,
+            'links_broken' => $broken,
+        ];
+    }
+
+    /**
+     * Dispatch missing/stale Workspace SEO scores and wait until queue drains.
+     *
+     * @return array<string, mixed>
+     */
+    private function scoreMissingArticles(CoreSite $site, SeoSiteSyncRun $run): array
+    {
+        $scoring = app(\App\Addons\SeoContentAi\Services\SeoArticleScoringQueueService::class);
+        $meta = is_array($run->meta) ? $run->meta : [];
+        $stepRow = SeoSiteSyncRunStep::query()
+            ->where('run_id', (int) $run->id)
+            ->where('step_key', 'score_missing_articles')
+            ->first();
+
+        if (empty($meta['scoring_dispatched_at'])) {
+            $result = $scoring->queueMissingOrStaleForSite((int) $site->id, [
+                'run_id' => (int) $run->id,
+                'operation_id' => (string) ($meta['operation_id'] ?? $run->public_ref),
+                'step_id' => $stepRow !== null ? (int) $stepRow->id : null,
+            ]);
+            $meta['scoring_dispatched_at'] = now()->toIso8601String();
+            $meta['scoring_queued'] = (int) ($result['queued'] ?? 0);
+            $meta['scoring_stale_queued'] = (int) ($result['stale_queued'] ?? 0);
+            $meta['scoring_missing_queued'] = (int) ($result['missing_queued'] ?? 0);
+            $meta['scoring_polls'] = 0;
+            $run->meta = $meta;
+            $run->save();
+        }
+
+        $progress = $scoring->domainProgress((int) $site->id);
+        $pending = (int) ($progress['pending'] ?? 0);
+        $processing = (int) ($progress['processing'] ?? 0);
+        $failed = (int) ($progress['failed'] ?? 0);
+        $completed = (int) ($progress['completed'] ?? 0);
+        $queued = (int) ($meta['scoring_queued'] ?? 0);
+        $polls = (int) ($meta['scoring_polls'] ?? 0) + 1;
+        $meta['scoring_polls'] = $polls;
+        $run->meta = $meta;
+        $run->save();
+
+        $inFlight = $pending + $processing;
+        if ($inFlight > 0) {
+            // Worker idle: pending stuck with processing=0 for many polls.
+            $waitingWorker = $pending > 0 && $processing === 0 && $polls >= 3;
+
+            return [
+                '__defer_step' => true,
+                'defer_seconds' => $waitingWorker ? 30 : 15,
+                'scoring_pending' => $pending,
+                'scoring_processing' => $processing,
+                'scoring_failed' => $failed,
+                'scoring_completed' => $completed,
+                'workspace_scores_queued' => $queued,
+                'scoring_waiting_worker' => $waitingWorker ? 1 : 0,
+            ];
+        }
+
+        $warnings = [];
+        if ($failed > 0) {
+            $warnings[] = "{$failed} bài chấm SEO thất bại — có thể retry riêng bước scoring.";
+        }
+        if ($polls > 120) {
+            $warnings[] = 'Chấm SEO chờ lâu hơn dự kiến (worker có thể chậm).';
+        }
+
+        return [
+            'workspace_scores_queued' => $queued,
+            'workspace_scores_generated' => $completed,
+            'scoring_failed' => $failed,
+            'scoring_pending' => 0,
+            'scoring_processing' => 0,
+            'scoring_stale_queued' => (int) ($meta['scoring_stale_queued'] ?? 0),
+            'scoring_missing_queued' => (int) ($meta['scoring_missing_queued'] ?? 0),
+            'warnings' => $warnings,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function finalize(SeoSiteSyncRun $run): array
+    {
+        $counters = is_array($run->counters) ? $run->counters : [];
+        $warnings = is_array($run->warnings) ? $run->warnings : [];
+        $site = CoreSite::query()->find((int) $run->site_id);
+        if ($site !== null) {
+            $this->maybeMarkBootstrapComplete($site, $run);
+            try {
+                $progress = app(\App\Addons\SeoContentAi\Services\SeoArticleScoringQueueService::class)
+                    ->domainProgress((int) $site->id);
+                $counters['workspace_scores_generated'] = (int) ($progress['completed'] ?? $counters['workspace_scores_generated'] ?? 0);
+                $counters['scoring_failed'] = (int) ($progress['failed'] ?? $counters['scoring_failed'] ?? 0);
+                if ((int) ($progress['failed'] ?? 0) > 0) {
+                    $warnings[] = ((int) $progress['failed']).' bài chấm SEO thất bại.';
+                }
+            } catch (Throwable) {
+                // Scoring tables may be unavailable — sync data already applied.
+            }
+        }
+
+        $run->counters = $counters;
+        $run->warnings = array_values(array_unique($warnings));
+        $run->save();
+
+        return [
+            'finalized' => 1,
+            'summary' => $counters,
+            'warnings' => $warnings,
+            'scoring_failed' => (int) ($counters['scoring_failed'] ?? 0),
+            'workspace_scores_generated' => (int) ($counters['workspace_scores_generated'] ?? 0),
+        ];
+    }
+
+    private function maybeMarkBootstrapComplete(CoreSite $site, SeoSiteSyncRun $run): void
+    {
+        $meta = is_array($run->meta) ? $run->meta : [];
+        $forceFull = (string) $run->mode === SiteSyncSchema::MODE_FORCE_FULL
+            || (bool) ($meta['force_full'] ?? false);
+        // force_full traverses entire catalog — treat as bootstrap-complete when finished.
+        if (! empty($meta['bootstrap']) || $forceFull) {
+            SiteSyncSiteMeta::put($site, SiteSyncSchema::META_BOOTSTRAPPED_AT, now()->toIso8601String());
+        }
+    }
+}

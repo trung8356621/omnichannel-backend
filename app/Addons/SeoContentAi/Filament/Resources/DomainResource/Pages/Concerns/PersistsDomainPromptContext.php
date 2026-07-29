@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages\Concerns;
 
-use App\Addons\SeoContentAi\Services\DomainLinkListKeywordSyncService;
 use App\Addons\SeoContentAi\Services\SiteDomainPromptContextService;
 use App\Models\Site;
 use Filament\Notifications\Notification;
@@ -71,18 +70,9 @@ trait PersistsDomainPromptContext
 
         try {
             app(SiteDomainPromptContextService::class)->saveForSite($site, $this->pendingPromptContext);
-            $synced = app(DomainLinkListKeywordSyncService::class)->syncLinks(
-                $site,
-                $this->pendingPromptContext['links'] ?? [],
-            );
-
-            if ($synced > 0) {
-                Notification::make()
-                    ->title(__('seo-content-ai::filament.domain.link_sync_title'))
-                    ->body(__('seo-content-ai::filament.domain.link_sync_body', ['count' => $synced]))
-                    ->success()
-                    ->send();
-            }
+            // Save-fast: persist manual links to SiteLinkCatalog only — NEVER keyword sync / parse / crawl.
+            app(\App\Addons\SeoContentAi\Services\SiteSync\Reconciliation\SiteLinkCatalogReconciler::class)
+                ->syncManualLinksFromSettings($site, $this->pendingPromptContext['links'] ?? []);
         } catch (\InvalidArgumentException $exception) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.domain.save_failed'))

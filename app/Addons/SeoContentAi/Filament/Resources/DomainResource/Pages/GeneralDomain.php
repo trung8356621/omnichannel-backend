@@ -9,11 +9,27 @@ use App\Addons\SeoContentAi\Jobs\RunIncrementalDomainSyncJob;
 use App\Addons\SeoContentAi\Jobs\RunKeywordDomainResyncJob;
 use App\Addons\SeoContentAi\Jobs\RunMetadataDomainSyncJob;
 use App\Addons\SeoContentAi\Services\ClearDomainArticlesService;
+use App\Addons\SeoContentAi\Services\ContentProject\Agent\Mcp\McpCapabilityMarkdownPresenter;
 use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\IncrementalDomainSyncRunner;
 use App\Addons\SeoContentAi\Services\LinkMapStatusAuditService;
 use App\Addons\SeoContentAi\Services\MetadataDomainSyncRunner;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
+use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\BootstrapSiteSyncCommand;
+use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\CancelSiteSyncCommand;
+use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ForceFullSiteSyncCommand;
+use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\PreviewBootstrapSiteSyncCommand;
+use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\QueueMissingSeoScoresCommand;
+use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RequeueAllSeoScoresCommand;
+use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ResumeSiteSyncCommand;
+use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RetryFailedSeoScoresCommand;
+use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RunSiteSyncCommand;
+use App\Addons\SeoContentAi\Services\SiteSync\Bootstrap\SiteSyncBootstrapService;
+use App\Addons\SeoContentAi\Services\SiteSync\Orchestration\SiteSyncFeatureFlags;
+use App\Addons\SeoContentAi\Services\SiteSync\Presentation\SiteSyncSourceLabelPresenter;
+use App\Addons\SeoContentAi\Services\SiteSync\Presentation\SiteSyncStatusPresenter;
 use App\Addons\SeoContentAi\Services\SyncDomainContentService;
 use App\Addons\SeoContentAi\Support\IncrementalDomainSyncCache;
 use App\Addons\SeoContentAi\Support\KeywordDomainResyncCache;
@@ -88,6 +104,48 @@ class GeneralDomain extends Page
 
     public ?string $auditLinkStatusMessage = null;
 
+    public bool $siteSyncV2Running = false;
+
+    public bool $siteSyncV2Resumable = false;
+
+    public bool $siteSyncV2Cancellable = false;
+
+    public int $siteSyncV2Progress = 0;
+
+    public int $siteSyncV2Total = 8;
+
+    public string $siteSyncV2Status = 'idle';
+
+    public ?string $siteSyncV2StatusMessage = null;
+
+    /** @var list<string> */
+    public array $siteSyncV2Warnings = [];
+
+    public ?int $siteSyncV2RunId = null;
+
+    /** @var array<string, mixed> */
+    public array $siteSyncV2Sources = [];
+
+    /** @var list<array{key: string, label: string}> */
+    public array $siteSyncV2SourceChips = [];
+
+    public bool $siteSyncForceFull = false;
+
+    public ?string $siteSyncV2ModeLabel = null;
+
+    /** @var array<string, int|string> */
+    public array $siteSyncV2Counters = [];
+
+    public ?string $siteSyncScoringContext = null;
+
+    /** @var array<string, mixed>|null */
+    public ?array $siteSyncBootstrapPreview = null;
+
+    public bool $siteSyncNeedsBootstrap = false;
+
+    /** @var array<string, mixed> */
+    public array $mcpCapabilityDoc = [];
+
     public function mount(int|string $record): void
     {
         $this->record = $this->resolveRecord($record);
@@ -106,6 +164,30 @@ class GeneralDomain extends Page
         $this->restoreIncrementalSyncProgressFromCache();
         $this->restoreMetadataSyncProgressFromCache();
         $this->refreshKeywordResyncProgress();
+        $this->refreshSiteSyncV2Progress();
+        $this->loadMcpCapabilityDoc();
+    }
+
+    public function loadMcpCapabilityDoc(): void
+    {
+        try {
+            $includeInternal = SeoAccessControl::canAccessManagerFeatures();
+            $this->mcpCapabilityDoc = app(McpCapabilityMarkdownPresenter::class)->present(
+                includeInternal: $includeInternal,
+                filter: McpCapabilityMarkdownPresenter::FILTER_ALL,
+            );
+        } catch (\Throwable) {
+            $this->mcpCapabilityDoc = [
+                'title' => 'MCP Capabilities',
+                'filter' => McpCapabilityMarkdownPresenter::FILTER_ALL,
+                'filters' => [],
+                'items' => [],
+                'internal_items' => [],
+                'markdown' => '',
+                'include_internal' => false,
+                'count' => 0,
+            ];
+        }
     }
 
     public function refreshKeywordResyncProgress(): void
@@ -157,6 +239,347 @@ class GeneralDomain extends Page
         $this->refreshIncrementalSyncProgress();
         $this->refreshMetadataSyncProgress();
         $this->refreshKeywordResyncProgress();
+        $this->refreshSiteSyncV2Progress();
+    }
+
+    public function refreshSiteSyncV2Progress(): void
+    {
+        try {
+            /** @var Site $site */
+            $site = $this->getRecord();
+            $status = app(SiteSyncStatusPresenter::class)->forSite($site);
+            $wasRunning = $this->siteSyncV2Running;
+            $this->siteSyncV2Running = (bool) $status['running'];
+            $this->siteSyncV2Resumable = (bool) $status['resumable'];
+            $this->siteSyncV2Cancellable = (bool) ($status['cancellable'] ?? false);
+            $this->siteSyncV2Progress = (int) $status['progress'];
+            $this->siteSyncV2Total = (int) $status['total'];
+            $this->siteSyncV2Status = (string) $status['status'];
+            $this->siteSyncV2StatusMessage = (string) $status['message'];
+            $this->siteSyncV2RunId = isset($status['run_id']) ? (int) $status['run_id'] : null;
+            $this->siteSyncV2Sources = is_array($status['capability_sources'] ?? null) ? $status['capability_sources'] : [];
+            $this->siteSyncV2SourceChips = app(SiteSyncSourceLabelPresenter::class)->chips($this->siteSyncV2Sources);
+            $this->siteSyncNeedsBootstrap = app(SiteSyncBootstrapService::class)->needsBootstrap($site);
+            $this->siteSyncV2ModeLabel = isset($status['mode_label']) ? (string) $status['mode_label'] : null;
+            $this->siteSyncV2Counters = is_array($status['counters'] ?? null)
+                ? array_map(static fn (mixed $v): int|string => is_numeric($v) ? (int) $v : (string) $v, $status['counters'])
+                : [];
+            $this->siteSyncScoringContext = isset($status['scoring_context'])
+                ? (string) $status['scoring_context']
+                : null;
+            $this->siteSyncV2Warnings = is_array($status['warnings'] ?? null)
+                ? array_values(array_map('strval', $status['warnings']))
+                : [];
+
+            if ($wasRunning && ! $this->siteSyncV2Running && $this->siteSyncV2Status === 'completed') {
+                $this->dispatch('domain-sync-completed');
+            }
+        } catch (\Throwable $e) {
+            \App\Support\RuntimeLogger::report($e, [
+                'endpoint' => 'domain.refresh_site_sync_v2',
+                'site_id' => (int) $this->getRecord()->getKey(),
+            ]);
+            $this->siteSyncV2Running = false;
+            $this->siteSyncV2Resumable = false;
+            $this->siteSyncV2Cancellable = false;
+            $this->siteSyncV2Status = 'degraded';
+            $this->siteSyncV2StatusMessage = 'Site Sync V2 lỗi: '.$e->getMessage();
+            $this->siteSyncV2Warnings = ['status_refresh_failed'];
+        }
+    }
+
+    public function runSiteSyncV2Action(): void
+    {
+        @set_time_limit(120);
+        $siteId = (int) $this->getRecord()->getKey();
+
+        try {
+            if ($this->siteSyncForceFull) {
+                $this->runForceFullSiteSyncAction();
+
+                return;
+            }
+
+            \App\Support\RuntimeLogger::warning('seo.site_sync.v2_ui_click', [
+                'site_id' => $siteId,
+                'action' => 'runSiteSyncV2Action',
+            ]);
+
+            /** @var Site $site */
+            $site = $this->getRecord();
+            $flags = app(SiteSyncFeatureFlags::class);
+            \App\Support\RuntimeLogger::warning('seo.site_sync.v2_ui_step', [
+                'site_id' => $siteId,
+                'step' => 'flags_resolved',
+                'orchestrator' => $flags->orchestratorEnabled(),
+                'ui' => $flags->uiEnabled(),
+            ]);
+
+            if (! $flags->orchestratorEnabled() || ! $flags->uiEnabled()) {
+                \App\Support\RuntimeLogger::warning('seo.site_sync.v2_ui_blocked', [
+                    'site_id' => $siteId,
+                    'reason' => 'flags_disabled',
+                ]);
+                $notification = Notification::make()
+                    ->title('Site Sync V2 đang tắt');
+                $notification->warning();
+                $notification->send();
+
+                return;
+            }
+
+            $tablesReady = \App\Addons\SeoContentAi\Services\SiteSync\Support\SiteSyncInfrastructure::tablesReady();
+            \App\Support\RuntimeLogger::warning('seo.site_sync.v2_ui_step', [
+                'site_id' => $siteId,
+                'step' => 'tables_checked',
+                'ready' => $tablesReady,
+            ]);
+            if (! $tablesReady) {
+                \App\Support\RuntimeLogger::warning('seo.site_sync.v2_ui_blocked', [
+                    'site_id' => $siteId,
+                    'reason' => 'migrations_missing',
+                ]);
+                $this->notifySiteSyncResult(
+                    'Chưa migrate Site Sync V2',
+                    'Chạy migration trên connection omi_seo_ai rồi thử lại.',
+                    false,
+                );
+
+                return;
+            }
+
+            // Priority after force_full: bootstrap if never synced, else incremental.
+            $needsBootstrap = app(SiteSyncBootstrapService::class)->needsBootstrap($site);
+            \App\Support\RuntimeLogger::warning('seo.site_sync.v2_ui_step', [
+                'site_id' => $siteId,
+                'step' => 'bootstrap_checked',
+                'needs_bootstrap' => $needsBootstrap,
+            ]);
+
+            if ($needsBootstrap) {
+                \App\Support\RuntimeLogger::warning('seo.site_sync.v2_ui_step', [
+                    'site_id' => $siteId,
+                    'step' => 'before_bootstrap_preview',
+                ]);
+                // Preview trực tiếp — tránh resolve CommandBus nặng trên first click.
+                $preview = app(SiteSyncBootstrapService::class)->preview($site);
+                $this->siteSyncBootstrapPreview = $preview;
+                $this->siteSyncNeedsBootstrap = true;
+                \App\Support\RuntimeLogger::warning('seo.site_sync.v2_ui_outcome', [
+                    'site_id' => $siteId,
+                    'outcome' => 'bootstrap_preview',
+                    'success' => true,
+                    'articles_remote' => $preview['articles_remote'] ?? null,
+                    'warnings' => $preview['warnings'] ?? [],
+                    'bridge' => $preview['bridge_version'] ?? null,
+                ]);
+                $this->notifySiteSyncResult(
+                    'Xác nhận đồng bộ lần đầu',
+                    sprintf(
+                        '~%s bài remote · %s batch · Provider: %s. Bấm “Xác nhận bootstrap” bên dưới.',
+                        (string) ($preview['articles_remote'] ?? 0),
+                        (string) ($preview['estimated_batches'] ?? '?'),
+                        (string) ($preview['provider_label'] ?? 'Không phát hiện'),
+                    ),
+                    true,
+                );
+                $this->dispatch('open-site-sync-bootstrap-preview');
+
+                return;
+            }
+
+            \App\Support\RuntimeLogger::warning('seo.site_sync.v2_ui_step', [
+                'site_id' => $siteId,
+                'step' => 'before_run_delta_bus',
+            ]);
+            $result = $this->dispatchSiteSyncBus(new RunSiteSyncCommand((int) $site->id, 'delta'));
+            $this->refreshSiteSyncV2Progress();
+            \App\Support\RuntimeLogger::warning('seo.site_sync.v2_ui_outcome', [
+                'site_id' => $siteId,
+                'outcome' => 'run_delta',
+                'success' => $result->success,
+                'message' => $result->message,
+                'run_id' => $result->metadata['run_id'] ?? null,
+            ]);
+            $this->notifySiteSyncResult(
+                $result->success ? 'Đồng bộ & kiểm tra website' : 'Không chạy được sync',
+                $result->message,
+                $result->success,
+            );
+        } catch (\Throwable $e) {
+            \App\Support\RuntimeLogger::report($e, [
+                'endpoint' => 'domain.run_site_sync_v2',
+                'site_id' => $siteId,
+            ]);
+            $this->notifySiteSyncResult('Site Sync V2 lỗi', $e->getMessage(), false);
+            $this->refreshSiteSyncV2Progress();
+        }
+    }
+
+    public function runForceFullSiteSyncAction(): void
+    {
+        @set_time_limit(120);
+        $siteId = (int) $this->getRecord()->getKey();
+
+        try {
+            \App\Support\RuntimeLogger::warning('seo.site_sync.v2_ui_click', [
+                'site_id' => $siteId,
+                'action' => 'runForceFullSiteSyncAction',
+            ]);
+
+            $flags = app(SiteSyncFeatureFlags::class);
+            if (! $flags->orchestratorEnabled() || ! $flags->uiEnabled()) {
+                $notification = Notification::make()->title('Site Sync V2 đang tắt');
+                $notification->warning();
+                $notification->send();
+
+                return;
+            }
+
+            if (! \App\Addons\SeoContentAi\Services\SiteSync\Support\SiteSyncInfrastructure::tablesReady()) {
+                $this->notifySiteSyncResult(
+                    'Chưa migrate Site Sync V2',
+                    'Chạy migration trên connection omi_seo_ai rồi thử lại.',
+                    false,
+                );
+
+                return;
+            }
+
+            /** @var Site $site */
+            $site = $this->getRecord();
+            $operationId = 'ff_'.bin2hex(random_bytes(8));
+            $result = $this->dispatchSiteSyncBus(new ForceFullSiteSyncCommand(
+                siteId: (int) $site->id,
+                supersedeActive: true,
+                idempotencyKey: $operationId,
+                operationId: $operationId,
+            ));
+            $this->siteSyncForceFull = false;
+            $this->refreshSiteSyncV2Progress();
+            \App\Support\RuntimeLogger::warning('seo.site_sync.v2_ui_outcome', [
+                'site_id' => $siteId,
+                'outcome' => 'force_full',
+                'success' => $result->success,
+                'message' => $result->message,
+                'run_id' => $result->metadata['run_id'] ?? null,
+            ]);
+            $this->notifySiteSyncResult(
+                $result->success ? 'Đồng bộ lại toàn bộ website' : 'Không chạy được force full',
+                $result->message,
+                $result->success,
+            );
+        } catch (\Throwable $e) {
+            \App\Support\RuntimeLogger::report($e, [
+                'endpoint' => 'domain.run_force_full_site_sync',
+                'site_id' => $siteId,
+            ]);
+            $this->notifySiteSyncResult('Force full sync lỗi', $e->getMessage(), false);
+            $this->refreshSiteSyncV2Progress();
+        }
+    }
+
+    public function confirmSiteSyncBootstrapAction(): void
+    {
+        /** @var Site $site */
+        $site = $this->getRecord();
+        \App\Support\RuntimeLogger::warning('seo.site_sync.v2_ui_step', [
+            'site_id' => (int) $site->id,
+            'step' => 'before_bootstrap_confirm',
+        ]);
+        $result = $this->dispatchSiteSyncBus(new BootstrapSiteSyncCommand((int) $site->id));
+        $this->siteSyncBootstrapPreview = null;
+        $this->refreshSiteSyncV2Progress();
+        \App\Support\RuntimeLogger::warning('seo.site_sync.v2_ui_outcome', [
+            'site_id' => (int) $site->id,
+            'outcome' => 'bootstrap_confirm',
+            'success' => $result->success,
+            'message' => $result->message,
+            'run_id' => $result->metadata['run_id'] ?? null,
+        ]);
+        $this->notifySiteSyncResult(
+            $result->success ? 'Bootstrap đã xếp hàng' : 'Bootstrap thất bại',
+            $result->message,
+            $result->success,
+        );
+    }
+
+    public function cancelSiteSyncBootstrapPreview(): void
+    {
+        $this->siteSyncBootstrapPreview = null;
+    }
+
+    public function cancelSiteSyncV2Action(): void
+    {
+        $runId = (int) ($this->siteSyncV2RunId ?? 0);
+        if ($runId <= 0) {
+            $status = app(SiteSyncStatusPresenter::class)->forSite($this->getRecord());
+            $runId = (int) ($status['run_id'] ?? 0);
+        }
+        if ($runId <= 0) {
+            return;
+        }
+        $result = $this->dispatchSiteSyncBus(new CancelSiteSyncCommand((int) $this->getRecord()->id, $runId));
+        $this->refreshSiteSyncV2Progress();
+        $this->notifySiteSyncResult(
+            $result->success ? 'Đã hủy' : 'Không hủy được',
+            $result->message,
+            $result->success,
+        );
+    }
+
+    public function resumeSiteSyncV2Action(): void
+    {
+        $status = app(SiteSyncStatusPresenter::class)->forSite($this->getRecord());
+        $runId = (int) ($status['run_id'] ?? 0);
+        if ($runId <= 0) {
+            return;
+        }
+        $result = $this->dispatchSiteSyncBus(new ResumeSiteSyncCommand((int) $this->getRecord()->id, $runId));
+        $this->refreshSiteSyncV2Progress();
+        $this->notifySiteSyncResult(
+            $result->success ? 'Tiếp tục sync' : 'Không resume được',
+            $result->message,
+            $result->success,
+        );
+    }
+
+    public function siteSyncV2UiEnabled(): bool
+    {
+        return app(SiteSyncFeatureFlags::class)->uiEnabled();
+    }
+
+    public function siteSyncV2LegacyVisible(): bool
+    {
+        if (app(SiteSyncFeatureFlags::class)->legacyActionsVisible()) {
+            return true;
+        }
+        $mode = app(\App\Addons\SeoContentAi\Services\SiteSync\Cutover\SiteSyncCutoverStateService::class)
+            ->modeFor($this->getRecord());
+
+        return $mode === \App\Addons\SeoContentAi\Services\SiteSync\Cutover\SiteSyncCutoverModes::LEGACY_ACTIVE
+            && app(SiteSyncFeatureFlags::class)->emergencyRollback();
+    }
+
+    private function dispatchSiteSyncBus(object $command): \App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResult
+    {
+        return app(ContentProjectCommandBus::class)->dispatch(
+            $command,
+            ActorContext::user((int) auth()->id(), (int) $this->getRecord()->id),
+        );
+    }
+
+    private function notifySiteSyncResult(string $title, string $body, bool $success): void
+    {
+        $notification = Notification::make()
+            ->title($title)
+            ->body($body);
+        if ($success) {
+            $notification->success();
+        } else {
+            $notification->danger();
+        }
+        $notification->send();
     }
 
     private function restoreMetadataSyncProgressFromCache(): void
@@ -834,11 +1257,12 @@ class GeneralDomain extends Page
         }
 
         try {
-            app(SeoDatabaseConnectionService::class)->bootstrapSeoDatabaseConnection($siteId);
-            $result = app(\App\Addons\SeoContentAi\Services\SeoArticleScoringQueueService::class)
-                ->queueMissingForSite($siteId);
+            $result = $this->dispatchSiteSyncBus(new QueueMissingSeoScoresCommand($siteId));
         } catch (\Throwable $exception) {
-            report($exception);
+            \App\Support\RuntimeLogger::report($exception, [
+                'endpoint' => 'domain.queue_missing_seo_scoring',
+                'site_id' => $siteId,
+            ]);
             Notification::make()
                 ->title(__('seo-content-ai::filament.domain.seo_scoring_queue_missing'))
                 ->body($exception->getMessage())
@@ -850,9 +1274,7 @@ class GeneralDomain extends Page
 
         Notification::make()
             ->title(__('seo-content-ai::filament.domain.seo_scoring_queue_missing'))
-            ->body(__('seo-content-ai::filament.domain.seo_scoring_queue_missing_success', [
-                'count' => $result['queued'],
-            ]))
+            ->body($result->message)
             ->success()
             ->send();
     }
@@ -865,11 +1287,12 @@ class GeneralDomain extends Page
         }
 
         try {
-            app(SeoDatabaseConnectionService::class)->bootstrapSeoDatabaseConnection($siteId);
-            $result = app(\App\Addons\SeoContentAi\Services\SeoArticleScoringQueueService::class)
-                ->queueFailedForSite($siteId);
+            $result = $this->dispatchSiteSyncBus(new RetryFailedSeoScoresCommand($siteId));
         } catch (\Throwable $exception) {
-            report($exception);
+            \App\Support\RuntimeLogger::report($exception, [
+                'endpoint' => 'domain.retry_failed_seo_scoring',
+                'site_id' => $siteId,
+            ]);
             Notification::make()
                 ->title(__('seo-content-ai::filament.domain.seo_scoring_retry_failed'))
                 ->body($exception->getMessage())
@@ -881,9 +1304,7 @@ class GeneralDomain extends Page
 
         Notification::make()
             ->title(__('seo-content-ai::filament.domain.seo_scoring_retry_failed'))
-            ->body(__('seo-content-ai::filament.domain.seo_scoring_retry_failed_success', [
-                'count' => $result['queued'],
-            ]))
+            ->body($result->message)
             ->success()
             ->send();
     }
@@ -896,11 +1317,17 @@ class GeneralDomain extends Page
         }
 
         try {
-            app(SeoDatabaseConnectionService::class)->bootstrapSeoDatabaseConnection($siteId);
-            $result = app(\App\Addons\SeoContentAi\Services\SeoArticleScoringQueueService::class)
-                ->queueAllForSite($siteId);
+            $preview = $this->getSeoScoringProgress();
+            $result = $this->dispatchSiteSyncBus(new RequeueAllSeoScoresCommand(
+                siteId: $siteId,
+                confirmed: true,
+                operationId: 'requeue_all_'.bin2hex(random_bytes(6)),
+            ));
         } catch (\Throwable $exception) {
-            report($exception);
+            \App\Support\RuntimeLogger::report($exception, [
+                'endpoint' => 'domain.requeue_all_seo_scoring',
+                'site_id' => $siteId,
+            ]);
             Notification::make()
                 ->title(__('seo-content-ai::filament.domain.seo_scoring_requeue_all'))
                 ->body($exception->getMessage())
@@ -912,9 +1339,7 @@ class GeneralDomain extends Page
 
         Notification::make()
             ->title(__('seo-content-ai::filament.domain.seo_scoring_requeue_all'))
-            ->body(__('seo-content-ai::filament.domain.seo_scoring_requeue_all_success', [
-                'count' => $result['queued'],
-            ]))
+            ->body($result->message.' (preview '.$preview['total'].' bài)')
             ->success()
             ->send();
     }

@@ -1,4 +1,5 @@
 @php
+    use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceDeepLink;
     use App\Addons\SeoContentAi\Services\TeamChatAttachmentService;
     use App\Addons\SeoContentAi\Support\SeoAccessControl;
 
@@ -9,7 +10,9 @@
     $storageKey = 'seo_global_ai_chat_'.((int) auth()->id());
     $currentUserId = (int) auth()->id();
     $isContentManager = SeoAccessControl::isContentManager();
+    // Star tab is Agent Workspace launcher — not in-popup AI runtime.
     $canUseAiChat = ! $isContentManager;
+    $agentDeepLink = AgentWorkspaceDeepLink::forCurrentRequest();
     $teamChatConfig = app(TeamChatAttachmentService::class)->clientConfig();
     $mediaImportUrl = route('seo.media.import-url');
     $teamAccept = implode(',', array_map(
@@ -19,6 +22,8 @@
     $workspaceChatI18n = [
         'browser_fallback_body' => __('seo-content-ai::filament.workspace_chat.browser_notification_body'),
         'unknown_sender' => __('seo-content-ai::filament.workspace_chat.notify_unknown_sender'),
+        'open_agent_workspace' => __('seo-content-ai::filament.agent_workspace.open_workspace'),
+        'agent_missing_site' => AgentWorkspaceDeepLink::MISSING_SITE_MESSAGE,
     ];
 @endphp
 
@@ -45,6 +50,9 @@
         teamFileIsImage: false,
         teamChatConfig: @js($teamChatConfig),
         canUseAiChat: @js($canUseAiChat),
+        agentWorkspaceUrl: @js($agentDeepLink['url']),
+        agentWorkspaceError: @js($agentDeepLink['message']),
+        agentLaunching: false,
         teamAccept: @js($teamAccept),
         lastTeamMessageId: 0,
         lastReadTeamMessageId: 0,
@@ -76,12 +84,11 @@
 
         init() {
             this.restore();
-            if (this.canUseAiChat) {
-                this.loadModels();
-            } else {
-                this.loadingModels = false;
-                this.activeTab = 'team';
-            }
+            // AI star = Agent Workspace launcher. No in-popup model/AI runtime.
+            this.loadingModels = false;
+            this.activeTab = 'team';
+            this.models = [];
+            this.selectedModel = '';
 
             this.refreshTeamUnreadOnInit().then(() => {
                 if (this.lastTeamMessageId > 0) {
@@ -94,6 +101,25 @@
                 this.applyLibraryImage(event?.detail ?? {});
             };
             window.addEventListener('seo-global-ai-chat-image-selected', this._onGlobalAiChatImageSelected);
+        },
+
+        openAgentWorkspace() {
+            if (this.agentLaunching) {
+                return;
+            }
+
+            const url = String(this.agentWorkspaceUrl || '').trim();
+            if (! url || /\/seo\/?(\?|$)/.test(url)) {
+                const message = this.agentWorkspaceError
+                    || this.workspaceChatI18n.agent_missing_site
+                    || 'Vui lòng chọn website trước khi mở Agent Workspace.';
+                window.alert(message);
+                return;
+            }
+
+            this.agentLaunching = true;
+            this.closePanel();
+            window.location.assign(url);
         },
 
         destroy() {
@@ -155,12 +181,13 @@
         },
 
         switchTab(tab) {
-            this.activeTab = tab;
-            if (tab === 'team') {
-                this.loadTeamMessages();
-            } else {
-                this.scrollToBottom();
+            if (tab === 'ai') {
+                this.openAgentWorkspace();
+                return;
             }
+
+            this.activeTab = 'team';
+            this.loadTeamMessages();
         },
 
         startTeamSse(afterId = null) {
@@ -453,14 +480,9 @@
         submitComposer() {
             const text = this.message.trim();
 
-            if (this.canUseAiChat && (this.activeTab === 'ai' || this.isAiInvocation(text))) {
-                if (this.isAiInvocation(text)) {
-                    this.message = this.stripAiPrefix(text);
-                    if (this.activeTab !== 'ai') {
-                        this.switchTab('ai');
-                    }
-                }
-                this.send();
+            // @ai in Team composer launches Agent Workspace — never popup AI API.
+            if (this.canUseAiChat && this.isAiInvocation(text)) {
+                this.openAgentWorkspace();
                 return;
             }
 
@@ -1083,7 +1105,7 @@
                     <div>
                         <h2>Chat workspace</h2>
                         <p>
-                            <span x-text="canUseAiChat && activeTab === 'ai' ? 'Trợ lý AI' : 'Nhóm nội bộ'"></span>
+                            <span>Nhóm nội bộ</span>
                             <span
                                 class="seo-global-chat__workspace-id"
                                 x-show="workspaceOwnerId"
@@ -1098,22 +1120,19 @@
                         <button
                             type="button"
                             class="seo-global-chat__ai-shortcut seo-global-chat__ai-shortcut--icon"
-                            x-show="activeTab === 'team'"
-                            x-cloak
-                            x-on:click="switchTab('ai')"
-                            title="Hỏi Trợ lý AI (Manager Mode)"
-                            aria-label="Hỏi Trợ lý AI (Manager Mode)"
+                            x-bind:disabled="agentLaunching"
+                            x-on:click="openAgentWorkspace()"
+                            title="{{ __('seo-content-ai::filament.agent_workspace.open_workspace') }}"
+                            aria-label="{{ __('seo-content-ai::filament.agent_workspace.open_workspace') }}"
                         >
-                            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                                <path d="M12 2.75c.48 4.91 4.34 8.77 9.25 9.25-4.91.48-8.77 4.34-9.25 9.25-.48-4.91-4.34-8.77-9.25-9.25C7.66 11.52 11.52 7.66 12 2.75Z" />
-                            </svg>
+                            <x-seo-content-ai::seo-agent-chat.star-icon />
                         </button>
                     @endif
                     <button
                         type="button"
                         class="seo-global-chat__icon-button"
                         x-on:click="clearConversation()"
-                        x-show="activeTab === 'ai' && messages.length > 0"
+                        x-show="false"
                         title="Xóa cuộc trò chuyện AI"
                         aria-label="Xóa cuộc trò chuyện AI"
                     >
@@ -1150,21 +1169,20 @@
                         type="button"
                         role="tab"
                         class="seo-global-chat__tab"
-                        x-bind:class="{ 'is-active': activeTab === 'ai' }"
-                        x-bind:aria-selected="activeTab === 'ai'"
-                        x-on:click="switchTab('ai')"
-                        title="Trợ lý AI"
-                        aria-label="Trợ lý AI"
+                        x-bind:class="{ 'is-active': false, 'is-launching': agentLaunching }"
+                        x-bind:aria-selected="false"
+                        x-bind:disabled="agentLaunching"
+                        x-on:click="openAgentWorkspace()"
+                        title="{{ __('seo-content-ai::filament.agent_workspace.open_workspace') }}"
+                        aria-label="{{ __('seo-content-ai::filament.agent_workspace.open_workspace') }}"
                     >
-                        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                            <path d="M12 2.75c.48 4.91 4.34 8.77 9.25 9.25-4.91.48-8.77 4.34-9.25 9.25-.48-4.91-4.34-8.77-9.25-9.25C7.66 11.52 11.52 7.66 12 2.75Z" />
-                        </svg>
+                        <x-seo-content-ai::seo-agent-chat.star-icon />
                     </button>
                 </div>
             @endif
         </header>
 
-        <div class="seo-global-chat__model-row" x-show="canUseAiChat && activeTab === 'ai'" x-cloak>
+        <div class="seo-global-chat__model-row" x-show="false" x-cloak>
             <label for="seo-global-chat-model">Model</label>
             <x-select
                 id="seo-global-chat-model"
@@ -1253,8 +1271,9 @@
         <div
             class="seo-global-chat__messages"
             x-ref="aiMessages"
-            x-show="canUseAiChat && activeTab === 'ai'"
+            x-show="false"
             x-cloak
+            aria-hidden="true"
         >
             <div class="seo-global-chat__empty" x-show="messages.length === 0">
                 <span class="seo-global-chat__empty-icon">
@@ -1320,7 +1339,7 @@
                 <button type="button" x-on:click="clearTeamFile()" aria-label="Bỏ tệp">×</button>
             </div>
 
-            <div class="seo-global-chat__image-preview" x-show="canUseAiChat && activeTab === 'ai' && imagePreview" x-cloak>
+            <div class="seo-global-chat__image-preview" x-show="false" x-cloak>
                 <button
                     type="button"
                     class="seo-global-chat__image-preview-thumb"
@@ -1373,8 +1392,8 @@
                     type="button"
                     class="seo-global-chat__attach"
                     x-on:click="$refs.imageInput.click()"
-                    x-bind:disabled="loading || activeTab !== 'ai'"
-                    x-show="canUseAiChat && activeTab === 'ai'"
+                    x-bind:disabled="true"
+                    x-show="false"
                     aria-label="Đính kèm hình ảnh"
                 >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
@@ -1385,8 +1404,8 @@
                     type="button"
                     class="seo-global-chat__attach"
                     x-on:click="openMediaLibrary()"
-                    x-bind:disabled="loading || activeTab !== 'ai'"
-                    x-show="canUseAiChat && activeTab === 'ai'"
+                    x-bind:disabled="true"
+                    x-show="false"
                     aria-label="Chọn ảnh từ thư viện"
                     title="Chọn ảnh từ thư viện"
                 >
@@ -1399,20 +1418,18 @@
                     x-ref="messageInput"
                     x-model="message"
                     rows="1"
-                    x-bind:placeholder="activeTab === 'team'
-                        ? (canUseAiChat ? 'Nhắn team... (@ai để hỏi AI)' : 'Nhắn team...')
-                        : 'Hỏi Trợ lý AI...'"
+                    x-bind:placeholder="canUseAiChat ? 'Nhắn team... (@ai mở Agent Workspace)' : 'Nhắn team...'"
                     x-on:input="resizeInput()"
                     x-on:paste="handlePaste($event)"
                     x-on:keydown.enter.prevent="if (!$event.shiftKey) submitComposer(); else message += '\n'"
-                    x-bind:disabled="loading || teamSending"
+                    x-bind:disabled="teamSending || agentLaunching"
                 ></textarea>
 
                 <button
                     type="button"
                     class="seo-global-chat__send"
                     x-on:click="submitComposer()"
-                    x-bind:disabled="(canUseAiChat && activeTab === 'ai' && (loading || !selectedModel || (!message.trim() && !imageFile))) || (activeTab === 'team' && (teamSending || (!message.trim() && !teamFile)))"
+                    x-bind:disabled="teamSending || agentLaunching || (!message.trim() && !teamFile)"
                     aria-label="Gửi tin nhắn"
                 >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -1420,14 +1437,11 @@
                     </svg>
                 </button>
             </div>
-            <p class="seo-global-chat__hint" x-show="activeTab === 'team' && canUseAiChat">
-                Team chat đồng bộ qua SSE (Server-Sent Events). Gõ <code>@ai</code> hoặc bấm icon AI để chuyển sang Trợ lý AI. Hỗ trợ Ctrl+V ảnh và đính kèm file.
+            <p class="seo-global-chat__hint" x-show="canUseAiChat">
+                Team chat đồng bộ qua SSE. Gõ <code>@ai</code> hoặc bấm ngôi sao để mở Agent Workspace. Hỗ trợ Ctrl+V ảnh và đính kèm file.
             </p>
-            <p class="seo-global-chat__hint" x-show="activeTab === 'team' && ! canUseAiChat">
+            <p class="seo-global-chat__hint" x-show="! canUseAiChat">
                 Team chat đồng bộ qua SSE (Server-Sent Events). Hỗ trợ Ctrl+V ảnh và đính kèm file.
-            </p>
-            <p class="seo-global-chat__hint" x-show="canUseAiChat && activeTab === 'ai'">
-                AI có thể đưa ra thông tin chưa chính xác. Hãy kiểm tra nội dung quan trọng.
             </p>
         </footer>
     </aside>

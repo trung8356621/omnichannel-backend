@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources\AutomationRuleResource\Page
 
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationWorkflowMode;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Models\AutomationRule;
+use App\Addons\SeoContentAi\Filament\Concerns\RedirectsSeoAutomationToAdmin;
 use App\Addons\SeoContentAi\Filament\Pages\AutomationWorkflowBuilder;
 use App\Addons\SeoContentAi\Filament\Resources\AutomationRuleResource;
 use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoEditRecord;
@@ -14,7 +15,18 @@ use Filament\Notifications\Notification;
 
 final class EditAutomationRule extends SeoEditRecord
 {
+    use RedirectsSeoAutomationToAdmin;
+
     protected static string $resource = AutomationRuleResource::class;
+
+    public function mount(int|string $record): void
+    {
+        if ($this->redirectSeoAutomationToAdmin(AutomationRuleResource::getUrl('edit', ['record' => $record]))) {
+            return;
+        }
+
+        parent::mount($record);
+    }
 
     protected function mutateFormDataBeforeFill(array $data): array
     {

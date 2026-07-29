@@ -9,8 +9,8 @@ use App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueRunner;
 use App\Models\SeoDatabaseConnection;
+use App\Support\RuntimeLogger;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
 
@@ -27,7 +27,7 @@ final class ScheduledArticlePublishRunner
     ) {}
 
     /**
-     * @return array{processed: int, published: int, failed: int}
+     * @return array{processed: int, published: int, failed: int, skipped: int}
      */
     public function run(): array
     {
@@ -35,10 +35,20 @@ final class ScheduledArticlePublishRunner
             'processed' => 0,
             'published' => 0,
             'failed' => 0,
+            'skipped' => 0,
         ];
 
-        if (! Schema::hasTable('seo_database_connections')) {
-            return $stats;
+        try {
+            if (! Schema::hasTable('seo_database_connections')) {
+                return $stats;
+            }
+        } catch (Throwable $e) {
+            RuntimeLogger::warning('Scheduled article publish: cannot inspect seo_database_connections.', [
+                'error' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+
+            throw $e;
         }
 
         $connections = SeoDatabaseConnection::query()
@@ -47,8 +57,19 @@ final class ScheduledArticlePublishRunner
             ->get();
 
         if ($connections->isEmpty()) {
-            $this->databaseConnection->bootstrapLegacySharedConnection();
-            $this->dispatchDueArticles($stats);
+            try {
+                $this->databaseConnection->bootstrapLegacySharedConnection();
+                $this->dispatchDueArticles($stats);
+            } catch (Throwable $exception) {
+                RuntimeLogger::warning('Scheduled article publish: legacy connection path failed.', [
+                    'error' => $exception->getMessage(),
+                    'exception' => $exception::class,
+                    'file' => $exception->getFile(),
+                    'line' => $exception->getLine(),
+                ]);
+
+                throw $exception;
+            }
 
             return $stats;
         }
@@ -62,9 +83,11 @@ final class ScheduledArticlePublishRunner
                 $this->databaseConnection->bootstrapFromConnection($connection);
                 $this->dispatchDueArticles($stats);
             } catch (Throwable $exception) {
-                Log::warning('Scheduled article publish: connection bootstrap failed.', [
+                $stats['failed']++;
+                RuntimeLogger::warning('Scheduled article publish: connection bootstrap failed.', [
                     'connection_id' => $connection->id,
                     'error' => $exception->getMessage(),
+                    'exception' => $exception::class,
                 ]);
             }
         }
@@ -73,7 +96,7 @@ final class ScheduledArticlePublishRunner
     }
 
     /**
-     * @param  array{processed: int, published: int, failed: int}  $stats
+     * @param  array{processed: int, published: int, failed: int, skipped: int}  $stats
      */
     private function dispatchDueArticles(array &$stats): void
     {
@@ -81,6 +104,7 @@ final class ScheduledArticlePublishRunner
         $stats['processed'] += $projectStats['processed'];
         $stats['published'] += $projectStats['published'];
         $stats['failed'] += $projectStats['failed'];
+        $stats['skipped'] += $projectStats['skipped'] ?? 0;
 
         $this->dueArticles()->each(function (SeoArticle $article) use (&$stats): void {
             $stats['processed']++;
@@ -96,7 +120,7 @@ final class ScheduledArticlePublishRunner
                 $stats['published']++;
             } catch (Throwable $e) {
                 $stats['failed']++;
-                Log::warning('Scheduled article publish event emit failed.', [
+                RuntimeLogger::warning('Scheduled article publish event emit failed.', [
                     'article_id' => $article->id,
                     'message' => $e->getMessage(),
                 ]);

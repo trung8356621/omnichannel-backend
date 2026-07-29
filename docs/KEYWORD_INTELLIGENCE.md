@@ -100,6 +100,10 @@ $PHP_BIN vendor/bin/phpunit app/Addons/SeoContentAi/tests/Unit
 php artisan optimize:clear
 ```
 
+## Agent Workspace skills
+
+Keyword Intelligence capabilities exposed as Agent slash skills — xem [AGENT_SLASH_COMMANDS.md](AGENT_SLASH_COMMANDS.md) (`/import-keywords`, `/analyze-keywords`, `/build-topical-map`, `/preview-project`, …). Availability: [AGENT_SKILLS.md](AGENT_SKILLS.md).
+
 ## Phase 4 — SERP Intelligence (additive)
 
 Public refs thêm prefix `srpq_`, `srps_`, `srpr_`, `srpf_`, `srpe_`, `srpc_`, `srpg_` trên `KeywordIntelligencePublicRef`.

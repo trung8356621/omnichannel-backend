@@ -33,17 +33,19 @@ final class SeoPerformanceHub extends SeoPanelPage
 
     protected static ?string $navigationIcon = 'heroicon-o-chart-bar-square';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
+
+    protected static ?string $navigationParentItem = 'Keyword Intelligence';
 
     protected static ?string $navigationLabel = 'SEO Performance';
 
-    protected static ?int $navigationSort = 11;
+    protected static ?int $navigationSort = 3;
 
     protected static ?string $slug = 'performance-hub';
 
     protected static string $view = 'seo-content-ai::seo.performance-hub';
 
-    protected static bool $shouldRegisterNavigation = false;
+    protected static bool $shouldRegisterNavigation = true;
 
     #[Url(as: 'source')]
     public string $dataSource = '';
@@ -207,6 +209,21 @@ final class SeoPerformanceHub extends SeoPanelPage
     public static function canAccess(array $parameters = []): bool
     {
         return SeoAccessControl::canAccessPlannerFeatures();
+    }
+
+    public static function shouldRegisterNavigation(array $parameters = []): bool
+    {
+        return SeoAccessControl::canAccessPlannerFeatures();
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.performance_hub.nav_seo_performance');
+    }
+
+    public static function getNavigationParentItem(): ?string
+    {
+        return __('seo-content-ai::filament.keyword_intelligence.nav');
     }
 
     public function mount(): void

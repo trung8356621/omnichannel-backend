@@ -29,6 +29,44 @@
             </button>
         </div>
 
+        @php
+            $mediaToolsSiteParams = $siteId ? ['siteId' => (int) $siteId] : [];
+            $canMediaTools = ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager();
+            $canManagerMediaTools = \App\Addons\SeoContentAi\Support\SeoAccessControl::canAccessManagerFeatures();
+        @endphp
+        @if ($canManagerMediaTools || $canMediaTools)
+            <div class="seo-media-library-tools mb-3 flex flex-wrap gap-2">
+                @if ($canManagerMediaTools)
+                    <a
+                        href="{{ \App\Addons\SeoContentAi\Filament\Pages\WatermarkSettingsPage::getUrl($mediaToolsSiteParams) }}"
+                        class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+                    >
+                        {{ __('seo-content-ai::filament.nav.watermark_batch') }}
+                    </a>
+                    <a
+                        href="{{ \App\Addons\SeoContentAi\Filament\Pages\ImageOptimizationSettings::getUrl($mediaToolsSiteParams) }}"
+                        class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+                    >
+                        {{ __('seo-content-ai::filament.nav.image_optimization') }}
+                    </a>
+                @endif
+                @if ($canMediaTools)
+                    <a
+                        href="{{ \App\Addons\SeoContentAi\Filament\Pages\WatermarkEditor::getUrl($mediaToolsSiteParams) }}"
+                        class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+                    >
+                        {{ __('seo-content-ai::filament.nav.watermark_designer') }}
+                    </a>
+                    <a
+                        href="{{ \App\Addons\SeoContentAi\Filament\Pages\ImageProcessingPage::getUrl($mediaToolsSiteParams) }}"
+                        class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+                    >
+                        {{ __('seo-content-ai::filament.nav.image_processing') }}
+                    </a>
+                @endif
+            </div>
+        @endif
+
         <div class="seo-media-library-filters-card">
             <input
                 type="file"

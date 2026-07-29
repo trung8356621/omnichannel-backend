@@ -13,6 +13,7 @@ final class GenerateProjectItemsCommand implements ContentProjectCommand
         public readonly string|int $projectRef,
         public readonly array $itemRefs = [],
         public readonly string $mode = 'full',
+        public readonly bool $technicalConfirmFullRerun = false,
     ) {}
 
     public function name(): string

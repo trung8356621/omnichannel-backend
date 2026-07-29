@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\AutomationExecutionResource\Pages;
 
 use App\Addons\SeoContentAi\Automation\BusinessHook\Services\ExecutionCleanupService;
+use App\Addons\SeoContentAi\Filament\Concerns\RedirectsSeoAutomationToAdmin;
 use App\Addons\SeoContentAi\Filament\Resources\AutomationExecutionResource;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Actions;
@@ -13,7 +14,18 @@ use Filament\Resources\Pages\ListRecords;
 
 final class ListAutomationExecutions extends ListRecords
 {
+    use RedirectsSeoAutomationToAdmin;
+
     protected static string $resource = AutomationExecutionResource::class;
+
+    public function mount(): void
+    {
+        if ($this->redirectSeoAutomationToAdmin(AutomationExecutionResource::getUrl('index'))) {
+            return;
+        }
+
+        parent::mount();
+    }
 
     protected function getHeaderActions(): array
     {

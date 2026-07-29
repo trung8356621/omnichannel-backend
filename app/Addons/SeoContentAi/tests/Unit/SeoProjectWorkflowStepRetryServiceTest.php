@@ -84,12 +84,10 @@ final class SeoProjectWorkflowStepRetryServiceTest extends TestCase
             dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php'
         );
         self::assertNotFalse($source);
-        self::assertStringContainsString("public function canRerunAllItems(): bool\n    {\n        return false;", $source);
-        self::assertStringContainsString('retryWorkflowStep', $source);
-        self::assertStringContainsString('cancelWorkflowStep', $source);
-        self::assertStringContainsString('forceStopRunQueue', $source);
-        self::assertStringContainsString('bulkRetryWorkflowSteps', $source);
-        self::assertStringContainsString('getBulkWorkflowSteps', $source);
+        self::assertStringContainsString('getProjectWorkspaceUrl', $source);
+        self::assertStringNotContainsString('function canRerunAllItems', $source);
+        self::assertStringNotContainsString('function retryWorkflowStep', $source);
+        self::assertTrue(method_exists(SeoProjectWorkflowStepRetryService::class, 'cancelActiveStep'));
     }
 
     public function test_service_exposes_stale_abandon_and_cancel(): void
@@ -185,11 +183,13 @@ final class SeoProjectWorkflowStepRetryServiceTest extends TestCase
             dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php'
         );
         self::assertNotFalse($source);
-        self::assertStringContainsString("'affected_item_ids'", $source);
-        self::assertStringContainsString("'active_before'", $source);
-        self::assertStringContainsString("'active_after'", $source);
-        self::assertStringContainsString("'already_idle'", $source);
-        self::assertStringContainsString("'match_mode'", $source);
+        self::assertStringContainsString('getProjectWorkspaceUrl', $source);
+        self::assertStringNotContainsString("'affected_item_ids'", $source);
+        $retry = file_get_contents(
+            dirname(__DIR__, 2).'/Services/SeoProjectWorkflowStepRetryService.php'
+        );
+        self::assertNotFalse($retry);
+        self::assertStringContainsString('cancelActiveStep', $retry);
     }
 
     public function test_blade_busy_badge_has_data_attribute_and_passes_task_node(): void

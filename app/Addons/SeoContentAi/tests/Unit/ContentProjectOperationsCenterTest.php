@@ -48,7 +48,52 @@ final class ContentProjectOperationsCenterTest extends TestCase
         self::assertStringContainsString('canAccessContentOperations', $source);
         self::assertStringContainsString('ContentProjectOpsReplayService', $source);
         self::assertStringContainsString('ContentProjectCommandBusMonitorService', $source);
+        self::assertStringContainsString("'site_sync'", $source);
+        self::assertStringContainsString('loadSiteSync', $source);
         self::assertStringNotContainsString('SeoProjectRun::', $source);
+
+        $siteSyncOps = (string) file_get_contents(
+            (new ReflectionClass(\App\Addons\SeoContentAi\Filament\Pages\SiteSyncOperationsCenter::class))->getFileName(),
+        );
+        self::assertStringContainsString('shouldRegisterNavigation', $siteSyncOps);
+        self::assertStringContainsString('return false;', $siteSyncOps);
+    }
+
+    public function test_operation_center_view_contains_site_sync_tab_and_sections(): void
+    {
+        $viewPath = dirname((new ReflectionClass(ContentProjectOperationsCenter::class))->getFileName(), 3)
+            .'/resources/views/filament/pages/content-project-operations-center.blade.php';
+        $view = (string) file_get_contents($viewPath);
+
+        self::assertStringContainsString("tab === 'site_sync'", $view);
+        self::assertStringContainsString('Site Sync', $view);
+        self::assertStringContainsString('Recent runs', $view);
+        self::assertStringContainsString('Inbound events', $view);
+        self::assertStringContainsString('Diagnostics', $view);
+    }
+
+    public function test_site_sync_run_actions_are_status_aware(): void
+    {
+        $source = (string) file_get_contents(
+            (new ReflectionClass(ContentProjectOperationsCenter::class))->getFileName(),
+        );
+        $viewPath = dirname((new ReflectionClass(ContentProjectOperationsCenter::class))->getFileName(), 3)
+            .'/resources/views/filament/pages/content-project-operations-center.blade.php';
+        $view = (string) file_get_contents($viewPath);
+
+        self::assertStringContainsString("'show_report'", $source);
+        self::assertStringContainsString("'show_resume'", $source);
+        self::assertStringContainsString("'show_cancel'", $source);
+        self::assertStringContainsString("'show_restart'", $source);
+        self::assertStringContainsString("'completed', 'completed_with_warnings'", $source);
+        self::assertStringContainsString("'failed', 'paused'", $source);
+        self::assertStringContainsString("'pending', 'running'", $source);
+        self::assertStringContainsString("'canceled', 'cancelled', 'superseded'", $source);
+
+        self::assertStringContainsString("@if (\$run['show_report'])", $view);
+        self::assertStringContainsString("@if (\$run['show_resume'])", $view);
+        self::assertStringContainsString("@if (\$run['show_cancel'])", $view);
+        self::assertStringContainsString("@if (\$run['show_restart'])", $view);
     }
 
     public function test_replay_service_uses_command_bus_only(): void

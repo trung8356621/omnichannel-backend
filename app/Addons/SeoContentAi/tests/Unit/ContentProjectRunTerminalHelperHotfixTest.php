@@ -126,7 +126,8 @@ final class ContentProjectRunTerminalHelperHotfixTest extends TestCase
         self::assertStringContainsString("['completed','cancelled','failed']", $blade);
 
         $view = $this->source('Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php');
-        self::assertStringContainsString("'engineUiRunning'", $view);
+        self::assertStringContainsString('getProjectWorkspaceUrl', $view);
+        self::assertStringNotContainsString('engineUiRunning', $view);
 
         $js = $this->source('resources/js/project-run-queue.js');
         self::assertStringContainsString('engineUiRunning', $js);
@@ -155,9 +156,10 @@ final class ContentProjectRunTerminalHelperHotfixTest extends TestCase
     public function test_php_engine_running_status_still_drives_ui_flag(): void
     {
         $view = $this->source('Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php');
-        self::assertStringContainsString('STATUS_RUNNING', $view);
-        self::assertStringContainsString('STATUS_STOPPING', $view);
-        self::assertStringContainsString('engineUiRunning', $view);
+        self::assertStringContainsString('getProjectWorkspaceUrl', $view);
+        self::assertStringNotContainsString('STATUS_RUNNING', $view);
+        $js = $this->source('resources/js/project-run-queue.js');
+        self::assertStringContainsString('engineUiRunning', $js);
     }
 
     private function source(string $relativeFromAddonRoot): string

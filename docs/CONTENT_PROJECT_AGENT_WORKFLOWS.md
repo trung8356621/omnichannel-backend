@@ -1,5 +1,15 @@
 # Content Project Agent Workflows
 
+## Agent Workspace UI (Phase 1)
+
+Filament **Agent Workspace** (`/seo/{connection_hash}/agent`) expose cùng capabilities qua slash skills + form preview/confirm — không duplicate CommandBus handlers.
+
+- Overview: [AGENT_WORKSPACE.md](AGENT_WORKSPACE.md)
+- Slash catalog: [AGENT_SLASH_COMMANDS.md](AGENT_SLASH_COMMANDS.md)
+- Security/scopes: [AGENT_WORKSPACE_SECURITY.md](AGENT_WORKSPACE_SECURITY.md)
+
+Flow UI: `AgentWorkspaceApplicationService` → `AgentGateway` → `ContentProjectAgentGateway` → `CanonicalCapabilityRegistry` → `ContentProjectCommandBus`.
+
 ## E2E Create → Generate
 
 ```

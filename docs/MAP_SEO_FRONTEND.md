@@ -71,6 +71,7 @@ flowchart TB
 | 8 | `article-media-picker-cache-bootstrap.js` | **Alpine bridge** | cache + workspace picker factory | `edit-article`, `workspace-media-picker.blade.php` |
 | 9 | `media-library-actions.js` | **Alpine** | `seoMediaLibraryActions` | `media-library.blade.php` |
 | 10 | `project-run-queue.js` | **Alpine** | `seoProjectRunQueue` + store `seoRunQueue` | `view-project-run.blade.php` |
+| 11 | `automation-workflow-viewer.jsx` | **React** (read-only) | `automation-workflow-viewer.jsx` → `AutomationWorkflowViewerApp` | Admin `/admin/automation/flows` — list ~17rem \| canvas `flex-1` `min-h: calc(100vh-…)` \| inspector ~20rem (collapse); CSS `automation-workflow-viewer.css` |
 
 ### 2.2 CSS-only bundles (không mount React)
 

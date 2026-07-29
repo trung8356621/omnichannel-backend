@@ -11,10 +11,13 @@ use App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationExecution
 use App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationGraphExecutionService;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationStaleRecoveryService;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Services\ExecutionCleanupService;
+use App\Addons\SeoContentAi\Filament\Concerns\BelongsToAdminAutomationPanel;
+use App\Addons\SeoContentAi\Filament\Concerns\RedirectsSeoAutomationToAdmin;
 use App\Addons\SeoContentAi\Filament\Resources\AutomationExecutionResource;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Actions;
 use Filament\Notifications\Notification;
+use Filament\Pages\Page;
 use Filament\Tables;
 use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
@@ -22,9 +25,11 @@ use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Livewire\Attributes\Url;
 
-final class AutomationOperationsDashboard extends SeoPanelPage implements HasTable
+class AutomationOperationsDashboard extends Page implements HasTable
 {
+    use BelongsToAdminAutomationPanel;
     use InteractsWithTable;
+    use RedirectsSeoAutomationToAdmin;
 
     private const STALE_SECONDS = 900;
 
@@ -32,11 +37,9 @@ final class AutomationOperationsDashboard extends SeoPanelPage implements HasTab
 
     protected static ?string $navigationIcon = 'heroicon-o-wrench-screwdriver';
 
-    protected static ?string $navigationGroup = 'Automation';
+    protected static ?int $navigationSort = 3;
 
-    protected static ?int $navigationSort = 92;
-
-    protected static ?string $navigationLabel = 'Automation Ops';
+    protected static ?string $navigationLabel = null;
 
     protected static ?string $title = 'Automation Operations';
 
@@ -48,8 +51,34 @@ final class AutomationOperationsDashboard extends SeoPanelPage implements HasTab
     /** @var array<string, int> */
     public array $counters = [];
 
+    /**
+     * @param  array<string, mixed>  $parameters
+     */
+    public static function getUrl(
+        array $parameters = [],
+        bool $isAbsolute = true,
+        ?string $panel = null,
+        ?\Illuminate\Database\Eloquent\Model $tenant = null,
+    ): string {
+        return parent::getUrl(
+            $parameters,
+            $isAbsolute,
+            $panel ?? self::adminPanelId(),
+            $tenant,
+        );
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.automation.nav_operations');
+    }
+
     public function mount(): void
     {
+        if ($this->redirectSeoAutomationToAdmin(static::getUrl())) {
+            return;
+        }
+
         abort_unless(SeoAccessControl::canViewAutomation(), 403);
         $this->refreshCounters();
     }

@@ -20,12 +20,9 @@ final class ContentOperationsRedirect extends Page
 
     protected static ?int $navigationSort = 40;
 
-    protected static string $view = 'filament.pages.content-operations-redirect';
+    protected static bool $shouldRegisterNavigation = false;
 
-    public static function getNavigationGroup(): ?string
-    {
-        return 'SEO';
-    }
+    protected static string $view = 'filament.pages.content-operations-redirect';
 
     public static function getNavigationLabel(): string
     {

@@ -21,6 +21,10 @@ Approved clusters → `BuildTopicalMap` (draft) → review/resolve conflicts →
 - After conversion: no live sync map → project.
 - Content Project archive does **not** delete topical planning data.
 
+## Agent Workspace
+
+Topical Map flows trong Agent UI: slash `/build-topical-map`, `/approve-topical-map`, `/preview-project`, `/create-project-from-map`; template `create_project_from_map`. Docs: [AGENT_SLASH_COMMANDS.md](AGENT_SLASH_COMMANDS.md), [AGENT_CHAT_TEMPLATES.md](AGENT_CHAT_TEMPLATES.md).
+
 ## Phase 4 — SERP boundary (additive)
 
 SERP Intelligence services **do not** call `ApproveTopicalMap` or mutate approved map versions. SERP evidence is advisory input only. See [SERP_INTELLIGENCE.md](SERP_INTELLIGENCE.md).

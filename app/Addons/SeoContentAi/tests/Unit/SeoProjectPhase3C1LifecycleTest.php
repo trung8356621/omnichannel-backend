@@ -131,13 +131,14 @@ final class SeoProjectPhase3C1LifecycleTest extends TestCase
     public function test_public_livewire_archive_methods_unchanged(): void
     {
         $this->assertTrue(method_exists(
-            \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages\ViewSeoProjectRun::class,
-            'archiveItem',
-        ));
-        $this->assertTrue(method_exists(
             \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages\ContentProjectArchive::class,
             'unarchiveItem',
         ));
+        $viewRun = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php',
+        );
+        $this->assertStringNotContainsString('function archiveItem', $viewRun);
+        $this->assertStringContainsString('getProjectWorkspaceUrl', $viewRun);
     }
 
     public function test_sync_service_no_longer_delete_all_recreate(): void

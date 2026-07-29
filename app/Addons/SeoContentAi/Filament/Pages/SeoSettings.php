@@ -13,11 +13,13 @@ class SeoSettings extends Page
 
     protected static ?string $navigationIcon = 'heroicon-o-adjustments-horizontal';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
     protected static ?string $navigationLabel = 'Settings';
 
     protected static ?string $title = 'Settings';
+
+    protected static ?int $navigationSort = 11;
 
     protected static string $view = 'seo-content-ai::filament.pages.seo-settings-redirect';
 

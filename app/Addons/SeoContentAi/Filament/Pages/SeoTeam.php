@@ -28,11 +28,13 @@ class SeoTeam extends SeoPanelPage implements HasTable
 
     protected static ?string $navigationIcon = 'heroicon-o-users';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
     protected static ?string $navigationLabel = 'Team members';
 
     protected static ?string $title = 'Team management';
+
+    protected static ?int $navigationSort = 12;
 
     protected static string $view = 'seo-content-ai::filament.pages.seo-team';
 

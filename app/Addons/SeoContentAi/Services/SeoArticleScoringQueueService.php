@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Jobs\AnalyzeArticleSeoJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\SeoScoringStatus;
+use App\Support\RuntimeLogger;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Log;
 
@@ -106,6 +107,60 @@ final class SeoArticleScoringQueueService
             'processing' => $processing,
             'failed' => $failed,
             'remaining' => $remaining,
+        ];
+    }
+
+    /**
+     * Queue missing Workspace scores + stale fingerprint articles.
+     * Does not overwrite provider scores — AnalyzeArticleSeoJob writes Workspace only.
+     *
+     * @param  array{run_id?: int|null, operation_id?: string|null, step_id?: int|null}  $context
+     * @return array{queued: int, skipped: int, stale_queued: int, missing_queued: int}
+     */
+    public function queueMissingOrStaleForSite(int $siteId, array $context = []): array
+    {
+        $missing = $this->queueMissingForSite($siteId);
+        $staleQueued = 0;
+
+        $this->eligibleArticlesQuery($siteId)
+            ->with('articleMetas')
+            ->orderBy('id')
+            ->chunkById(100, function ($articles) use (&$staleQueued): void {
+                foreach ($articles as $article) {
+                    if (! $article instanceof SeoArticle) {
+                        continue;
+                    }
+                    $status = SeoScoringStatus::readStatus($article);
+                    if (in_array($status, [SeoScoringStatus::STATUS_PENDING, SeoScoringStatus::STATUS_PROCESSING], true)) {
+                        continue;
+                    }
+                    if (! SeoScoringStatus::hasBeenAnalyzed($article)) {
+                        continue;
+                    }
+                    $stored = SeoScoringStatus::readFingerprint($article);
+                    $current = $this->buildArticleFingerprint($article);
+                    if ($stored !== null && $stored === $current) {
+                        continue;
+                    }
+                    if ($this->dispatchForArticle($article, force: true)) {
+                        $staleQueued++;
+                    }
+                }
+            });
+
+        if ($context !== []) {
+            RuntimeLogger::warning('seo.scoring.queue_missing_or_stale', array_merge($context, [
+                'site_id' => $siteId,
+                'missing_queued' => $missing['queued'],
+                'stale_queued' => $staleQueued,
+            ]));
+        }
+
+        return [
+            'queued' => $missing['queued'] + $staleQueued,
+            'skipped' => $missing['skipped'],
+            'stale_queued' => $staleQueued,
+            'missing_queued' => $missing['queued'],
         ];
     }
 

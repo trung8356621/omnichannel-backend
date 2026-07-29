@@ -57,6 +57,12 @@
         >
             {{ __('seo-content-ai::filament.article_list.tab_skipped') }}
         </a>
+        <a
+            href="{{ \App\Addons\SeoContentAi\Filament\Pages\ArticlesOptimal::getUrl() }}"
+            class="seo-internal-tabs__audit"
+        >
+            {{ __('seo-content-ai::filament.articles_optimal.navigation') }}
+        </a>
     </div>
 
     @if ($this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_REVIEWED)

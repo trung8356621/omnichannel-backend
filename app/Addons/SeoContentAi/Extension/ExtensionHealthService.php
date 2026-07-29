@@ -47,6 +47,7 @@ final class ExtensionHealthService
                 'ok' => $ok,
                 'message' => $message,
                 'drivers' => $driverResults,
+                'checked_at' => now()->toDateTimeString(),
             ];
 
             $this->stateStore->setHealth($id, $snapshot);

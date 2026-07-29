@@ -1,0 +1,230 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Tests\Unit;
+
+use App\Addons\SeoContentAi\Enums\ContentProjectLifecyclePhase;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectGeneratePendingPreview;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationDecision;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectLifecycle;
+use PHPUnit\Framework\TestCase;
+
+final class ContentProjectGeneratePendingSafetyTest extends TestCase
+{
+    private ContentProjectItemGenerationClassifier $classifier;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->classifier = new ContentProjectItemGenerationClassifier(new ContentProjectLifecycle);
+    }
+
+    public function test_legacy_31_ok_reviewing_items_not_selected_as_pending(): void
+    {
+        $decisions = [];
+        for ($i = 1; $i <= 28; $i++) {
+            $decisions[] = $this->classifier->classifySnapshot([
+                'task_id' => $i,
+                'type' => SeoProjectTask::TYPE_CREATE,
+                'status' => SeoProjectTask::STATUS_COMPLETED,
+                'article_id' => 1000 + $i,
+                'article_has_body' => true,
+                'lifecycle_phase' => ContentProjectLifecyclePhase::Review->value,
+                'successful_execution' => true,
+            ]);
+        }
+        for ($i = 29; $i <= 31; $i++) {
+            $decisions[] = $this->classifier->classifySnapshot([
+                'task_id' => $i,
+                'type' => SeoProjectTask::TYPE_CREATE,
+                'status' => SeoProjectTask::STATUS_REVIEWING,
+                'article_id' => 1000 + $i,
+                'article_has_body' => true,
+                'lifecycle_phase' => ContentProjectLifecyclePhase::Review->value,
+                'successful_execution' => true,
+                'last_run_item_status' => 'success',
+            ]);
+        }
+
+        $preview = new ContentProjectGeneratePendingPreview(
+            projectId: 24,
+            totalItems: 31,
+            decisions: $decisions,
+            hasHistoricalExecution: true,
+            failClosed: false,
+        );
+
+        self::assertSame(0, $preview->runCount());
+        self::assertSame(31, count($preview->skipDecisions()));
+        self::assertFalse($preview->failClosed);
+    }
+
+    public function test_generated_but_not_approved_is_not_pending(): void
+    {
+        $d = $this->classifier->classifySnapshot([
+            'task_id' => 1,
+            'type' => SeoProjectTask::TYPE_CREATE,
+            'status' => SeoProjectTask::STATUS_COMPLETED,
+            'article_id' => 9,
+            'article_has_body' => true,
+            'article_is_reviewed' => false,
+            'lifecycle_phase' => ContentProjectLifecyclePhase::Review->value,
+            'successful_execution' => true,
+        ]);
+
+        self::assertFalse($d->shouldRun());
+        self::assertSame(ContentProjectItemGenerationDecision::ACTION_SKIP, $d->action);
+    }
+
+    public function test_manually_edited_is_not_regenerated_as_pending(): void
+    {
+        $d = $this->classifier->classifySnapshot([
+            'task_id' => 2,
+            'type' => SeoProjectTask::TYPE_CREATE,
+            'status' => SeoProjectTask::STATUS_PENDING,
+            'article_id' => 9,
+            'article_manually_edited' => true,
+            'lifecycle_phase' => ContentProjectLifecyclePhase::Draft->value,
+        ]);
+
+        self::assertFalse($d->shouldRun());
+        self::assertSame('manually_edited', $d->reason);
+    }
+
+    public function test_improve_never_dispatches_generation(): void
+    {
+        $d = $this->classifier->classifySnapshot([
+            'task_id' => 3,
+            'type' => SeoProjectTask::TYPE_IMPROVE,
+            'status' => SeoProjectTask::STATUS_PENDING,
+            'lifecycle_phase' => ContentProjectLifecyclePhase::Draft->value,
+        ]);
+
+        self::assertFalse($d->shouldRun());
+        self::assertSame('improve_manual_only', $d->reason);
+    }
+
+    public function test_only_truly_pending_runs(): void
+    {
+        $pending = $this->classifier->classifySnapshot([
+            'task_id' => 4,
+            'type' => SeoProjectTask::TYPE_CREATE,
+            'status' => SeoProjectTask::STATUS_PENDING,
+            'lifecycle_phase' => ContentProjectLifecyclePhase::Draft->value,
+        ]);
+        $done = $this->classifier->classifySnapshot([
+            'task_id' => 5,
+            'type' => SeoProjectTask::TYPE_CREATE,
+            'status' => SeoProjectTask::STATUS_PENDING,
+            'successful_execution' => true,
+            'lifecycle_phase' => ContentProjectLifecyclePhase::Draft->value,
+        ]);
+
+        self::assertTrue($pending->shouldRun());
+        self::assertSame('never_generated', $pending->reason);
+        self::assertFalse($done->shouldRun());
+    }
+
+    public function test_preview_counts_match_dispatch_ids(): void
+    {
+        $decisions = [
+            $this->classifier->classifySnapshot([
+                'task_id' => 10,
+                'type' => SeoProjectTask::TYPE_CREATE,
+                'status' => SeoProjectTask::STATUS_PENDING,
+                'lifecycle_phase' => ContentProjectLifecyclePhase::Draft->value,
+            ]),
+            $this->classifier->classifySnapshot([
+                'task_id' => 11,
+                'type' => SeoProjectTask::TYPE_CREATE,
+                'status' => SeoProjectTask::STATUS_COMPLETED,
+                'lifecycle_phase' => ContentProjectLifecyclePhase::Approved->value,
+                'successful_execution' => true,
+            ]),
+        ];
+
+        $preview = new ContentProjectGeneratePendingPreview(1, 2, $decisions, false, false);
+
+        self::assertSame(1, $preview->runCount());
+        self::assertSame([10], $preview->runnableTaskIds());
+        self::assertSame($preview->runCount(), count($preview->runnableTaskIds()));
+    }
+
+    public function test_fail_closed_when_all_selected_with_history(): void
+    {
+        $decisions = [];
+        for ($i = 1; $i <= 3; $i++) {
+            $decisions[] = $this->classifier->classifySnapshot([
+                'task_id' => $i,
+                'type' => SeoProjectTask::TYPE_CREATE,
+                'status' => SeoProjectTask::STATUS_PENDING,
+                'lifecycle_phase' => ContentProjectLifecyclePhase::Draft->value,
+            ]);
+        }
+
+        $preview = new ContentProjectGeneratePendingPreview(
+            projectId: 1,
+            totalItems: 3,
+            decisions: $decisions,
+            hasHistoricalExecution: true,
+            failClosed: true,
+            failClosedReason: 'fail_closed_would_rerun_entire_project_with_history',
+        );
+
+        self::assertTrue($preview->failClosed);
+        self::assertTrue($preview->requiresTechnicalConfirm());
+        self::assertSame(3, $preview->runCount());
+    }
+
+    public function test_ui_has_project_operations_not_run_history_hub(): void
+    {
+        $resource = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource.php',
+        );
+        $opsView = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource/Pages/ViewSeoProject.php',
+        );
+        $opsBlade = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/filament/resources/seo-project-resource/pages/view-seo-project-operations.blade.php',
+        );
+        $viewRun = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php',
+        );
+
+        self::assertStringContainsString('view-seo-project-operations', $opsView);
+        self::assertStringContainsString('ContentProjectItemOperationsReadModel', $opsView);
+        self::assertStringContainsString('applySummaryFilter', $opsBlade);
+        self::assertStringContainsString('generation_badge', $opsBlade);
+        self::assertSame([], \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource::getRelations());
+        self::assertStringContainsString('redirect', strtolower($viewRun));
+        self::assertStringContainsString('allowsDevTestGenerateUi', $resource);
+        self::assertStringContainsString("environment('production')", $resource);
+    }
+
+    public function test_hydrate_service_preserves_reviewing_and_is_idempotent_shaped(): void
+    {
+        $src = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/ContentProject/ContentProjectLegacyExecutionHydrateService.php',
+        );
+
+        self::assertStringContainsString('manual_or_lifecycle_status_preserved', $src);
+        self::assertStringContainsString('STATUS_REVIEWING', $src);
+        self::assertStringContainsString('dry_run', $src);
+        self::assertStringContainsString('transaction', strtolower($src));
+        self::assertStringNotContainsString('ContentProjectRunEngine', $src);
+    }
+
+    public function test_prepare_run_queue_uses_classifier_not_status_pending_only(): void
+    {
+        $src = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/SeoProjectWorkflowRunService.php',
+        );
+
+        self::assertStringContainsString('ContentProjectItemGenerationClassifier', $src);
+        self::assertStringContainsString('technical_confirm_full_rerun', $src);
+        self::assertStringContainsString('Rerun requires explicit item selection', $src);
+    }
+}

@@ -185,17 +185,13 @@ class EditSeoProject extends SeoEditRecord
         return [
             Actions\ActionGroup::make([
                 SeoProjectResource::makeArchiveProjectPageAction($record),
-                Actions\Action::make('publishing_queue')
-                    ->label(__('seo-content-ai::filament.projects.publishing_queue'))
+                Actions\Action::make('open_scheduled_filter')
+                    ->label(__('seo-content-ai::filament.projects.open_scheduled_filter'))
                     ->icon('heroicon-o-calendar-days')
-                    ->color('primary')
-                    ->url(fn (): string => SeoProjectResource::getPublishingQueueUrl($this->getRecord())),
-                Actions\Action::make('view_runs')
-                    ->label(__('seo-content-ai::filament.projects.view_runs'))
-                    ->icon('heroicon-o-queue-list')
                     ->color('gray')
-                    ->visible(fn (): bool => SeoAccessControl::canAccessContentProjectRun($this->getRecord()))
-                    ->url(fn (): string => SeoProjectResource::getRunHistoryUrl($this->getRecord())),
+                    ->url(fn (): string => SeoProjectResource::getPublishingQueueUrl($this->getRecord())),
+                SeoProjectResource::makeGeneratePendingItemsAction($record),
+                SeoProjectResource::makeDevTestGeneratePendingItemsAction($record),
                 Actions\DeleteAction::make()
                     ->visible(fn (): bool => SeoAccessControl::canMutateContentProjects())
                     ->requiresConfirmation()

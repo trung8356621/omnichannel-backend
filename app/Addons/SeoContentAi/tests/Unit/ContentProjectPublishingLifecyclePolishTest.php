@@ -61,6 +61,12 @@ final class ContentProjectPublishingLifecyclePolishTest extends TestCase
         self::assertArrayHasKey('publishing-queue', $pages);
         self::assertTrue(class_exists(ContentProjectPublishingQueue::class));
         self::assertTrue(method_exists(SeoProjectResource::class, 'getPublishingQueueUrl'));
+
+        $src = (string) file_get_contents(
+            (new ReflectionClass(ContentProjectPublishingQueue::class))->getFileName(),
+        );
+        self::assertStringContainsString('redirect', $src);
+        self::assertStringContainsString('waiting_publish,published', $src);
     }
 
     public function test_archive_service_exposes_gate_and_confirm_flag(): void

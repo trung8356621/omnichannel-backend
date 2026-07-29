@@ -136,12 +136,16 @@ final class ContentProjectRunEnginePhase1Test extends TestCase
         self::assertStringContainsString('startPhpEngineProgressPoll', $js);
         self::assertStringContainsString('JS không được orchestration article', $js);
 
-        self::assertStringContainsString('ContentProjectRunEngineFeature::enabledFor($this->projectRun)', $view);
-        self::assertStringContainsString('requestStop', $view);
-        self::assertStringContainsString('pollRunProgress', $view);
-        self::assertStringContainsString('không chạy article qua Livewire queue', $view);
+        // Run History UI removed — generate starts from SeoProjectResource + PHP engine.
+        $resource = $this->source('Filament/Resources/SeoProjectResource.php');
+        self::assertStringContainsString('startGeneratePendingItems', $resource);
+        self::assertStringContainsString('ContentProjectRunEngine::class)->start', $resource);
+        self::assertStringContainsString('getProjectWorkspaceUrl', $resource);
 
-        self::assertStringContainsString('ContentProjectRunEngine::class)->start', $list);
+        self::assertStringContainsString('getProjectWorkspaceUrl', $view);
+        self::assertStringContainsString('redirect', $view);
+        self::assertStringContainsString('getProjectWorkspaceUrl', $list);
+        self::assertStringContainsString('redirect', $list);
     }
 
     public function test_start_does_not_call_retry_task_directly(): void
@@ -185,36 +189,20 @@ final class ContentProjectRunEnginePhase1Test extends TestCase
     public function test_poll_and_mount_are_read_only_when_flag_on(): void
     {
         $view = $this->source('Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php');
-
-        $pollPos = strpos($view, 'function pollRunProgress');
-        self::assertNotFalse($pollPos);
-        $pollChunk = substr($view, $pollPos, 600);
-        self::assertStringNotContainsString('dispatchNextArticle', $pollChunk);
-        self::assertStringNotContainsString('retryTask', $pollChunk);
-        self::assertStringNotContainsString('ContentProjectRunEngine::class)->start', $pollChunk);
-
-        $mountPos = strpos($view, 'function mount(');
-        self::assertNotFalse($mountPos);
-        $mountChunk = substr($view, $mountPos, 900);
-        self::assertStringNotContainsString('ContentProjectRunEngine::class)->start', $mountChunk);
-        self::assertStringNotContainsString('dispatchNextArticle', $mountChunk);
+        self::assertStringContainsString('getProjectWorkspaceUrl', $view);
+        self::assertStringContainsString('redirect', $view);
+        self::assertStringNotContainsString('function pollRunProgress', $view);
+        self::assertStringNotContainsString('dispatchNextArticle', $view);
     }
 
     public function test_legacy_livewire_orchestration_rejected_when_flag_on(): void
     {
         $view = $this->source('Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php');
-
+        // Run Detail UI removed — no Livewire orchestration entry points remain.
         foreach (['function runItemQueued', 'function beginRunQueue', 'function completeRunQueue'] as $fn) {
-            $pos = strpos($view, $fn);
-            self::assertNotFalse($pos, $fn);
-            $chunk = substr($view, $pos, 700);
-            self::assertTrue(
-                str_contains($chunk, 'shouldBlockPhpEngineArticleMutation')
-                || str_contains($chunk, 'denyLegacyOrchestrationAction')
-                || str_contains($chunk, 'ContentProjectRunEngineFeature::enabledFor'),
-                $fn.' must guard PHP engine orchestration',
-            );
+            self::assertStringNotContainsString($fn, $view);
         }
+        self::assertStringContainsString('getProjectWorkspaceUrl', $view);
     }
 
     public function test_js_orchestration_disabled_when_php_engine(): void
@@ -365,12 +353,12 @@ final class ContentProjectRunEnginePhase1Test extends TestCase
 
     public function test_view_uses_enabled_for_run_not_global_only(): void
     {
+        $resource = $this->source('Filament/Resources/SeoProjectResource.php');
+        self::assertStringContainsString('startGeneratePendingItems', $resource);
+        self::assertStringContainsString("'use_php_engine' => true", $resource);
         $view = $this->source('Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php');
-        self::assertStringContainsString('ContentProjectRunEngineFeature::enabledFor($this->projectRun)', $view);
-        self::assertStringNotContainsString(
-            'if (ContentProjectRunEngineFeature::enabled())',
-            $view,
-        );
+        self::assertStringContainsString('getProjectWorkspaceUrl', $view);
+        self::assertStringNotContainsString('ContentProjectRunEngineFeature::enabled()', $view);
     }
 
     public function test_dispatch_selects_pending_article_ordered_by_id(): void

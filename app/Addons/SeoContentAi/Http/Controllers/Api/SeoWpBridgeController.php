@@ -5,13 +5,13 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Http\Controllers\Api;
 
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
-use App\Addons\SeoContentAi\Services\SyncDomainContentService;
+use App\Addons\SeoContentAi\Services\SiteSync\Inbound\SiteSyncInboundGateway;
 use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Http\Controllers\Controller;
 use App\Models\Site;
+use App\Support\RuntimeLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 
 class SeoWpBridgeController extends Controller
 {
@@ -56,7 +56,7 @@ class SeoWpBridgeController extends Controller
      * POST /api/seo-wp-bridge/push-content
      * Authorization: Bearer {seo_read_token}
      */
-    public function pushContent(Request $request, SyncDomainContentService $syncService): JsonResponse
+    public function pushContent(Request $request, SiteSyncInboundGateway $inbound): JsonResponse
     {
         $token = trim((string) ($request->bearerToken() ?? $request->header('X-Seo-Read-Token', '')));
         if ($token === '') {
@@ -78,7 +78,7 @@ class SeoWpBridgeController extends Controller
 
         $siteUrl = trim((string) $request->input('site_url', ''));
         if ($siteUrl !== '' && ! $this->siteUrlMatchesSite($site, $siteUrl)) {
-            Log::warning('SeoWpBridge push: site_url host mismatch', [
+            RuntimeLogger::warning('SeoWpBridge push: site_url host mismatch', [
                 'site_id' => $site->id,
                 'site_domain' => $site->domain,
                 'site_url' => $siteUrl,
@@ -106,9 +106,9 @@ class SeoWpBridgeController extends Controller
             ], 422);
         }
 
-        $result = $syncService->importPushedItems($site, $items);
+        $result = $inbound->ingestCompatPush($site, $items);
 
-        Log::info('SeoWpBridge push-content', [
+        RuntimeLogger::info('SeoWpBridge push-content', [
             'site_id' => $site->id,
             'item_count' => count($items),
             'success' => $result['success'] ?? false,
@@ -116,6 +116,66 @@ class SeoWpBridgeController extends Controller
         ]);
 
         return response()->json($result, ($result['success'] ?? false) ? 200 : 422);
+    }
+
+    /**
+     * POST /api/seo-wp-bridge/snapshot-callback — site_sync.v1 delta after WP save/publish.
+     */
+    public function snapshotCallback(Request $request, SiteSyncInboundGateway $inbound): JsonResponse
+    {
+        return $this->deltaEvent($request, app(\App\Addons\SeoContentAi\Services\SiteSync\Inbound\SiteSyncDeltaEventIngestor::class), $inbound);
+    }
+
+    /**
+     * POST /api/seo-wp-bridge/delta-event — fast ack + queue (site_sync.v1 outbox).
+     */
+    public function deltaEvent(
+        Request $request,
+        \App\Addons\SeoContentAi\Services\SiteSync\Inbound\SiteSyncDeltaEventIngestor $ingestor,
+        ?SiteSyncInboundGateway $inbound = null,
+    ): JsonResponse {
+        $token = trim((string) ($request->bearerToken() ?? $request->header('X-Seo-Read-Token', '')));
+        if ($token === '') {
+            return response()->json(['success' => false, 'message' => 'Thiếu Bearer token.'], 401);
+        }
+
+        $site = $this->resolveSiteByReadToken($token);
+        if ($site === null) {
+            return response()->json(['success' => false, 'message' => 'Token không hợp lệ.'], 401);
+        }
+
+        $this->databaseConnection->bootstrapBySiteId((int) $site->id);
+
+        $siteUrl = trim((string) $request->input('site_url', ''));
+        if ($siteUrl !== '' && ! $this->siteUrlMatchesSite($site, $siteUrl)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'site_url không khớp domain.',
+            ], 403);
+        }
+
+        $raw = (string) $request->getContent();
+        /** @var array<string, mixed> $payload */
+        $payload = $request->all();
+        $result = $ingestor->receive(
+            $site,
+            $payload,
+            $raw !== '' ? $raw : (json_encode($payload) ?: '{}'),
+            $request->header('X-Omi-Timestamp'),
+            $request->header('X-Omi-Nonce'),
+            $request->header('X-Omi-Signature'),
+            $request->header('X-Omi-Idempotency-Key'),
+            $request->header('X-Omi-Operation-Id'),
+        );
+
+        // Compat: if auto-push disabled, fall back to synchronous snapshot ingest.
+        if (($result['code'] ?? '') === 'auto_push_disabled' && $inbound !== null) {
+            $result = $inbound->ingestSnapshotCallback($site, $payload);
+        }
+
+        $status = ($result['success'] ?? false) ? 200 : (($result['code'] ?? '') === 'signature_invalid' ? 401 : 422);
+
+        return response()->json($result, $status);
     }
 
     private function resolveSiteByReadToken(string $token): ?Site

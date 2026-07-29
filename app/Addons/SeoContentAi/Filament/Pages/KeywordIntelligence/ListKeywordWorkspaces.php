@@ -28,15 +28,22 @@ final class ListKeywordWorkspaces extends SeoPanelPage implements HasTable
 
     protected static ?string $navigationIcon = 'heroicon-o-magnifying-glass-circle';
 
-    protected static ?string $navigationGroup = 'Content Projects';
+    protected static ?string $navigationGroup = null;
 
-    protected static ?int $navigationSort = 6;
+    protected static ?int $navigationSort = 3;
+
+    protected static bool $shouldRegisterNavigation = false;
 
     protected static string $view = 'seo-content-ai::filament.pages.keyword-intelligence.list-keyword-workspaces';
 
     public static function canAccess(): bool
     {
         return SeoAccessControl::canAccessManagerFeatures();
+    }
+
+    public static function shouldRegisterNavigation(array $parameters = []): bool
+    {
+        return false;
     }
 
     public static function getNavigationLabel(): string

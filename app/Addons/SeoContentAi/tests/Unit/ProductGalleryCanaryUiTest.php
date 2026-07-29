@@ -67,6 +67,10 @@ final class ProductGalleryCanaryUiTest extends TestCase
         $this->assertStringContainsString('Execution history', $blade);
         $this->assertStringContainsString('Preview prompts', $blade);
         $this->assertStringContainsString('Xóa kết quả canary đã generate', $blade);
+        $this->assertTrue(
+            str_starts_with(ltrim($blade), '<x-filament-panels::page>'),
+            'Filament page must be Livewire root (no outer wrapper div)',
+        );
     }
 
     public function test_mode1_and_mode2_regression_hooks_still_present(): void

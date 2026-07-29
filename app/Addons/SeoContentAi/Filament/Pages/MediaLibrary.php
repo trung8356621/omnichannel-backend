@@ -17,6 +17,7 @@ use App\Addons\SeoContentAi\Services\SeoWpMediaEditedPendingService;
 use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
+use Filament\Navigation\NavigationItem;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Illuminate\Database\Eloquent\Collection;
@@ -32,9 +33,9 @@ class MediaLibrary extends Page
 
     protected static ?string $title = 'Media library';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
-    protected static ?int $navigationSort = 6;
+    protected static ?int $navigationSort = 2;
 
     protected static string $view = 'seo-content-ai::filament.pages.media-library';
 
@@ -1258,9 +1259,47 @@ class MediaLibrary extends Page
         return SeoAccessControl::canAccessContentFeatures();
     }
 
+    public static function getNavigationGroup(): ?string
+    {
+        return null;
+    }
+
     public static function getNavigationLabel(): string
     {
         return __('seo-content-ai::filament.nav.media_library');
+    }
+
+    /**
+     * @return array<int, NavigationItem>
+     */
+    public static function getNavigationItems(): array
+    {
+        $parentLabel = static::getNavigationLabel();
+
+        return [
+            NavigationItem::make($parentLabel)
+                ->icon(static::getNavigationIcon())
+                ->isActiveWhen(fn (): bool => request()->routeIs('filament.seo.pages.media-library')
+                    && ! in_array(request()->query('activeTab'), ['local', 'generated'], true))
+                ->sort(static::getNavigationSort())
+                ->url(static::getUrl(['activeTab' => 'original'])),
+            NavigationItem::make('Original (WP)')
+                ->icon('heroicon-o-globe-alt')
+                ->group(null)
+                ->parentItem($parentLabel)
+                ->isActiveWhen(fn (): bool => request()->routeIs('filament.seo.pages.media-library')
+                    && request()->query('activeTab', 'original') === 'original')
+                ->sort(1)
+                ->url(static::getUrl(['activeTab' => 'original'])),
+            NavigationItem::make('Local (Laravel)')
+                ->icon('heroicon-o-server-stack')
+                ->group(null)
+                ->parentItem($parentLabel)
+                ->isActiveWhen(fn (): bool => request()->routeIs('filament.seo.pages.media-library')
+                    && in_array(request()->query('activeTab'), ['local', 'generated'], true))
+                ->sort(2)
+                ->url(static::getUrl(['activeTab' => 'local'])),
+        ];
     }
 
     public function getTitle(): string

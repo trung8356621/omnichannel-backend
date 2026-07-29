@@ -1,0 +1,388 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Services\ContentProject;
+
+use App\Addons\SeoContentAi\Enums\SeoProjectRunItemStatus;
+use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
+use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoProject;
+use App\Addons\SeoContentAi\Models\SeoProjectRun;
+use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectLifecycle;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectStatusBadgePresenter;
+use Carbon\Carbon;
+use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Schema;
+
+/**
+ * Canonical Project Items operations read-model (generation + review + publishing).
+ */
+final class ContentProjectItemOperationsReadModel
+{
+    public function __construct(
+        private readonly ContentProjectLifecycle $lifecycle,
+        private readonly ContentProjectDashboardStatsService $stats,
+        private readonly ContentProjectItemGenerationClassifier $classifier,
+    ) {}
+
+    /**
+     * @param  array{
+     *     search?: string,
+     *     type?: string,
+     *     generation?: string,
+     *     lifecycle?: string,
+     *     queue?: string,
+     *     scheduled?: string,
+     *     failed_only?: bool,
+     *     page?: int,
+     *     per_page?: int,
+     * }  $filters
+     * @return array{
+     *     project_id: int,
+     *     stats: array<string, int>,
+     *     last_execution_at: string|null,
+     *     last_execution_status: string|null,
+     *     rows: list<array<string, mixed>>,
+     *     paginator: LengthAwarePaginator,
+     * }
+     */
+    public function forProject(SeoProject $project, array $filters = []): array
+    {
+        $projectId = (int) $project->getKey();
+        $baseStats = $this->stats->forProject($project);
+
+        $tasks = SeoProjectTask::query()
+            ->where('project_id', $projectId)
+            ->planned()
+            ->with(['article'])
+            ->orderBy('id')
+            ->get();
+
+        $latestByTask = $this->latestRunItemsByTaskIds(
+            $tasks->map(static fn (SeoProjectTask $t): int => (int) $t->id)->all(),
+        );
+
+        $latestRun = SeoProjectRun::query()
+            ->where('project_id', $projectId)
+            ->orderByDesc('id')
+            ->first();
+
+        $rows = [];
+        $index = 0;
+        foreach ($tasks as $task) {
+            if (! $task instanceof SeoProjectTask) {
+                continue;
+            }
+            $index++;
+            $rows[] = $this->mapRow($task, $index, $latestByTask[(int) $task->id] ?? null);
+        }
+
+        $generated = 0;
+        $pending = 0;
+        $running = 0;
+        $failed = 0;
+        foreach ($rows as $row) {
+            $gs = (string) $row['generation_status'];
+            if ($gs === SeoProjectTask::STATUS_WRITING) {
+                $running++;
+            } elseif ($gs === SeoProjectTask::STATUS_FAILED) {
+                $failed++;
+            } elseif ($row['can_generate'] === true) {
+                $pending++;
+            } else {
+                $generated++;
+            }
+        }
+
+        $filtered = $this->applyFilters(collect($rows), $filters);
+        $perPage = max(10, min(100, (int) ($filters['per_page'] ?? 30)));
+        $page = max(1, (int) ($filters['page'] ?? LengthAwarePaginator::resolveCurrentPage()));
+        $total = $filtered->count();
+        $slice = $filtered->forPage($page, $perPage)->values()->all();
+
+        $paginator = new LengthAwarePaginator(
+            $slice,
+            $total,
+            $perPage,
+            $page,
+            [
+                'path' => LengthAwarePaginator::resolveCurrentPath(),
+                'query' => request()->query(),
+            ],
+        );
+
+        return [
+            'project_id' => $projectId,
+            'stats' => [
+                'total_items' => count($rows),
+                'generated' => $generated,
+                'pending' => $pending,
+                'running' => $running,
+                'failed' => $failed,
+                'waiting_review' => (int) ($baseStats['waiting_review'] ?? 0),
+                'approved' => (int) ($baseStats['approved'] ?? 0),
+                'waiting_publish' => (int) ($baseStats['waiting_publish'] ?? 0),
+                'published' => (int) ($baseStats['published'] ?? 0),
+            ],
+            'last_execution_at' => $latestRun?->finished_at?->format('d/m/Y H:i')
+                ?? $latestRun?->started_at?->format('d/m/Y H:i'),
+            'last_execution_status' => $latestRun !== null ? (string) $latestRun->status : null,
+            'rows' => $slice,
+            'paginator' => $paginator,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $exec
+     * @return array<string, mixed>
+     */
+    private function mapRow(SeoProjectTask $task, int $index, ?array $exec): array
+    {
+        $tid = (int) $task->id;
+        $article = $task->article;
+        $phase = $this->lifecycle->resolvePhase($task, $article instanceof SeoArticle ? $article : null);
+        $type = SeoProjectTask::normalizeType($task->type);
+        $decision = $this->classifier->classifyTask($task, [
+            'successful_execution' => $exec !== null && in_array(
+                strtolower((string) ($exec['status'] ?? '')),
+                [SeoProjectRunItemStatus::Success->value, 'completed'],
+                true,
+            ),
+            'last_run_item_status' => $exec['status'] ?? null,
+            'generation_meta_complete' => $article instanceof SeoArticle && $article->last_ai_content_at !== null,
+        ]);
+
+        $articleId = (int) ($task->article_id ?? 0);
+        $keyword = trim((string) ($task->keyword ?? ''));
+        $title = trim((string) ($task->title ?? ''));
+        if ($title === '' && $article instanceof SeoArticle) {
+            $title = trim((string) ($article->title ?? ''));
+        }
+        $source = trim((string) ($task->source_content ?? ''));
+        if ($keyword === '' && $source !== '' && $type !== SeoProjectTask::TYPE_IMPROVE) {
+            $keyword = $source;
+        }
+
+        $primary = $title !== '' ? $title : ($keyword !== '' ? $keyword : '#'.$tid);
+
+        $message = '';
+        if ($exec !== null) {
+            $message = trim((string) ($exec['error_message'] ?? $exec['message'] ?? ''));
+        }
+        if ($message === '' && $task->last_publish_error !== null) {
+            $message = (string) $task->last_publish_error;
+        }
+
+        $genStatus = (string) ($task->status ?? 'pending');
+        $queueStatus = (string) ($task->publish_queue_status ?? 'none');
+        if ($queueStatus === '') {
+            $queueStatus = 'none';
+        }
+
+        $lastActivityCarbon = $this->resolveLastActivity($task, $article, $exec);
+        $genBadge = ContentProjectStatusBadgePresenter::generation($genStatus, $exec['status'] ?? null);
+        $lifeBadge = ContentProjectStatusBadgePresenter::lifecycle($phase->value);
+        $queueBadge = ContentProjectStatusBadgePresenter::queue($queueStatus);
+
+        return [
+            'index' => $index,
+            'task_id' => $tid,
+            'type' => $type,
+            'type_label' => match ($type) {
+                SeoProjectTask::TYPE_REWRITE => 'rewrite',
+                SeoProjectTask::TYPE_IMPROVE => 'improve',
+                default => 'new',
+            },
+            'primary_label' => $primary,
+            'keyword' => $keyword !== '' ? $keyword : '—',
+            'title' => $title !== '' ? $title : '—',
+            'article_id' => $articleId > 0 ? $articleId : null,
+            'article_edit_url' => $articleId > 0
+                ? ArticleResource::getUrl('edit', ['record' => $articleId])
+                : null,
+            'article_slug' => $article instanceof SeoArticle ? (string) ($article->slug ?? '') : '',
+            'generation_status' => $genStatus,
+            'execution_status' => $exec['status'] ?? null,
+            'current_step' => $exec['action'] ?? null,
+            'lifecycle' => $phase->value,
+            'queue_status' => $queueStatus,
+            'scheduled_at' => $task->scheduled_publish_at?->format('d/m/Y H:i'),
+            'scheduled_raw' => $task->scheduled_publish_at?->toIso8601String(),
+            'is_scheduled' => $task->scheduled_publish_at !== null,
+            'message' => $message !== '' ? $message : null,
+            'last_activity' => $lastActivityCarbon?->diffForHumans() ?? '—',
+            'last_activity_full' => $lastActivityCarbon?->format('d/m/Y H:i:s'),
+            'last_run_at' => $exec['finished_at'] ?? $exec['started_at'] ?? null,
+            'can_generate' => $decision->shouldRun(),
+            'can_regen' => $type !== SeoProjectTask::TYPE_IMPROVE && $articleId > 0,
+            'is_improve' => $type === SeoProjectTask::TYPE_IMPROVE,
+            'generation_badge' => $genBadge,
+            'lifecycle_badge' => $lifeBadge,
+            'queue_badge' => $queueBadge,
+        ];
+    }
+
+    /**
+     * @param  Collection<int, array<string, mixed>>  $rows
+     * @param  array<string, mixed>  $filters
+     * @return Collection<int, array<string, mixed>>
+     */
+    private function applyFilters(Collection $rows, array $filters): Collection
+    {
+        $search = strtolower(trim((string) ($filters['search'] ?? '')));
+        $type = trim((string) ($filters['type'] ?? ''));
+        $generation = trim((string) ($filters['generation'] ?? ''));
+        $lifecycle = trim((string) ($filters['lifecycle'] ?? ''));
+        $queue = trim((string) ($filters['queue'] ?? ''));
+        $scheduled = trim((string) ($filters['scheduled'] ?? ''));
+        $failedOnly = (bool) ($filters['failed_only'] ?? false);
+
+        return $rows->filter(static function (array $row) use (
+            $search,
+            $type,
+            $generation,
+            $lifecycle,
+            $queue,
+            $scheduled,
+            $failedOnly
+        ): bool {
+            if ($search !== '') {
+                $hay = strtolower(implode(' ', [
+                    (string) $row['primary_label'],
+                    (string) $row['keyword'],
+                    (string) $row['title'],
+                    (string) ($row['article_slug'] ?? ''),
+                    (string) $row['task_id'],
+                    (string) ($row['article_id'] ?? ''),
+                ]));
+                if (! str_contains($hay, $search)) {
+                    return false;
+                }
+            }
+
+            if ($type !== '' && (string) $row['type'] !== $type) {
+                return false;
+            }
+
+            if ($generation !== '') {
+                $gs = (string) $row['generation_status'];
+                $ok = match ($generation) {
+                    'pending' => $gs === SeoProjectTask::STATUS_PENDING || ($row['can_generate'] ?? false) === true,
+                    'running' => $gs === SeoProjectTask::STATUS_WRITING,
+                    'success' => in_array($gs, [SeoProjectTask::STATUS_COMPLETED, SeoProjectTask::STATUS_REVIEWING], true),
+                    'failed' => $gs === SeoProjectTask::STATUS_FAILED,
+                    default => $gs === $generation,
+                };
+                if (! $ok) {
+                    return false;
+                }
+            }
+
+            if ($lifecycle !== '') {
+                $wanted = array_filter(array_map('trim', explode(',', $lifecycle)));
+                if ($wanted !== [] && ! in_array((string) $row['lifecycle'], $wanted, true)) {
+                    return false;
+                }
+            }
+
+            if ($queue !== '' && (string) $row['queue_status'] !== $queue) {
+                return false;
+            }
+
+            if ($scheduled === 'yes' && ! ($row['is_scheduled'] ?? false)) {
+                return false;
+            }
+            if ($scheduled === 'no' && ($row['is_scheduled'] ?? false)) {
+                return false;
+            }
+
+            if ($failedOnly) {
+                $genFail = (string) $row['generation_status'] === SeoProjectTask::STATUS_FAILED;
+                $queueFail = (string) $row['queue_status'] === 'failed';
+                if (! $genFail && ! $queueFail) {
+                    return false;
+                }
+            }
+
+            return true;
+        })->values();
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $exec
+     */
+    private function resolveLastActivity(SeoProjectTask $task, mixed $article, ?array $exec): ?Carbon
+    {
+        $candidates = [];
+        if ($article instanceof SeoArticle) {
+            foreach ([$article->last_manual_saved_at, $article->last_synced_at, $article->updated_at] as $dt) {
+                if ($dt !== null) {
+                    $candidates[] = Carbon::parse($dt);
+                }
+            }
+        }
+        if ($task->updated_at !== null) {
+            $candidates[] = Carbon::parse($task->updated_at);
+        }
+        foreach (['finished_at', 'started_at'] as $key) {
+            if (! empty($exec[$key])) {
+                try {
+                    $candidates[] = Carbon::createFromFormat('d/m/Y H:i', (string) $exec[$key]);
+                } catch (\Throwable) {
+                    try {
+                        $candidates[] = Carbon::parse((string) $exec[$key]);
+                    } catch (\Throwable) {
+                    }
+                }
+            }
+        }
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        usort($candidates, static fn (Carbon $a, Carbon $b): int => $b <=> $a);
+
+        return $candidates[0];
+    }
+
+    /**
+     * @param  list<int>  $taskIds
+     * @return array<int, array<string, mixed>>
+     */
+    private function latestRunItemsByTaskIds(array $taskIds): array
+    {
+        if ($taskIds === [] || ! Schema::connection('omi_seo_ai')->hasTable('seo_project_run_items')) {
+            return [];
+        }
+
+        $items = SeoProjectRunItem::query()
+            ->whereIn('task_id', $taskIds)
+            ->orderByDesc('id')
+            ->get(['id', 'task_id', 'run_id', 'status', 'action', 'error_message', 'started_at', 'finished_at']);
+
+        $map = [];
+        foreach ($items as $item) {
+            $tid = (int) $item->task_id;
+            if ($tid <= 0 || isset($map[$tid])) {
+                continue;
+            }
+            $map[$tid] = [
+                'id' => (int) $item->id,
+                'run_id' => (int) $item->run_id,
+                'status' => (string) ($item->status ?? ''),
+                'action' => $item->action !== null ? (string) $item->action : null,
+                'error_message' => $item->error_message !== null ? (string) $item->error_message : null,
+                'message' => null,
+                'started_at' => $item->started_at?->format('d/m/Y H:i'),
+                'finished_at' => $item->finished_at?->format('d/m/Y H:i'),
+            ];
+        }
+
+        return $map;
+    }
+}

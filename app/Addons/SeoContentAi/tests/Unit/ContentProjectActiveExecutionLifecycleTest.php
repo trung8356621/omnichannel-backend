@@ -112,12 +112,8 @@ final class ContentProjectActiveExecutionLifecycleTest extends TestCase
         self::assertStringContainsString('ContentProjectActiveExecutionResolver', $bulk);
         self::assertStringContainsString('ContentProjectActiveExecutionResolver', $retry);
         self::assertStringContainsString('whereNull(\'finished_at\')', $retry);
-        self::assertStringContainsString('active_execution', $view);
-        // Order: LastSaved(WorkflowSteps(...)) — steps enrich trước row status.
-        self::assertMatchesRegularExpression(
-            '/enrichItemLastSaved\s*\(\s*\$this->enrichItemWorkflowSteps\s*\(/s',
-            $view,
-        );
+        self::assertStringContainsString('getProjectWorkspaceUrl', $view);
+        self::assertStringNotContainsString('active_execution', $view);
     }
 
     public function test_finalizer_and_repair_command_exist(): void

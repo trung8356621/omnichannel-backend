@@ -24,8 +24,11 @@ use App\Addons\SeoContentAi\Services\SeoProjectKeywordListParser;
 use App\Addons\SeoContentAi\Services\SeoProjectRunPreflightService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskMoveService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
+use App\Addons\SeoContentAi\Services\RunEngine\ContentProjectRunEngine;
+use App\Addons\SeoContentAi\Services\SeoProjectRunConsolidationService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Models\Site;
 use App\Models\User;
 use App\Support\RuntimeLogger;
@@ -52,7 +55,7 @@ class SeoProjectResource extends SeoPanelResource
 
     protected static ?string $navigationIcon = 'heroicon-o-folder-open';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
     protected static ?string $navigationLabel = 'Content projects';
 
@@ -60,7 +63,7 @@ class SeoProjectResource extends SeoPanelResource
 
     protected static ?string $pluralModelLabel = 'Content projects';
 
-    protected static ?int $navigationSort = 8;
+    protected static ?int $navigationSort = 4;
 
     public static function canViewAny(): bool
     {
@@ -783,11 +786,25 @@ class SeoProjectResource extends SeoPanelResource
                     ->alignCenter()
                     ->sortable(),
 
-                Tables\Columns\TextColumn::make('active_completed_count')
-                    ->label(__('seo-content-ai::filament.projects.completed'))
+                Tables\Columns\TextColumn::make('active_generated_count')
+                    ->label(__('seo-content-ai::filament.projects.generated'))
+                    ->numeric()
+                    ->alignCenter()
+                    ->sortable()
+                    ->tooltip(__('seo-content-ai::filament.projects.generated_tooltip')),
+
+                Tables\Columns\TextColumn::make('active_pending_count')
+                    ->label(__('seo-content-ai::filament.projects.pending_never_generated'))
                     ->numeric()
                     ->alignCenter()
                     ->sortable(),
+
+                Tables\Columns\TextColumn::make('active_failed_count')
+                    ->label(__('seo-content-ai::filament.projects.failed'))
+                    ->numeric()
+                    ->alignCenter()
+                    ->sortable()
+                    ->toggleable(),
 
                 Tables\Columns\TextColumn::make('status')
                     ->label(__('seo-content-ai::filament.projects.status'))
@@ -857,18 +874,11 @@ class SeoProjectResource extends SeoPanelResource
             ])
             ->actions([
                 Tables\Actions\ActionGroup::make([
-                    Tables\Actions\Action::make('view_runs')
-                        ->label(__('seo-content-ai::filament.projects.view_runs'))
+                    Tables\Actions\Action::make('open_project_items')
+                        ->label(__('seo-content-ai::filament.projects.open_project_items'))
                         ->icon('heroicon-o-queue-list')
                         ->color('gray')
-                        ->visible(fn (SeoProject $record): bool => SeoAccessControl::canAccessContentProjectRun($record))
-                        ->url(fn (SeoProject $record): string => static::getRunHistoryUrl($record)),
-                    Tables\Actions\Action::make('publishing_queue')
-                        ->label(__('seo-content-ai::filament.projects.publishing_queue'))
-                        ->icon('heroicon-o-calendar-days')
-                        ->color('primary')
-                        ->visible(fn (SeoProject $record): bool => ! $record->isProjectArchived() && ! $record->isArchive())
-                        ->url(fn (SeoProject $record): string => static::getPublishingQueueUrl($record)),
+                        ->url(fn (SeoProject $record): string => static::getProjectWorkspaceUrl($record)),
                     Tables\Actions\Action::make('archive_project')
                         ->label(__('seo-content-ai::filament.projects.archive_project'))
                         ->icon('heroicon-o-archive-box')
@@ -1070,9 +1080,25 @@ class SeoProjectResource extends SeoPanelResource
                 ->with(['user', 'site', 'currentArchive'])
                 ->withCount([
                     'tasks as active_tasks_count' => static fn (Builder $sub): Builder => $sub->active(),
-                    'tasks as active_completed_count' => static fn (Builder $sub): Builder => $sub
+                    'tasks as active_generated_count' => static fn (Builder $sub): Builder => $sub
                         ->active()
-                        ->where('status', SeoProjectTask::STATUS_COMPLETED),
+                        ->where(static function (Builder $inner): void {
+                            $inner->whereIn('status', [
+                                SeoProjectTask::STATUS_COMPLETED,
+                                SeoProjectTask::STATUS_REVIEWING,
+                            ])->orWhere(static function (Builder $linked): void {
+                                $linked->whereNotNull('article_id')->where('article_id', '>', 0);
+                            });
+                        }),
+                    'tasks as active_pending_count' => static fn (Builder $sub): Builder => $sub
+                        ->active()
+                        ->where('status', SeoProjectTask::STATUS_PENDING)
+                        ->where(static function (Builder $inner): void {
+                            $inner->whereNull('article_id')->orWhere('article_id', '<=', 0);
+                        }),
+                    'tasks as active_failed_count' => static fn (Builder $sub): Builder => $sub
+                        ->active()
+                        ->where('status', SeoProjectTask::STATUS_FAILED),
                     'tasks as active_articles_count' => static fn (Builder $sub): Builder => $sub
                         ->active()
                         ->whereNotNull('article_id')
@@ -1159,6 +1185,7 @@ class SeoProjectResource extends SeoPanelResource
 
     public static function getRelations(): array
     {
+        // Operations table lives on ViewSeoProject (canonical). Edit = settings form only.
         return [];
     }
 
@@ -1170,6 +1197,7 @@ class SeoProjectResource extends SeoPanelResource
             // Tab dự án đã lưu trữ + legacy bài lẻ. Preview: archive/{archive}/preview
             'archive' => Pages\ContentProjectArchive::route('/archive'),
             'archive-preview' => Pages\ContentProjectArchivePreview::route('/archive/{archive}/preview'),
+            // Legacy run URLs — pages redirect to project workspace (ADR-004 UI cutover).
             'run-history' => Pages\ListSeoProjectRuns::route('/{record}/runs'),
             'view-run-step' => Pages\ViewSeoProjectRunStep::route('/runs/{run}/items/{article}'),
             'view-run' => Pages\ViewSeoProjectRun::route('/runs/{run}'),
@@ -1181,12 +1209,38 @@ class SeoProjectResource extends SeoPanelResource
 
     public static function getPublishingQueueUrl(SeoProject $project): string
     {
-        return static::getUrl('publishing-queue', ['record' => $project]);
+        // Compatibility: Publishing Queue is a filtered view of project items.
+        return static::getUrl('view', [
+            'record' => $project,
+            'lifecycle' => 'waiting_publish,published',
+        ]);
     }
 
+    /**
+     * Canonical Content Project workspace (Project → Items). Replaces Run History URLs.
+     */
+    public static function getProjectWorkspaceUrl(SeoProject $project): string
+    {
+        return static::getUrl('view', ['record' => $project]);
+    }
+
+    /** @deprecated Use getProjectWorkspaceUrl — Run History UI removed. */
     public static function getRunHistoryUrl(SeoProject $project): string
     {
-        return static::getUrl('run-history', ['record' => $project]);
+        return static::getProjectWorkspaceUrl($project);
+    }
+
+    /**
+     * Dev-only Test generate UI — fail-closed outside local/testing + debug.
+     */
+    public static function allowsDevTestGenerateUi(): bool
+    {
+        if (app()->environment('production')) {
+            return false;
+        }
+
+        return app()->hasDebugModeEnabled()
+            && app()->environment(['local', 'testing']);
     }
 
     public static function workspaceTabQueryValue(string $tabKey): string
@@ -1274,12 +1328,213 @@ class SeoProjectResource extends SeoPanelResource
 
     public static function getLatestRunUrl(SeoProject $project): ?string
     {
-        $latestRunId = (int) $project->runs()->latest('id')->value('id');
-        if ($latestRunId <= 0) {
-            return null;
+        // Do not deep-link into legacy run detail — stay on project items workspace.
+        return static::getProjectWorkspaceUrl($project);
+    }
+
+    public static function canGeneratePendingItems(SeoProject $project): bool
+    {
+        if ($project->isProjectArchived() || $project->isArchive()) {
+            return false;
         }
 
-        return static::getUrl('view-run', ['run' => $latestRunId]);
+        if (! SeoAccessControl::canAccessContentProjectRun($project)) {
+            return false;
+        }
+
+        $preview = app(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier::class)
+            ->preview($project);
+
+        return $preview->runCount() > 0;
+    }
+
+    /**
+     * Start generate via CommandBus + PHP RunEngine — stay on project workspace (no Run History UI).
+     *
+     * @param  array<string, mixed>|null  $settings
+     */
+    public static function startGeneratePendingItems(SeoProject $project, string $mode, ?array $settings = null): SeoProjectRun
+    {
+        $settings = is_array($settings) ? $settings : [];
+        $settings['use_php_engine'] = true;
+
+        $run = static::createProjectWorkflowRun($project, $mode, $settings);
+        app(ContentProjectRunEngine::class)->start($run);
+
+        return $run;
+    }
+
+    public static function makeGeneratePendingItemsAction(SeoProject $project): \Filament\Actions\Action
+    {
+        return \Filament\Actions\Action::make('generate_pending_items')
+            ->label(__('seo-content-ai::filament.projects.generate_pending_items'))
+            ->icon('heroicon-o-play')
+            ->color('success')
+            ->visible(fn (): bool => SeoAccessControl::canAccessContentProjectRun($project))
+            ->disabled(fn (): bool => ! static::canGeneratePendingItems($project))
+            ->tooltip(fn (): ?string => static::canGeneratePendingItems($project)
+                ? null
+                : __('seo-content-ai::filament.projects.run_workflow_disabled'))
+            ->modalHeading(__('seo-content-ai::filament.projects.generate_pending_preview_heading'))
+            ->modalDescription(fn () => static::generatePendingPreviewHtml($project))
+            ->form([
+                Forms\Components\Checkbox::make('generate_post_images')
+                    ->label(__('seo-content-ai::filament.projects.run_settings_generate_post_images'))
+                    ->helperText(__('seo-content-ai::filament.projects.run_settings_generate_post_images_help'))
+                    ->default(false),
+                Forms\Components\Checkbox::make('technical_confirm_full_rerun')
+                    ->label(__('seo-content-ai::filament.projects.generate_pending_technical_confirm'))
+                    ->helperText(__('seo-content-ai::filament.projects.generate_pending_technical_confirm_help'))
+                    ->visible(function () use ($project): bool {
+                        $preview = app(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier::class)
+                            ->preview($project);
+
+                        return $preview->failClosed;
+                    })
+                    ->default(false),
+            ])
+            ->action(function (array $data) use ($project): void {
+                try {
+                    $preview = app(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier::class)
+                        ->preview($project);
+
+                    if ($preview->failClosed && ! (bool) ($data['technical_confirm_full_rerun'] ?? false)) {
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.projects.run_failed'))
+                            ->body(__('seo-content-ai::filament.projects.generate_pending_fail_closed'))
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
+
+                    if (! $preview->canDispatch() && ! $preview->failClosed) {
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.projects.run_failed'))
+                            ->body(__('seo-content-ai::filament.projects.run_items_empty'))
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
+
+                    $taskIds = $preview->runnableTaskIds();
+                    if ($preview->failClosed && (bool) ($data['technical_confirm_full_rerun'] ?? false)) {
+                        // Technical override still only runs classifier-runnable IDs (never improve / evidence).
+                        $taskIds = $preview->runnableTaskIds();
+                    }
+
+                    static::startGeneratePendingItems(
+                        $project,
+                        SeoProjectRun::MODE_FULL,
+                        [
+                            'generate_post_images' => (bool) ($data['generate_post_images'] ?? false),
+                            'use_php_engine' => true,
+                            'task_ids' => $taskIds,
+                            'technical_confirm_full_rerun' => (bool) ($data['technical_confirm_full_rerun'] ?? false),
+                        ],
+                    );
+
+                    SeoConnectionContext::applyUrlDefaults();
+
+                    Notification::make()
+                        ->title(__('seo-content-ai::filament.projects.run_started'))
+                        ->body(__('seo-content-ai::filament.projects.generate_pending_started_body'))
+                        ->success()
+                        ->send();
+                } catch (\InvalidArgumentException $exception) {
+                    Notification::make()
+                        ->title(__('seo-content-ai::filament.projects.run_failed'))
+                        ->body($exception->getMessage())
+                        ->danger()
+                        ->send();
+                } catch (\Throwable $exception) {
+                    Notification::make()
+                        ->title(__('seo-content-ai::filament.projects.run_failed'))
+                        ->body($exception->getMessage())
+                        ->danger()
+                        ->send();
+                }
+            });
+    }
+
+    public static function generatePendingPreviewHtml(SeoProject $project): HtmlString
+    {
+        $preview = app(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier::class)
+            ->preview($project);
+
+        $lines = [
+            __('seo-content-ai::filament.projects.generate_pending_preview_total', ['count' => $preview->totalItems]),
+            __('seo-content-ai::filament.projects.generate_pending_preview_run', ['count' => $preview->runCount()]),
+            __('seo-content-ai::filament.projects.generate_pending_preview_skip', ['count' => count($preview->skipDecisions())]),
+            __('seo-content-ai::filament.projects.generate_pending_preview_anomaly', ['count' => count($preview->anomalyDecisions())]),
+        ];
+
+        if ($preview->failClosed) {
+            $lines[] = __('seo-content-ai::filament.projects.generate_pending_fail_closed');
+        }
+
+        $skipSample = array_slice($preview->skipDecisions(), 0, 8);
+        foreach ($skipSample as $decision) {
+            $lines[] = '#'.$decision->taskId.' — '.$decision->reason
+                .($decision->keyword ? ' ('.$decision->keyword.')' : '');
+        }
+
+        $html = '<ul class="list-disc pl-5 space-y-1">';
+        foreach ($lines as $line) {
+            $html .= '<li>'.e((string) $line).'</li>';
+        }
+        $html .= '</ul>';
+
+        return new HtmlString($html);
+    }
+
+    public static function makeDevTestGeneratePendingItemsAction(SeoProject $project): \Filament\Actions\Action
+    {
+        return \Filament\Actions\Action::make('test_generate_pending_items')
+            ->label(__('seo-content-ai::filament.projects.test_run_workflow'))
+            ->icon('heroicon-o-beaker')
+            ->color('warning')
+            ->visible(fn (): bool => static::allowsDevTestGenerateUi()
+                && SeoAccessControl::canAccessContentProjectRun($project))
+            ->disabled(fn (): bool => ! static::canGeneratePendingItems($project))
+            ->modalHeading(__('seo-content-ai::filament.projects.test_run_workflow_heading', [
+                'limit' => SeoProjectWorkflowRunService::TEST_RUN_LIMIT,
+            ]))
+            ->modalDescription(fn () => static::runWorkflowModalDescription(
+                $project,
+                SeoProjectWorkflowRunService::TEST_RUN_LIMIT,
+            ))
+            ->form([
+                Forms\Components\Checkbox::make('generate_post_images')
+                    ->label(__('seo-content-ai::filament.projects.run_settings_generate_post_images'))
+                    ->helperText(__('seo-content-ai::filament.projects.run_settings_generate_post_images_help'))
+                    ->default(false),
+            ])
+            ->action(function (array $data) use ($project): void {
+                try {
+                    static::startGeneratePendingItems(
+                        $project,
+                        SeoProjectRun::MODE_TEST,
+                        [
+                            'generate_post_images' => (bool) ($data['generate_post_images'] ?? false),
+                            'use_php_engine' => true,
+                        ],
+                    );
+
+                    Notification::make()
+                        ->title(__('seo-content-ai::filament.projects.run_started'))
+                        ->body(__('seo-content-ai::filament.projects.generate_pending_started_body'))
+                        ->success()
+                        ->send();
+                } catch (\Throwable $exception) {
+                    Notification::make()
+                        ->title(__('seo-content-ai::filament.projects.run_failed'))
+                        ->body($exception->getMessage())
+                        ->danger()
+                        ->send();
+                }
+            });
     }
 
     public static function runWorkflowModalDescription(SeoProject $project, ?int $pendingLimit = null): HtmlString
@@ -1308,6 +1563,7 @@ class SeoProjectResource extends SeoPanelResource
                 (int) $project->getKey(),
                 $itemRefs,
                 $mode,
+                (bool) (($settings['technical_confirm_full_rerun'] ?? false)),
             ),
             ActorContext::user(
                 auth()->id() !== null ? (int) auth()->id() : null,
@@ -1341,16 +1597,15 @@ class SeoProjectResource extends SeoPanelResource
     public static function dispatchProjectWorkflowRun(SeoProject $project, string $mode): mixed
     {
         try {
-            $run = static::createProjectWorkflowRun($project, $mode);
-            $url = static::getUrl('view-run', ['run' => $run->id]).'?autorun=1';
+            static::startGeneratePendingItems($project, $mode, ['use_php_engine' => true]);
 
             Notification::make()
                 ->title(__('seo-content-ai::filament.projects.run_started'))
-                ->body(__('seo-content-ai::filament.projects.run_started_new_tab'))
+                ->body(__('seo-content-ai::filament.projects.generate_pending_started_body'))
                 ->success()
                 ->send();
 
-            return redirect($url);
+            return redirect(static::getProjectWorkspaceUrl($project));
         } catch (\InvalidArgumentException $exception) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.projects.run_failed'))

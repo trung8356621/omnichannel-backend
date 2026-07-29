@@ -14,11 +14,13 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\Generat
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\MoveProjectItemScheduleCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\PublishProjectItemsNowCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RestoreContentProjectCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ResumeProjectExecutionCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RetryProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ScheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SkipProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StopProjectExecutionCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UnscheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UpdateContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UpdateContentProjectItemCommand;
@@ -65,7 +67,12 @@ final class ContentProjectAgentCommandFactory
             'content_project.create' => $this->buildCreate($input, $resolvedSiteId),
             'content_project.update' => new UpdateContentProjectCommand(
                 $this->projectRef($input),
-                is_array($input['attributes'] ?? null) ? $input['attributes'] : [],
+                is_array($input['attributes'] ?? null)
+                    ? $input['attributes']
+                    : array_filter([
+                        'name' => $input['project_name'] ?? $input['name'] ?? null,
+                        'description' => $input['description'] ?? null,
+                    ], static fn (mixed $v): bool => $v !== null && $v !== ''),
             ),
             'content_project.add_items' => new AddContentProjectItemsCommand(
                 $this->projectRef($input),
@@ -145,6 +152,15 @@ final class ContentProjectAgentCommandFactory
                 $this->projectRef($input),
                 (bool) ($input['dry_run'] ?? false),
                 isset($input['confirmation_token']) ? (string) $input['confirmation_token'] : null,
+            ),
+            'content_project.stop_execution' => new StopProjectExecutionCommand(
+                $this->projectRef($input),
+                isset($input['execution_ref']) ? (string) $input['execution_ref'] : null,
+                isset($input['reason']) ? (string) $input['reason'] : null,
+            ),
+            'content_project.resume_execution' => new ResumeProjectExecutionCommand(
+                $this->projectRef($input),
+                isset($input['execution_ref']) ? (string) $input['execution_ref'] : null,
             ),
 
             // Keyword Intelligence — additive.
@@ -432,6 +448,52 @@ final class ContentProjectAgentCommandFactory
                 isset($input['confirmation_token']) ? (string) $input['confirmation_token'] : null,
                 isset($input['idempotency_key']) ? (string) $input['idempotency_key'] : null,
             ),
+            'site.discover' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\DiscoverSiteCommand($resolvedSiteId),
+            'site.sync' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RunSiteSyncCommand(
+                $resolvedSiteId,
+                (string) ($input['mode'] ?? 'delta'),
+                (bool) ($input['force_snapshot'] ?? false),
+            ),
+            'site.sync_keywords' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\SyncSiteKeywordsCommand($resolvedSiteId),
+            'site.sync_links' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\SyncSiteLinksCommand($resolvedSiteId),
+            'site.discover_contacts' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\DiscoverSiteContactsCommand($resolvedSiteId),
+            'site.refresh_snapshot' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RefreshSiteSnapshotCommand($resolvedSiteId),
+            'site.resume_sync' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ResumeSiteSyncCommand(
+                $resolvedSiteId,
+                (int) ($input['run_id'] ?? 0),
+            ),
+            'site.retry_sync_step' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RetrySiteSyncStepCommand(
+                $resolvedSiteId,
+                (int) ($input['run_id'] ?? 0),
+                (string) ($input['step_key'] ?? ''),
+            ),
+            'site.cancel_sync' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\CancelSiteSyncCommand(
+                $resolvedSiteId,
+                (int) ($input['run_id'] ?? 0),
+            ),
+            'site.reconcile' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ReconcileSiteSyncCommand(
+                $resolvedSiteId,
+                (string) ($input['mode'] ?? 'standard'),
+            ),
+            'site.requeue_inbound_event' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RequeueSiteSyncInboundEventCommand(
+                $resolvedSiteId,
+                (int) ($input['event_id'] ?? 0),
+            ),
+            'site.preview_bootstrap' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\PreviewBootstrapSiteSyncCommand($resolvedSiteId),
+            'site.bootstrap' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\BootstrapSiteSyncCommand(
+                $resolvedSiteId,
+                (bool) ($input['force'] ?? false),
+            ),
+            'site.backfill_v2' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\BackfillSiteSyncV2Command(
+                $resolvedSiteId,
+                (bool) ($input['dry_run'] ?? true),
+                is_array($input['only'] ?? null) ? $input['only'] : ['all'],
+                (int) ($input['batch'] ?? 200),
+                isset($input['resume_id']) ? (int) $input['resume_id'] : null,
+                (bool) ($input['force'] ?? false),
+            ),
+            'site.validate_handshake' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ValidateSiteSyncHandshakeCommand($resolvedSiteId),
+            'site.generate_diagnostic' => new \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\GenerateSiteSyncDiagnosticCommand($resolvedSiteId),
             default => throw new InvalidArgumentException('Unsupported agent capability: '.$capability),
         };
     }

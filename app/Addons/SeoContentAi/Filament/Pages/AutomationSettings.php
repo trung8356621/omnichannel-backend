@@ -5,26 +5,29 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
 use App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationSettingsService;
+use App\Addons\SeoContentAi\Filament\Concerns\BelongsToAdminAutomationPanel;
+use App\Addons\SeoContentAi\Filament\Concerns\RedirectsSeoAutomationToAdmin;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Forms;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
+use Filament\Pages\Page;
 
-final class AutomationSettings extends SeoPanelPage implements HasForms
+class AutomationSettings extends Page implements HasForms
 {
+    use BelongsToAdminAutomationPanel;
     use InteractsWithForms;
+    use RedirectsSeoAutomationToAdmin;
 
     protected static ?string $slug = 'automation/settings';
 
     protected static ?string $navigationIcon = 'heroicon-o-cog-6-tooth';
 
-    protected static ?string $navigationGroup = 'Automation';
+    protected static ?int $navigationSort = 4;
 
-    protected static ?int $navigationSort = 95;
-
-    protected static ?string $navigationLabel = 'Automation Settings';
+    protected static ?string $navigationLabel = null;
 
     protected static ?string $title = 'Automation Settings';
 
@@ -33,8 +36,34 @@ final class AutomationSettings extends SeoPanelPage implements HasForms
     /** @var array<string, mixed> */
     public array $data = [];
 
+    /**
+     * @param  array<string, mixed>  $parameters
+     */
+    public static function getUrl(
+        array $parameters = [],
+        bool $isAbsolute = true,
+        ?string $panel = null,
+        ?\Illuminate\Database\Eloquent\Model $tenant = null,
+    ): string {
+        return parent::getUrl(
+            $parameters,
+            $isAbsolute,
+            $panel ?? self::adminPanelId(),
+            $tenant,
+        );
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.automation.nav_settings');
+    }
+
     public function mount(AutomationSettingsService $settings): void
     {
+        if ($this->redirectSeoAutomationToAdmin(static::getUrl())) {
+            return;
+        }
+
         abort_unless(SeoAccessControl::canManageAutomationSettings(), 403);
         $this->form->fill($settings->getSettings());
     }
@@ -42,6 +71,16 @@ final class AutomationSettings extends SeoPanelPage implements HasForms
     public static function canAccess(): bool
     {
         return SeoAccessControl::canManageAutomationSettings();
+    }
+
+    /**
+     * @return array<string, Form>
+     */
+    protected function getForms(): array
+    {
+        return [
+            'form' => $this->form($this->makeForm()),
+        ];
     }
 
     public function form(Form $form): Form

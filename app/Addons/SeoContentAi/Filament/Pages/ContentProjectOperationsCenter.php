@@ -8,9 +8,13 @@ use App\Addons\SeoContentAi\Models\ContentProjectAgentApproval;
 use App\Addons\SeoContentAi\Models\ContentProjectAgentPlan;
 use App\Addons\SeoContentAi\Models\ContentProjectOperation;
 use App\Addons\SeoContentAi\Models\SeoProject;
+use App\Addons\SeoContentAi\Models\SiteSync\SeoSiteSyncInboundEvent;
+use App\Addons\SeoContentAi\Models\SiteSync\SeoSiteSyncRun;
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\AgentExecutionContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectAgentPlanApplicationService;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResultNotifier;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectPublicRef;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectTimelineService;
 use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectAiCostAggregateService;
@@ -24,10 +28,19 @@ use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectOps
 use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectPublishAnalyticsService;
 use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectSiteHealthService;
 use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectWpAdapterMetricsService;
+use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\CancelSiteSyncCommand;
+use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\GenerateSiteSyncComparisonReportCommand;
+use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\GenerateSiteSyncDiagnosticCommand;
+use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ReconcileSiteSyncCommand;
+use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RequeueSiteSyncInboundEventCommand;
+use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ResumeSiteSyncCommand;
+use App\Addons\SeoContentAi\Services\SiteSync\Cutover\SiteSyncCutoverStateService;
+use App\Addons\SeoContentAi\Services\SiteSync\Orchestration\SiteSyncCutoverReadinessService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Support\RuntimeLogger;
 use Carbon\Carbon;
 use Filament\Notifications\Notification;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -44,9 +57,9 @@ final class ContentProjectOperationsCenter extends SeoPanelPage
 
     protected static ?string $navigationIcon = 'heroicon-o-signal';
 
-    protected static ?string $navigationGroup = 'Content Projects';
+    protected static ?string $navigationGroup = null;
 
-    protected static ?int $navigationSort = 5;
+    protected static ?int $navigationSort = 7;
 
     protected static string $view = 'seo-content-ai::filament.pages.content-project-operations-center';
 
@@ -91,6 +104,25 @@ final class ContentProjectOperationsCenter extends SeoPanelPage
     /** @var list<array<string, mixed>> */
     public array $agentApprovals = [];
 
+    /** @var list<array<string, mixed>> */
+    public array $runtimeRows = [];
+
+    public ?int $siteSyncFilterSiteId = null;
+
+    /** @var list<array<string, mixed>> */
+    public array $siteSyncRuns = [];
+
+    /** @var list<array<string, mixed>> */
+    public array $siteSyncEvents = [];
+
+    /** @var array<string, mixed>|null */
+    public ?array $siteSyncCutover = null;
+
+    /** @var array<string, mixed>|null */
+    public ?array $siteSyncDiagnostic = null;
+
+    public string $siteSyncCutoverMode = 'legacy_active';
+
     public string $filterCommand = '';
 
     public string $filterActor = '';
@@ -130,7 +162,7 @@ final class ContentProjectOperationsCenter extends SeoPanelPage
 
     public function switchTab(string $tab): void
     {
-        $allowed = ['dashboard', 'commands', 'analytics', 'health', 'timeline', 'report', 'audit', 'plans', 'approvals'];
+        $allowed = ['dashboard', 'site_sync', 'health', 'runtime', 'timeline', 'audit', 'commands', 'analytics', 'report', 'plans', 'approvals'];
         if (! in_array($tab, $allowed, true)) {
             return;
         }
@@ -145,6 +177,28 @@ final class ContentProjectOperationsCenter extends SeoPanelPage
         $this->refreshTab($this->activeTab);
     }
 
+    public function refreshRuntimeHealth(): void
+    {
+        abort_unless(SeoAccessControl::canAccessContentOperations(), 403);
+
+        try {
+            app(\App\Addons\SeoContentAi\Extension\ExtensionHealthService::class)->runAll();
+            Notification::make()
+                ->title(__('seo-content-ai::filament.extensions.health_refreshed'))
+                ->success()
+                ->send();
+        } catch (Throwable $e) {
+            RuntimeLogger::report($e, ['endpoint' => 'content_project.ops.runtime_health']);
+            Notification::make()
+                ->title(__('seo-content-ai::filament.extensions.health_failed'))
+                ->body($e->getMessage())
+                ->danger()
+                ->send();
+        }
+
+        $this->runtimeRows = SeoExtensions::buildRuntimeSnapshot();
+    }
+
     public function refreshTab(?string $tab = null): void
     {
         $tab ??= $this->activeTab;
@@ -154,9 +208,11 @@ final class ContentProjectOperationsCenter extends SeoPanelPage
         try {
             match ($tab) {
                 'dashboard' => $this->dashboard = app(ContentProjectOpsDashboardService::class)->snapshot($sites),
+                'site_sync' => $this->loadSiteSync(),
                 'commands' => $this->loadOperations(),
                 'analytics' => $this->loadAnalytics($sites),
                 'health' => $this->loadHealth($sites),
+                'runtime' => $this->runtimeRows = SeoExtensions::buildRuntimeSnapshot(),
                 'timeline' => $this->loadTimeline(),
                 'report' => $this->dailyReport = app(ContentProjectDailyReportService::class)
                     ->buildForDate(Carbon::yesterday(), $sites),
@@ -199,6 +255,58 @@ final class ContentProjectOperationsCenter extends SeoPanelPage
         $result = app(ContentProjectOpsReplayService::class)->replay($operationId, $userId);
         app(ContentProjectActionResultNotifier::class)->send($result);
         $this->loadOperations();
+    }
+
+    public function refreshSiteSync(): void
+    {
+        $this->loadSiteSync();
+    }
+
+    public function resumeSiteSyncRun(int $runId): void
+    {
+        $run = SeoSiteSyncRun::query()->find($runId);
+        if ($run === null) {
+            return;
+        }
+
+        $this->dispatchSiteSyncCommand(new ResumeSiteSyncCommand((int) $run->site_id, $runId));
+    }
+
+    public function cancelSiteSyncRun(int $runId): void
+    {
+        $run = SeoSiteSyncRun::query()->find($runId);
+        if ($run === null) {
+            return;
+        }
+
+        $this->dispatchSiteSyncCommand(new CancelSiteSyncCommand((int) $run->site_id, $runId));
+    }
+
+    public function requeueSiteSyncEvent(int $eventId): void
+    {
+        $event = SeoSiteSyncInboundEvent::query()->find($eventId);
+        if ($event === null) {
+            return;
+        }
+
+        $this->dispatchSiteSyncCommand(new RequeueSiteSyncInboundEventCommand((int) $event->site_id, $eventId));
+    }
+
+    public function reconcileSiteSyncSite(int $siteId): void
+    {
+        $this->dispatchSiteSyncCommand(new ReconcileSiteSyncCommand($siteId, 'standard'));
+    }
+
+    public function runSiteSyncDiagnostic(int $siteId): void
+    {
+        $result = $this->dispatchSiteSyncCommandResult(new GenerateSiteSyncDiagnosticCommand($siteId));
+        $this->siteSyncDiagnostic = is_array($result->metadata) ? $result->metadata : null;
+        $this->loadSiteSync();
+    }
+
+    public function generateSiteSyncReport(int $siteId): void
+    {
+        $this->dispatchSiteSyncCommand(new GenerateSiteSyncComparisonReportCommand($siteId, 'summary'));
     }
 
     public function loadTimelineForProject(): void
@@ -349,6 +457,33 @@ final class ContentProjectOperationsCenter extends SeoPanelPage
         $notification->send();
     }
 
+    private function dispatchSiteSyncCommand(object $command): void
+    {
+        $this->dispatchSiteSyncCommandResult($command);
+        $this->loadSiteSync();
+    }
+
+    private function dispatchSiteSyncCommandResult(object $command): \App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResult
+    {
+        $user = Auth::user();
+        $actor = ActorContext::user($user !== null ? (int) $user->id : null);
+        $result = app(ContentProjectCommandBus::class)->dispatch($command, $actor);
+
+        $notification = Notification::make()
+            ->title($result->success ? 'OK' : 'Failed')
+            ->body($result->message);
+
+        if ($result->success) {
+            $notification->success();
+        } else {
+            $notification->danger();
+        }
+
+        $notification->send();
+
+        return $result;
+    }
+
     private function loadOperations(): void
     {
         $filters = array_filter([
@@ -381,6 +516,65 @@ final class ContentProjectOperationsCenter extends SeoPanelPage
                 'can_replay' => ! $op->success,
             ];
         })->all();
+    }
+
+    private function loadSiteSync(): void
+    {
+        $siteIds = SeoAccessControl::accessibleSiteIds();
+
+        $runsQuery = SeoSiteSyncRun::query()->orderByDesc('id')->limit(50);
+        $eventsQuery = SeoSiteSyncInboundEvent::query()->orderByDesc('id')->limit(50);
+
+        if ($siteIds !== []) {
+            $runsQuery->whereIn('site_id', $siteIds);
+            $eventsQuery->whereIn('site_id', $siteIds);
+        }
+
+        if ($this->siteSyncFilterSiteId !== null && $this->siteSyncFilterSiteId > 0) {
+            $runsQuery->where('site_id', $this->siteSyncFilterSiteId);
+            $eventsQuery->where('site_id', $this->siteSyncFilterSiteId);
+        }
+
+        $this->siteSyncRuns = $runsQuery->get()->map(function (SeoSiteSyncRun $run): array {
+            $status = (string) $run->status;
+
+            return [
+                'id' => (int) $run->id,
+                'site_id' => (int) $run->site_id,
+                'public_ref' => (string) $run->public_ref,
+                'status' => $status,
+                'mode' => (string) $run->mode,
+                'current_step' => (string) ($run->current_step ?? ''),
+                'error' => (string) ($run->error_message ?? ''),
+                'show_report' => in_array($status, ['completed', 'completed_with_warnings'], true),
+                'show_resume' => in_array($status, ['failed', 'paused'], true),
+                'show_cancel' => in_array($status, ['pending', 'running'], true),
+                'show_reconcile' => in_array($status, ['completed', 'completed_with_warnings', 'failed', 'paused'], true),
+                'show_restart' => in_array($status, ['canceled', 'cancelled', 'superseded'], true),
+            ];
+        })->all();
+
+        $this->siteSyncEvents = $eventsQuery->get()->map(static fn (SeoSiteSyncInboundEvent $event): array => [
+            'id' => (int) $event->id,
+            'site_id' => (int) $event->site_id,
+            'event_type' => (string) $event->event_type,
+            'status' => (string) $event->status,
+            'wordpress_id' => $event->wordpress_id,
+            'error' => (string) ($event->last_error_message ?? ''),
+        ])->all();
+
+        if ($this->siteSyncFilterSiteId !== null && $this->siteSyncFilterSiteId > 0) {
+            $site = \App\Models\Site::query()->find($this->siteSyncFilterSiteId);
+            $this->siteSyncCutover = $site
+                ? app(SiteSyncCutoverReadinessService::class)->evaluate($site)
+                : null;
+            $this->siteSyncCutoverMode = $site
+                ? app(SiteSyncCutoverStateService::class)->modeFor($site)
+                : 'legacy_active';
+        } else {
+            $this->siteSyncCutover = null;
+            $this->siteSyncCutoverMode = 'legacy_active';
+        }
     }
 
     /** @param list<int>|null $sites */

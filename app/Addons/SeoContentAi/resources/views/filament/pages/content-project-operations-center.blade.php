@@ -33,11 +33,13 @@
         <div class="flex flex-wrap gap-2 border-b border-gray-200 pb-2 dark:border-gray-700">
             @foreach ([
                 'dashboard' => __('seo-content-ai::filament.ops.tab_dashboard'),
-                'commands' => __('seo-content-ai::filament.ops.tab_commands'),
-                'analytics' => __('seo-content-ai::filament.ops.tab_analytics'),
+                'site_sync' => 'Site Sync',
                 'health' => __('seo-content-ai::filament.ops.tab_health'),
+                'runtime' => __('seo-content-ai::filament.ops.tab_runtime'),
                 'timeline' => __('seo-content-ai::filament.ops.tab_timeline'),
                 'audit' => __('seo-content-ai::filament.ops.tab_audit'),
+                'commands' => __('seo-content-ai::filament.ops.tab_commands'),
+                'analytics' => __('seo-content-ai::filament.ops.tab_analytics'),
                 'report' => __('seo-content-ai::filament.ops.tab_report'),
                 'plans' => __('seo-content-ai::filament.ops.tab_plans'),
                 'approvals' => __('seo-content-ai::filament.ops.tab_approvals'),
@@ -114,6 +116,126 @@
                     </div>
                 </x-filament::section>
             @endif
+        </div>
+
+        <div x-show="tab === 'site_sync'" x-cloak class="space-y-4">
+            <x-filament::section>
+                <x-slot name="heading">Site Sync</x-slot>
+                <x-slot name="description">Recent runs, inbound events, diagnostics.</x-slot>
+
+                <div class="flex flex-wrap items-center gap-3">
+                    <x-filament::button
+                        type="button"
+                        color="gray"
+                        wire:click="refreshSiteSync"
+                        wire:loading.attr="disabled"
+                        wire:target="refreshSiteSync,resumeSiteSyncRun,cancelSiteSyncRun,reconcileSiteSyncSite,runSiteSyncDiagnostic,generateSiteSyncReport,requeueSiteSyncEvent"
+                    >
+                        Refresh
+                    </x-filament::button>
+                </div>
+
+                @if ($siteSyncCutover)
+                    <div class="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
+                        <div class="font-medium">Cutover: {{ $siteSyncCutover['status'] ?? $siteSyncCutoverMode }}</div>
+                        <div class="mt-1 text-sm">Current mode: <strong>{{ $siteSyncCutoverMode }}</strong></div>
+                    </div>
+                @endif
+
+                <div class="overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700">
+                    <div class="border-b border-gray-200 px-4 py-3 font-medium dark:border-gray-700">Recent runs</div>
+                    <table class="min-w-full text-sm">
+                        <thead class="bg-gray-50 dark:bg-gray-800">
+                            <tr>
+                                <th class="px-3 py-2 text-left">Run</th>
+                                <th class="px-3 py-2 text-left">Site</th>
+                                <th class="px-3 py-2 text-left">Status</th>
+                                <th class="px-3 py-2 text-left">Step</th>
+                                <th class="px-3 py-2 text-left">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+                            @forelse ($siteSyncRuns as $run)
+                                <tr>
+                                    <td class="px-3 py-2 font-mono text-xs">#{{ $run['id'] }}</td>
+                                    <td class="px-3 py-2">site {{ $run['site_id'] }}</td>
+                                    <td class="px-3 py-2">{{ $run['status'] }}</td>
+                                    <td class="px-3 py-2 text-xs text-gray-500">{{ $run['current_step'] ?: '—' }}</td>
+                                    <td class="px-3 py-2">
+                                        <div class="flex flex-wrap gap-2">
+                                            @if ($run['show_report'])
+                                                <x-filament::button size="xs" color="info" wire:click="generateSiteSyncReport({{ (int) $run['site_id'] }})">View report</x-filament::button>
+                                            @endif
+                                            @if ($run['show_resume'])
+                                                <x-filament::button size="xs" color="info" wire:click="resumeSiteSyncRun({{ (int) $run['id'] }})">Resume</x-filament::button>
+                                            @endif
+                                            @if ($run['show_cancel'])
+                                                <x-filament::button size="xs" color="danger" wire:click="cancelSiteSyncRun({{ (int) $run['id'] }})">Cancel</x-filament::button>
+                                            @endif
+                                            @if ($run['show_reconcile'])
+                                                <x-filament::button size="xs" color="gray" wire:click="reconcileSiteSyncSite({{ (int) $run['site_id'] }})">Reconcile</x-filament::button>
+                                            @endif
+                                            @if ($run['show_restart'])
+                                                <x-filament::button size="xs" color="info" wire:click="resumeSiteSyncRun({{ (int) $run['id'] }})">Restart</x-filament::button>
+                                            @endif
+                                            <x-filament::button size="xs" color="warning" wire:click="runSiteSyncDiagnostic({{ (int) $run['site_id'] }})">Diagnostic</x-filament::button>
+                                        </div>
+                                        @if ($run['error'] !== '')
+                                            <div class="mt-2 text-xs text-amber-600">{{ $run['error'] }}</div>
+                                        @endif
+                                    </td>
+                                </tr>
+                            @empty
+                                <tr>
+                                    <td colspan="5" class="px-3 py-6 text-center text-gray-500">No runs yet.</td>
+                                </tr>
+                            @endforelse
+                        </tbody>
+                    </table>
+                </div>
+
+                @if ($siteSyncDiagnostic)
+                    <div class="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
+                        <div class="font-medium">Diagnostics</div>
+                        <pre class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap text-xs">{{ json_encode($siteSyncDiagnostic, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) }}</pre>
+                    </div>
+                @endif
+
+                <div class="overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700">
+                    <div class="border-b border-gray-200 px-4 py-3 font-medium dark:border-gray-700">Inbound events</div>
+                    <table class="min-w-full text-sm">
+                        <thead class="bg-gray-50 dark:bg-gray-800">
+                            <tr>
+                                <th class="px-3 py-2 text-left">Event</th>
+                                <th class="px-3 py-2 text-left">Site</th>
+                                <th class="px-3 py-2 text-left">Type</th>
+                                <th class="px-3 py-2 text-left">Status</th>
+                                <th class="px-3 py-2 text-left">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+                            @forelse ($siteSyncEvents as $event)
+                                <tr>
+                                    <td class="px-3 py-2 font-mono text-xs">#{{ $event['id'] }}</td>
+                                    <td class="px-3 py-2">site {{ $event['site_id'] }}</td>
+                                    <td class="px-3 py-2">{{ $event['event_type'] }}</td>
+                                    <td class="px-3 py-2">{{ $event['status'] }}</td>
+                                    <td class="px-3 py-2">
+                                        <x-filament::button size="xs" wire:click="requeueSiteSyncEvent({{ (int) $event['id'] }})">Requeue</x-filament::button>
+                                        @if ($event['error'] !== '')
+                                            <div class="mt-2 text-xs text-amber-600">{{ $event['error'] }}</div>
+                                        @endif
+                                    </td>
+                                </tr>
+                            @empty
+                                <tr>
+                                    <td colspan="5" class="px-3 py-6 text-center text-gray-500">No inbound events.</td>
+                                </tr>
+                            @endforelse
+                        </tbody>
+                    </table>
+                </div>
+            </x-filament::section>
         </div>
 
         {{-- Commands --}}
@@ -313,6 +435,30 @@
                     </table>
                 </div>
             </x-filament::section>
+        </div>
+
+        {{-- Runtime Info --}}
+        <div x-show="tab === 'runtime'" x-cloak class="space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                    {{ __('seo-content-ai::filament.extensions.subtitle') }}
+                </p>
+                <x-filament::button
+                    type="button"
+                    color="gray"
+                    icon="heroicon-o-arrow-path"
+                    wire:click="refreshRuntimeHealth"
+                    wire:loading.attr="disabled"
+                    wire:target="refreshRuntimeHealth"
+                >
+                    <span wire:loading.remove wire:target="refreshRuntimeHealth">{{ __('seo-content-ai::filament.extensions.refresh_health') }}</span>
+                    <span wire:loading wire:target="refreshRuntimeHealth" class="inline-flex items-center gap-2">
+                        <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>
+                        …
+                    </span>
+                </x-filament::button>
+            </div>
+            @include('seo-content-ai::filament.pages.partials.runtime-info-grid', ['runtimeRows' => $runtimeRows])
         </div>
 
         {{-- Timeline --}}

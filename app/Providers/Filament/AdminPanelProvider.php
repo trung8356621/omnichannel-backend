@@ -2,9 +2,16 @@
 
 namespace App\Providers\Filament;
 
+use App\Addons\SeoContentAi\Filament\Pages\AutomationFlowsPage;
+use App\Addons\SeoContentAi\Filament\Pages\AutomationOperationsDashboard;
+use App\Addons\SeoContentAi\Filament\Pages\AutomationSettings;
+use App\Addons\SeoContentAi\Filament\Pages\AutomationWorkflowBuilder;
+use App\Addons\SeoContentAi\Filament\Resources\AutomationExecutionResource;
+use App\Addons\SeoContentAi\Filament\Resources\AutomationRuleResource;
 use App\Filament\Pages\Auth\CustomLogin;
 use App\Filament\Pages\ManageServices;
 use App\Http\Middleware\Filament\RedirectStaffFromAdminPanel;
+use App\Http\Middleware\Filament\RestrictAdminAutomationOnlyUsers;
 use App\Models\Service;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
@@ -14,6 +21,7 @@ use Filament\Pages;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
+use Filament\Support\Enums\MaxWidth;
 use Filament\Widgets;
 use File;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
@@ -39,11 +47,20 @@ class AdminPanelProvider extends PanelProvider
             ->colors([
                 'primary' => Color::Amber,
             ])
+            ->maxContentWidth(MaxWidth::Full)
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')
             ->pages([
                 Pages\Dashboard::class,
                 ManageServices::class,
+                AutomationFlowsPage::class,
+                AutomationOperationsDashboard::class,
+                AutomationSettings::class,
+                AutomationWorkflowBuilder::class,
+            ])
+            ->resources([
+                AutomationRuleResource::class,
+                AutomationExecutionResource::class,
             ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
             ->widgets([
@@ -64,6 +81,7 @@ class AdminPanelProvider extends PanelProvider
             ->authMiddleware([
                 RedirectStaffFromAdminPanel::class,
                 Authenticate::class,
+                RestrictAdminAutomationOnlyUsers::class,
             ]);
 
         return $this->discover_addons($panel);
@@ -95,8 +113,21 @@ class AdminPanelProvider extends PanelProvider
                             $this->loadViewsFrom($viewsPath, $service->slug);
                         }
 
-                        // SEO Content AI dùng Filament panel riêng (/seo); không đăng ký Pages/Resources vào /admin.
+                        // SEO Content AI panel riêng (/seo). Automation UI gắn vào /admin tại đây
+                        // (discoverPages addon SEO bị skip — không pollute Articles/Media vào admin).
                         if ($service->slug === 'seo-content-ai') {
+                            $panel
+                                ->pages([
+                                    AutomationFlowsPage::class,
+                                    AutomationOperationsDashboard::class,
+                                    AutomationSettings::class,
+                                    AutomationWorkflowBuilder::class,
+                                ])
+                                ->resources([
+                                    AutomationRuleResource::class,
+                                    AutomationExecutionResource::class,
+                                ]);
+
                             continue;
                         }
 

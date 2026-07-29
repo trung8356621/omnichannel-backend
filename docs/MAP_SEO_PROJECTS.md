@@ -158,17 +158,48 @@ Lưu kết quả test workflow cho một task. Columns: `task_id` (FK → `seo_t
 
 ### 3.1 Route structure
 
+**Canonical UX:** Content Project → Operations/Items → Article.
+
 ```
 /seo/{connection_hash}/content-projects           → ListSeoProjects (index)
 /seo/{connection_hash}/content-projects/create     → CreateSeoProject
-/seo/{connection_hash}/content-projects/{record}   → ViewSeoProject (read-only)
-/seo/{connection_hash}/content-projects/{record}/edit → EditSeoProject
-/seo/{connection_hash}/content-projects/{record}/runs → ListSeoProjectRuns
-/seo/{connection_hash}/content-projects/runs/{run}     → ViewSeoProjectRun
-/seo/{connection_hash}/content-projects/runs/{run}/items/{article} → ViewSeoProjectRunStep
-/seo/{connection_hash}/content-operations          → ContentProjectOperationsCenter (manager+)
+/seo/{connection_hash}/content-projects/{record}   → ViewSeoProject (operations workspace — Run Results UX)
+/seo/{connection_hash}/content-projects/{record}/edit → EditSeoProject (settings form)
+/seo/{connection_hash}/content-projects/{record}/publishing-queue → ContentProjectPublishingQueue
+/seo/{connection_hash}/content-operations          → ContentProjectOperationsCenter (manager+; tabs gồm **Site Sync**: runs/events/diagnostics; `SiteSyncOperationsCenter` ẩn sidebar nav)
 /admin/content-operations                          → ContentOperationsRedirect → SEO ops
 ```
+
+`ContentProjectOperationsCenter` tab **Site Sync**: recent runs (nút theo status — completed: report/diagnostic/reconcile; failed: resume; running: cancel), inbound events, diagnostics. Không còn menu sidebar riêng **Site Sync Ops**.
+
+`ViewSeoProject` = màn hình điều hành chính (dashboard vận hành compact):
+
+- **Header:** Filament `getHeading` = project name; `getSubheading` = domain · owner · month. Actions: Generate pending · Edit project · Project info · More (Test run chỉ khi `allowsDevTestGenerateUi()`, ẩn production). Không lặp tên project trong card riêng.
+- **KPI grid:** 2→4→8 cột (`x-seo-content-ai::content-project-summary-card`); click áp filter; accent qua `ContentProjectStatusBadgePresenter::summaryAccent()`; active ring khi filter khớp.
+- **Filter toolbar:** search + generation/lifecycle/queue/schedule + failed only + clear; mobile drawer Filters. **BulkSelectionToolbar** (`content-project-bulk-selection-toolbar`) chỉ hiện khi `selectedCount > 0` (nhóm Content / Review / Publishing).
+- **Một bảng Project Items** canonical (`ContentProjectItemOperationsReadModel`): Item meta 2 dòng + badges Generation/Lifecycle/Queue + Schedule + Last activity + grouped actions menu (`ContentProjectItemActionsPresenter` — chỉ action hợp lệ UI). Sticky header, density vừa, mobile card list (`md:hidden` / `md:block`).
+- Semantic badges: `ContentProjectStatusBadgePresenter` + `content-project-status-badge` (nền nhạt + icon + ring; dark-mode).
+- Empty/loading: no items / no filter results / pulse skeleton.
+
+**Publishing Queue:** không còn tầng/page bắt buộc. Route `/{record}/publishing-queue` → redirect compatibility tới `view?lifecycle=waiting_publish,published`. `getPublishingQueueUrl()` trỏ cùng filter.
+
+**Legacy Run History (compatibility redirects only — không render UI):**
+
+```
+.../content-projects/{record}/runs              → redirect → ViewSeoProject
+.../content-projects/runs/{run}                 → redirect → ViewSeoProject (project của run)
+.../content-projects/runs/{run}/items/{article} → redirect → ViewSeoProject
+```
+
+Generate pending: header action trên `ViewSeoProject` / `EditSeoProject` → dry-run preview (`ContentProjectItemGenerationClassifier`) → `GenerateProjectItemsCommand` + PHP `ContentProjectRunEngine`. Chỉ item **never-generated** (không có execution success / article / lifecycle review|approved|published|scheduled / improve). Fail-closed nếu sẽ chọn cả project khi đã có execution lịch sử (cần technical confirm). Test generate chỉ hiện khi `allowsDevTestGenerateUi()` (local/testing + debug; fail-closed production).
+
+**Project Items table:** render trên `view-seo-project-operations.blade.php` (không RelationManager). Cột: checkbox · Item · Generation · Lifecycle · Schedule · Queue · Last activity · Actions. Components flat (namespace `seo-content-ai`): `content-project-summary-card`, `content-project-status-badge`, `content-project-filter-toolbar`, `content-project-bulk-selection-toolbar`, `content-project-item-meta`, `content-project-item-actions-menu`. Không điều hướng Run History.
+
+**Counters (list):** `Generated` (content ready) ≠ Run OK. Tách `Pending` (chưa generate) / `Failed`. Không dùng “Completed” mơ hồ so với Run succeeded.
+
+**Compatibility:** `ContentProjectCounterAuditService` (audit 31 OK vs status≠completed), `ContentProjectLegacyExecutionHydrateService` (dry-run/idempotent; không AI; không đè reviewing/completed).
+
+`SeoProjectRun` = execution record nội bộ (ADR-004). Ops/Timeline đọc operation — không phục hồi Run History hub.
 
 Docs: [CONTENT_PROJECT_OPERATIONS.md](CONTENT_PROJECT_OPERATIONS.md) — dashboard, metrics, replay, health, analytics.
 
@@ -215,14 +246,16 @@ Docs: [CONTENT_PROJECT_OPERATIONS.md](CONTENT_PROJECT_OPERATIONS.md) — dashboa
 | `user.name` | Relationship | Sortable, searchable |
 | `site.domain` | Relationship (cross-DB) | Placeholder "—" |
 | `month` | `->month` | Date format `m/Y`, sortable |
-| `total_tasks` | `->total_tasks` | Numeric, align center |
-| `tasks_completed` | Computed: `tasks()->where('status','completed')->count()` | Align center |
+| `total_items` / `active_tasks_count` | Active tasks | Numeric |
+| `generated` / `active_generated_count` | Content ready (completed\|reviewing\|article linked) | **Không** đồng nghĩa Run OK |
+| `pending_never_generated` | status=pending và chưa article | Generate pending target |
+| `failed` | status=failed | |
 | `status` | `->status` | Badge (color-coded) |
 | `updated_at` | `->updated_at` | Toggleable, hidden by default |
 
 **Filters:** status, user_id, site_id, month
 
-**Row actions:** `ActionGroup (...)` chứa `view_runs`, `view_archives` (link Project Lưu trữ domain), `archive_project_articles`, `Delete` (rollback tháng trước); bên ngoài chỉ `Edit` (hoặc `View`)
+**Row actions:** `ActionGroup (...)` chứa `open_project_items` (workspace), `publishing_queue`, `archive_project`, `Delete`; bên ngoài `Edit` / `View`
 
 **Bulk actions:** Delete — cùng logic rollback tháng trước (`SeoProjectTaskMoveService`)
 
@@ -230,45 +263,26 @@ Docs: [CONTENT_PROJECT_OPERATIONS.md](CONTENT_PROJECT_OPERATIONS.md) — dashboa
 
 **List query:** ẩn `kind=archive` (chỉ hiện project tháng)
 
-### 3.5 ListSeoProjectRuns (`Filament/.../Pages/ListSeoProjectRuns.php`)
+### 3.5 Legacy Run History pages (redirect stubs)
 
-- Routes: `/{record}/runs`
-- Custom view (không dùng table mặc định)
-- Gọi `SeoProjectRunConsolidationService::maybeConsolidate()` khi mount
-- Hiển thị lịch sử runs dạng danh sách, mỗi run hiển thị: user, mode (full/test), status, counters, started_at
-- **Header actions:**
-  - `run_workflow` → create run (mode=full) → flag `CONTENT_PROJECT_PHP_ENGINE` ON: `ContentProjectRunEngine::start` rồi mở `view-run` (không `?autorun=1`); flag OFF: `view-run?autorun=1`
-  - `test_run_workflow` → create run (mode=test, limit=1) → cùng nhánh flag như trên
-  - `back_to_project`
+| Page | Route | Behavior |
+|------|-------|----------|
+| `ListSeoProjectRuns` | `/{record}/runs` | Redirect → `ViewSeoProject` |
+| `ViewSeoProjectRun` | `/runs/{run}` | Redirect → project workspace |
+| `ViewSeoProjectRunStep` | `/runs/{run}/items/{article}` | Redirect → project workspace |
 
-### 3.6 ViewSeoProjectRun (`Filament/.../Pages/ViewSeoProjectRun.php`)
+Không còn header Run / Test run / View run trên Run History. Generate: `SeoProjectResource::makeGeneratePendingItemsAction` trên View/Edit project. Blade `view-project-run.blade.php` + `project-run-queue.js` còn trong repo (asset/legacy) nhưng **không mount** qua Filament page.
 
-- Routes: `/runs/{run}`
-- Custom view với queue heading (partial Blade)
-- Query param `?autorun=1` → legacy JS start (chỉ khi flag PHP engine OFF)
-- Flag ON (`phpEngine` bootstrap): JS tắt orchestration; `pollRunProgress` read-only; `runItemQueued`/`beginRunQueue`/`completeRunQueue` reject/no-op; Stop → `ContentProjectRunEngine::requestStop` (`running→stopping→cancelled`)
-- Hiển thị: stats (total/succeeded/failed/pending) từ `getRunStatsPayload()` + bảng `getAllItems()` (merge `run.items` + pending chưa có trong items → `SeoProjectRunItemsDisplayPresenter::consolidate()` → enrich → sort)
-- **Display consolidate (view-only):** 1 article/task = 1 hàng; gom theo `task_id` → `article_id` → `retry_task_id` (nối pending shadow); không ghi đè raw `run.items`. Status/message/AI stats lấy attempt mới nhất; `retry_count` = số lần chạy lại thêm (badge `data-run-retry-badge` trên `...`, tooltip `run_item_rerun_badge_tooltip`; ghi chú chèn `run_item_rerun_count_inline`)
-- Mount: `ensureFailedTasksQueued()` + `reconcileMissingCompletedItems()` (khôi phục hàng completed bị thiếu trên run cũ)
-- Gọi `SeoProjectWorkflowRunService::retryTask()` qua Livewire `runItemQueued` / `completeRunQueue` — **chỉ** cho hàng `pending` (lần chạy đầu / «Chạy»)
-- **Không** còn entry «Chạy lại toàn bộ» (`canRerunAllItems()` luôn false; button + modal rerun-all đã gỡ)
-- **Chạy lại từng prompt:** menu hàng liệt kê node `prompt` từ workflow SeoTask (`SeoProjectWorkflowStepCatalogService` + `SeoProjectWorkflowStepRetryService`); Livewire `retryWorkflowStep` / `bulkRetryWorkflowSteps` / `cancelWorkflowStep`; run item `action=step:{nodeId}`; không chạy lại full pipeline; duplicate guard `pending|processing`
-- **Ngắt step:** Blade `(task_id, node_id)` → Alpine → Livewire `cancelWorkflowStep` → `cancelActiveStep` (ưu tiên `task_id`, fallback article null-task); busy chỉ `pending|processing` + exact `step:{nodeId}`; JS clear busy chỉ khi `cancelled>0` hoặc `already_idle` (không sơn Failed hàng chính); log `seo.project_run.cancel_workflow_step`
-- Bulk: checkbox hàng + select-all → chọn nhiều prompt → modal xác nhận → tạo task riêng từng bài×prompt; outline trước content khi cùng bulk
-- Trước khi rerun full pending: `syncResolvedArticleIdForRunTask()` resolve `article_id` từ raw `run.items` (nếu > 0) rồi fallback `seo_project_tasks.article_id` — **không** fuzzy title/keyword; ghi lại cả `run.items` + task rồi truyền `forcedArticleId` vào `retryTask()`. `enrichItemArticleLink()` ưu tiên `task.article_id` trước khi resolve theo source content
-- **Nhãn cột Từ khóa/title:** `itemKeywordLabel()` ưu tiên `articles.title` (`article_title` từ enrich) — không dùng `source_content` khi đã có bài (tránh lệch keyword task vs title editor)
-- Cột bảng: Checkbox | # | Loại bài (task type) | Từ khóa/title | Trạng thái | **Lần cuối lưu** | Ghi chú (line-clamp) | **Ngày chạy** (`last_run_at`) | Thao tác — đã bỏ cột `post_type` trùng nhãn «Loại bài»
-- **Lần cuối lưu:** `max(articles.last_manual_saved_at, articles.last_synced_at)` qua `ArticleLastSavedTimestampService` — không dùng `updated_at`; nhãn «Lưu thủ công» / «Đồng bộ» / `—`
-- Row actions: nút `...`; menu = Archive, Xem runs, «Chạy» (pending only), submenu prompt rerun, đánh dấu đã fix — CSS `project-run-queue.css`
-- `getAllItems()` sort theo `last_run_at` desc
-- `archiveItem(taskId)` → `SeoProjectArchiveService::archiveTasks()` chuyển task có `article_id` sang Project Lưu trữ domain
-- Frontend: `project-run-queue.js` — bulk + `retryWorkflowStep` / `cancelWorkflowStep` / `confirmBulkRetry`; `data-run-busy-step`; autorun chỉ `?autorun=1`; counter/bảng exclude `step:%`
+### 3.6 ViewSeoProject / EditSeoProject — Project Items workspace
 
-### 3.7 ViewSeoProjectRunStep (`Filament/.../Pages/ViewSeoProjectRunStep.php`)
+- Canonical items UI trên form project (tasks repeater)
+- Header: Generate pending items (+ optional Test generate khi `allowsDevTestGenerateUi()`), publishing queue, edit
+- Không breadcrumb/link “Run history”
+- Item-level regenerate / step rerun: services (`ContentProjectStepRerunService`, `SeoProjectWorkflowStepRetryService`, article editor) — không qua Run Detail page
 
-- Routes: `/runs/{run}/items/{article}`
-- Custom view hiển thị run history cho một article cụ thể trong project run
-- Gọi `ArticlePromptRunHistoryService::build()` để lấy timeline lịch sử run
+### 3.7 (removed) ViewSeoProjectRunStep UI
+
+Redirect stub only — xem §3.5. Prompt timeline per article: article editor / `ArticlePromptRunHistoryService` (không mount qua run step route).
 
 ---
 
@@ -293,8 +307,7 @@ Invariant: `SeoProjectWorkflowRunService` / `CreateArticlesFromTaskService` / `A
 ```mermaid
 flowchart TB
     subgraph Filament["Filament Actions"]
-        RUN["ListSeoProjectRuns.run_workflow"]
-        TEST["ListSeoProjectRuns.test_run_workflow"]
+        RUN["View/EditSeoProject.generate_pending_items"]
         SAVE["CreateSeoProject.save / EditSeoProject.save"]
     end
 
@@ -330,7 +343,7 @@ flowchart TB
         LINK_HIST["PromptResultLinkService"]
     end
 
-    RUN & TEST --> WORKFLOW
+    RUN --> WORKFLOW
     WORKFLOW --> PREFLIGHT
     WORKFLOW --> CONSOL
     SAVE --> SYNC
@@ -447,49 +460,27 @@ sequenceDiagram
     Form->>User: Redirect to EditProject
 ```
 
-### 5.2 Chạy Workflow (Run → ViewSeoProjectRun)
+### 5.2 Generate pending items (Project workspace)
 
 ```mermaid
 sequenceDiagram
     actor Planner as Content Planner
-    participant Runs as ListSeoProjectRuns
+    participant UI as View/EditSeoProject
     participant RS as SeoProjectResource
-    participant Pre as SeoProjectRunPreflightService
+    participant Bus as ContentProjectCommandBus
     participant Run as SeoProjectWorkflowRunService
-    participant Consol as SeoProjectRunConsolidationService
-    participant Create as CreateArticlesFromTaskService
-    participant Runner as TaskWorkflowTestRunner
-    participant Publish as PromptTestPublishService
-    participant Prompt as PromptRunnerService
-    participant AI as AI Model
+    participant Engine as ContentProjectRunEngine
 
-    Planner->>Runs: Click "Run Workflow"
-    Runs->>RS: createProjectWorkflowRun(project, 'full')
-    RS->>Pre: findKeywordTitleConflicts(project)
-    RS->>Run: startRun(project, 'full')
-    Run->>DB: INSERT seo_project_run (status=running)
-    RS->>Run: prepareRunQueue(project, run)
-    Run->>Consol: syncObsoleteTaskStatuses(project)
-    Run->>DB: UPDATE run (total=N, items=[...])
-    Runs->>Planner: Open view-run tab
-
-    Note over Create,AI: Autorun loop (trong ViewSeoProjectRun) — chỉ Laravel, không WP sync
-    Run->>Create: runPublishWorkflowForContext(context, siteId)
-    Create->>Runner: run(task, context)
-    Runner->>Prompt: runPrompt(prompt, context)
-    Prompt->>AI: Gửi request AI
-    AI-->>Prompt: Response (outline + content)
-    Prompt->>DB: INSERT prompt_result
-    Runner->>Publish: publishArticle(article, markdown) — local only
-    Runner->>DB: INSERT seo_prompt_result_link
-    Run->>DB: UPDATE task (status=completed, article_id=X) + run.items[].article_id
-
-    loop Mỗi task pending
-        Run->>Create: runPublishWorkflowForContext()
-    end
-
-    Run->>DB: UPDATE run (status=completed, succeeded=N, failed=M)
+    Planner->>UI: Generate pending items
+    UI->>RS: startGeneratePendingItems(project, full)
+    RS->>Bus: GenerateProjectItemsCommand
+    Bus->>Run: startRun + prepareRunQueue
+    Run->>DB: INSERT seo_project_run (internal)
+    RS->>Engine: start(run)
+    UI->>Planner: Stay on project workspace
 ```
+
+`SeoProjectRun` không mở UI. Progress qua item status / Operations / timeline.
 
 ### 5.3 Đồng bộ task type → bài viết
 
@@ -545,7 +536,7 @@ ArchiveContentProjectService.restore(project, userId)
 - List Content Projects / Articles: vẫn filter theo `SeoAccessControl::globalSiteId()`.
 - Detail/edit/preview: `getRecordRouteBindingEloquentQuery()` **không** áp global site scope. `canView` project dùng `canAccessSite`, không dùng `getEloquentQuery()` đã scope domain.
 - Edit article khác domain: mở được, note badge, **không** auto `setGlobalSiteId`, **không** 404 giả.
-- `ListSeoProjectRuns` / `ViewSeoProjectRunStep` resolve project qua `getRecordRouteBindingEloquentQuery()`.
+- Legacy run routes redirect via `getRecordRouteBindingEloquentQuery()` / `SeoProjectRun.project`.
 
 **“Hoàn tất duyệt”** (`ArticleReviewService` action `archive`): chỉ `review_status=archived` + audit log. **Không** detach task, **không** `content_archived_at`.
 
@@ -748,11 +739,9 @@ Identity: `execution_role` / `hook_key` / image tool — **không** title heuris
 
 Bulk: preview valid/invalid → confirm partial → **serial** từng article. Không «Chạy lại toàn bộ» (`canRerunAllItems()=false`).
 
-### UI (Phase 2.0)
+### UI (Phase 2.0 — updated)
 
-`ViewSeoProjectRun` + `view-project-run.blade.php` + `project-run-queue.js`  
-Per-row step menu gọi rerun (Livewire `retryWorkflowStep` → `ContentProjectStepRerunService`).  
-Active article → block parallel.
+Step rerun services vẫn tồn tại; **không** mount qua `ViewSeoProjectRun` (redirect stub). Entry điểm: article editor / project items. Leftover `view-project-run.blade.php` + `project-run-queue.js` không gắn Filament page.
 
 ### Tests
 
@@ -975,10 +964,11 @@ F Stale: user sửa khi job pending → late result ignored_stale
 
 ```
 Filament Resource: Filament/Resources/SeoProjectResource.php
-Pages: ListSeoProjects, CreateSeoProject, EditSeoProject, ViewSeoProject,
-       ListSeoProjectRuns, ViewSeoProjectRun, ViewSeoProjectRunStep
-Models: SeoProject, SeoProjectTask, SeoProjectRun, SeoProjectRunItem, SeoProjectTaskEvent
-Core Service: SeoProjectWorkflowRunService
+Pages: ListSeoProjects, CreateSeoProject, EditSeoProject, ViewSeoProject
+       (+ legacy redirect stubs: ListSeoProjectRuns, ViewSeoProjectRun, ViewSeoProjectRunStep)
+Models: SeoProject, SeoProjectTask, SeoProjectRun (internal), SeoProjectRunItem, SeoProjectTaskEvent
+Core Service: SeoProjectWorkflowRunService + ContentProjectRunEngine
+Generate UI: SeoProjectResource::startGeneratePendingItems (CommandBus)
 Run items SoT: SeoProjectRunItemService + SeoProjectRunItemsReader (DB XOR JSON)
 Task Execution: CreateArticlesFromTaskService → ArticleWritingExecutionService / ArticleImproveExecutionService → TaskWorkflowTestRunner
 Preflight: SeoProjectRunPreflightService

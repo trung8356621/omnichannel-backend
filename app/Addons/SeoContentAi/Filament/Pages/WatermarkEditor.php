@@ -20,7 +20,7 @@ class WatermarkEditor extends SeoPanelPage
 
     protected static ?string $title = 'Watermark design suite';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
     protected static ?string $navigationParentItem = 'Media library';
 
@@ -32,7 +32,7 @@ class WatermarkEditor extends SeoPanelPage
 
     public static function shouldRegisterNavigation(array $parameters = []): bool
     {
-        return ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager();
+        return ! SeoAccessControl::isContentManager();
     }
 
     #[Url]

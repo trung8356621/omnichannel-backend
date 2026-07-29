@@ -195,22 +195,16 @@ class SeoPanelProvider extends PanelProvider
                     return new HtmlString('');
                 }
 
-                return new HtmlString(
-                    view('seo-content-ai::components.workspace-media-picker')->render()
-                    .view('seo-content-ai::components.global-ai-chat')->render(),
-                );
-            },
-        );
-
-        FilamentView::registerRenderHook(
-            PanelsRenderHook::SIDEBAR_NAV_END,
-            function (): HtmlString {
-                if (filament()->getCurrentPanel()?->getId() !== 'seo') {
-                    return new HtmlString('');
+                // Agent Workspace is the full-page chat — do not mount floating launcher/runtime.
+                if (\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceUiContext::hidesGlobalChat()) {
+                    return new HtmlString(
+                        view('seo-content-ai::components.workspace-media-picker')->render()
+                    );
                 }
 
                 return new HtmlString(
-                    view('seo-content-ai::filament.hooks.seo-sidebar-keywords-nav')->render()
+                    view('seo-content-ai::components.workspace-media-picker')->render()
+                    .view('seo-content-ai::components.global-ai-chat')->render(),
                 );
             },
         );
@@ -579,6 +573,7 @@ class SeoPanelProvider extends PanelProvider
             ->sidebarWidth('16rem')
             ->collapsedSidebarWidth('4rem')
             ->maxContentWidth(MaxWidth::Full)
+            ->navigationGroups([])
             ->discoverResources(
                 in: __DIR__.'/../Filament/Resources',
                 for: 'App\\Addons\\SeoContentAi\\Filament\\Resources'

@@ -23,13 +23,15 @@ class TaskResource extends SeoPanelResource
 
     protected static ?string $navigationIcon = 'heroicon-o-queue-list';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
     protected static ?string $navigationLabel = 'Task workflows';
 
     protected static ?string $modelLabel = 'Workflow';
 
     protected static ?string $pluralModelLabel = 'Task workflows';
+
+    protected static ?int $navigationSort = 15;
 
     public static function canViewAny(): bool
     {

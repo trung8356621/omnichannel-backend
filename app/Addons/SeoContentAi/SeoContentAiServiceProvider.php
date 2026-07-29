@@ -264,6 +264,214 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentSessionService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentReadService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentGateway::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentGateway::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackCache::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackEventEmitter::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackDiscoveryService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackLoader::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackStateService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackCompatibilityService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackManifestValidator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackSafeSchemaValidator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackSafeMappingValidator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackCapabilityBinder::class, function ($app) {
+            $caps = $app->make(\App\Addons\SeoContentAi\Services\ContentProject\Application\Capabilities\CanonicalCapabilityRegistry::class);
+
+            return new \App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackCapabilityBinder(
+                static fn (string $name): ?array => $caps->get($name),
+            );
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackCompiler::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackOrchestrator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackImportExportService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\V1\AgentCapabilityCoverageAuditService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\V1\AgentV1ReadinessService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\V1\AgentSkillGroupCatalog::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentSkillRegistry::class, function ($app) {
+            return new \App\Addons\SeoContentAi\Services\AgentWorkspace\AgentSkillRegistry(
+                null,
+                $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackRegistry::class),
+            );
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentChatTemplateRegistry::class, function ($app) {
+            return new \App\Addons\SeoContentAi\Services\AgentWorkspace\AgentChatTemplateRegistry(
+                null,
+                $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Packs\AgentPackRegistry::class),
+            );
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceQuotaService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentSkillAvailabilityService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentExecutionPlanService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentIntentRouter::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentSkillRecommendationService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentConversationService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentSkillInputResolver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentErrorPresentation::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceContextService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Execution\AgentExecutionStateMachine::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Execution\AgentConfirmationTokenService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Execution\AgentExecutionIdempotencyFactory::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Execution\AgentExecutionContextUpdater::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Execution\AgentPlanOutputBinder::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Execution\Rendering\AgentResultRendererRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Execution\AgentPlanStepRunner::class);
+
+        // Phase 6 — Observability / evaluation / governance (side-channel)
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentObservabilityRedactor::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentObservabilityEventBus::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentPlanningVersionRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentTraceService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentMetricRecorder::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentMetricAggregator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentCostUsageTracker::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentGovernancePolicyService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentReviewService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentFeedbackService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentPolicyViolationDetector::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentRetentionService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentObservabilityExportService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentOperationsDashboardService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\Evaluation\AgentPlanningEvaluator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\Evaluation\AgentExecutionOutcomeEvaluator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\Evaluation\AgentGroundingEvaluator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\Evaluation\AgentAutomationHealthEvaluator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\Evaluation\AgentQualityGateService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\Evaluation\AgentEvaluationRunner::class);
+
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Execution\DefaultAgentExecutionOrchestrator::class);
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Execution\AgentExecutionOrchestrator::class,
+            function ($app) {
+                $inner = $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Execution\DefaultAgentExecutionOrchestrator::class);
+
+                return new \App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\Decorators\ObservingAgentExecutionOrchestrator(
+                    $inner,
+                    $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentTraceService::class),
+                    $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentMetricRecorder::class),
+                );
+            },
+        );
+        // Phase 3 — AI planning / guarded copilot
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Security\AgentUntrustedContentMarker::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Security\AgentPlanningInputSanitizer::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Security\AgentPlanningOutputSanitizer::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Services\AgentContextBudgetManager::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Services\AgentSkillCatalogPresenter::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Services\AgentPlanningContextAssembler::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Services\DeterministicAgentPlanRepairer::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Services\AgentPlanningPersistence::class);
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Contracts\AgentPlanValidator::class,
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Services\DefaultAgentPlanValidator::class,
+        );
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Contracts\AgentModelRouter::class,
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Services\RegistryAgentModelRouter::class,
+        );
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Contracts\AgentModelGateway::class,
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Services\ProviderAgentModelGateway::class,
+        );
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Contracts\AgentConversationSummarizer::class,
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Services\DefaultAgentConversationSummarizer::class,
+        );
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Services\DefaultAgentPlanningOrchestrator::class);
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Contracts\AgentPlanningOrchestrator::class,
+            function ($app) {
+                return new \App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\Decorators\ObservingAgentPlanningOrchestrator(
+                    $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Planning\Services\DefaultAgentPlanningOrchestrator::class),
+                    $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentTraceService::class),
+                    $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentMetricRecorder::class),
+                    $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentPolicyViolationDetector::class),
+                    $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentCostUsageTracker::class),
+                );
+            },
+        );
+
+        // Phase 4 — scoped knowledge & memory
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Security\AgentKnowledgeContentSanitizer::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Services\AgentKnowledgeChunker::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Services\AgentKnowledgeConflictResolver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Services\AgentKnowledgeFreshnessService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Services\AgentKnowledgeCitationPresenter::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Services\AgentMemoryCandidateExtractor::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Services\AgentMemoryProposalService::class);
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Contracts\AgentKnowledgeSourceRegistry::class,
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Services\DefaultAgentKnowledgeSourceRegistry::class,
+        );
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Contracts\AgentKnowledgeRepository::class,
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Services\EloquentAgentKnowledgeRepository::class,
+        );
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Contracts\AgentKnowledgeIndex::class,
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Services\DatabaseAgentKnowledgeIndex::class,
+        );
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Services\DefaultAgentKnowledgeRetriever::class);
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Contracts\AgentKnowledgeRetriever::class,
+            function ($app) {
+                return new \App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\Decorators\ObservingAgentKnowledgeRetriever(
+                    $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Services\DefaultAgentKnowledgeRetriever::class),
+                    $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentTraceService::class),
+                    $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentMetricRecorder::class),
+                );
+            },
+        );
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Contracts\AgentGroundingContextProvider::class,
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Services\DefaultAgentGroundingContextProvider::class,
+        );
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Contracts\AgentKnowledgeOrchestrator::class,
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Knowledge\Services\DefaultAgentKnowledgeOrchestrator::class,
+        );
+
+        // Phase 5 — Agent Workspace scheduled automations / proactive monitoring
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Services\AgentAutomationQuotaService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Services\AgentAutomationLockService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Services\AgentAutomationRunStateMachine::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Services\AgentAutomationApprovalTokenService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Services\AgentAutomationDefinitionValidator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Services\AgentAutomationDispatcher::class);
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Contracts\AgentAutomationScheduleResolver::class,
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Services\DefaultAgentAutomationScheduleResolver::class,
+        );
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Contracts\AgentAutomationConditionEvaluator::class,
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Services\DefaultAgentAutomationConditionEvaluator::class,
+        );
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Contracts\AgentAutomationRepository::class,
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Services\EloquentAgentAutomationRepository::class,
+        );
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Contracts\AgentAutomationNotificationService::class,
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Services\DefaultAgentAutomationNotificationService::class,
+        );
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Services\DefaultAgentAutomationRunner::class);
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Contracts\AgentAutomationRunner::class,
+            function ($app) {
+                return new \App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\Decorators\ObservingAgentAutomationRunner(
+                    $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Services\DefaultAgentAutomationRunner::class),
+                    $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentTraceService::class),
+                    $app->make(\App\Addons\SeoContentAi\Services\AgentWorkspace\Observability\AgentMetricRecorder::class),
+                );
+            },
+        );
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Contracts\AgentAutomationOrchestrator::class,
+            \App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Services\DefaultAgentAutomationOrchestrator::class,
+        );
+
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceApplicationService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentCapabilityDiagnosticsService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectPlanTemplateRegistry::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\RuleBasedContentProjectPlanGenerator::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\LlmContentProjectPlanGenerator::class);
@@ -279,6 +487,7 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectAgentPlanExecutor::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectAgentPlanGateway::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Mcp\ContentProjectMcpToolCatalog::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Mcp\McpCapabilityMarkdownPresenter::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Agent\Mcp\ContentProjectMcpServer::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Workspace\ContentProjectWorkspaceCleanupRegistry::class, function ($app) {
             return new \App\Addons\SeoContentAi\Services\ContentProject\Workspace\ContentProjectWorkspaceCleanupRegistry([
@@ -425,11 +634,15 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
 
         // Đăng ký console ở register() — không phụ thuộc $booted guard trong boot().
         if ($this->app->runningInConsole()) {
-            $this->commands([
+            $commands = [
                 BackfillPromptResultLinksCommand::class,
                 CleanCtaKeywordsCommand::class,
                 ExtractOldArticleTocsCommand::class,
                 PublishScheduledArticlesCommand::class,
+                \App\Addons\SeoContentAi\Console\RunSiteSyncCommand::class,
+                \App\Addons\SeoContentAi\Console\ReconcileSiteSyncCommand::class,
+                \App\Addons\SeoContentAi\Console\BackfillSiteSyncV2Command::class,
+                \App\Addons\SeoContentAi\Console\BackfillSiteManualLinksCommand::class,
                 \App\Addons\SeoContentAi\Console\ClearPromptHookDefinitionCacheCommand::class,
                 \App\Addons\SeoContentAi\Console\PromptHookStatusCommand::class,
                 \App\Addons\SeoContentAi\Console\PromptHookParityReportCommand::class,
@@ -483,7 +696,24 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 \App\Addons\SeoContentAi\Console\AssignWorkflowExecutionRolesCommand::class,
                 \App\Addons\SeoContentAi\Console\WorkflowDoctorCommand::class,
                 \App\Addons\SeoContentAi\Console\InstallDefaultImprovePromptCommand::class,
-            ]);
+            ];
+
+            // Agent Workspace commands — optional so partial deploy never kills publish cron (exit 255).
+            foreach ([
+                \App\Addons\SeoContentAi\Console\DispatchDueAgentAutomationsCommand::class,
+                \App\Addons\SeoContentAi\Console\AgentEvaluateCommand::class,
+                \App\Addons\SeoContentAi\Console\InstallBuiltinAgentEvaluationsCommand::class,
+                \App\Addons\SeoContentAi\Console\AgentCapabilitiesAuditCommand::class,
+                \App\Addons\SeoContentAi\Console\AgentV1DoctorCommand::class,
+                \App\Addons\SeoContentAi\Console\AgentMetricsAggregateCommand::class,
+                \App\Addons\SeoContentAi\Console\AgentObservabilityPruneCommand::class,
+            ] as $optionalCommand) {
+                if (class_exists($optionalCommand)) {
+                    $commands[] = $optionalCommand;
+                }
+            }
+
+            $this->commands($commands);
         }
     }
 
@@ -495,6 +725,11 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
         self::$booted = true;
 
         $this->loadViewsFrom(__DIR__.'/resources/views', 'seo-content-ai');
+        // Override Filament sidebar item: caret expand/collapse cho nested parent (v3 không có sẵn).
+        \Illuminate\Support\Facades\View::prependNamespace(
+            'filament-panels',
+            __DIR__.'/resources/views/overrides/filament-panels',
+        );
         $this->loadMigrationsFrom(__DIR__.'/database/migrations');
         $this->bootstrapDefaultSeoConnection();
 
@@ -511,20 +746,19 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
 
             $schedule = app(Schedule::class);
             $name = 'seo-content-ai:cleanup-old-notifications';
-            $alreadyRegistered = collect($schedule->events())
+            $cleanupRegistered = collect($schedule->events())
                 ->contains(static fn ($event): bool => $event->description === $name);
-            if ($alreadyRegistered) {
-                return;
+            if (! $cleanupRegistered) {
+                $schedule
+                    ->call(static fn (): int => DatabaseNotification::query()
+                        ->where('created_at', '<', now()->startOfMonth())
+                        ->delete())
+                    ->monthlyOn(1, '00:10')
+                    ->name($name)
+                    ->withoutOverlapping();
             }
 
-            $schedule
-                ->call(static fn (): int => DatabaseNotification::query()
-                    ->where('created_at', '<', now()->startOfMonth())
-                    ->delete())
-                ->monthlyOn(1, '00:10')
-                ->name($name)
-                ->withoutOverlapping();
-
+            // Sole scheduled publishing dispatcher (canonical CP queue + legacy non-project).
             $publishScheduledName = 'seo-content-ai:publish-scheduled-articles';
             $publishScheduledRegistered = collect($schedule->events())
                 ->contains(static fn ($event): bool => $event->description === $publishScheduledName);
@@ -536,6 +770,17 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                     ->withoutOverlapping();
             }
 
+            $siteSyncReconcileName = 'seo-content-ai:site-sync-reconcile-quick';
+            $siteSyncReconcileRegistered = collect($schedule->events())
+                ->contains(static fn ($event): bool => $event->description === $siteSyncReconcileName);
+            if (! $siteSyncReconcileRegistered) {
+                $schedule
+                    ->command(\App\Addons\SeoContentAi\Console\ReconcileSiteSyncCommand::class, ['--mode' => 'quick', '--limit' => 30])
+                    ->hourly()
+                    ->name($siteSyncReconcileName)
+                    ->withoutOverlapping(50);
+            }
+
             $automationScheduleName = 'seo-content-ai:automation-dispatch-scheduled';
             $automationScheduleRegistered = collect($schedule->events())
                 ->contains(static fn ($event): bool => $event->description === $automationScheduleName);
@@ -544,6 +789,48 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                     ->command(\App\Addons\SeoContentAi\Console\AutomationDispatchScheduledCommand::class)
                     ->everyMinute()
                     ->name($automationScheduleName)
+                    ->withoutOverlapping();
+            }
+
+            $agentAutomationDispatchName = 'seo-content-ai:agent-automations-dispatch-due';
+            $agentAutomationDispatchRegistered = collect($schedule->events())
+                ->contains(static fn ($event): bool => $event->description === $agentAutomationDispatchName);
+            if (
+                ! $agentAutomationDispatchRegistered
+                && class_exists(\App\Addons\SeoContentAi\Console\DispatchDueAgentAutomationsCommand::class)
+            ) {
+                $schedule
+                    ->command(\App\Addons\SeoContentAi\Console\DispatchDueAgentAutomationsCommand::class)
+                    ->everyMinute()
+                    ->name($agentAutomationDispatchName)
+                    ->withoutOverlapping();
+            }
+
+            $agentMetricsAggName = 'seo-content-ai:agent-metrics-aggregate';
+            $agentMetricsAggRegistered = collect($schedule->events())
+                ->contains(static fn ($event): bool => $event->description === $agentMetricsAggName);
+            if (
+                ! $agentMetricsAggRegistered
+                && class_exists(\App\Addons\SeoContentAi\Console\AgentMetricsAggregateCommand::class)
+            ) {
+                $schedule
+                    ->command(\App\Addons\SeoContentAi\Console\AgentMetricsAggregateCommand::class, ['--sync' => true])
+                    ->hourly()
+                    ->name($agentMetricsAggName)
+                    ->withoutOverlapping();
+            }
+
+            $agentObsPruneName = 'seo-content-ai:agent-observability-prune';
+            $agentObsPruneRegistered = collect($schedule->events())
+                ->contains(static fn ($event): bool => $event->description === $agentObsPruneName);
+            if (
+                ! $agentObsPruneRegistered
+                && class_exists(\App\Addons\SeoContentAi\Console\AgentObservabilityPruneCommand::class)
+            ) {
+                $schedule
+                    ->command(\App\Addons\SeoContentAi\Console\AgentObservabilityPruneCommand::class, ['--sync' => true])
+                    ->dailyAt('03:40')
+                    ->name($agentObsPruneName)
                     ->withoutOverlapping();
             }
 
@@ -677,7 +964,9 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
         try {
             app(SeoDatabaseConnectionService::class)->bootstrapLegacySharedConnection();
         } catch (\Throwable $exception) {
-            report($exception);
+            \App\Support\RuntimeLogger::report($exception, [
+                'source' => 'SeoContentAiServiceProvider::bootstrapDefaultSeoConnection',
+            ]);
         }
     }
 

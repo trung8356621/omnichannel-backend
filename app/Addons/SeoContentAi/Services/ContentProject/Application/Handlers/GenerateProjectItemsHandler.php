@@ -79,7 +79,48 @@ final class GenerateProjectItemsHandler extends AbstractPublishingHandler
                 $this->tenantGuard->assertTasksBelongToProject($project, $itemIds);
             }
 
-            $settings = $itemIds !== [] ? ['task_ids' => $itemIds] : null;
+            $classifier = app(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier::class);
+            $preview = $classifier->preview($project);
+
+            if ($itemIds === []) {
+                if ($preview->runCount() <= 0) {
+                    return ContentProjectActionResult::fail(
+                        ContentProjectActionCodes::VALIDATION_FAILED,
+                        'No truly pending items to generate.',
+                        $projectId,
+                        metadata: ['preview' => $preview->toArray()],
+                    );
+                }
+                $itemIds = $preview->runnableTaskIds();
+            } else {
+                $allowed = array_flip($preview->runnableTaskIds());
+                $itemIds = array_values(array_filter(
+                    $itemIds,
+                    static fn (int $id): bool => isset($allowed[$id]),
+                ));
+                if ($itemIds === []) {
+                    return ContentProjectActionResult::fail(
+                        ContentProjectActionCodes::VALIDATION_FAILED,
+                        'Selected items are not eligible for generate-pending (already generated or blocked).',
+                        $projectId,
+                        metadata: ['preview' => $preview->toArray()],
+                    );
+                }
+            }
+
+            if ($preview->failClosed && ! $command->technicalConfirmFullRerun) {
+                return ContentProjectActionResult::fail(
+                    ContentProjectActionCodes::VALIDATION_FAILED,
+                    'Generate pending fail-closed: would select entire project despite historical execution.',
+                    $projectId,
+                    metadata: ['preview' => $preview->toArray()],
+                );
+            }
+
+            $settings = [
+                'task_ids' => $itemIds,
+                'technical_confirm_full_rerun' => $command->technicalConfirmFullRerun,
+            ];
 
             return $this->businessLock->withLock(
                 $this->businessLock->projectGenerate($projectId),
@@ -99,12 +140,12 @@ final class GenerateProjectItemsHandler extends AbstractPublishingHandler
 
                     return ContentProjectActionResult::ok(
                         ContentProjectActionCodes::ITEMS_GENERATE_REQUESTED,
-                        'Generate run started.',
+                        'Generate pending started for '.count($itemIds).' item(s).',
                         $projectId,
                         $itemIds,
                         metadata: [
                             'execution_ref' => $executionRef,
-                            'affected_count' => count($itemIds),
+                            'task_ids' => $itemIds,
                         ],
                     );
                 },

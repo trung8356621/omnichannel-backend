@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\AutomationRuleResource\Pages;
 
 use App\Addons\SeoContentAi\Automation\BusinessHook\Models\AutomationRule;
+use App\Addons\SeoContentAi\Filament\Concerns\RedirectsSeoAutomationToAdmin;
 use App\Addons\SeoContentAi\Filament\Resources\AutomationExecutionResource;
 use App\Addons\SeoContentAi\Filament\Resources\AutomationRuleResource;
 use Filament\Actions;
@@ -14,7 +15,18 @@ use Filament\Resources\Pages\ViewRecord;
 
 final class ViewAutomationRule extends ViewRecord
 {
+    use RedirectsSeoAutomationToAdmin;
+
     protected static string $resource = AutomationRuleResource::class;
+
+    public function mount(int|string $record): void
+    {
+        if ($this->redirectSeoAutomationToAdmin(AutomationRuleResource::getUrl('view', ['record' => $record]))) {
+            return;
+        }
+
+        parent::mount($record);
+    }
 
     public function infolist(Infolist $infolist): Infolist
     {

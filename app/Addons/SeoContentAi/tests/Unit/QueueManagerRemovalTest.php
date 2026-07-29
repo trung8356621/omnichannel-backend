@@ -33,20 +33,28 @@ final class QueueManagerRemovalTest extends TestCase
         self::assertTrue(class_exists(AutomationRuleResource::class));
         self::assertTrue(class_exists(AutomationExecutionResource::class));
         self::assertTrue(class_exists(AutomationOperationsDashboard::class));
+        self::assertTrue(class_exists(\App\Addons\SeoContentAi\Filament\Pages\AutomationFlowsPage::class));
 
         $rule = (string) file_get_contents($base.'/Filament/Resources/AutomationRuleResource.php');
         $execution = (string) file_get_contents($base.'/Filament/Resources/AutomationExecutionResource.php');
         $ops = (string) file_get_contents($base.'/Filament/Pages/AutomationOperationsDashboard.php');
+        $flows = (string) file_get_contents($base.'/Filament/Pages/AutomationFlowsPage.php');
 
-        self::assertStringContainsString("navigationGroup = 'Automation'", $rule);
-        self::assertStringContainsString("navigationGroup = 'Automation'", $execution);
-        self::assertStringContainsString("navigationGroup = 'Automation'", $ops);
+        self::assertStringContainsString('BelongsToAdminAutomationPanel', $rule);
+        self::assertStringContainsString('BelongsToAdminAutomationPanel', $execution);
+        self::assertStringContainsString('BelongsToAdminAutomationPanel', $ops);
+        self::assertStringContainsString('BelongsToAdminAutomationPanel', $flows);
         self::assertStringContainsString("slug = 'automation-rules'", $rule);
         self::assertStringContainsString("slug = 'automation-executions'", $execution);
         self::assertStringContainsString("slug = 'automation/operations'", $ops);
-        self::assertStringNotContainsString('shouldRegisterNavigation = false', $rule);
-        self::assertStringNotContainsString('shouldRegisterNavigation = false', $execution);
-        self::assertStringNotContainsString('shouldRegisterNavigation = false', $ops);
+        self::assertStringContainsString("slug = 'automation/flows'", $flows);
+        self::assertStringNotContainsString('extends SeoPanelResource', $rule);
+        self::assertStringNotContainsString('extends SeoPanelPage', $ops);
+
+        $trait = (string) file_get_contents($base.'/Filament/Concerns/BelongsToAdminAutomationPanel.php');
+        self::assertStringContainsString("'Automation'", $trait);
+        self::assertStringContainsString("=== 'admin'", $trait);
+        self::assertStringContainsString('getNavigationGroup', $trait);
     }
 
     public function test_panel_provider_has_no_queue_worker_banner_hook(): void

@@ -127,11 +127,10 @@ final class ContentProjectStepRerunPhase20Test extends TestCase
             dirname(__DIR__, 2).'/resources/js/project-run-queue.js',
         );
 
-        self::assertStringContainsString('ContentProjectStepRerunService', $page);
-        self::assertStringContainsString('canRerunAllItems(): bool', $page);
-        self::assertStringContainsString('return false;', $page);
-        self::assertStringContainsString('getGenericPickerSteps', $page);
-        self::assertStringContainsString('ArticleLastContentChangeResolver', $page);
+        // Page is redirect-only; step rerun lives in services + leftover blade/js assets.
+        self::assertStringContainsString('getProjectWorkspaceUrl', $page);
+        self::assertStringNotContainsString('ContentProjectStepRerunService', $page);
+        self::assertTrue(class_exists(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectStepRerunService::class));
         self::assertStringContainsString('Chạy lại bước...', $blade);
         self::assertStringContainsString('openGenericStepPicker', $js);
         self::assertStringNotContainsString('window.prompt(', $js);

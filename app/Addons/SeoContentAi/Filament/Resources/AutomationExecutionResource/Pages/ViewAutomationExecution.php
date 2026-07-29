@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources\AutomationExecutionResource\Pages;
 
+use App\Addons\SeoContentAi\Filament\Concerns\RedirectsSeoAutomationToAdmin;
 use App\Addons\SeoContentAi\Filament\Resources\AutomationExecutionResource;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationGraphExecutionService;
 use App\Addons\SeoContentAi\Filament\Resources\AutomationRuleResource;
@@ -13,7 +14,18 @@ use Filament\Resources\Pages\ViewRecord;
 
 final class ViewAutomationExecution extends ViewRecord
 {
+    use RedirectsSeoAutomationToAdmin;
+
     protected static string $resource = AutomationExecutionResource::class;
+
+    public function mount(int|string $record): void
+    {
+        if ($this->redirectSeoAutomationToAdmin(AutomationExecutionResource::getUrl('view', ['record' => $record]))) {
+            return;
+        }
+
+        parent::mount($record);
+    }
 
     protected function getHeaderActions(): array
     {

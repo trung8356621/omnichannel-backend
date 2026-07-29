@@ -27,7 +27,7 @@ final class ContentProjectPublishingQueueRunner
     ) {}
 
     /**
-     * @return array{processed: int, published: int, failed: int}
+     * @return array{processed: int, published: int, failed: int, skipped: int}
      */
     public function dispatchDue(): array
     {
@@ -35,12 +35,22 @@ final class ContentProjectPublishingQueueRunner
             'processed' => 0,
             'published' => 0,
             'failed' => 0,
+            'skipped' => 0,
         ];
 
         $this->health->rememberWorkerRun();
 
-        if (! Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'scheduled_publish_at')) {
-            return $stats;
+        try {
+            if (! Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'scheduled_publish_at')) {
+                return $stats;
+            }
+        } catch (Throwable $e) {
+            RuntimeLogger::warning('content_project_publishing_queue_schema_unavailable', [
+                'message' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+
+            throw $e;
         }
 
         $this->dueTasks()->each(function (SeoProjectTask $task) use (&$stats): void {
@@ -73,11 +83,11 @@ final class ContentProjectPublishingQueueRunner
 
                 if ($result->success) {
                     $stats['published']++;
+                } elseif ($result->code === ContentProjectActionCodes::OPERATION_ALREADY_PROCESSING) {
+                    $stats['skipped']++;
                 } else {
                     $stats['failed']++;
-                    if ($result->code !== ContentProjectActionCodes::OPERATION_ALREADY_PROCESSING) {
-                        $this->health->rememberFailure($result->message);
-                    }
+                    $this->health->rememberFailure($result->message);
                 }
             } catch (Throwable $e) {
                 $stats['failed']++;

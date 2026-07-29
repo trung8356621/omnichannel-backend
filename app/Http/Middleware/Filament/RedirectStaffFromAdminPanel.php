@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Middleware\Filament;
 
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\User;
 use Closure;
 use Illuminate\Http\Request;
@@ -16,7 +17,7 @@ final class RedirectStaffFromAdminPanel
     {
         $user = Auth::user();
 
-        if ($user instanceof User && $user->isStaff()) {
+        if ($user instanceof User && $user->isStaff() && ! SeoAccessControl::canAccessAdminAutomationPanel($user)) {
             return redirect('/');
         }
 

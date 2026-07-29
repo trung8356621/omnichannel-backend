@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationActionCode;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationRuleClassification;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationRuleVisibility;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Models\AutomationRule;
+use App\Addons\SeoContentAi\Filament\Concerns\RedirectsSeoAutomationToAdmin;
 use App\Addons\SeoContentAi\Filament\Resources\AutomationRuleResource;
 use Filament\Actions;
 use Filament\Notifications\Notification;
@@ -16,6 +17,8 @@ use Illuminate\Database\Eloquent\Builder;
 
 final class ListAutomationRules extends ListRecords
 {
+    use RedirectsSeoAutomationToAdmin;
+
     protected static string $resource = AutomationRuleResource::class;
 
     public bool $showSystem = false;
@@ -26,6 +29,10 @@ final class ListAutomationRules extends ListRecords
 
     public function mount(): void
     {
+        if ($this->redirectSeoAutomationToAdmin(AutomationRuleResource::getUrl('index'))) {
+            return;
+        }
+
         parent::mount();
 
         $hasAutoWp = AutomationRule::query()

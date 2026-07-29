@@ -10,4 +10,11 @@ use Filament\Pages\Page;
 abstract class SeoPanelPage extends Page
 {
     use InteractsWithSeoConnectionRoutes;
+
+    protected static ?string $navigationGroup = null;
+
+    public static function getNavigationGroup(): ?string
+    {
+        return null;
+    }
 }

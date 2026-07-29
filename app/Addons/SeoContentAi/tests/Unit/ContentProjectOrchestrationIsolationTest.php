@@ -101,11 +101,13 @@ final class ContentProjectOrchestrationIsolationTest extends TestCase
         $view = (string) file_get_contents(
             dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php'
         );
-        self::assertStringContainsString('shouldBlockPhpEngineArticleMutation', $view);
-        self::assertStringContainsString('denyLegacyOrchestrationAction', $view);
-        self::assertStringContainsString('content_project_run.legacy_action_blocked', $view);
-        self::assertStringContainsString('orchestrationFor', $view);
-        self::assertStringContainsString('engineLabel', $view);
+        self::assertStringContainsString('getProjectWorkspaceUrl', $view);
+        self::assertStringNotContainsString('shouldBlockPhpEngineArticleMutation', $view);
+        $resource = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource.php'
+        );
+        self::assertStringContainsString("'use_php_engine' => true", $resource);
+        self::assertStringContainsString('startGeneratePendingItems', $resource);
     }
 
     public function test_js_legacy_paths_guard_php_engine(): void
@@ -124,12 +126,8 @@ final class ContentProjectOrchestrationIsolationTest extends TestCase
         $view = (string) file_get_contents(
             dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php'
         );
-        $pos = strpos($view, 'function pollRunProgress');
-        self::assertNotFalse($pos);
-        $chunk = substr($view, $pos, 700);
-        self::assertStringNotContainsString('dispatchNextArticle', $chunk);
-        self::assertStringNotContainsString('retryTask', $chunk);
-        self::assertStringNotContainsString('legacy_action_blocked', $chunk);
+        self::assertStringNotContainsString('function pollRunProgress', $view);
+        self::assertStringContainsString('redirect', $view);
     }
 
     public function test_badge_blade_uses_bootstrap_stamp_not_global(): void

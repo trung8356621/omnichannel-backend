@@ -29,9 +29,11 @@ class DomainResource extends SeoPanelResource
 
     protected static ?string $navigationIcon = 'heroicon-o-globe-alt';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
     protected static ?string $navigationLabel = 'Domain list';
+
+    protected static ?int $navigationSort = 13;
 
     public static function canViewAny(): bool
     {

@@ -134,6 +134,13 @@ final class SeoAccessControl
 
     public static function canViewAutomationRules(): bool
     {
+        $user = auth()->user();
+        if ($user instanceof User
+            && in_array((string) $user->role, [User::ROLE_ADMIN, User::ROLE_OWNER], true)
+        ) {
+            return true;
+        }
+
         return self::canAccessPlannerFeatures() || self::canMutateInSeoPanel();
     }
 
@@ -462,9 +469,9 @@ final class SeoAccessControl
             return null;
         }
 
-        return $user->isStaff() && (int) $user->parent_id > 0
-            ? (int) $user->parent_id
-            : (int) $user->id;
+        $ownerId = $user->accountOwnerId();
+
+        return $ownerId ?? (int) $user->id;
     }
 
     public static function globalSiteId(): ?int
@@ -687,7 +694,37 @@ final class SeoAccessControl
 
     public static function canViewAutomation(): bool
     {
+        $user = auth()->user();
+        if ($user instanceof User
+            && in_array((string) $user->role, [User::ROLE_ADMIN, User::ROLE_OWNER], true)
+        ) {
+            return true;
+        }
+
         return self::canAccessPlannerFeatures() || self::canMutateInSeoPanel();
+    }
+
+    /**
+     * Narrow Admin-panel gate for SEO Managers who already have Automation rights.
+     * Does not grant full /admin — RestrictAdminAutomationOnlyUsers limits routes.
+     */
+    public static function canAccessAdminAutomationPanel(?User $user = null): bool
+    {
+        $user ??= auth()->user();
+        if (! $user instanceof User) {
+            return false;
+        }
+
+        if ((string) ($user->status ?? '') === User::STATUS_BLOCK) {
+            return false;
+        }
+
+        // Evaluate as current auth user (Filament always checks the authenticated user).
+        if (auth()->id() !== $user->id) {
+            return false;
+        }
+
+        return self::canViewAutomation();
     }
 
     public static function canEditAutomation(): bool
@@ -723,6 +760,13 @@ final class SeoAccessControl
 
     public static function canClearAutomationLogs(): bool
     {
+        $user = auth()->user();
+        if ($user instanceof User
+            && in_array((string) $user->role, [User::ROLE_ADMIN, User::ROLE_OWNER], true)
+        ) {
+            return true;
+        }
+
         if (! self::canAccessManagerFeatures()) {
             return false;
         }

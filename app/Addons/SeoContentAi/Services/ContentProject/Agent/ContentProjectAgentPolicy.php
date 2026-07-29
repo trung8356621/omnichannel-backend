@@ -155,6 +155,10 @@ final class ContentProjectAgentPolicy
             return 'content-project:write';
         }
 
+        if (str_starts_with($capability, 'site.')) {
+            return 'content-project:write';
+        }
+
         if (str_starts_with($capability, 'keyword_intelligence.')) {
             return 'content-project:write';
         }

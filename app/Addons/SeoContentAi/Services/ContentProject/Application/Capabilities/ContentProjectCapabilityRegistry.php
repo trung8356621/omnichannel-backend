@@ -16,10 +16,12 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\MovePro
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\PublishProjectItemsNowCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RestoreContentProjectCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ResumeProjectExecutionCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RetryProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ScheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SkipProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StopProjectExecutionCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SyncContentProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UnscheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UpdateContentProjectCommand;
@@ -413,6 +415,37 @@ final class ContentProjectCapabilityRegistry
                 ],
                 phases: [ContentProjectLifecyclePhase::Archived->value],
                 confirmation: true,
+            ),
+            $this->cap(
+                'content_project.stop_execution',
+                'Stop active project execution',
+                StopProjectExecutionCommand::class,
+                'content_project.stop_execution',
+                riskLevel: 'write',
+                idempotencySupport: true,
+                dryRunSupport: false,
+                inputSchema: [
+                    'project_ref' => ['type' => 'string', 'required' => true],
+                    'execution_ref' => ['type' => 'string', 'required' => false],
+                    'reason' => ['type' => 'string', 'required' => false],
+                ],
+                phases: null,
+                confirmation: true,
+            ),
+            $this->cap(
+                'content_project.resume_execution',
+                'Resume paused/stopped project execution',
+                ResumeProjectExecutionCommand::class,
+                'content_project.resume_execution',
+                riskLevel: 'write',
+                idempotencySupport: true,
+                dryRunSupport: false,
+                inputSchema: [
+                    'project_ref' => ['type' => 'string', 'required' => true],
+                    'execution_ref' => ['type' => 'string', 'required' => false],
+                ],
+                phases: null,
+                confirmation: false,
             ),
 
             // Keyword Intelligence — additive, không phase-gate theo ContentProjectLifecyclePhase.
@@ -1082,6 +1115,139 @@ final class ContentProjectCapabilityRegistry
             $this->cap('gsc_intelligence.add_queries_to_workspace', 'Add GSC queries to keyword workspace', \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\AddGscQueriesToKeywordWorkspaceCommand::class, 'gsc_intelligence.add_queries_to_workspace', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: ['property_ref' => ['type' => 'string', 'required' => true], 'workspace_ref' => ['type' => 'string', 'required' => true], 'query_refs' => ['type' => 'array', 'required' => false], 'keep_duplicates' => ['type' => 'boolean', 'required' => false]], phases: null, confirmation: false),
             $this->cap('gsc_intelligence.preview_create_content_project', 'Preview content project from GSC opportunities', \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\PreviewCreateContentProjectFromGscOpportunitiesCommand::class, 'gsc_intelligence.preview_create_content_project', riskLevel: 'write', idempotencySupport: false, dryRunSupport: true, inputSchema: ['property_ref' => ['type' => 'string', 'required' => true], 'opportunity_refs' => ['type' => 'array', 'required' => true], 'project_attributes' => ['type' => 'object', 'required' => false]], phases: null, confirmation: false),
             $this->cap('gsc_intelligence.create_content_project', 'Create content project from approved GSC opportunities', \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\CreateContentProjectFromGscOpportunitiesCommand::class, 'gsc_intelligence.create_content_project', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: ['property_ref' => ['type' => 'string', 'required' => true], 'opportunity_refs' => ['type' => 'array', 'required' => true], 'project_attributes' => ['type' => 'object', 'required' => false], 'confirmation_token' => ['type' => 'string', 'required' => false]], phases: null, confirmation: true),
+
+            // Site Sync V2
+            $this->cap('site.discover', 'Detect site capability + profile', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\DiscoverSiteCommand::class, 'site.discover', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: [], phases: null, confirmation: false, presentation: [
+                'label' => 'site.discover',
+                'description' => 'Phát hiện thông tin website, plugin SEO và capability hiện có.',
+                'category' => 'site_sync',
+                'read_only' => true,
+                'scopes' => ['site:read'],
+                'input_summary' => ['site_id'],
+                'output_summary' => ['site profile', 'SEO provider', 'plugin version', 'capabilities', 'fallback status'],
+                'examples' => ['Phân tích website này đang dùng plugin SEO gì và có những khả năng nào.'],
+            ]),
+            $this->cap('site.sync', 'Run full site sync orchestrator', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RunSiteSyncCommand::class, 'site.sync', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: ['mode' => ['type' => 'string', 'required' => false], 'force_snapshot' => ['type' => 'boolean', 'required' => false]], phases: null, confirmation: false, presentation: [
+                'label' => 'site.sync',
+                'description' => 'Đồng bộ và kiểm tra website qua Site Sync V2.',
+                'category' => 'site_sync',
+                'read_only' => false,
+                'scopes' => ['site:sync'],
+                'confirmation_modes' => ['force_full'],
+                'confirmation_note' => 'Có khi dùng `force_full`',
+                'input_summary' => ['site_id', 'mode: incremental | bootstrap | force_full'],
+                'output_summary' => ['operation_id', 'run_id', 'trạng thái', 'tóm tắt kết quả'],
+                'examples' => ['Đồng bộ website này.'],
+            ]),
+            $this->cap('site.sync_keywords', 'Sync provider keywords (+ workspace fallback)', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\SyncSiteKeywordsCommand::class, 'site.sync_keywords', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: [], phases: null, confirmation: false, presentation: [
+                'label' => 'site.sync_keywords',
+                'description' => 'Đồng bộ keyword của các bài thay đổi hoặc theo phạm vi được chọn.',
+                'category' => 'site_sync',
+                'scopes' => ['site:sync'],
+                'input_summary' => ['site_id', 'scope (optional)'],
+                'output_summary' => ['operation_id', 'keyword sync summary'],
+                'examples' => ['Đồng bộ keyword website này.'],
+            ]),
+            $this->cap('site.sync_links', 'Sync URL catalog + validate changed links', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\SyncSiteLinksCommand::class, 'site.sync_links', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: [], phases: null, confirmation: false, presentation: [
+                'label' => 'site.sync_links',
+                'description' => 'Đồng bộ catalog URL và kiểm tra link đã thay đổi.',
+                'category' => 'site_sync',
+                'scopes' => ['site:sync'],
+                'input_summary' => ['site_id'],
+                'output_summary' => ['operation_id', 'link catalog summary'],
+                'examples' => ['Đồng bộ link website này.'],
+            ]),
+            $this->cap('site.discover_contacts', 'Discover contacts / profile suggest', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\DiscoverSiteContactsCommand::class, 'site.discover_contacts', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: [], phases: null, confirmation: false, presentation: [
+                'label' => 'site.discover_contacts',
+                'description' => 'Gợi ý contacts / profile từ WordPress (không ghi đè manual).',
+                'category' => 'site_sync',
+                'read_only' => true,
+                'scopes' => ['site:read'],
+                'input_summary' => ['site_id'],
+                'output_summary' => ['suggested contacts', 'profile hints'],
+                'examples' => ['Tìm contact / profile gợi ý của website này.'],
+            ]),
+            $this->cap('site.refresh_snapshot', 'Force full snapshot sync', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RefreshSiteSnapshotCommand::class, 'site.refresh_snapshot', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: [], phases: null, confirmation: true, presentation: [
+                'label' => 'site.refresh_snapshot',
+                'description' => 'Làm mới snapshot toàn site (force full).',
+                'category' => 'site_sync',
+                'scopes' => ['site:sync'],
+                'confirmation_modes' => ['confirm'],
+                'confirmation_note' => 'Có',
+                'input_summary' => ['site_id'],
+                'output_summary' => ['operation_id', 'run_id', 'trạng thái'],
+                'examples' => ['Refresh snapshot website này.'],
+            ]),
+            $this->cap('site.resume_sync', 'Resume a site sync run', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ResumeSiteSyncCommand::class, 'site.resume_sync', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: ['run_id' => ['type' => 'integer', 'required' => true]], phases: null, confirmation: false, presentation: [
+                'category' => 'site_sync',
+                'scopes' => ['site:sync'],
+                'input_summary' => ['run_id'],
+                'output_summary' => ['operation_id', 'run status'],
+            ]),
+            $this->cap('site.retry_sync_step', 'Retry a failed site sync step', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RetrySiteSyncStepCommand::class, 'site.retry_sync_step', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: ['run_id' => ['type' => 'integer', 'required' => true], 'step_key' => ['type' => 'string', 'required' => true]], phases: null, confirmation: false, presentation: [
+                'category' => 'site_sync',
+                'scopes' => ['site:sync'],
+                'input_summary' => ['run_id', 'step_key'],
+                'output_summary' => ['operation_id', 'step status'],
+            ]),
+            $this->cap('site.cancel_sync', 'Cancel an in-flight site sync run', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\CancelSiteSyncCommand::class, 'site.cancel_sync', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: ['run_id' => ['type' => 'integer', 'required' => true]], phases: null, confirmation: true, presentation: [
+                'category' => 'site_sync',
+                'scopes' => ['site:sync'],
+                'confirmation_modes' => ['confirm'],
+                'confirmation_note' => 'Có',
+                'input_summary' => ['run_id'],
+                'output_summary' => ['operation_id', 'cancelled status'],
+            ]),
+            $this->cap('site.reconcile', 'Reconcile site sync drift', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ReconcileSiteSyncCommand::class, 'site.reconcile', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: ['mode' => ['type' => 'string', 'required' => false]], phases: null, confirmation: false, presentation: [
+                'category' => 'site_sync',
+                'scopes' => ['site:sync'],
+                'input_summary' => ['mode (optional)'],
+                'output_summary' => ['reconcile summary'],
+            ]),
+            $this->cap('site.requeue_inbound_event', 'Requeue inbound delta event', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RequeueSiteSyncInboundEventCommand::class, 'site.requeue_inbound_event', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: ['event_id' => ['type' => 'integer', 'required' => true]], phases: null, confirmation: false, presentation: [
+                'category' => 'site_sync',
+                'visibility' => 'internal',
+                'scopes' => ['site:sync'],
+                'input_summary' => ['event_id'],
+                'output_summary' => ['requeue status'],
+            ]),
+            $this->cap('site.preview_bootstrap', 'Preview first-time Site Sync bootstrap', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\PreviewBootstrapSiteSyncCommand::class, 'site.preview_bootstrap', riskLevel: 'read', idempotencySupport: true, dryRunSupport: true, inputSchema: [], phases: null, confirmation: false, presentation: [
+                'category' => 'site_sync',
+                'read_only' => true,
+                'scopes' => ['site:read'],
+                'input_summary' => ['site_id'],
+                'output_summary' => ['bootstrap preview'],
+            ]),
+            $this->cap('site.bootstrap', 'First-time Site Sync bootstrap', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\BootstrapSiteSyncCommand::class, 'site.bootstrap', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: ['force' => ['type' => 'boolean', 'required' => false]], phases: null, confirmation: true, presentation: [
+                'category' => 'site_sync',
+                'scopes' => ['site:sync'],
+                'confirmation_modes' => ['confirm'],
+                'confirmation_note' => 'Có',
+                'input_summary' => ['force (optional)'],
+                'output_summary' => ['operation_id', 'bootstrap status'],
+            ]),
+            $this->cap('site.backfill_v2', 'Backfill legacy data into Site Sync V2', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\BackfillSiteSyncV2Command::class, 'site.backfill_v2', riskLevel: 'write', idempotencySupport: true, dryRunSupport: true, inputSchema: ['dry_run' => ['type' => 'boolean', 'required' => false], 'only' => ['type' => 'array', 'required' => false]], phases: null, confirmation: true, presentation: [
+                'category' => 'site_sync',
+                'visibility' => 'internal',
+                'scopes' => ['site:sync'],
+                'confirmation_modes' => ['confirm'],
+                'confirmation_note' => 'Có',
+                'input_summary' => ['dry_run', 'only'],
+                'output_summary' => ['backfill summary'],
+            ]),
+            $this->cap('site.validate_handshake', 'Validate Site Sync callback handshake', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ValidateSiteSyncHandshakeCommand::class, 'site.validate_handshake', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: [], phases: null, confirmation: false, presentation: [
+                'category' => 'site_sync',
+                'scopes' => ['site:sync'],
+                'input_summary' => ['site_id'],
+                'output_summary' => ['handshake status'],
+            ]),
+            $this->cap('site.generate_diagnostic', 'Readonly Site Sync diagnostic report', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\GenerateSiteSyncDiagnosticCommand::class, 'site.generate_diagnostic', riskLevel: 'read', idempotencySupport: true, dryRunSupport: true, inputSchema: [], phases: null, confirmation: false, presentation: [
+                'category' => 'site_sync',
+                'read_only' => true,
+                'scopes' => ['site:read'],
+                'input_summary' => ['site_id'],
+                'output_summary' => ['diagnostic report'],
+            ]),
         ];
     }
 
@@ -1178,6 +1344,24 @@ final class ContentProjectCapabilityRegistry
     /**
      * @param  list<string>|null  $phases
      * @param  array<string, mixed>  $inputSchema
+     * @param  array{
+     *     label?: string,
+     *     description?: string,
+     *     category?: string,
+     *     read_only?: bool,
+     *     scopes?: list<string>,
+     *     confirmation_modes?: list<string>,
+     *     confirmation_note?: string|null,
+     *     input_summary?: list<string>,
+     *     output_summary?: list<string>,
+     *     examples?: list<string>,
+     *     visibility?: string,
+     *     internal?: bool,
+     *     enabled?: bool,
+     *     unhealthy?: bool,
+     *     agent_exposed?: bool,
+     *     mcp_exposed?: bool|null
+     * }|null  $presentation
      * @return array<string, mixed>
      */
     private function cap(
@@ -1191,7 +1375,21 @@ final class ContentProjectCapabilityRegistry
         array $inputSchema,
         ?array $phases,
         bool $confirmation,
+        ?array $presentation = null,
     ): array {
+        $meta = is_array($presentation) ? $presentation : [];
+        $visibility = (string) ($meta['visibility'] ?? 'public');
+        $internal = (bool) ($meta['internal'] ?? ($visibility === 'internal'));
+        $readOnly = (bool) ($meta['read_only'] ?? ($riskLevel === 'read'));
+        $inputSummary = array_values(array_map(
+            static fn (mixed $v): string => (string) $v,
+            (array) ($meta['input_summary'] ?? array_keys($inputSchema)),
+        ));
+        $confirmationModes = array_values(array_map(
+            static fn (mixed $v): string => (string) $v,
+            (array) ($meta['confirmation_modes'] ?? ($confirmation ? ['confirm'] : [])),
+        ));
+
         return [
             'name' => $name,
             'description' => $description,
@@ -1203,6 +1401,56 @@ final class ContentProjectCapabilityRegistry
             'allowed_lifecycle_phases' => $phases,
             'handler' => $handlerCommand,
             'confirmation_requirement' => $confirmation,
+            'label' => (string) ($meta['label'] ?? $name),
+            'presentation_description' => (string) ($meta['description'] ?? $description),
+            'category' => (string) ($meta['category'] ?? self::inferPresentationCategory($name)),
+            'read_only' => $readOnly,
+            'scopes' => array_values(array_map(
+                static fn (mixed $v): string => (string) $v,
+                (array) ($meta['scopes'] ?? [$permission]),
+            )),
+            'confirmation_modes' => $confirmationModes,
+            'confirmation_note' => array_key_exists('confirmation_note', $meta)
+                ? (is_string($meta['confirmation_note']) ? $meta['confirmation_note'] : null)
+                : ($confirmationModes !== [] ? 'Có' : 'Không'),
+            'input_summary' => $inputSummary,
+            'output_summary' => array_values(array_map(
+                static fn (mixed $v): string => (string) $v,
+                (array) ($meta['output_summary'] ?? []),
+            )),
+            'examples' => array_values(array_map(
+                static fn (mixed $v): string => (string) $v,
+                (array) ($meta['examples'] ?? []),
+            )),
+            'visibility' => $internal ? 'internal' : $visibility,
+            'internal' => $internal,
+            'enabled' => (bool) ($meta['enabled'] ?? true),
+            'unhealthy' => (bool) ($meta['unhealthy'] ?? false),
+            'agent_exposed' => (bool) ($meta['agent_exposed'] ?? true),
+            'mcp_exposed' => array_key_exists('mcp_exposed', $meta) ? $meta['mcp_exposed'] : null,
         ];
+    }
+
+    private static function inferPresentationCategory(string $name): string
+    {
+        if (str_starts_with($name, 'site.')) {
+            return 'site_sync';
+        }
+        if (str_starts_with($name, 'content_project.')) {
+            return 'content_project';
+        }
+        if (str_starts_with($name, 'keyword_intelligence.') || str_starts_with($name, 'keyword.')) {
+            return 'keyword_intelligence';
+        }
+        if (str_starts_with($name, 'serp_intelligence.') || str_starts_with($name, 'serp.')) {
+            return 'serp_intelligence';
+        }
+        if (str_starts_with($name, 'gsc_intelligence.') || str_starts_with($name, 'gsc.')) {
+            return 'gsc_intelligence';
+        }
+
+        $dot = strpos($name, '.');
+
+        return $dot === false ? 'general' : substr($name, 0, $dot);
     }
 }

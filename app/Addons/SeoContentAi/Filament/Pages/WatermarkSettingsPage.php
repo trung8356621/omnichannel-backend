@@ -17,7 +17,7 @@ class WatermarkSettingsPage extends SeoPanelPage
 {
     protected static ?string $navigationIcon = 'heroicon-o-bookmark-square';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
     protected static ?string $navigationParentItem = 'Media library';
 

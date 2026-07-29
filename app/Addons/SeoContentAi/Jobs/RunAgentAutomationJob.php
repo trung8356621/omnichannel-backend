@@ -1,0 +1,39 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Jobs;
+
+use App\Addons\SeoContentAi\Services\AgentWorkspace\Automation\Contracts\AgentAutomationRunner;
+use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+
+/**
+ * Queue job for Agent Workspace automation runs.
+ * Only calls AgentAutomationRunner — no business services.
+ */
+final class RunAgentAutomationJob implements ShouldQueue
+{
+    use Dispatchable;
+    use InteractsWithQueue;
+    use Queueable;
+    use SerializesModels;
+
+    public int $tries = 3;
+
+    public function __construct(
+        public readonly int $runId,
+    ) {}
+
+    public function handle(
+        SeoDatabaseConnectionService $databaseConnection,
+        AgentAutomationRunner $runner,
+    ): void {
+        $databaseConnection->bootstrapLegacySharedConnection();
+        $runner->run($this->runId);
+    }
+}

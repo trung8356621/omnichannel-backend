@@ -10,6 +10,8 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/seo-wp-bridge/ping', [SeoWpBridgeController::class, 'ping']);
 Route::post('/seo-wp-bridge/push-content', [SeoWpBridgeController::class, 'pushContent']);
+Route::post('/seo-wp-bridge/snapshot-callback', [SeoWpBridgeController::class, 'snapshotCallback']);
+Route::post('/seo-wp-bridge/delta-event', [SeoWpBridgeController::class, 'deltaEvent']);
 
 Route::middleware(['auth:sanctum', SetDynamicSeoDatabase::class])
     ->prefix('v1')

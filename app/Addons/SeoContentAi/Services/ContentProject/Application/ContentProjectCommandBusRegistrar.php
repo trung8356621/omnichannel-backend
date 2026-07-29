@@ -110,7 +110,9 @@ use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\Se
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\SplitKeywordClusterHandler;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\UpdateKeywordClassificationHandler;
 use App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Handlers\UpdateTopicHandler;
+use App\Support\RuntimeLogger;
 use Illuminate\Contracts\Foundation\Application;
+use Throwable;
 
 final class ContentProjectCommandBusRegistrar
 {
@@ -223,10 +225,75 @@ final class ContentProjectCommandBusRegistrar
             \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\AddGscQueriesToKeywordWorkspaceCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\AddGscQueriesToKeywordWorkspaceHandler::class,
             \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\PreviewCreateContentProjectFromGscOpportunitiesCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\PreviewCreateContentProjectFromGscOpportunitiesHandler::class,
             \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\CreateContentProjectFromGscOpportunitiesCommand::class => \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Handlers\CreateContentProjectFromGscOpportunitiesHandler::class,
+
+            // Site Sync V2 — additive; shared handler.
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RunSiteSyncCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ForceFullSiteSyncCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\QueueMissingSeoScoresCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RetryFailedSeoScoresCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RequeueAllSeoScoresCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\DiscoverSiteCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\SyncSiteKeywordsCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\SyncSiteLinksCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\DiscoverSiteContactsCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RefreshSiteSnapshotCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ResumeSiteSyncCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RetrySiteSyncStepCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\CancelSiteSyncCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ReconcileSiteSyncCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RequeueSiteSyncInboundEventCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\PreviewBootstrapSiteSyncCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\BootstrapSiteSyncCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\BackfillSiteSyncV2Command::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ValidateSiteSyncHandshakeCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\GenerateSiteSyncDiagnosticCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\AcceptSiteProfileSuggestionCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RejectSiteProfileSuggestionCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\PreviewSiteSyncCutoverCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCutoverCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\EnterSiteSyncShadowModeCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCutoverCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ExitSiteSyncShadowModeCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCutoverCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ActivateSiteSyncV2Command::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCutoverCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RollbackSiteSyncToLegacyCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCutoverCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\GenerateSiteSyncComparisonReportCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCutoverCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\PreviewSiteSyncRepairCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCutoverCommandHandler::class,
+            \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\ExecuteSiteSyncRepairCommand::class => \App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCutoverCommandHandler::class,
         ];
 
         foreach ($map as $command => $handler) {
-            $bus->register($command, $this->app->make($handler));
+            try {
+                // Lazy proxy: tránh make() toàn bộ DI graph khi boot CommandBus
+                // (Site Sync Cutover/Comparison từng Fatal giữa vòng register).
+                $bus->register($command, new class($this->app, $handler) implements \App\Addons\SeoContentAi\Services\ContentProject\Application\Contracts\ContentProjectCommandHandler
+                {
+                    /**
+                     * @param  \Illuminate\Contracts\Foundation\Application  $app
+                     * @param  class-string  $handlerClass
+                     */
+                    public function __construct(
+                        private readonly mixed $app,
+                        private readonly string $handlerClass,
+                    ) {}
+
+                    public function handle(
+                        \App\Addons\SeoContentAi\Services\ContentProject\Application\Contracts\ContentProjectCommand $command,
+                        \App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext $actor,
+                    ): \App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResult {
+                        /** @var \App\Addons\SeoContentAi\Services\ContentProject\Application\Contracts\ContentProjectCommandHandler $resolved */
+                        $resolved = $this->app->make($this->handlerClass);
+
+                        return $resolved->handle($command, $actor);
+                    }
+                });
+            } catch (Throwable $e) {
+                // One broken additive handler (KI/SERP/GSC/…) must not kill
+                // Content Project publish scheduler DI (seo:publish-scheduled-articles).
+                RuntimeLogger::warning('content_project_command_bus_handler_skipped', [
+                    'command' => $command,
+                    'handler' => $handler,
+                    'exception' => $e::class,
+                    'message' => $e->getMessage(),
+                ]);
+            }
         }
     }
 }

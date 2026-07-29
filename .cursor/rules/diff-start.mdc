@@ -1,9 +1,13 @@
 ---
-description: Snapshot before coding and remind manual diff deploy
+description: Per-agent deployment session with mandatory final file tracking
 alwaysApply: true
 ---
 
-If this task will modify any project files, run exactly once before the first file change:
+For every coding task that may modify project files, generate one short unique deployment ID.
+
+Use only lowercase letters, numbers, hyphens, and underscores.
+
+Before modifying the first project file, run exactly:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".secure\deploy-diff.ps1" -Mode start
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".secure\deploy-diff.ps1" -Mode start -Id "<DEPLOY_ID>"

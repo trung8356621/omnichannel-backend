@@ -28,7 +28,7 @@ class ImageProcessingPage extends Page
 
     protected static ?string $title = 'Image processing';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
     protected static ?string $navigationParentItem = 'Media library';
 
@@ -311,6 +311,11 @@ class ImageProcessingPage extends Page
     public static function canAccess(): bool
     {
         return SeoAccessControl::canAccessContentFeatures();
+    }
+
+    public static function getNavigationGroup(): ?string
+    {
+        return null;
     }
 
     public static function getNavigationLabel(): string

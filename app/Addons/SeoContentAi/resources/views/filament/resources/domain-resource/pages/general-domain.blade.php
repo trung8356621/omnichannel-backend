@@ -50,13 +50,31 @@
 @endphp
 
 {{-- Livewire 3 yêu cầu MỘT phần tử gốc — bọc toàn bộ view trong div này. --}}
-<div @if($incrementalSyncRunning || $metadataSyncRunning || $keywordResyncRunning) wire:poll.5s="refreshSyncProgress" @endif>
+<div @if($incrementalSyncRunning || $metadataSyncRunning || $keywordResyncRunning || ($siteSyncV2Running ?? false)) wire:poll.5s="refreshSyncProgress" @endif>
     @if(is_readable($overviewCss))
         <style>{!! file_get_contents($overviewCss) !!}</style>
     @endif
 
     <x-filament-panels::page>
     <div class="seo-domain-overview">
+        {{-- MCP Markdown — readonly collapsible from Capability Registry --}}
+        <x-filament::section>
+            @php
+                $mcpDoc = is_array($this->mcpCapabilityDoc ?? null) ? $this->mcpCapabilityDoc : [];
+                $mcpMarkdown = (string) ($mcpDoc['markdown'] ?? '');
+                $mcpCount = (int) ($mcpDoc['count'] ?? 0);
+            @endphp
+            <details class="group" open>
+                <summary class="cursor-pointer select-none list-none text-sm font-semibold text-gray-950 dark:text-white">
+                    MCP Markdown
+                    @if ($mcpCount > 0)
+                        <span class="ml-2 font-normal text-gray-500 dark:text-gray-400">({{ $mcpCount }})</span>
+                    @endif
+                </summary>
+                <pre class="mt-3 max-h-[28rem] overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs leading-relaxed text-gray-800 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-200">{{ $mcpMarkdown !== '' ? $mcpMarkdown : 'No MCP capabilities available.' }}</pre>
+            </details>
+        </x-filament::section>
+
         {{-- API Key --}}
         <x-filament::section>
             <x-slot name="heading">{{ __('API Key') }}</x-slot>
@@ -208,10 +226,7 @@
                             ]) }}
                         </p>
                         <p class="text-gray-600 dark:text-gray-300">
-                            {{ __('seo-content-ai::filament.domain.seo_scoring_pending', ['count' => number_format((int) (($seoScoring['pending'] ?? 0) + ($seoScoring['remaining'] ?? 0)))]) }}
-                        </p>
-                        <p class="text-gray-600 dark:text-gray-300">
-                            {{ __('seo-content-ai::filament.domain.seo_scoring_processing', ['count' => number_format((int) ($seoScoring['processing'] ?? 0))]) }}
+                            {{ $siteSyncScoringContext ?: 'Chấm SEO gắn vào nút Đồng bộ & kiểm tra website.' }}
                         </p>
                         @if (($seoScoring['failed'] ?? 0) > 0)
                             <p class="text-warning-600 dark:text-warning-400">

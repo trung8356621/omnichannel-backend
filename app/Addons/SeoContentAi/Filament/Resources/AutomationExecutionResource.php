@@ -7,19 +7,23 @@ namespace App\Addons\SeoContentAi\Filament\Resources;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Models\AutomationExecution;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Models\AutomationRule;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Models\BusinessEvent;
+use App\Addons\SeoContentAi\Filament\Concerns\BelongsToAdminAutomationPanel;
 use App\Addons\SeoContentAi\Filament\Resources\AutomationExecutionResource\Pages;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Infolists;
 use Filament\Infolists\Infolist;
+use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 
-class AutomationExecutionResource extends SeoPanelResource
+class AutomationExecutionResource extends Resource
 {
+    use BelongsToAdminAutomationPanel;
+
     protected static ?string $model = AutomationExecution::class;
 
     protected static ?string $slug = 'automation-executions';
@@ -28,9 +32,26 @@ class AutomationExecutionResource extends SeoPanelResource
 
     protected static ?string $navigationIcon = 'heroicon-o-play-circle';
 
-    protected static ?string $navigationGroup = 'Automation';
+    protected static ?int $navigationSort = 2;
 
-    protected static ?int $navigationSort = 91;
+    /**
+     * @param  array<string, mixed>  $parameters
+     */
+    public static function getUrl(
+        string $name = 'index',
+        array $parameters = [],
+        bool $isAbsolute = true,
+        ?string $panel = null,
+        ?Model $tenant = null,
+    ): string {
+        return parent::getUrl(
+            $name,
+            $parameters,
+            $isAbsolute,
+            $panel ?? self::adminPanelId(),
+            $tenant,
+        );
+    }
 
     public static function getNavigationLabel(): string
     {
@@ -39,8 +60,7 @@ class AutomationExecutionResource extends SeoPanelResource
 
     public static function canViewAny(): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures()
-            || SeoAccessControl::canMutateInSeoPanel();
+        return SeoAccessControl::canViewAutomation();
     }
 
     public static function canCreate(): bool

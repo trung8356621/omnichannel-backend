@@ -51,17 +51,23 @@ class KeywordResource extends SeoPanelResource
 
     protected static ?string $slug = 'keywords';
 
-    protected static ?string $navigationIcon = 'heroicon-o-key';
+    protected static ?string $navigationIcon = 'heroicon-o-magnifying-glass-circle';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
-    protected static ?string $navigationLabel = 'Keywords';
+    protected static ?string $navigationLabel = 'Keyword Intelligence';
 
     protected static ?string $modelLabel = 'Keyword';
 
     protected static ?string $pluralModelLabel = 'Keywords';
 
-    protected static ?int $navigationSort = 12;
+    protected static ?int $navigationSort = 3;
+
+    /**
+     * Sidebar parent: Keyword Intelligence → default URL = Content Editor Hub.
+     * Workspace list (/keyword-intelligence) giữ route, không đăng ký nav.
+     */
+    protected static bool $shouldRegisterNavigation = true;
 
     public static function canViewAny(): bool
     {
@@ -70,7 +76,47 @@ class KeywordResource extends SeoPanelResource
 
     public static function shouldRegisterNavigation(array $parameters = []): bool
     {
-        return false;
+        return SeoAccessControl::canAccessPlannerFeatures();
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.keyword_intelligence.nav');
+    }
+
+    /**
+     * @return array<int, \Filament\Navigation\NavigationItem>
+     */
+    public static function getNavigationItems(): array
+    {
+        if (! static::shouldRegisterNavigation()) {
+            return [];
+        }
+
+        $parentLabel = static::getNavigationLabel();
+        $contentEditorLabel = __('seo-content-ai::filament.performance_hub.nav_content_editor');
+        $contentEditorUrl = static::getUrl('index');
+
+        return [
+            \Filament\Navigation\NavigationItem::make($parentLabel)
+                ->icon(static::getNavigationIcon())
+                ->group(null)
+                ->sort(static::getNavigationSort())
+                ->url($contentEditorUrl)
+                ->isActiveWhen(fn (): bool => request()->routeIs([
+                    'filament.seo.resources.keywords.*',
+                    'filament.seo.pages.ai-keyword-discovery',
+                    'filament.seo.pages.performance-hub',
+                    'seo.performance.*',
+                ])),
+            \Filament\Navigation\NavigationItem::make($contentEditorLabel)
+                ->icon('heroicon-o-pencil-square')
+                ->group(null)
+                ->parentItem($parentLabel)
+                ->isActiveWhen(fn (): bool => request()->routeIs('filament.seo.resources.keywords.*'))
+                ->sort(1)
+                ->url($contentEditorUrl),
+        ];
     }
 
     public static function canCreate(): bool
@@ -94,11 +140,6 @@ class KeywordResource extends SeoPanelResource
             && $record instanceof Keyword
             && ! static::isKeywordLockedByActiveJobs($record)
             && static::isUnused($record);
-    }
-
-    public static function getNavigationLabel(): string
-    {
-        return __('seo-content-ai::filament.nav.keywords');
     }
 
     public static function getModelLabel(): string

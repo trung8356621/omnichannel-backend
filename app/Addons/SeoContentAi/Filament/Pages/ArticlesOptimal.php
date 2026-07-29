@@ -37,11 +37,11 @@ final class ArticlesOptimal extends SeoPanelPage
 
     protected static ?string $title = 'Article SEO audit';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
     protected static ?string $navigationParentItem = 'Articles';
 
-    protected static ?int $navigationSort = 2;
+    protected static ?int $navigationSort = 6;
 
     protected static ?string $slug = 'articles/optimal';
 

@@ -53,6 +53,8 @@ class Keyword extends Model
         'phrase',
         'type',
         'parent_id',
+        'source',
+        'source_locked',
         'review_status',
         'review_reason_id',
         'review_note',
@@ -62,6 +64,7 @@ class Keyword extends Model
 
     protected $casts = [
         'parent_id' => 'integer',
+        'source_locked' => 'boolean',
         'review_reason_id' => 'integer',
         'reviewed_by' => 'integer',
         'reviewed_at' => 'datetime',

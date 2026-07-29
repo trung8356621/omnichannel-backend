@@ -26,9 +26,9 @@ class TagResource extends SeoPanelResource
 
     protected static ?string $navigationIcon = 'heroicon-o-tag';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
-    protected static ?int $navigationSort = 14;
+    protected static ?int $navigationSort = 16;
 
     public static function canViewAny(): bool
     {

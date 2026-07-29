@@ -17,7 +17,27 @@ User Laravel core (`App\Models\User`) có 2 lớp role:
 |------|----------|-------|
 | `admin` | `User::ROLE_ADMIN` | Super admin — toàn quyền, có thể view panel của mọi connection (read-only) |
 | `owner` | `User::ROLE_OWNER` | Chủ tài khoản — full quyền trên account và team của mình |
-| `staff` | `User::ROLE_STAFF` | Thành viên team — bị ràng buộc bởi `parent_id` |
+| `manager` | `User::ROLE_MANAGER` | Quản lý thuộc một Owner (`parent_id`); quản lý Staff qua `manager_id` |
+| `staff` | `User::ROLE_STAFF` | Thành viên team — `parent_id` = Owner; `manager_id` nullable (chưa gán Manager) |
+
+### 1.1b Organizational hierarchy (Owner → Manager → Staff)
+
+Quan hệ tổ chức **không thay RBAC / `seo_role`**. Schema:
+
+| Cột | Ý nghĩa |
+|-----|---------|
+| `parent_id` | Owner FK (giữ tên cũ; không thêm `owner_id` trùng) |
+| `manager_id` | Manager FK của Staff; `nullOnDelete` |
+
+Rules: Owner/Admin → cả hai null; Manager → `parent_id` bắt buộc, `manager_id` null; Staff → `parent_id` bắt buộc, `manager_id` optional (Manager phải thuộc cùng Owner).
+
+| Symbol | Vai trò | Path |
+|--------|---------|------|
+| `User::owner()` / `manager()` / `managers()` / `staffMembers()` / `directStaffMembers()` | Eloquent hierarchy | `app/Models/User.php` |
+| `User::accountOwnerId()` | Owner self; Manager/Staff → `parent_id` | `app/Models/User.php` |
+| `UserHierarchyService` | Normalize/validate form; block xóa Owner còn team; detach Staff khi xóa/đổi Manager | `app/Services/Users/UserHierarchyService.php` |
+| `UserResource` (Admin) | Form Owner/Manager theo role; filter Role/Owner/Manager/Unassigned staff; group `owner.name`; scope Owner chỉ team mình | `app/Filament/Resources/UserResource.php` |
+| Migration `manager_id` | Index + FK nullable | `database/migrations/2026_07_29_100000_add_manager_id_to_users_table.php` |
 
 **Role SEO** (`users.seo_role`):
 | Role | Constant | Rank | Mô tả |
@@ -72,7 +92,7 @@ flowchart LR
 
 **Account Owner Scoping:**
 - `shouldScopeToAccountOwner()`: luôn true, trừ khi Admin đang xem panel của connection khác
-- `accountOwnerId()`: Admin viewer → `panelOwnerId()`, Staff → `parent_id`, Owner → `auth()->id()`
+- `accountOwnerId()`: Admin viewer → `panelOwnerId()`; Manager/Staff → `parent_id` (qua `User::accountOwnerId()`); Owner → `auth()->id()`
 - `accountSiteOwnerId()`: fallback về `accountOwnerId()`
 
 **Content Project Scoping:**
@@ -271,7 +291,9 @@ flowchart TB
 
 ```
 Access Control: Support/SeoAccessControl.php (570 dòng)
-User Model: app/Models/User.php (constants: ROLE_*, SEO_ROLE_*, STATUS_*)
+User Model: app/Models/User.php (constants: ROLE_*, SEO_ROLE_*, STATUS_*; hierarchy: parent_id/manager_id)
+UserHierarchyService: app/Services/Users/UserHierarchyService.php
+Admin Users: app/Filament/Resources/UserResource.php
 Team Page: Filament/Pages/SeoTeam.php
 Team Messages: Http/Controllers/TeamMessageController.php
 Team Message Model: app/Models/TeamMessage.php (mysql)

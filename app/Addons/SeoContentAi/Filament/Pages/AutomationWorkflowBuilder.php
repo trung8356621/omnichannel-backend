@@ -11,23 +11,25 @@ use App\Addons\SeoContentAi\Automation\BusinessHook\Registry\BusinessEventRegist
 use App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationExecutionService;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationVersionService;
 use App\Addons\SeoContentAi\Automation\Exceptions\AutomationException;
+use App\Addons\SeoContentAi\Filament\Concerns\BelongsToAdminAutomationPanel;
+use App\Addons\SeoContentAi\Filament\Concerns\RedirectsSeoAutomationToAdmin;
 use App\Addons\SeoContentAi\Filament\Resources\AutomationRuleResource;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Notifications\Notification;
+use Filament\Pages\Page;
 use Filament\Support\Enums\MaxWidth;
 use Livewire\Attributes\Url;
 
-final class AutomationWorkflowBuilder extends SeoPanelPage
+class AutomationWorkflowBuilder extends Page
 {
+    use BelongsToAdminAutomationPanel;
+    use RedirectsSeoAutomationToAdmin;
+
     protected static ?string $slug = 'automation/workflow-builder';
 
     protected static ?string $navigationIcon = 'heroicon-o-squares-2x2';
 
-    protected static ?string $navigationGroup = 'Automation';
-
     protected static ?int $navigationSort = 89;
-
-    protected static bool $shouldRegisterNavigation = false;
 
     protected static string $view = 'seo-content-ai::filament.pages.automation-workflow-builder';
 
@@ -36,8 +38,35 @@ final class AutomationWorkflowBuilder extends SeoPanelPage
 
     public ?AutomationRule $record = null;
 
+    public static function shouldRegisterNavigation(): bool
+    {
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $parameters
+     */
+    public static function getUrl(
+        array $parameters = [],
+        bool $isAbsolute = true,
+        ?string $panel = null,
+        ?\Illuminate\Database\Eloquent\Model $tenant = null,
+    ): string {
+        return parent::getUrl(
+            $parameters,
+            $isAbsolute,
+            $panel ?? self::adminPanelId(),
+            $tenant,
+        );
+    }
+
     public function mount(): void
     {
+        if ($this->redirectSeoAutomationToAdmin(static::getUrl(
+            array_filter(['rule' => $this->rule]),
+        ))) {
+            return;
+        }
         abort_unless(SeoAccessControl::canViewAutomation(), 403);
         abort_if($this->rule === null || $this->rule <= 0, 404);
 

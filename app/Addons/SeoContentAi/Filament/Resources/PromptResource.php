@@ -31,13 +31,15 @@ class PromptResource extends SeoPanelResource
 
     protected static ?string $navigationIcon = 'heroicon-o-chat-bubble-bottom-center-text';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
     protected static ?string $navigationLabel = 'Prompt management';
 
     protected static ?string $modelLabel = 'Prompt';
 
     protected static ?string $pluralModelLabel = 'Prompts';
+
+    protected static ?int $navigationSort = 14;
 
     public static function canViewAny(): bool
     {

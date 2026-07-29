@@ -112,28 +112,73 @@ final class SeoProjectWorkflowRunService
 
     public function prepareRunQueue(SeoProject $project, SeoProjectRun $run, ?int $limit = null): SeoProjectRun
     {
-        $pendingCount = (int) $project->tasks()
-            ->where('status', SeoProjectTask::STATUS_PENDING)
-            ->planned()
-            ->count();
-
-        if ($pendingCount <= 0) {
-            throw new \InvalidArgumentException(__('seo-content-ai::filament.projects.run_items_empty'));
-        }
-
         $project->loadMissing('site');
 
-        $query = $project->tasks()
-            ->where('status', SeoProjectTask::STATUS_PENDING)
-            ->planned()
-            ->orderBy('target_date')
-            ->orderBy('id');
-
-        if ($limit !== null && $limit > 0) {
-            $query->limit($limit);
+        $settings = is_array($run->settings) ? $run->settings : [];
+        $isRerun = (bool) ($settings['rerun'] ?? false);
+        $explicitIds = [];
+        if (isset($settings['task_ids']) && is_array($settings['task_ids'])) {
+            $explicitIds = array_values(array_filter(array_map(
+                static fn (mixed $id): int => (int) $id,
+                $settings['task_ids'],
+            ), static fn (int $id): bool => $id > 0));
         }
 
-        $tasks = $query->get();
+        if ($isRerun) {
+            if ($explicitIds === []) {
+                throw new \InvalidArgumentException(
+                    'Rerun requires explicit item selection — entire-project rerun blocked.',
+                );
+            }
+            $query = $project->tasks()
+                ->planned()
+                ->whereIn('id', $explicitIds)
+                ->where('type', '!=', SeoProjectTask::TYPE_IMPROVE)
+                ->orderBy('target_date')
+                ->orderBy('id');
+            $tasks = $query->get();
+        } else {
+            $preview = app(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier::class)
+                ->preview($project);
+
+            if ($preview->runCount() <= 0) {
+                throw new \InvalidArgumentException(__('seo-content-ai::filament.projects.run_items_empty'));
+            }
+
+            if ($preview->failClosed && ! (bool) ($settings['technical_confirm_full_rerun'] ?? false)) {
+                throw new \InvalidArgumentException(
+                    __('seo-content-ai::filament.projects.generate_pending_fail_closed'),
+                );
+            }
+
+            $runnableIds = $preview->runnableTaskIds();
+            if ($explicitIds !== []) {
+                $allowed = array_flip($runnableIds);
+                $runnableIds = array_values(array_filter(
+                    $explicitIds,
+                    static fn (int $id): bool => isset($allowed[$id]),
+                ));
+            }
+
+            if ($runnableIds === []) {
+                throw new \InvalidArgumentException(__('seo-content-ai::filament.projects.run_items_empty'));
+            }
+
+            if ($limit !== null && $limit > 0) {
+                $runnableIds = array_slice($runnableIds, 0, $limit);
+            }
+
+            $tasks = $project->tasks()
+                ->planned()
+                ->whereIn('id', $runnableIds)
+                ->orderBy('target_date')
+                ->orderBy('id')
+                ->get();
+        }
+
+        if ($tasks->isEmpty()) {
+            throw new \InvalidArgumentException(__('seo-content-ai::filament.projects.run_items_empty'));
+        }
 
         foreach ($tasks as $task) {
             if (! $task instanceof SeoProjectTask) {
@@ -145,7 +190,7 @@ final class SeoProjectWorkflowRunService
 
         $run = $this->runItemService->syncMirrorAndCounters($run, false);
 
-        if ($this->pendingAiTasksInBatch($project, $limit) === 0) {
+        if ($tasks->count() === 0) {
             return $this->completeRunQueue($run);
         }
 

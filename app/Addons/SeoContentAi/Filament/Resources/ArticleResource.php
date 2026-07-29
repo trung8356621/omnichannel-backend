@@ -57,13 +57,15 @@ class ArticleResource extends SeoPanelResource
 
     protected static ?string $navigationIcon = 'heroicon-o-document-text';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
     protected static ?string $navigationLabel = 'Articles';
 
     protected static ?string $modelLabel = 'Article';
 
     protected static ?string $pluralModelLabel = 'Articles';
+
+    protected static ?int $navigationSort = 1;
 
     /** article_meta: bỏ qua lọc Article SEO Audit (Laravel only — không đụng WordPress). */
     public const META_SKIP_SEO_AUDIT = 'skip_seo_audit';
@@ -1417,10 +1419,10 @@ class ArticleResource extends SeoPanelResource
                 }),
             static::makeApproveArticleTableAction(),
             Tables\Actions\Action::make('view_content_project_runs')
-                ->icon('heroicon-o-queue-list')
+                ->icon('heroicon-o-folder-open')
                 ->iconButton()
                 ->color('info')
-                ->tooltip('View content project runs')
+                ->tooltip(__('seo-content-ai::filament.projects.open_project_items'))
                 ->visible(function (SeoArticle $record): bool {
                     return static::articleAssignedContentProjectId($record) !== null;
                 })
@@ -1433,7 +1435,7 @@ class ArticleResource extends SeoPanelResource
                     $project = SeoProject::query()->find($projectId);
 
                     return $project instanceof SeoProject
-                        ? SeoProjectResource::getRunHistoryUrl($project)
+                        ? SeoProjectResource::getProjectWorkspaceUrl($project)
                         : null;
                 }),
             Tables\Actions\Action::make('assign_to_content_project')
@@ -2274,6 +2276,62 @@ class ArticleResource extends SeoPanelResource
     public static function getNavigationLabel(): string
     {
         return __('seo-content-ai::filament.nav.articles');
+    }
+
+    /**
+     * @return array<int, \Filament\Navigation\NavigationItem>
+     */
+    public static function getNavigationItems(): array
+    {
+        if (! static::shouldRegisterNavigation()) {
+            return [];
+        }
+
+        $parentLabel = static::getNavigationLabel();
+
+        return [
+            \Filament\Navigation\NavigationItem::make($parentLabel)
+                ->icon(static::getNavigationIcon())
+                ->isActiveWhen(fn (): bool => request()->routeIs('filament.seo.resources.articles.index')
+                    && in_array(request()->query('tab', Pages\ListArticles::TAB_POSTS), [
+                        Pages\ListArticles::TAB_POSTS,
+                        '',
+                    ], true))
+                ->sort(static::getNavigationSort())
+                ->url(static::getUrl('index', ['tab' => Pages\ListArticles::TAB_POSTS])),
+            \Filament\Navigation\NavigationItem::make(__('seo-content-ai::filament.article_list.tab_posts'))
+                ->icon('heroicon-o-document-text')
+                ->group(null)
+                ->parentItem($parentLabel)
+                ->isActiveWhen(fn (): bool => request()->routeIs('filament.seo.resources.articles.index')
+                    && request()->query('tab', Pages\ListArticles::TAB_POSTS) === Pages\ListArticles::TAB_POSTS)
+                ->sort(1)
+                ->url(static::getUrl('index', ['tab' => Pages\ListArticles::TAB_POSTS])),
+            \Filament\Navigation\NavigationItem::make(__('seo-content-ai::filament.article_list.tab_categories'))
+                ->icon('heroicon-o-folder')
+                ->group(null)
+                ->parentItem($parentLabel)
+                ->isActiveWhen(fn (): bool => request()->routeIs('filament.seo.resources.articles.index')
+                    && request()->query('tab') === Pages\ListArticles::TAB_CATEGORIES)
+                ->sort(2)
+                ->url(static::getUrl('index', ['tab' => Pages\ListArticles::TAB_CATEGORIES])),
+            \Filament\Navigation\NavigationItem::make(__('seo-content-ai::filament.article_list.tab_reviewed'))
+                ->icon('heroicon-o-check-badge')
+                ->group(null)
+                ->parentItem($parentLabel)
+                ->isActiveWhen(fn (): bool => request()->routeIs('filament.seo.resources.articles.index')
+                    && request()->query('tab') === Pages\ListArticles::TAB_REVIEWED)
+                ->sort(4)
+                ->url(static::getUrl('index', ['tab' => Pages\ListArticles::TAB_REVIEWED])),
+            \Filament\Navigation\NavigationItem::make(__('seo-content-ai::filament.article_list.tab_skipped'))
+                ->icon('heroicon-o-no-symbol')
+                ->group(null)
+                ->parentItem($parentLabel)
+                ->isActiveWhen(fn (): bool => request()->routeIs('filament.seo.resources.articles.index')
+                    && request()->query('tab') === Pages\ListArticles::TAB_SKIPPED)
+                ->sort(5)
+                ->url(static::getUrl('index', ['tab' => Pages\ListArticles::TAB_SKIPPED])),
+        ];
     }
 
     public static function getModelLabel(): string

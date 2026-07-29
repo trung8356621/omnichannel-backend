@@ -103,7 +103,7 @@
 
 | Provider | Panel | Middleware đặc biệt |
 |----------|-------|---------------------|
-| `AdminPanelProvider` | `/admin` | `RedirectStaffFromAdminPanel`, auto-discover addon |
+| `AdminPanelProvider` | `/admin` | `RedirectStaffFromAdminPanel`, auto-discover addon; **`maxContentWidth(MaxWidth::Full)`** — content full chiều rộng sau sidebar (Users, Automation Flows, …) |
 | `SeoToolsPanelProvider` | `/tools` | Không auth — chỉ 1 trang `SeoTools` |
 
 ---

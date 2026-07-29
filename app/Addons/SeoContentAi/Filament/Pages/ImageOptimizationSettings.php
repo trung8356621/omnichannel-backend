@@ -19,7 +19,7 @@ class ImageOptimizationSettings extends SeoPanelPage
 
     protected static ?string $title = 'Image optimization settings';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
     protected static ?string $navigationParentItem = 'Media library';
 

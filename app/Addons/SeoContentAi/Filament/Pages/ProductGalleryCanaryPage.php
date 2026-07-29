@@ -30,13 +30,13 @@ final class ProductGalleryCanaryPage extends Page implements HasForms
 
     protected static ?string $navigationIcon = 'heroicon-o-beaker';
 
-    protected static ?string $navigationGroup = 'SEO Workspace';
+    protected static ?string $navigationGroup = null;
 
     protected static ?string $navigationLabel = 'PG Canary';
 
     protected static ?string $title = 'Product Gallery Canary';
 
-    protected static ?int $navigationSort = 95;
+    protected static ?int $navigationSort = 17;
 
     protected static string $view = 'seo-content-ai::filament.pages.product-gallery-canary';
 
@@ -170,9 +170,9 @@ final class ProductGalleryCanaryPage extends Page implements HasForms
             ->send();
     }
 
-    public function refreshReadiness(ProductGalleryCanaryReadinessService $readiness = null): void
+    public function refreshReadiness(): void
     {
-        $readiness ??= app(ProductGalleryCanaryReadinessService::class);
+        $readiness = app(ProductGalleryCanaryReadinessService::class);
         $article = $this->resolveArticle();
         if (! $article instanceof SeoArticle) {
             $this->readiness = null;
@@ -198,6 +198,16 @@ final class ProductGalleryCanaryPage extends Page implements HasForms
                 'selection' => is_array($row->selection_snapshot) ? $row->selection_snapshot : [],
             ])
             ->all();
+    }
+
+    /**
+     * @return array<int, \Filament\Forms\Form>
+     */
+    protected function getForms(): array
+    {
+        return [
+            'form' => $this->form($this->makeForm()),
+        ];
     }
 
     public function loadPromptPreview(ProductGalleryCanaryPromptPreviewService $preview): void

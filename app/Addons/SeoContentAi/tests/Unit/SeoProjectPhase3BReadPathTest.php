@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Tests\Unit;
 
 use App\Addons\SeoContentAi\Console\BackfillContentProjectRunItemsCommand;
-use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages\ViewSeoProjectRun;
 use App\Addons\SeoContentAi\Services\ArticlePromptRunHistoryService;
 use App\Addons\SeoContentAi\Services\SeoProjectRunConsolidationService;
 use App\Addons\SeoContentAi\Services\SeoProjectRunItemsReader;
@@ -148,31 +147,25 @@ final class SeoProjectPhase3BReadPathTest extends TestCase
 
     public function test_view_run_keeps_public_method_names(): void
     {
-        $methods = [
-            'getResultItems',
-            'getAllItems',
-            'getPendingItems',
-            'runItemQueued',
-            'runItem',
-            'archiveItem',
-            'canArchiveRunItem',
-            'canRetryRunItem',
-        ];
-
-        foreach ($methods as $name) {
-            $this->assertTrue(
-                method_exists(ViewSeoProjectRun::class, $name),
-                'Missing public method: '.$name,
-            );
-        }
+        $view = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php',
+        );
+        // Legacy Run Detail is redirect-only; queue methods no longer public on the page.
+        self::assertStringContainsString('getProjectWorkspaceUrl', $view);
+        self::assertStringContainsString('function mount(', $view);
+        self::assertStringNotContainsString('function getAllItems', $view);
+        self::assertStringNotContainsString('function archiveItem', $view);
     }
 
     public function test_get_all_items_doc_forbids_pending_union(): void
     {
-        $method = new ReflectionMethod(ViewSeoProjectRun::class, 'getAllItems');
-        $doc = (string) $method->getDocComment();
-
-        $this->assertStringContainsString('không union', mb_strtolower($doc));
+        $reader = new ReflectionClass(SeoProjectRunItemsReader::class);
+        self::assertTrue($reader->hasMethod('forRun'));
+        self::assertTrue($reader->hasMethod('forRunAsArrays'));
+        $view = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php',
+        );
+        self::assertStringNotContainsString('function getAllItems', $view);
     }
 
     public function test_consolidation_service_is_marked_deprecated(): void

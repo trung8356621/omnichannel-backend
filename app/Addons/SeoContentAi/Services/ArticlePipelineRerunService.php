@@ -236,13 +236,20 @@ final class ArticlePipelineRerunService
             $finalStatus = (string) ($final['status'] ?? self::STATUS_FAILED);
             $ok = $finalStatus === self::STATUS_COMPLETED;
 
+            $projectForUrl = $run->project;
+            if (! $projectForUrl instanceof SeoProject) {
+                $projectForUrl = SeoProject::query()->find((int) $run->project_id);
+            }
+
             return [
                 'success' => $ok,
                 'message' => $ok
                     ? (string) ($final['message'] ?: 'Đã chạy lại quy trình thành công.')
                     : (string) ($final['message'] ?: 'Chạy lại quy trình thất bại.'),
                 'run_id' => (int) $run->id,
-                'run_url' => SeoProjectResource::getUrl('view-run', ['run' => $run->id]),
+                'run_url' => $projectForUrl instanceof SeoProject
+                    ? SeoProjectResource::getProjectWorkspaceUrl($projectForUrl)
+                    : null,
                 'status' => $finalStatus !== '' ? $finalStatus : self::STATUS_FAILED,
             ];
         } finally {
@@ -260,12 +267,19 @@ final class ArticlePipelineRerunService
         $status = isset($meta['status']) ? (string) $meta['status'] : null;
         $busy = in_array($status, [self::STATUS_QUEUED, self::STATUS_RUNNING], true);
 
+        $runUrl = null;
+        if ($runId > 0) {
+            $run = SeoProjectRun::query()->with('project')->find($runId);
+            $project = $run?->project;
+            if ($project instanceof SeoProject) {
+                $runUrl = SeoProjectResource::getProjectWorkspaceUrl($project);
+            }
+        }
+
         return [
             'status' => $status,
             'run_id' => $runId > 0 ? $runId : null,
-            'run_url' => $runId > 0
-                ? SeoProjectResource::getUrl('view-run', ['run' => $runId])
-                : null,
+            'run_url' => $runUrl,
             'from' => isset($meta['from']) ? (string) $meta['from'] : null,
             'message' => isset($meta['message']) ? (string) $meta['message'] : null,
             'busy' => $busy,
