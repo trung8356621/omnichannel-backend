@@ -30,7 +30,35 @@ final class AgentResultRendererTest extends TestCase
         self::assertTrue($renderer->supports($result));
         $rendered = $renderer->render($result);
         self::assertStringContainsString('Content Project', $rendered['title']);
-        self::assertNotEmpty($rendered['links']);
+        self::assertTrue($rendered['hide_envelope'] ?? false);
+        self::assertSame([], $rendered['links'] ?? []);
+    }
+
+    public function test_project_list_renderer_is_user_facing_business_text(): void
+    {
+        $result = $this->makeExecutionResult('content_project.list_projects', true, [
+            'projects' => [[
+                'project_id' => 31,
+                'name' => 'Blog tháng 8',
+                'month' => '2026-08-01',
+                'member_name' => 'Nguyễn Văn A',
+                'archived' => false,
+                'stats' => ['total_items' => 20],
+                'site_ref' => 'cps_should_not_appear',
+            ]],
+        ], message: 'Read successful.');
+        $rendered = (new ContentProjectResultRenderer)->render($result);
+
+        self::assertTrue($rendered['hide_envelope'] ?? false);
+        self::assertStringContainsString('CONTENT PROJECTS', $rendered['summary']);
+        self::assertStringContainsString('[31] Blog tháng 8', $rendered['summary']);
+        self::assertStringContainsString('Status: Active | Items: 20', $rendered['summary']);
+        self::assertStringNotContainsString('Member:', $rendered['summary']);
+        self::assertStringNotContainsString('site_ref', $rendered['summary']);
+        self::assertStringNotContainsString('cps_should_not_appear', $rendered['summary']);
+        self::assertStringNotContainsString('Read successful', $rendered['summary']);
+        self::assertStringNotContainsString('tenant_ref', $rendered['summary']);
+        self::assertSame([], $rendered['badges'] ?? []);
     }
 
     public function test_keyword_and_serp_renderers(): void
@@ -128,13 +156,14 @@ final class AgentResultRendererTest extends TestCase
         bool $ok,
         array $data = [],
         ?AgentErrorCategory $category = null,
+        string $message = '',
     ): AgentExecutionResult {
         return new AgentExecutionResult(
             executionRef: 'aex_test',
             status: $ok ? AgentExecutionStatus::Succeeded : AgentExecutionStatus::Failed,
             ok: $ok,
             code: $ok ? 'ok' : 'fail',
-            message: $ok ? 'OK' : 'Fail',
+            message: $message !== '' ? $message : ($ok ? 'OK' : 'Fail'),
             skillKey: 'skill',
             capabilityKey: $capability,
             data: $data,

@@ -35,4 +35,9 @@
             {{ $message }}
         </div>
     @endif
+    @if (! empty($row['has_unpublished_changes']))
+        <div class="mt-1 inline-flex rounded bg-warning-50 px-1.5 py-0.5 text-[10px] font-semibold text-warning-700 dark:bg-warning-500/10 dark:text-warning-300">
+            {{ __('seo-content-ai::filament.projects.ops_unpublished_changes') }}
+        </div>
+    @endif
 </div>

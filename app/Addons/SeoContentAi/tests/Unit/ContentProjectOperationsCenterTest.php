@@ -50,6 +50,8 @@ final class ContentProjectOperationsCenterTest extends TestCase
         self::assertStringContainsString('ContentProjectCommandBusMonitorService', $source);
         self::assertStringContainsString("'site_sync'", $source);
         self::assertStringContainsString('loadSiteSync', $source);
+        self::assertStringContainsString('McpCapabilityMarkdownPresenter', $source);
+        self::assertStringContainsString('loadMcpCapabilityDoc', $source);
         self::assertStringNotContainsString('SeoProjectRun::', $source);
 
         $siteSyncOps = (string) file_get_contents(

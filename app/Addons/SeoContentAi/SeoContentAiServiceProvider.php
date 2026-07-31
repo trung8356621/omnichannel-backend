@@ -125,6 +125,8 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectArticleMembership::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectWorkspaceSaveService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Support\ContentProject\ContentProjectLifecycle::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectExecutionStalenessPolicy::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectGenerationRecoveryService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectDashboardStatsService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectAutoScheduleService::class);
@@ -189,6 +191,7 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
         $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\Quotas\KeywordIntelligenceQuotaGuard::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\Application\KeywordIntelligenceReadService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\KeywordIntelligence\Agent\KeywordIntelligenceReadService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\SeoAudit\Agent\SeoAuditAgentReadService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\SerpIntelligence\SerpSnapshotPersistService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\SerpIntelligence\SerpImportSnapshotService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\SerpIntelligence\SerpCollectionOperationService::class);
@@ -653,6 +656,7 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 \App\Addons\SeoContentAi\Console\ContentProjectRunStatusCommand::class,
                 \App\Addons\SeoContentAi\Console\ContentProjectRunRecoverCommand::class,
                 \App\Addons\SeoContentAi\Console\RepairContentProjectActiveExecutionsCommand::class,
+                \App\Addons\SeoContentAi\Console\RecoverContentProjectStaleGenerationCommand::class,
                 \App\Addons\SeoContentAi\Console\ProductGalleryParentChildCanaryCommand::class,
                 \App\Addons\SeoContentAi\Console\ProductGalleryPromptsDoctorCommand::class,
                 \App\Addons\SeoContentAi\Console\InstallDefaultProductGalleryPromptsCommand::class,
@@ -813,8 +817,9 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 ! $agentMetricsAggRegistered
                 && class_exists(\App\Addons\SeoContentAi\Console\AgentMetricsAggregateCommand::class)
             ) {
+                // Flag options are VALUE_NONE — do not pass ['--sync' => true] (becomes --sync=1 and fails).
                 $schedule
-                    ->command(\App\Addons\SeoContentAi\Console\AgentMetricsAggregateCommand::class, ['--sync' => true])
+                    ->command('agent:metrics:aggregate --sync')
                     ->hourly()
                     ->name($agentMetricsAggName)
                     ->withoutOverlapping();
@@ -828,7 +833,7 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 && class_exists(\App\Addons\SeoContentAi\Console\AgentObservabilityPruneCommand::class)
             ) {
                 $schedule
-                    ->command(\App\Addons\SeoContentAi\Console\AgentObservabilityPruneCommand::class, ['--sync' => true])
+                    ->command('agent:observability:prune --sync')
                     ->dailyAt('03:40')
                     ->name($agentObsPruneName)
                     ->withoutOverlapping();
@@ -842,6 +847,20 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                     ->command(\App\Addons\SeoContentAi\Console\AutomationRecoverStaleCommand::class)
                     ->everyFiveMinutes()
                     ->name($automationRecoverName)
+                    ->withoutOverlapping();
+            }
+
+            $cpStaleGenName = 'seo-content-ai:content-project-recover-stale-generation';
+            $cpStaleGenRegistered = collect($schedule->events())
+                ->contains(static fn ($event): bool => $event->description === $cpStaleGenName);
+            if (
+                ! $cpStaleGenRegistered
+                && class_exists(\App\Addons\SeoContentAi\Console\RecoverContentProjectStaleGenerationCommand::class)
+            ) {
+                $schedule
+                    ->command('seo:content-project:recover-stale-generation --apply')
+                    ->everyTenMinutes()
+                    ->name($cpStaleGenName)
                     ->withoutOverlapping();
             }
 

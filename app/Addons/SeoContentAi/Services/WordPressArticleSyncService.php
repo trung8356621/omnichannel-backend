@@ -882,6 +882,10 @@ final class WordPressArticleSyncService
             $article->update(['body' => null]);
         }
         app(ArticleWordPressSyncFlagService::class)->clearAll($article);
+        app(ArticleWordPressSyncFlagService::class)->rememberPublishedContentHash(
+            $article->fresh() ?? $article,
+            hash('sha256', trim((string) (($article->fresh() ?? $article)->body ?? $postContent ?? ''))),
+        );
         app(ArticleLastSavedTimestampService::class)->touchSynced($article);
         $this->timestampService->sync($article, $decoded);
 

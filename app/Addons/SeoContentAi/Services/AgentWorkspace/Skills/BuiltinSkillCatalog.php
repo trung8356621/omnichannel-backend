@@ -24,6 +24,7 @@ final class BuiltinSkillCatalog
             ContentProjectSkills::definitions(),
             KeywordIntelligenceSkills::definitions(),
             SerpIntelligenceSkills::definitions(),
+            SeoAuditSkills::definitions(),
             OperationsSkills::definitions(),
         );
     }

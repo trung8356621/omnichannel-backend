@@ -474,15 +474,27 @@ class WordPressArticleContentService
             ['meta_value' => $wpTaxonomy],
         );
 
-        $parentId = max(0, (int) ($post['parent_id'] ?? 0));
-        if ($parentId > 0) {
-            $article->articleMetas()->updateOrCreate(
-                ['meta_key' => 'wp_parent_id'],
-                ['meta_value' => (string) $parentId],
-            );
-        } else {
-            $article->articleMetas()->where('meta_key', 'wp_parent_id')->delete();
+        $hasParent = array_key_exists('parent_term_id', $post) || array_key_exists('parent_id', $post);
+        if (! $hasParent) {
+            return;
         }
+
+        $raw = array_key_exists('parent_term_id', $post)
+            ? $post['parent_term_id']
+            : $post['parent_id'];
+
+        if ($raw === null || $raw === '') {
+            $article->articleMetas()->where('meta_key', 'wp_parent_id')->delete();
+
+            return;
+        }
+
+        // Preserve parent=0 as "0" — never delete on zero (Site MCP fail-closed).
+        $parentId = (int) $raw;
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => 'wp_parent_id'],
+            ['meta_value' => (string) $parentId],
+        );
     }
 
     private function normalizeTaxonomySlug(string $taxonomy): ?string

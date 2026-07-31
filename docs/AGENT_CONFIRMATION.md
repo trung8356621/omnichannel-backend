@@ -25,6 +25,8 @@ Rejects: expired, already_used, actor/site/conversation/input mismatch, stale ga
 
 ## UI
 
-Confirmation card: action, site, project/workspace, item count, warnings, effects, Cancel, Confirm (loading + double-submit guard).
+Confirmation card (`execution_confirmation` only): Yes / No / Sửa. **`execution_preview` không hiện Yes** — skill read/`none` auto-execute sau preview.
+
+Chat Yes path (`answerConversation` / composer): dùng Livewire `pendingConfirmationToken` (plaintext từ preview response) — **không** gửi `confirmation_token_hash` từ DB. `submitComposer` gọi `loadActiveDraftFromConversation` trước khi route awaiting state.
 
 No auto-confirm. AI cannot confirm.

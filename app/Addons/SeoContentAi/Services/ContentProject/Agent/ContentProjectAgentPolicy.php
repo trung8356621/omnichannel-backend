@@ -87,8 +87,12 @@ final class ContentProjectAgentPolicy
 
         if ((int) ($project->site_id ?? 0) !== $siteId) {
             return AgentCapabilityResult::fail(
-                AgentErrorCodes::TENANT_ACCESS_DENIED,
+                AgentErrorCodes::CONTEXT_MISMATCH,
                 'Project does not belong to site context.',
+                data: [
+                    'required' => ['project_ref'],
+                    'mismatch' => 'site_ref',
+                ],
             );
         }
 
@@ -148,6 +152,10 @@ final class ContentProjectAgentPolicy
 
         if (str_starts_with($capability, 'gsc_intelligence.get_')
             || str_starts_with($capability, 'gsc_intelligence.list_')) {
+            return 'content-project:read';
+        }
+
+        if (str_starts_with($capability, 'seo_audit.')) {
             return 'content-project:read';
         }
 

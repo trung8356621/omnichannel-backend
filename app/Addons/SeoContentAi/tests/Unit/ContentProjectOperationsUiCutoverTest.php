@@ -65,6 +65,8 @@ final class ContentProjectOperationsUiCutoverTest extends TestCase
         self::assertStringContainsString('Content', $blade);
         self::assertStringContainsString('Review', $blade);
         self::assertStringContainsString('Publishing', $blade);
+        self::assertStringContainsString('Lifecycle', $blade);
+        self::assertStringContainsString('archiveSelected', $blade);
     }
 
     public function test_actions_menu_groups_and_gates(): void
@@ -77,7 +79,9 @@ final class ContentProjectOperationsUiCutoverTest extends TestCase
         self::assertStringContainsString('>Content</p>', $blade);
         self::assertStringContainsString('>Review</p>', $blade);
         self::assertStringContainsString('>Publishing</p>', $blade);
+        self::assertStringContainsString('>Lifecycle</p>', $blade);
         self::assertStringContainsString('>Other</p>', $blade);
+        self::assertStringContainsString('archiveOne', $blade);
 
         $reviewOnly = ContentProjectItemActionsPresenter::forRow([
             'lifecycle' => 'review',

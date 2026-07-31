@@ -125,14 +125,49 @@ final class ArticleEditorSyncController extends Controller
         );
         $statusCode = ($result['success'] ?? false) ? 200 : 422;
         $dispatchStatus = (string) ($result['status'] ?? (($result['success'] ?? false) ? 'dispatched' : 'blocked'));
+        $saveMode = (string) ($result['save_mode'] ?? ($result['data']['save_mode'] ?? ''));
+        $workspaceOnly = (bool) ($result['workspace_only'] ?? false)
+            || $dispatchStatus === 'workspace_saved'
+            || $saveMode === 'project_local_save';
 
         if ($dispatchStatus === 'blocked') {
-            $result['data'] = null;
-            $result['notification'] = [
+            $result['queued'] = false;
+            $result['close_editor'] = false;
+            $result['data'] = $result['data'] ?? null;
+            $result['notification'] = $result['notification'] ?? [
                 'title' => __('seo-content-ai::filament.automation.wp_sync_blocked_title'),
                 'body' => (string) ($result['message'] ?? __('seo-content-ai::filament.automation.wp_sync_blocked_body')),
                 'status' => 'danger',
             ];
+        } elseif ($workspaceOnly) {
+            // Content Project local save — never pretend it entered the legacy WP sync queue.
+            $result['queued'] = false;
+            $result['already_queued'] = false;
+            $result['workspace_only'] = true;
+            $result['save_mode'] = $saveMode !== '' ? $saveMode : 'project_local_save';
+            $data = is_array($result['data'] ?? null) ? $result['data'] : [];
+            $proven = (bool) ($result['success'] ?? false)
+                && (int) ($data['article_id'] ?? 0) > 0
+                && trim((string) ($data['content_hash'] ?? '')) !== ''
+                && trim((string) ($data['saved_at'] ?? '')) !== '';
+            $result['close_editor'] = $proven;
+            $result['reload'] = false;
+            if (! $proven) {
+                $result['success'] = false;
+                $result['status'] = 'blocked';
+                $statusCode = 422;
+                $result['notification'] = [
+                    'title' => __('seo-content-ai::filament.automation.content_project_workspace_save_failed_title'),
+                    'body' => (string) ($result['message'] ?? 'Workspace save was not confirmed.'),
+                    'status' => 'danger',
+                ];
+            } elseif (! isset($result['notification']) || ! is_array($result['notification'])) {
+                $result['notification'] = [
+                    'title' => __('seo-content-ai::filament.automation.content_project_workspace_saved_title'),
+                    'body' => (string) ($result['message'] ?? __('seo-content-ai::filament.automation.content_project_workspace_saved')),
+                    'status' => 'success',
+                ];
+            }
         } elseif ($dispatchStatus === 'deduplicated') {
             $result['queued'] = true;
             $result['reload'] = false;

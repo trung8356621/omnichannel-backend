@@ -18,6 +18,7 @@ use App\Addons\SeoContentAi\Services\ArticleEditorPersistService;
 use App\Addons\SeoContentAi\Services\ArticleLastSavedTimestampService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -116,24 +117,12 @@ final class UpdateArticleContentAction implements BusinessAction
 
         try {
             $result = ActionSupport::withArticleLock($articleId, function () use ($article, $saveContext, $content, $input, $forceOverwrite) {
-                return DB::connection('omi_seo_ai')->transaction(function () use ($article, $saveContext, $content, $input, $forceOverwrite) {
-                    $fresh = $article->fresh();
-                    if ($fresh === null) {
-                        throw new \RuntimeException('Article disappeared during lock.');
-                    }
-                    if (! $forceOverwrite) {
-                        if ($conflict = $this->conflictGuard->assertCompatible($fresh, $input)) {
-                            throw new ArticleContentConflictException($conflict);
-                        }
-                    }
-
-                    return $this->persistService->persistLocal($fresh, $saveContext, $content, deferSeoAnalysis: true);
-                });
+                return $this->persistUnderShortRowLock($article, $saveContext, $content, $input, $forceOverwrite);
             });
         } catch (ArticleContentConflictException $exception) {
             return $exception->result;
         } catch (\Throwable $exception) {
-            return ActionResult::failure('persist_failed', $exception->getMessage());
+            return ActionResult::failure('persist_failed', $this->friendlyPersistError($exception));
         }
 
         if (! ($result['success'] ?? false)) {
@@ -164,6 +153,90 @@ final class UpdateArticleContentAction implements BusinessAction
             ],
             changed: ['content', 'title'],
         );
+    }
+
+    /**
+     * Short TX around article row only; side-effects (images/revision/links) run after commit.
+     * Retries InnoDB lock-wait so concurrent Save/Sync không fail cứng sau 50s.
+     *
+     * @param  array<string, mixed>  $input
+     * @return array{success: bool, message: string, html?: string}
+     */
+    private function persistUnderShortRowLock(
+        SeoArticle $article,
+        ArticleEditorSaveContext $saveContext,
+        string $content,
+        array $input,
+        bool $forceOverwrite,
+    ): array {
+        $maxAttempts = 3;
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            try {
+                $written = DB::connection('omi_seo_ai')->transaction(function () use ($article, $saveContext, $content, $input, $forceOverwrite): array {
+                    $fresh = $article->fresh();
+                    if ($fresh === null) {
+                        throw new \RuntimeException('Article disappeared during lock.');
+                    }
+                    if (! $forceOverwrite) {
+                        if ($conflict = $this->conflictGuard->assertCompatible($fresh, $input)) {
+                            throw new ArticleContentConflictException($conflict);
+                        }
+                    }
+
+                    $html = $this->persistService->writeArticleRow($fresh, $saveContext, $content);
+
+                    return [
+                        'article' => $fresh->fresh() ?? $fresh,
+                        'html' => $html,
+                    ];
+                });
+
+                /** @var SeoArticle $persistedArticle */
+                $persistedArticle = $written['article'];
+                $html = (string) $written['html'];
+
+                $this->persistService->runAfterPersistSideEffects($persistedArticle, $saveContext, $html);
+
+                return $this->persistService->buildPersistResult(
+                    $persistedArticle->fresh() ?? $persistedArticle,
+                    $html,
+                );
+            } catch (ArticleContentConflictException $exception) {
+                throw $exception;
+            } catch (QueryException $exception) {
+                if ($attempt < $maxAttempts && $this->isLockWaitTimeout($exception)) {
+                    usleep(150_000 * $attempt);
+
+                    continue;
+                }
+
+                throw $exception;
+            }
+        }
+
+        throw new \RuntimeException('Could not persist article after lock-wait retries.');
+    }
+
+    private function isLockWaitTimeout(QueryException $exception): bool
+    {
+        $sqlState = (string) ($exception->errorInfo[0] ?? '');
+        $driverCode = (int) ($exception->errorInfo[1] ?? 0);
+        $message = $exception->getMessage();
+
+        return $driverCode === 1205
+            || ($sqlState === 'HY000' && str_contains($message, 'Lock wait timeout'))
+            || str_contains($message, 'SQLSTATE[40001]')
+            || str_contains($message, 'Deadlock found');
+    }
+
+    private function friendlyPersistError(\Throwable $exception): string
+    {
+        if ($exception instanceof QueryException && $this->isLockWaitTimeout($exception)) {
+            return 'Bài đang bị khóa bởi thao tác khác (lưu/sync/queue). Đợi vài giây rồi thử lại.';
+        }
+
+        return $exception->getMessage();
     }
 
     /**

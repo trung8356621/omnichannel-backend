@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers;
 
+use App\Addons\SeoContentAi\Models\SeoProjectRun;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionCodes;
@@ -15,7 +17,10 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Events\ContentPr
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectBusinessLock;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPreviewToken;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectGenerationRecoveryService;
+use App\Addons\SeoContentAi\Services\RunEngine\ContentProjectRunEngine;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
+use App\Support\RuntimeLogger;
 use InvalidArgumentException;
 
 final class RerunProjectItemsHandler extends AbstractPublishingHandler
@@ -26,6 +31,8 @@ final class RerunProjectItemsHandler extends AbstractPublishingHandler
         ContentProjectPreviewToken $previewToken,
         private readonly SeoProjectWorkflowRunService $workflowRunService,
         private readonly ContentProjectDomainEvents $domainEvents,
+        private readonly ContentProjectGenerationRecoveryService $generationRecovery,
+        private readonly ContentProjectRunEngine $runEngine,
     ) {
         parent::__construct($tenantGuard, $businessLock, $previewToken);
     }
@@ -62,12 +69,29 @@ final class RerunProjectItemsHandler extends AbstractPublishingHandler
                 );
             }
 
-            $settings = ['task_ids' => $itemIds, 'rerun' => true];
+            foreach ($itemIds as $itemId) {
+                $task = SeoProjectTask::query()->find((int) $itemId);
+                if ($task instanceof SeoProjectTask) {
+                    $this->generationRecovery->recoverTaskIfStale($task);
+                }
+            }
 
-            return $this->businessLock->withLock(
+            $settings = [
+                'task_ids' => $itemIds,
+                'rerun' => true,
+                'use_php_engine' => true,
+            ];
+
+            $run = $this->businessLock->withLock(
                 $this->businessLock->projectGenerate($projectId),
-                function () use ($project, $projectId, $command, $itemIds, $settings): ContentProjectActionResult {
+                function () use ($project, $projectId, $command, $itemIds, $settings): SeoProjectRun {
                     $run = $this->workflowRunService->startRun($project, $command->mode, $settings);
+                    $limit = $command->mode === SeoProjectRun::MODE_TEST
+                        ? SeoProjectWorkflowRunService::TEST_RUN_LIMIT
+                        : null;
+                    // Critical: startRun alone creates an empty run — queue + engine kick required.
+                    $run = $this->workflowRunService->prepareRunQueue($project, $run, $limit);
+
                     $executionRef = ContentProjectPublicRef::execution((int) $run->getKey());
                     $this->domainEvents->dispatchAfterCommit(new ContentProjectGenerationRequested(
                         $projectId,
@@ -75,17 +99,49 @@ final class RerunProjectItemsHandler extends AbstractPublishingHandler
                         $itemIds,
                     ));
 
-                    return ContentProjectActionResult::ok(
-                        ContentProjectActionCodes::ITEMS_GENERATE_REQUESTED,
-                        'Rerun started.',
-                        $projectId,
-                        $itemIds,
-                        metadata: [
-                            'execution_ref' => $executionRef,
-                            'rerun' => true,
-                        ],
-                    );
+                    return $run;
                 },
+            );
+
+            try {
+                $this->runEngine->start($run);
+            } catch (\Throwable $e) {
+                RuntimeLogger::report($e, [
+                    'endpoint' => 'content_project.rerun_engine_start',
+                    'project_id' => $projectId,
+                    'run_id' => (int) $run->getKey(),
+                    'task_ids' => $itemIds,
+                ]);
+
+                return ContentProjectActionResult::fail(
+                    ContentProjectActionCodes::FAILED,
+                    'Rerun queue prepared but engine start failed: '.$e->getMessage(),
+                    $projectId,
+                    affectedItemIds: $itemIds,
+                    metadata: [
+                        'execution_ref' => ContentProjectPublicRef::execution((int) $run->getKey()),
+                        'rerun' => true,
+                    ],
+                );
+            }
+
+            RuntimeLogger::info('content_project.rerun_started', [
+                'project_id' => $projectId,
+                'run_id' => (int) $run->getKey(),
+                'task_ids' => $itemIds,
+            ]);
+
+            return ContentProjectActionResult::ok(
+                ContentProjectActionCodes::ITEMS_GENERATE_REQUESTED,
+                'Rerun started.',
+                $projectId,
+                $itemIds,
+                metadata: [
+                    'execution_ref' => ContentProjectPublicRef::execution((int) $run->getKey()),
+                    'rerun' => true,
+                    'task_ids' => $itemIds,
+                    'engine_started' => true,
+                ],
             );
         });
     }

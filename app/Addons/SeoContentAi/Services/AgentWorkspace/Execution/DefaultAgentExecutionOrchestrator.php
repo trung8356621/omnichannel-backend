@@ -15,6 +15,7 @@ use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentSkillInputResolver;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentSkillRegistry;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\Dtos\AgentSkillDefinition;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\Dtos\AgentWorkspaceContext;
+use App\Addons\SeoContentAi\Services\AgentWorkspace\Cli\AgentCliCapabilityGate;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\Execution\Dtos\AgentExecutionCancellation;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\Execution\Dtos\AgentExecutionConfirmation;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\Execution\Dtos\AgentExecutionPreview;
@@ -46,6 +47,7 @@ final class DefaultAgentExecutionOrchestrator implements AgentExecutionOrchestra
         private readonly AgentExecutionIdempotencyFactory $idempotency,
         private readonly AgentExecutionContextUpdater $contextUpdater,
         private readonly AgentResultRendererRegistry $renderers,
+        private readonly AgentCliCapabilityGate $capabilityGate,
     ) {}
 
     public function preview(AgentExecutionRequest $request): AgentExecutionPreview
@@ -63,7 +65,12 @@ final class DefaultAgentExecutionOrchestrator implements AgentExecutionOrchestra
             ? $this->inputResolver->resolve($skill, $request->context, $request->formInput)
             : $prefilled;
 
-        $requiresConfirmation = in_array($skill->confirmationPolicy, ['preview', 'confirm'], true);
+        $confirmation = $this->capabilityGate->confirmationForCapability(
+            $skill->capability,
+            $skill->confirmationPolicy,
+        );
+        $requiresConfirmation = $confirmation['requires'];
+        $confirmationPolicy = $confirmation['policy'];
         $warnings = [];
         $effects = [];
         $previewLevel = 'orchestration';
@@ -82,7 +89,7 @@ final class DefaultAgentExecutionOrchestrator implements AgentExecutionOrchestra
                 mode: $request->mode,
                 executable: false,
                 requiresConfirmation: $requiresConfirmation,
-                confirmationPolicy: $skill->confirmationPolicy,
+                confirmationPolicy: $confirmationPolicy,
                 normalizedInput: $this->redactInput($normalized),
                 missingFields: $missing,
                 warnings: $warnings,
@@ -107,7 +114,7 @@ final class DefaultAgentExecutionOrchestrator implements AgentExecutionOrchestra
                 mode: $request->mode,
                 executable: false,
                 requiresConfirmation: $requiresConfirmation,
-                confirmationPolicy: $skill->confirmationPolicy,
+                confirmationPolicy: $confirmationPolicy,
                 normalizedInput: $this->redactInput($normalized),
                 missingFields: $missing,
                 warnings: $warnings,
@@ -164,7 +171,7 @@ final class DefaultAgentExecutionOrchestrator implements AgentExecutionOrchestra
                 'gateway_state' => $gatewayState,
             ]);
             $confirmationToken = $issued['token'];
-            $execution->confirmation_policy = $skill->confirmationPolicy;
+            $execution->confirmation_policy = $confirmationPolicy;
             $execution->confirmation_token_hash = $issued['hash'];
             $execution->confirmation_expires_at = $issued['expires_at'];
             $nextStatus = AgentExecutionStatus::AwaitingConfirmation;
@@ -179,7 +186,7 @@ final class DefaultAgentExecutionOrchestrator implements AgentExecutionOrchestra
             'gateway' => $gatewayResult?->toArray(),
             'gateway_state' => $gatewayState,
         ];
-        $execution->confirmation_policy = $skill->confirmationPolicy;
+        $execution->confirmation_policy = $confirmationPolicy;
         $this->transition($execution, AgentExecutionStatus::Validating, $executable ? $nextStatus : AgentExecutionStatus::Failed);
         if (! $executable) {
             $execution->error_code = 'preview_not_executable';
@@ -191,7 +198,16 @@ final class DefaultAgentExecutionOrchestrator implements AgentExecutionOrchestra
             $execution->save();
         }
 
-        $this->appendAssistantCard($request, $execution, $skill, $confirmationToken, kind: $requiresConfirmation ? 'confirmation' : 'preview');
+        // Read / confirmation_policy=none: không append Preview card — execute path trả một result card.
+        if ($requiresConfirmation || ! $executable) {
+            $this->appendAssistantCard(
+                $request,
+                $execution,
+                $skill,
+                $confirmationToken,
+                kind: $requiresConfirmation ? 'confirmation' : 'preview',
+            );
+        }
 
         return new AgentExecutionPreview(
             executionRef: (string) $execution->public_ref,
@@ -200,7 +216,7 @@ final class DefaultAgentExecutionOrchestrator implements AgentExecutionOrchestra
             mode: $request->mode,
             executable: $executable,
             requiresConfirmation: $requiresConfirmation,
-            confirmationPolicy: $skill->confirmationPolicy,
+            confirmationPolicy: $confirmationPolicy,
             normalizedInput: $this->redactInput($normalized),
             missingFields: $missing,
             warnings: $warnings,
@@ -233,8 +249,11 @@ final class DefaultAgentExecutionOrchestrator implements AgentExecutionOrchestra
             return $this->metaResult($request, $skill);
         }
 
-        $policy = $skill->confirmationPolicy;
-        if (in_array($policy, ['preview', 'confirm'], true)) {
+        $confirmation = $this->capabilityGate->confirmationForCapability(
+            $skill->capability,
+            $skill->confirmationPolicy,
+        );
+        if ($confirmation['requires']) {
             $preview = $this->preview($request);
             if ($preview->requiresConfirmation) {
                 return new AgentExecutionResult(
@@ -430,7 +449,11 @@ final class DefaultAgentExecutionOrchestrator implements AgentExecutionOrchestra
         );
 
         $skill = $this->requireSkill($request->skillKey);
-        if (in_array($skill->confirmationPolicy, ['preview', 'confirm'], true)) {
+        $confirmation = $this->capabilityGate->confirmationForCapability(
+            $skill->capability,
+            $skill->confirmationPolicy,
+        );
+        if ($confirmation['requires']) {
             $preview = $this->preview($request);
             return new AgentExecutionResult(
                 executionRef: $preview->executionRef,
@@ -599,17 +622,31 @@ final class DefaultAgentExecutionOrchestrator implements AgentExecutionOrchestra
             $this->contextUpdater->apply($conversation, $result);
         }
 
+        $hideEnvelope = (bool) ($rendered['hide_envelope'] ?? false);
+        // One display surface: when hide_envelope card owns body, keep message content empty.
+        $userContent = '';
+        if (! $hideEnvelope) {
+            $userContent = $result->message;
+        }
+
         $message = $this->conversations->appendMessage(
             $conversation,
             role: 'assistant',
             messageType: $result->ok ? 'execution_result' : 'execution_error',
-            content: $result->message,
+            content: $userContent,
             structured: [
-                'execution' => $result->toArray(),
+                'execution' => $hideEnvelope
+                    ? [
+                        'ok' => $result->ok,
+                        'status' => $result->status->value,
+                        'skill_key' => $result->skillKey,
+                        'capability_key' => $result->capabilityKey,
+                    ]
+                    : $result->toArray(),
                 'rendered' => $rendered,
             ],
             skillKey: $skill->key,
-            operationRef: $operationRef,
+            operationRef: $hideEnvelope ? null : $operationRef,
             createdBy: $context->actorUserId,
         );
         $execution->message_id = $message->id;
@@ -721,7 +758,7 @@ final class DefaultAgentExecutionOrchestrator implements AgentExecutionOrchestra
         return [
             'action' => $skill->name,
             'slash_command' => $skill->slashCommand,
-            'site' => $context->siteName ?? $context->siteRef,
+            'site' => $context->siteName,
             'project_ref' => $normalized['project_ref'] ?? $context->projectRef,
             'workspace_ref' => $normalized['workspace_ref'] ?? $context->workspaceRef,
             'affected_item_count' => $itemCount,
@@ -932,7 +969,7 @@ final class DefaultAgentExecutionOrchestrator implements AgentExecutionOrchestra
             dryRun: $dryRun,
             resolvedSiteId: $context->siteId,
             resolvedActorUserId: $context->actorUserId,
-            scopes: [],
+            scopes: $context->scopes,
         );
     }
 

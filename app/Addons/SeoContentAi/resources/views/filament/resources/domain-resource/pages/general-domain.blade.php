@@ -1,4 +1,4 @@
-@php
+﻿@php
     use App\Addons\SeoContentAi\Filament\Resources\DomainResource;
 
     $site = $this->getSite();
@@ -49,7 +49,7 @@
     $overviewCss = base_path('app/Addons/SeoContentAi/resources/css/domain-overview.css');
 @endphp
 
-{{-- Livewire 3 yêu cầu MỘT phần tử gốc — bọc toàn bộ view trong div này. --}}
+{{-- Livewire 3 yÃªu cáº§u Má»˜T pháº§n tá»­ gá»‘c â€” bá»c toÃ n bá»™ view trong div nÃ y. --}}
 <div @if($incrementalSyncRunning || $metadataSyncRunning || $keywordResyncRunning || ($siteSyncV2Running ?? false)) wire:poll.5s="refreshSyncProgress" @endif>
     @if(is_readable($overviewCss))
         <style>{!! file_get_contents($overviewCss) !!}</style>
@@ -57,29 +57,11 @@
 
     <x-filament-panels::page>
     <div class="seo-domain-overview">
-        {{-- MCP Markdown — readonly collapsible from Capability Registry --}}
-        <x-filament::section>
-            @php
-                $mcpDoc = is_array($this->mcpCapabilityDoc ?? null) ? $this->mcpCapabilityDoc : [];
-                $mcpMarkdown = (string) ($mcpDoc['markdown'] ?? '');
-                $mcpCount = (int) ($mcpDoc['count'] ?? 0);
-            @endphp
-            <details class="group" open>
-                <summary class="cursor-pointer select-none list-none text-sm font-semibold text-gray-950 dark:text-white">
-                    MCP Markdown
-                    @if ($mcpCount > 0)
-                        <span class="ml-2 font-normal text-gray-500 dark:text-gray-400">({{ $mcpCount }})</span>
-                    @endif
-                </summary>
-                <pre class="mt-3 max-h-[28rem] overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs leading-relaxed text-gray-800 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-200">{{ $mcpMarkdown !== '' ? $mcpMarkdown : 'No MCP capabilities available.' }}</pre>
-            </details>
-        </x-filament::section>
-
         {{-- API Key --}}
         <x-filament::section>
             <x-slot name="heading">{{ __('API Key') }}</x-slot>
             <x-slot name="description">
-                {{ __('Read token & Migration token. Bấm icon mắt để hiển thị; focus ô input để tự copy.') }}
+                {{ __('Read token & Migration token. Báº¥m icon máº¯t Ä‘á»ƒ hiá»ƒn thá»‹; focus Ã´ input Ä‘á»ƒ tá»± copy.') }}
             </x-slot>
             <x-slot name="headerEnd">
                 <x-filament::button
@@ -89,12 +71,12 @@
                     color="gray"
                     icon="heroicon-o-pencil-square"
                 >
-                    {{ __('Chỉnh sửa') }}
+                    {{ __('Chá»‰nh sá»­a') }}
                 </x-filament::button>
             </x-slot>
 
             @if(($api['platform'] ?? '') !== 'wordpress')
-                <p class="text-sm text-gray-500">{{ __('Nền tảng không dùng token WordPress.') }}</p>
+                <p class="text-sm text-gray-500">{{ __('Ná»n táº£ng khÃ´ng dÃ¹ng token WordPress.') }}</p>
             @else
                 <div class="seo-api-key-layout">
                     <div class="seo-api-key-layout__tokens space-y-4">
@@ -122,11 +104,11 @@
                 @if($this->showPasswordPrompt)
                     <div class="mt-4 max-w-md rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900">
                         <p class="mb-3 text-sm text-gray-600 dark:text-gray-300">
-                            {{ __('Nhập mật khẩu tài khoản để hiển thị token.') }}
+                            {{ __('Nháº­p máº­t kháº©u tÃ i khoáº£n Ä‘á»ƒ hiá»ƒn thá»‹ token.') }}
                         </p>
                         <div class="flex flex-wrap items-end gap-3">
                             <div class="min-w-[12rem] flex-1">
-                                <label class="mb-1 block text-sm font-medium">{{ __('Mật khẩu') }}</label>
+                                <label class="mb-1 block text-sm font-medium">{{ __('Máº­t kháº©u') }}</label>
                                 <input
                                     type="password"
                                     wire:model="tokenPassword"
@@ -143,14 +125,14 @@
                                 wire:click="confirmRevealTokens"
                                 class="fi-btn fi-btn-size-sm inline-flex items-center justify-center gap-1 rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-500"
                             >
-                                {{ __('Xác nhận') }}
+                                {{ __('XÃ¡c nháº­n') }}
                             </button>
                             <button
                                 type="button"
                                 wire:click="cancelPasswordPrompt"
                                 class="fi-btn fi-btn-size-sm inline-flex items-center justify-center gap-1 rounded-lg bg-gray-100 px-3 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200"
                             >
-                                {{ __('Hủy') }}
+                                {{ __('Há»§y') }}
                             </button>
                         </div>
                     </div>
@@ -160,9 +142,9 @@
 
         @if(! $synced)
             <x-filament::section class="border-amber-200 dark:border-amber-500/40">
-                <x-slot name="heading">{{ __('Đồng bộ') }}</x-slot>
+                <x-slot name="heading">{{ __('Äá»“ng bá»™') }}</x-slot>
                 <x-slot name="description">
-                    {{ __('Website chưa có dữ liệu trong kho SEO. Chạy đồng bộ từ WordPress.') }}
+                    {{ __('Website chÆ°a cÃ³ dá»¯ liá»‡u trong kho SEO. Cháº¡y Ä‘á»“ng bá»™ tá»« WordPress.') }}
                 </x-slot>
                 @include('seo-content-ai::filament.resources.domain-resource.pages.partials.domain-sync-actions', [
                     'showTest' => auth()->user()?->role === 'admin'
@@ -171,16 +153,16 @@
             </x-filament::section>
         @else
             <div class="seo-domain-overview__grid seo-domain-overview__grid--2">
-                {{-- Chấm điểm SEO --}}
+                {{-- Cháº¥m Ä‘iá»ƒm SEO --}}
                 <x-filament::section>
-                    <x-slot name="heading">{{ __('Chấm điểm SEO') }}</x-slot>
+                    <x-slot name="heading">{{ __('Cháº¥m Ä‘iá»ƒm SEO') }}</x-slot>
                     <x-slot name="description">
-                        {{ __('Phân bố điểm sau đồng bộ (Rank Math / Yoast + rule nội bộ).') }}
+                        {{ __('PhÃ¢n bá»‘ Ä‘iá»ƒm sau Ä‘á»“ng bá»™ (Rank Math / Yoast + rule ná»™i bá»™).') }}
                     </x-slot>
 
                     @if($scoring['scored'] === 0)
                         <p class="text-sm text-amber-700 dark:text-amber-300">
-                            {{ __('Chưa có bài được chấm. Cần Focus Keyword trên WordPress.') }}
+                            {{ __('ChÆ°a cÃ³ bÃ i Ä‘Æ°á»£c cháº¥m. Cáº§n Focus Keyword trÃªn WordPress.') }}
                         </p>
                     @else
                         @include('seo-content-ai::filament.resources.domain-resource.pages.partials.seo-score-donut-block', [
@@ -191,30 +173,30 @@
                     @endif
                 </x-filament::section>
 
-                {{-- Thống kê đồng bộ + nút --}}
+                {{-- Thá»‘ng kÃª Ä‘á»“ng bá»™ + nÃºt --}}
                 <x-filament::section>
-                    <x-slot name="heading">{{ __('Thống kê đồng bộ') }}</x-slot>
-                    <x-slot name="description">{{ __('Số lượng theo type trên kho nội dung SEO.') }}</x-slot>
+                    <x-slot name="heading">{{ __('Thá»‘ng kÃª Ä‘á»“ng bá»™') }}</x-slot>
+                    <x-slot name="description">{{ __('Sá»‘ lÆ°á»£ng theo type trÃªn kho ná»™i dung SEO.') }}</x-slot>
 
                     <div class="grid gap-2 text-sm sm:grid-cols-2">
-                        <p><span class="font-semibold">{{ __('Bài viết') }}:</span> {{ $stats['articles'] }}</p>
+                        <p><span class="font-semibold">{{ __('BÃ i viáº¿t') }}:</span> {{ $stats['articles'] }}</p>
                         @if(($stats['wp_articles_total'] ?? 0) > 0)
                             <p class="text-xs text-gray-500 sm:col-span-2">
                                 {{ __('WP') }}: {{ $stats['wp_posts'] }} post + {{ $stats['wp_pages'] }} page
                                 @if(($stats['article_gap'] ?? 0) > 0)
                                     <span class="font-semibold text-warning-600 dark:text-warning-400">
-                                        — {{ __('thiếu') }} {{ $stats['article_gap'] }} {{ __('bài so với plugin') }}
+                                        â€” {{ __('thiáº¿u') }} {{ $stats['article_gap'] }} {{ __('bÃ i so vá»›i plugin') }}
                                     </span>
                                 @endif
                             </p>
                         @endif
-                        <p><span class="font-semibold">{{ __('Sản phẩm') }}:</span> {{ $stats['products'] }}</p>
-                        <p><span class="font-semibold">{{ __('Danh mục') }}:</span> {{ $stats['categories'] }}</p>
-                        <p><span class="font-semibold">{{ __('Danh mục SP') }}:</span> {{ $stats['product_categories'] }}</p>
+                        <p><span class="font-semibold">{{ __('Sáº£n pháº©m') }}:</span> {{ $stats['products'] }}</p>
+                        <p><span class="font-semibold">{{ __('Danh má»¥c') }}:</span> {{ $stats['categories'] }}</p>
+                        <p><span class="font-semibold">{{ __('Danh má»¥c SP') }}:</span> {{ $stats['product_categories'] }}</p>
                         @if($stats['other'] > 0)
-                            <p class="sm:col-span-2"><span class="font-semibold">{{ __('Khác') }}:</span> {{ $stats['other'] }}</p>
+                            <p class="sm:col-span-2"><span class="font-semibold">{{ __('KhÃ¡c') }}:</span> {{ $stats['other'] }}</p>
                         @endif
-                        <p class="sm:col-span-2 text-gray-500">{{ __('Tổng') }}: {{ $stats['total'] }} {{ __('bản ghi') }}</p>
+                        <p class="sm:col-span-2 text-gray-500">{{ __('Tá»•ng') }}: {{ $stats['total'] }} {{ __('báº£n ghi') }}</p>
                     </div>
 
                     @php $seoScoring = $this->getSeoScoringProgress(); @endphp
@@ -226,7 +208,7 @@
                             ]) }}
                         </p>
                         <p class="text-gray-600 dark:text-gray-300">
-                            {{ $siteSyncScoringContext ?: 'Chấm SEO gắn vào nút Đồng bộ & kiểm tra website.' }}
+                            {{ $siteSyncScoringContext ?: 'Cháº¥m SEO gáº¯n vÃ o nÃºt Äá»“ng bá»™ & kiá»ƒm tra website.' }}
                         </p>
                         @if (($seoScoring['failed'] ?? 0) > 0)
                             <p class="text-warning-600 dark:text-warning-400">
@@ -245,11 +227,11 @@
             {{-- Internal link --}}
             <x-filament::section>
                 <x-slot name="heading">{{ __('Internal link') }}</x-slot>
-                <x-slot name="description">{{ __('Từ khóa và URL được trích xuất từ nội dung bài viết đã chấm SEO.') }}</x-slot>
+                <x-slot name="description">{{ __('Tá»« khÃ³a vÃ  URL Ä‘Æ°á»£c trÃ­ch xuáº¥t tá»« ná»™i dung bÃ i viáº¿t Ä‘Ã£ cháº¥m SEO.') }}</x-slot>
 
                 <div class="seo-internal-tabs">
                     <a href="{{ $keywordsTabUrl }}" class="{{ $this->internalLinkTab === 'keywords' ? 'is-active' : '' }}">
-                        {{ __('Từ khóa') }}
+                        {{ __('Tá»« khÃ³a') }}
                     </a>
                     <a href="{{ $linksTabUrl }}" class="{{ $this->internalLinkTab === 'links' ? 'is-active' : '' }}">
                         {{ __('Link') }}
@@ -260,7 +242,7 @@
                     @if($this->internalLinkTab === 'keywords')
                         @php $topKeywords = $this->getTopKeywords(); @endphp
                         @if($topKeywords->isEmpty())
-                            <p class="text-sm text-gray-500 italic">{{ __('Chưa có từ khóa gắn bài viết.') }}</p>
+                            <p class="text-sm text-gray-500 italic">{{ __('ChÆ°a cÃ³ tá»« khÃ³a gáº¯n bÃ i viáº¿t.') }}</p>
                         @else
                             <ul class="seo-rank-list">
                                 @foreach($topKeywords as $row)
@@ -269,9 +251,9 @@
                                         <a
                                             href="{{ $this->getArticlesFilterUrlForKeyword((int) $row->id) }}"
                                             class="seo-rank-list__count text-primary-600 hover:underline dark:text-primary-400"
-                                            title="{{ __('Xem danh sách bài viết') }}"
+                                            title="{{ __('Xem danh sÃ¡ch bÃ i viáº¿t') }}"
                                         >
-                                            {{ $row->articles_count }} {{ __('bài') }}
+                                            {{ $row->articles_count }} {{ __('bÃ i') }}
                                         </a>
                                     </li>
                                 @endforeach
@@ -280,21 +262,21 @@
                     @else
                         @php $topLinks = $this->getTopLinks(); @endphp
                         @if($topLinks->isEmpty())
-                            <p class="text-sm text-gray-500 italic">{{ __('Chưa có link được trích xuất. Chạy chấm SEO sau đồng bộ.') }}</p>
+                            <p class="text-sm text-gray-500 italic">{{ __('ChÆ°a cÃ³ link Ä‘Æ°á»£c trÃ­ch xuáº¥t. Cháº¡y cháº¥m SEO sau Ä‘á»“ng bá»™.') }}</p>
                         @else
                             <ul class="seo-rank-list">
                                 @foreach($topLinks as $row)
                                     <li>
                                         <span class="seo-rank-list__label">
-                                            <span class="text-xs uppercase text-gray-400">{{ $row->type === 'internal' ? 'Nội bộ' : 'Ngoài' }}</span>
+                                            <span class="text-xs uppercase text-gray-400">{{ $row->type === 'internal' ? 'Ná»™i bá»™' : 'NgoÃ i' }}</span>
                                             {{ $row->url }}
                                         </span>
                                         <a
                                             href="{{ $this->getArticlesFilterUrlForLink($row->url, $row->type) }}"
                                             class="seo-rank-list__count text-primary-600 hover:underline dark:text-primary-400"
-                                            title="{{ __('Xem danh sách bài viết') }}"
+                                            title="{{ __('Xem danh sÃ¡ch bÃ i viáº¿t') }}"
                                         >
-                                            {{ $row->articles_count }} {{ __('bài') }}
+                                            {{ $row->articles_count }} {{ __('bÃ i') }}
                                         </a>
                                     </li>
                                 @endforeach
@@ -311,22 +293,21 @@
                         color="gray"
                         icon="heroicon-o-arrow-right"
                     >
-                        {{ __('Xem thêm') }}
+                        {{ __('Xem thÃªm') }}
                     </x-filament::button>
                 </div>
             </x-filament::section>
 
-            {{-- Technical SEO --}}
+            {{-- Official Site MCP summary — draft generator lives on Edit Domain --}}
             <x-filament::section>
-                <x-slot name="heading">{{ __('Technical SEO') }}</x-slot>
+                <x-slot name="heading">{{ __('Site MCP — Knowledge Profile') }}</x-slot>
                 <x-slot name="description">
-                    {{ __('Mô tả site và CTA dùng trong prompt') }}
+                    {{ __('Official Knowledge Profile (tone, mô tả, CTA, links). Generate draft + so sánh nằm ở trang Edit Domain.') }}
                     (@{{site_short_description}}, @{{site_cta}}).
-                    {{ __('Link list chỉ dùng để gợi ý chèn link trong bài, không đưa vào prompt.') }}
                 </x-slot>
 
                 @if(! $technical['has_content'])
-                    <p class="text-sm text-gray-500">{{ __('Chưa cấu hình thông tin Technical SEO.') }}</p>
+                    <p class="text-sm text-gray-500">{{ __('Chưa cấu hình official Site MCP.') }}</p>
                 @else
                     <div class="space-y-2 text-sm">
                         @if($technical['short_description_preview'] !== '')
@@ -340,9 +321,9 @@
                     </div>
                 @endif
 
-                <div class="mt-4">
+                <div class="mt-4 flex flex-wrap gap-2">
                     <x-filament::button tag="a" :href="$technicalUrl" size="sm" icon="heroicon-o-cog-6-tooth">
-                        {{ __('Chỉnh sửa Technical SEO') }}
+                        {{ __('Chỉnh sửa / Generate draft') }}
                     </x-filament::button>
                 </div>
             </x-filament::section>
@@ -367,7 +348,7 @@
                     tip.className = 'seo-token-copy-tip';
                     document.body.appendChild(tip);
                 }
-                tip.textContent = 'Đã copy token vào clipboard';
+                tip.textContent = 'ÄÃ£ copy token vÃ o clipboard';
                 tip.style.display = 'block';
                 clearTimeout(window.seoTokenCopyTipTimer);
                 window.seoTokenCopyTipTimer = setTimeout(function () {

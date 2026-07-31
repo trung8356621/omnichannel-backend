@@ -86,14 +86,11 @@ final class ArticleEditorBundleApplyService
 
         if ($this->isTaxonomyEntity($article, $context->postType)) {
             $parentId = $ids[0] ?? 0;
-            if ($parentId <= 0) {
-                $article->articleMetas()->where('meta_key', 'wp_parent_id')->delete();
-            } else {
-                $article->articleMetas()->updateOrCreate(
-                    ['meta_key' => 'wp_parent_id'],
-                    ['meta_value' => (string) $parentId],
-                );
-            }
+            // Root terms (parent 0) must keep explicit meta "0".
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_parent_id'],
+                ['meta_value' => (string) max(0, $parentId)],
+            );
 
             return;
         }

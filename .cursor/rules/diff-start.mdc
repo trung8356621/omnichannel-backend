@@ -1,13 +1,25 @@
 ---
-description: Per-agent deployment session with mandatory final file tracking
+description: Automatic deployment session
 alwaysApply: true
 ---
 
-For every coding task that may modify project files, generate one short unique deployment ID.
+If this task modifies project files:
 
-Use only lowercase letters, numbers, hyphens, and underscores.
-
-Before modifying the first project file, run exactly:
+1. Before the first modification, run:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".secure\deploy-diff.ps1" -Mode start -Id "<DEPLOY_ID>"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".secure\deploy-diff.ps1" -Mode start -Id "<short-task-id>"
+```
+
+2. After coding finishes, run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".secure\deploy-diff.ps1" -Mode track -Current <every modified/deleted file>
+```
+
+Never run deploy automatically.
+
+Append exactly:
+
+🔔 Nhớ chạy:
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".secure\deploy-diff.ps1" -Mode deploy

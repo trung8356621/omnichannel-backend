@@ -26,8 +26,13 @@ class CreateDomain extends SeoCreateRecord
             ...$this->defaultSeoMetaForCreateForm([]),
             'promptContext' => $this->preparePromptContextForForm([
                 'tone' => '',
+                'company_short_identity' => '',
                 'short_description' => '',
                 'cta_intro' => app(SeoDomainCtaGlobalSettingsService::class)->getDefaultCtaIntro(),
+                'phones' => [],
+                'emails' => [],
+                'socials' => [],
+                'address' => '',
                 'cta' => [],
                 'links' => [],
             ]),

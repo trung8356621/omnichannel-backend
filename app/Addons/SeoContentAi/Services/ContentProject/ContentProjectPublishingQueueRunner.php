@@ -121,11 +121,14 @@ final class ContentProjectPublishingQueueRunner
             ->limit(50);
 
         if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_queue_status')) {
-            $query->whereIn('publish_queue_status', [
-                ContentProjectPublishQueueStatus::Waiting->value,
-                ContentProjectPublishQueueStatus::Retrying->value,
-                ContentProjectPublishQueueStatus::None->value,
-            ]);
+            // Legacy rows may still have NULL queue status with a past scheduled_publish_at.
+            $query->where(static function ($q): void {
+                $q->whereIn('publish_queue_status', [
+                    ContentProjectPublishQueueStatus::Waiting->value,
+                    ContentProjectPublishQueueStatus::Retrying->value,
+                    ContentProjectPublishQueueStatus::None->value,
+                ])->orWhereNull('publish_queue_status');
+            });
         }
 
         return $query->get();

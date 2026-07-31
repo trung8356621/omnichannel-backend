@@ -241,6 +241,20 @@
                             @endforeach
                         </x-select>
                     </div>
+                    <div>
+                        <label class="text-sm font-medium text-gray-700 dark:text-gray-200">
+                            {{ __('seo-content-ai::filament.articles_optimal.post_type_label') }}
+                        </label>
+                        <x-select
+                            wire:model.live="filterPostType"
+                            class="mt-1 block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-white/10 dark:bg-gray-900"
+                        >
+                            <option value="">{{ __('seo-content-ai::filament.articles_optimal.post_type_all') }}</option>
+                            @foreach ($this->getPostTypeOptions() as $postType => $postTypeLabel)
+                                <option value="{{ $postType }}">{{ $postTypeLabel }}</option>
+                            @endforeach
+                        </x-select>
+                    </div>
                 </div>
 
                 <div>

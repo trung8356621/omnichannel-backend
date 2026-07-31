@@ -27,16 +27,21 @@
         'reviewEndpoint' => $reviewActionEndpoint,
         'reviewGenericError' => __('seo-content-ai::filament.article_review.errors.invalid_transition'),
     ];
-    $saveLabel = __('seo-content-ai::filament.article_list.page_action_save_label');
-    $syncLabel = __('seo-content-ai::filament.article_list.page_action_sync_label');
-    $previewLabel = __('seo-content-ai::filament.article_list.page_action_preview_label');
-    $historyUrl = route('seo.articles.revisions.compare', ['article' => $record->getKey()]);
-    $promptsUrl = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('prompts', ['record' => $record]);
     $inContentProject = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsInContentProject($record);
     $isContentArchived = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsContentArchived($record);
     $contentProjectUrl = $inContentProject
         ? \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleContentProjectUrl($record)
         : null;
+    $saveLabel = __('seo-content-ai::filament.article_list.page_action_save_label');
+    $syncLabel = $inContentProject
+        ? __('seo-content-ai::filament.article_list.page_action_save_close_label')
+        : __('seo-content-ai::filament.article_list.page_action_sync_label');
+    $syncTitle = $inContentProject
+        ? __('seo-content-ai::filament.article_list.page_action_save_close_help')
+        : __('seo-content-ai::filament.article_list.sync_to_wordpress');
+    $previewLabel = __('seo-content-ai::filament.article_list.page_action_preview_label');
+    $historyUrl = route('seo.articles.revisions.compare', ['article' => $record->getKey()]);
+    $promptsUrl = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('prompts', ['record' => $record]);
 @endphp
 
 @once
@@ -248,9 +253,10 @@
             <button
                 type="button"
                 class="seo-editor-toolbar-btn seo-editor-toolbar-btn--accent seo-editor-toolbar-btn--labeled"
-                title="{{ __('seo-content-ai::filament.article_list.sync_to_wordpress') }}"
-                aria-label="{{ __('seo-content-ai::filament.article_list.sync_to_wordpress') }}"
+                title="{{ $syncTitle }}"
+                aria-label="{{ $syncTitle }}"
                 data-seo-page-action="sync"
+                data-seo-sync-mode="{{ $inContentProject ? 'project_local_save' : 'wordpress_sync' }}"
                 x-on:click="window.dispatchEvent(new CustomEvent('article-editor-shortcut', { detail: { action: 'sync' } }))"
             >
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">

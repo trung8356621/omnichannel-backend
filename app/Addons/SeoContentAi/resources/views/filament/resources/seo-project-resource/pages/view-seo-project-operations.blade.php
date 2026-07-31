@@ -7,7 +7,7 @@
     $project = $this->project;
     $totalItems = (int) ($stats['total_items'] ?? 0);
     $activeCard = $this->activeSummaryCard;
-    $selectedCount = count($this->selectedTaskIds);
+    $selectedCount = $this->selectedCount;
     $hasActiveFilters = $this->hasActiveFilters;
 @endphp
 
@@ -139,8 +139,8 @@
                                 <input
                                     type="checkbox"
                                     class="mt-1 rounded"
-                                    @checked(in_array($tid, $this->selectedTaskIds, true))
-                                    wire:click="toggleSelect({{ $tid }})"
+                                    value="{{ $tid }}"
+                                    wire:model.live="selectedTaskIds"
                                     aria-label="Select item {{ $tid }}"
                                 />
                                 <div class="cp-ops-mobile-card__body">
@@ -189,8 +189,8 @@
                                             <input
                                                 type="checkbox"
                                                 class="rounded"
-                                                @checked(in_array($tid, $this->selectedTaskIds, true))
-                                                wire:click="toggleSelect({{ $tid }})"
+                                                value="{{ $tid }}"
+                                                wire:model.live="selectedTaskIds"
                                                 aria-label="Select item {{ $tid }}"
                                             />
                                         </td>
@@ -512,7 +512,9 @@
 
             .cp-ops-table-wrap {
                 display: none;
-                overflow: hidden;
+                overflow-x: auto;
+                overflow-y: visible;
+                max-height: none;
                 border: 1px solid rgb(229 231 235);
                 border-radius: 0.75rem;
                 background: #fff;
@@ -526,8 +528,9 @@
                 .cp-ops-table-wrap { display: block; }
             }
             .cp-ops-table-scroll {
-                max-height: 70vh;
-                overflow: auto;
+                max-height: none;
+                overflow-x: auto;
+                overflow-y: visible;
             }
             .cp-ops-table {
                 width: 100%;
@@ -536,8 +539,6 @@
                 font-size: 0.875rem;
             }
             .cp-ops-table thead {
-                position: sticky;
-                top: 0;
                 z-index: 10;
                 background: rgb(249 250 251);
             }

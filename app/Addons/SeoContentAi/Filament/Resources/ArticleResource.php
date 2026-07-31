@@ -44,6 +44,7 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection as SupportCollection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -558,6 +559,8 @@ class ArticleResource extends SeoPanelResource
                 'lg' => 5,
             ])
             ->persistFiltersInSession()
+            ->defaultPaginationPageOption(30)
+            ->paginationPageOptions([10, 30, 50, 100])
             ->actionsAlignment('start')
             ->actions(static::getArticleTableRowActionsMerged())
             ->bulkActions(static::seoPanelBulkActions([
@@ -1220,12 +1223,28 @@ class ArticleResource extends SeoPanelResource
         // Trang edit/view cần ĐẦY ĐỦ articleMetas (seo_meta_description, wp_product_gallery...).
         // Không dùng whitelist articleEagerLoads() ở đây — whitelist đó chỉ dành cho trang list,
         // vì relation đã loaded sẽ khiến mọi loadMissing('articleMetas') sau đó bị bỏ qua.
+        // Global domain = UI list filter only — không chặn mở/sửa bài thuộc domain khác.
         return static::applyArticleAccessScopes(
             parent::getEloquentQuery()->with(['user', 'site', 'articleMetas']),
             includeGlobalSiteScope: false,
             includeReviewScope: false,
             includeContentManagerOwnershipScope: false,
         );
+    }
+
+    /**
+     * Filament core resolveRecordRouteBinding() luôn gọi getEloquentQuery() (có global site scope).
+     * Override để dùng query không lọc global domain — tránh 404 khi sửa bài khác domain đang chọn.
+     */
+    public static function resolveRecordRouteBinding(int|string $key): ?Model
+    {
+        return app(static::getModel())
+            ->resolveRouteBindingQuery(
+                static::getRecordRouteBindingEloquentQuery(),
+                $key,
+                static::getRecordRouteKeyName(),
+            )
+            ->first();
     }
 
     /**

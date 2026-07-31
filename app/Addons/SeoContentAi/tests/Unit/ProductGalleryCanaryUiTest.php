@@ -51,10 +51,17 @@ final class ProductGalleryCanaryUiTest extends TestCase
         );
         $this->assertStringContainsString('canaryProduct={isCanaryProduct}', $editor);
 
+        $bootstrap = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/article-editor.jsx',
+        );
+        $this->assertStringContainsString('isCanaryProduct,', $bootstrap);
+        $this->assertStringContainsString('isCanaryProduct={isCanaryProduct}', $bootstrap);
+
         $editArticle = (string) file_get_contents(
             dirname(__DIR__, 2).'/Filament/Resources/ArticleResource/Pages/EditArticle.php',
         );
         $this->assertStringContainsString('is_canary_product', $editArticle);
+        $this->assertStringContainsString("'isCanaryProduct'", $editArticle);
     }
 
     public function test_canary_page_blade_has_test_sequence_and_history(): void

@@ -56,13 +56,13 @@ Mobile: drawers Alpine (`conversationsOpen`, `contextOpen`) — không chờ Liv
 
 | Thành phần | File | Vai trò |
 |------------|------|---------|
-| Page | `Filament/Pages/AgentWorkspacePage.php` | Livewire orchestration, composer, palette, skill form |
-| View | `resources/views/filament/pages/agent-workspace.blade.php` | Layout 3 cột + diagnostics panel |
-| Conversations | `partials/agent-conversation-list.blade.php` | Danh sách / chọn / pin / archive |
-| Messages | `partials/agent-message.blade.php` | text, preview, tool_result, error |
-| Skill form | `partials/agent-skill-form.blade.php` | Dynamic form từ `form_schema` |
-| Context | `partials/agent-context-panel.blade.php` | site, refs, recommended skills |
-| Slash palette | Inline trong page view | Filter `paletteSkills` khi gõ `/` |
+| Page | `Filament/Pages/AgentWorkspacePage.php` | Livewire orchestration, composer, CLI draft flow |
+| View | `resources/views/filament/pages/agent-workspace.blade.php` | Full-height chat + Alpine palette |
+| Messages | `components/seo-agent-chat/message.blade.php` + `partials/agent-message-structured.blade.php` | User bubble **không** include structured (tránh Livewire morph newlines + `pre-wrap` làm bubble méo). `AgentMessageOutputSanitizer` strip marker `<!--[if BLOCK/ENDBLOCK]>` lúc persist + lazy refresh |
+| CLI catalog FE | `resources/js/agent/command-catalog.js` | `window.AgentCommandCatalog` — filter `/` zero-network; group Core/Site/Project/… |
+| CLI catalog BE | `Services/AgentWorkspace/Cli/AgentCliCommandCatalog.php` + `AgentCliCapabilityGate.php` | Curated CLI → skill/`capability_key`; không dump full registry |
+| Slash palette | Alpine `paletteOpen` / `filteredCommands` | Compact monospace; không `paletteSkills` Livewire round-trip |
+| Site health | `ContentProjectSiteHealthService` + `SiteInfoPresenter` | Evidence sync/handshake/capabilities — không hardcode `unknown` |
 
 ## Execution flow
 

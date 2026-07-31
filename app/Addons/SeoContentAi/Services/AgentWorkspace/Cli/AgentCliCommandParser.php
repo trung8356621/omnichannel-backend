@@ -71,6 +71,32 @@ final class AgentCliCommandParser
             $inputs['project_ref'] = $this->resolveProjectRef($inputs['project_ref']);
         }
 
+        // Member stable ID — never use display name as canonical value.
+        if (isset($inputs['assignee_ref']) && is_string($inputs['assignee_ref'])) {
+            $member = $this->normalizeMemberRef($inputs['assignee_ref']);
+            if (! ($member['ok'] ?? false)) {
+                return $member;
+            }
+            $inputs['assignee_ref'] = $member['value'];
+        }
+
+        // /site-health --refresh → canonical refresh capability (not inline HTTP).
+        if (($definition['command'] ?? '') === '/site-health' && $this->truthy($inputs['refresh'] ?? null)) {
+            return [
+                'ok' => true,
+                'command' => '/site-refresh-snapshot',
+                'skill_key' => 'site.refresh_snapshot',
+                'inputs' => [],
+                'is_meta' => false,
+            ];
+        }
+
+        // /site-sync --force → force_snapshot boolean for site.sync.
+        if (($definition['command'] ?? '') === '/site-sync' && $this->truthy($inputs['force_snapshot'] ?? null)) {
+            $inputs['force_snapshot'] = true;
+            $inputs['mode'] = 'snapshot';
+        }
+
         return [
             'ok' => true,
             'command' => $definition['command'],
@@ -90,8 +116,22 @@ final class AgentCliCommandParser
         $positional = '';
 
         if ($rest !== '') {
+            // Bare boolean flags: --refresh / --force (no =value).
+            if (preg_match_all('/(?:^|\s)(--[a-z0-9-]+|-[a-z])(?!=)(?=\s|$)/i', $rest, $bareMatches) > 0) {
+                foreach ($bareMatches[1] as $bareFlag) {
+                    $key = $this->mapFlagToKey(strtolower((string) $bareFlag), $definition);
+                    if ($key !== null) {
+                        $argType = $this->argTypeForKey($key, $definition);
+                        if ($argType === 'boolean') {
+                            $inputs[$key] = true;
+                            $rest = preg_replace('/(?:^|\s)'.preg_quote((string) $bareFlag, '/').'(?=\s|$)/i', ' ', $rest) ?? $rest;
+                        }
+                    }
+                }
+            }
+
             $segments = [];
-            if (preg_match_all('/(?:--[a-z0-9-]+|-[a-z])=(?:"[^"]*"|\'[^\']*\'|\S+)/i', $rest, $matches) === 1) {
+            if (preg_match_all('/(?:--[a-z0-9-]+|-[a-z])=(?:"[^"]*"|\'[^\']*\'|\S+)/i', $rest, $matches) > 0) {
                 $segments = $matches[0];
             }
 
@@ -110,6 +150,13 @@ final class AgentCliCommandParser
             }
 
             $positional = trim(preg_replace('/\s+/', ' ', $cursor) ?? '');
+        }
+
+        // CLI placeholders like --site-id="" / --domain="" are absent, not present-empty.
+        foreach ($inputs as $key => $value) {
+            if (is_string($value) && trim($value) === '') {
+                unset($inputs[$key]);
+            }
         }
 
         foreach ($definition['args'] as $arg) {
@@ -132,7 +179,68 @@ final class AgentCliCommandParser
             }
         }
 
+        if (($definition['command'] ?? '') === '/site-switch') {
+            $hasSiteId = isset($inputs['site_id']) && trim((string) $inputs['site_id']) !== '';
+            $hasDomain = isset($inputs['domain']) && trim((string) $inputs['domain']) !== '';
+            if (! $hasSiteId && ! $hasDomain) {
+                return ['ok' => false, 'error' => 'missing_required:site_id_or_domain'];
+            }
+        }
+
         return ['ok' => true, 'inputs' => $inputs];
+    }
+
+    /**
+     * @param  array<string, mixed>  $definition
+     */
+    private function argTypeForKey(string $key, array $definition): string
+    {
+        foreach ($definition['args'] as $arg) {
+            if ((string) ($arg['key'] ?? '') === $key) {
+                return (string) ($arg['type'] ?? 'string');
+            }
+        }
+
+        return 'string';
+    }
+
+    /**
+     * @return array{ok: bool, value?: string, error?: string}
+     */
+    private function normalizeMemberRef(string $raw): array
+    {
+        $value = trim($raw);
+        if ($value === '') {
+            return ['ok' => true, 'value' => ''];
+        }
+        // Prefer numeric ID; email allowed; reject display names.
+        if (ctype_digit($value)) {
+            return ['ok' => true, 'value' => $value];
+        }
+        if (str_contains($value, '@') && filter_var($value, FILTER_VALIDATE_EMAIL)) {
+            return ['ok' => true, 'value' => $value];
+        }
+
+        return [
+            'ok' => false,
+            'error' => 'member_ref_must_be_id_or_email',
+        ];
+    }
+
+    private function truthy(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (int) $value === 1;
+        }
+        if (! is_string($value)) {
+            return false;
+        }
+        $t = strtolower(trim($value));
+
+        return in_array($t, ['1', 'true', 'yes', 'y', 'on'], true);
     }
 
     /**

@@ -9,10 +9,15 @@ use App\Addons\SeoContentAi\Extension\Registry\ExtensionCapabilityRegistry;
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource;
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages\GeneralDomain;
 use App\Addons\SeoContentAi\Filament\Pages\AgentWorkspacePage;
+use App\Addons\SeoContentAi\Filament\Pages\ContentProjectOperationsCenter;
+use App\Addons\SeoContentAi\Services\ContentProject\Agent\AgentErrorCodes;
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\Mcp\ContentProjectMcpToolCatalog;
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\Mcp\McpCapabilityMarkdownPresenter;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Capabilities\CanonicalCapabilityRegistry;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Capabilities\CapabilityContextGuard;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Capabilities\CapabilityKind;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Capabilities\ContentProjectCapabilityRegistry;
+use App\Addons\SeoContentAi\Services\SiteSync\Contracts\SiteSyncSchema;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 
@@ -28,11 +33,8 @@ final class McpCapabilityMarkdownPresenterTest extends TestCase
         return $this->addonRoot().'/resources/views/'.$relativePath;
     }
 
-    public function test_present_reads_from_registry_not_hardcoded_site_list(): void
+    public function test_domain_general_does_not_render_mcp_markdown(): void
     {
-        $presenterSource = (string) file_get_contents(
-            (new ReflectionClass(McpCapabilityMarkdownPresenter::class))->getFileName(),
-        );
         $generalSource = (string) file_get_contents(
             (new ReflectionClass(GeneralDomain::class))->getFileName(),
         );
@@ -40,12 +42,95 @@ final class McpCapabilityMarkdownPresenterTest extends TestCase
             'filament/resources/domain-resource/pages/general-domain.blade.php',
         ));
 
+        self::assertStringNotContainsString('McpCapabilityMarkdownPresenter', $generalSource);
+        self::assertStringNotContainsString('mcpCapabilityDoc', $generalSource);
+        self::assertStringNotContainsString('loadMcpCapabilityDoc', $generalSource);
+        self::assertStringNotContainsString('MCP Markdown', $domainGeneralView);
+        self::assertStringNotContainsString('mcpCapabilityDoc', $domainGeneralView);
+
+        // Button on General → /domains/{id}/mcp
+        self::assertStringContainsString("getUrl('mcp'", $generalSource);
+        self::assertStringContainsString('view_mcp', $generalSource);
+
+        // Site-specific Domain General surface still present.
+        self::assertStringContainsString('seo-domain-overview', $domainGeneralView);
+        self::assertStringContainsString('domain-sync-actions', $domainGeneralView);
+        self::assertStringContainsString('Chấm điểm SEO', $domainGeneralView);
+        self::assertStringContainsString('Thống kê đồng bộ', $domainGeneralView);
+    }
+
+    public function test_domain_mcp_page_renders_mcp_markdown(): void
+    {
+        $pageSource = (string) file_get_contents(
+            (new ReflectionClass(\App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages\ViewDomainMcp::class))->getFileName(),
+        );
+        $resourceSource = (string) file_get_contents(
+            (new ReflectionClass(DomainResource::class))->getFileName(),
+        );
+        $view = (string) file_get_contents($this->addonView(
+            'filament/resources/domain-resource/pages/view-domain-mcp.blade.php',
+        ));
+
+        self::assertStringContainsString("route('/{record}/mcp')", $resourceSource);
+        self::assertStringContainsString('McpCapabilityMarkdownPresenter', $pageSource);
+        self::assertStringContainsString('SimpleMarkdownHtmlConverter', $pageSource);
+        self::assertStringContainsString('mcpCapabilityDoc', $pageSource);
+        self::assertStringContainsString('mcpHtml', $pageSource);
+        self::assertStringContainsString('Developer MCP Reference', $pageSource);
+        self::assertStringContainsString('Global MCP system-action catalog', $view);
+        self::assertStringContainsString('{!! $mcpHtml !!}', $view);
+        self::assertStringContainsString('View raw Markdown', $view);
+        self::assertStringContainsString('seo-mcp-doc', $view);
+        self::assertStringNotContainsString('filtered()', $view);
+        self::assertStringNotContainsString('toggle(row.key)', $view);
+        self::assertStringContainsString('canAccessManagerFeatures', $pageSource);
+        self::assertFileExists($this->addonView(
+            'filament/resources/domain-resource/pages/view-domain-mcp.blade.php',
+        ));
+    }
+
+    public function test_ops_runtime_hosts_global_mcp_reference(): void
+    {
+        $opsSource = (string) file_get_contents(
+            (new ReflectionClass(ContentProjectOperationsCenter::class))->getFileName(),
+        );
+        $opsView = (string) file_get_contents($this->addonView(
+            'filament/pages/content-project-operations-center.blade.php',
+        ));
+
+        self::assertStringContainsString('McpCapabilityMarkdownPresenter', $opsSource);
+        self::assertStringContainsString('loadMcpCapabilityDoc', $opsSource);
+        self::assertStringContainsString('mcpCapabilityDoc', $opsSource);
+        self::assertStringContainsString('MCP Reference', $opsView);
+        self::assertStringContainsString('CanonicalCapabilityRegistry', $opsView);
+        self::assertStringContainsString("tab === 'runtime'", $opsView);
+    }
+
+    public function test_present_reads_from_registry_not_hardcoded_site_list(): void
+    {
+        $presenterSource = (string) file_get_contents(
+            (new ReflectionClass(McpCapabilityMarkdownPresenter::class))->getFileName(),
+        );
+
         self::assertStringContainsString('registry->all()', $presenterSource);
         self::assertStringNotContainsString("'site.discover', 'site.sync'", $presenterSource);
-        self::assertStringContainsString('McpCapabilityMarkdownPresenter', $generalSource);
-        self::assertStringContainsString('mcpCapabilityDoc', $generalSource);
-        self::assertStringContainsString('MCP Markdown', $domainGeneralView);
-        self::assertStringNotContainsString('refreshMcpCapabilityDoc', $domainGeneralView);
+        self::assertStringContainsString('not bound to a Domain General', $presenterSource);
+        self::assertStringContainsString('Not bound to any Domain General page', $presenterSource);
+    }
+
+    public function test_mcp_contract_independent_of_frontend_route(): void
+    {
+        $presenterSource = (string) file_get_contents(
+            (new ReflectionClass(McpCapabilityMarkdownPresenter::class))->getFileName(),
+        );
+        $registrySource = (string) file_get_contents(
+            (new ReflectionClass(ContentProjectCapabilityRegistry::class))->getFileName(),
+        );
+
+        self::assertStringNotContainsString('/domains/', $presenterSource);
+        self::assertStringNotContainsString('/general', $presenterSource);
+        self::assertStringNotContainsString('request()->', $registrySource);
+        self::assertStringNotContainsString('DomainResource', $registrySource);
     }
 
     public function test_registered_capabilities_appear_in_markdown(): void
@@ -59,10 +144,11 @@ final class McpCapabilityMarkdownPresenterTest extends TestCase
 
         self::assertContains('site.discover', $names);
         self::assertContains('site.sync', $names);
-        self::assertStringContainsString('## site.discover', $doc['markdown']);
-        self::assertStringContainsString('## site.sync', $doc['markdown']);
-        self::assertStringContainsString('**Loại:** Read', $doc['markdown']);
-        self::assertStringContainsString('Phát hiện thông tin website', $doc['markdown']);
+        self::assertStringContainsString('### site.discover', $doc['markdown']);
+        self::assertStringContainsString('### site.sync', $doc['markdown']);
+        self::assertStringContainsString('Kind: system_action', $doc['markdown']);
+        self::assertStringContainsString('Required context: site_ref', $doc['markdown']);
+        self::assertStringContainsString('site_feature', $doc['markdown']);
     }
 
     public function test_content_project_capabilities_from_registry_only(): void
@@ -78,6 +164,95 @@ final class McpCapabilityMarkdownPresenterTest extends TestCase
         self::assertNotContains('content_project.get', $names);
     }
 
+    public function test_content_project_create_is_system_action_with_site_context(): void
+    {
+        $cap = (new ContentProjectCapabilityRegistry)->get('content_project.create');
+        self::assertNotNull($cap);
+        self::assertSame(CapabilityKind::SYSTEM_ACTION, $cap['capability_kind'] ?? null);
+        self::assertSame('content_project', $cap['action_domain'] ?? null);
+        self::assertContains('site_ref', $cap['required_context'] ?? []);
+        self::assertSame('write', $cap['side_effect_level'] ?? null);
+        self::assertStringContainsString('explicitly supplied site context', (string) ($cap['description'] ?? ''));
+        self::assertStringContainsString('does not create, discover, or switch sites', (string) ($cap['description'] ?? ''));
+    }
+
+    public function test_site_feature_keys_classified_separately_from_mcp_actions(): void
+    {
+        self::assertSame(CapabilityKind::SITE_FEATURE, CapabilityKind::classify('seo_score'));
+        self::assertSame(CapabilityKind::SITE_FEATURE, CapabilityKind::classify('focus_keyword'));
+        self::assertSame(CapabilityKind::SYSTEM_ACTION, CapabilityKind::classify('site.sync'));
+        self::assertSame(CapabilityKind::SYSTEM_ACTION, CapabilityKind::classify('content_project.create'));
+
+        foreach (SiteSyncSchema::CAPABILITY_KEYS as $key) {
+            self::assertTrue(CapabilityKind::isSiteFeatureKey($key));
+            self::assertNull((new ContentProjectCapabilityRegistry)->get($key));
+        }
+
+        $create = (new ContentProjectCapabilityRegistry)->get('content_project.create');
+        self::assertNotNull($create);
+        self::assertNotSame(CapabilityKind::SITE_FEATURE, $create['capability_kind'] ?? null);
+    }
+
+    public function test_site_sync_missing_site_ref_fail_closed(): void
+    {
+        $cap = (new ContentProjectCapabilityRegistry)->get('site.sync');
+        self::assertNotNull($cap);
+
+        $result = (new CapabilityContextGuard)->assert($cap, [
+            'site_ref' => '',
+            'tenant_ref' => 'tenant:demo',
+        ], []);
+
+        self::assertNotNull($result);
+        self::assertFalse($result->success);
+        self::assertSame(AgentErrorCodes::MISSING_REQUIRED_CONTEXT, $result->code);
+        self::assertSame(['site_ref'], $result->data['required'] ?? null);
+    }
+
+    public function test_content_project_action_missing_project_ref_fail_closed(): void
+    {
+        $cap = (new ContentProjectCapabilityRegistry)->get('content_project.generate');
+        self::assertNotNull($cap);
+        self::assertContains('project_ref', $cap['required_context'] ?? []);
+
+        $result = (new CapabilityContextGuard)->assert($cap, [
+            'site_ref' => 'cps_demo',
+            'tenant_ref' => 'tenant:cps_demo',
+        ], []);
+
+        self::assertNotNull($result);
+        self::assertSame(AgentErrorCodes::MISSING_REQUIRED_CONTEXT, $result->code);
+        self::assertContains('project_ref', $result->data['required'] ?? []);
+    }
+
+    public function test_agent_does_not_default_site_when_context_missing(): void
+    {
+        $guardSource = (string) file_get_contents(
+            (new ReflectionClass(CapabilityContextGuard::class))->getFileName(),
+        );
+        $gatewaySource = (string) file_get_contents(
+            (new ReflectionClass(\App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentGateway::class))->getFileName(),
+        );
+
+        self::assertStringContainsString('MISSING_REQUIRED_CONTEXT', $gatewaySource);
+        self::assertStringContainsString('Never infers site/project', $guardSource);
+        self::assertStringNotContainsString('accessibleSiteIds()[0]', $gatewaySource);
+        self::assertStringNotContainsString('first()', $guardSource);
+        self::assertStringNotContainsString('default site', strtolower($guardSource));
+    }
+
+    public function test_context_mismatch_error_code_exists_for_project_site_relation(): void
+    {
+        $policySource = (string) file_get_contents(
+            (new ReflectionClass(\App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentPolicy::class))->getFileName(),
+        );
+
+        self::assertStringContainsString('CONTEXT_MISMATCH', $policySource);
+        self::assertStringContainsString('Project does not belong to site context.', $policySource);
+        self::assertSame('context_mismatch', AgentErrorCodes::CONTEXT_MISMATCH);
+        self::assertSame('missing_required_context', AgentErrorCodes::MISSING_REQUIRED_CONTEXT);
+    }
+
     public function test_disabled_capability_shows_disabled_status(): void
     {
         $doc = $this->presenter()->presentFromDefinitions(
@@ -87,6 +262,10 @@ final class McpCapabilityMarkdownPresenterTest extends TestCase
                 'risk_level' => 'read',
                 'read_only' => true,
                 'enabled' => false,
+                'capability_kind' => CapabilityKind::SYSTEM_ACTION,
+                'action_domain' => 'demo',
+                'required_context' => ['site_ref'],
+                'side_effect_level' => 'none',
                 'scopes' => ['demo:read'],
                 'input_summary' => ['site_id'],
                 'output_summary' => ['ok'],
@@ -99,7 +278,10 @@ final class McpCapabilityMarkdownPresenterTest extends TestCase
         );
 
         self::assertSame(['disabled'], $doc['items'][0]['status']);
+        self::assertNotContains('exposed-to-agent', $doc['items'][0]['status']);
+        self::assertNotContains('exposed-to-mcp', $doc['items'][0]['status']);
         self::assertStringContainsString('disabled', $doc['markdown']);
+        self::assertStringContainsString('Kind: system_action', $doc['markdown']);
     }
 
     public function test_internal_hidden_from_regular_user_visible_to_manager(): void
@@ -138,7 +320,8 @@ final class McpCapabilityMarkdownPresenterTest extends TestCase
         self::assertCount(1, $manager['internal_items']);
         self::assertSame('demo.internal', $manager['internal_items'][0]['name']);
         self::assertStringContainsString('## Internal capabilities', $manager['markdown']);
-        self::assertStringContainsString('## demo.internal', $manager['markdown']);
+        // Heading level follows presenter markdown (### name).
+        self::assertMatchesRegularExpression('/^###\s+demo\.internal\s*$/m', $manager['markdown']);
     }
 
     public function test_read_write_confirmation_metadata(): void
@@ -197,6 +380,7 @@ final class McpCapabilityMarkdownPresenterTest extends TestCase
 
         self::assertStringContainsString('# MCP Capabilities', $doc['markdown']);
         self::assertStringContainsString('content_project.create', $doc['markdown']);
+        self::assertStringContainsString('Kind: system_action', $doc['markdown']);
         self::assertStringNotContainsString("'handler'", $doc['markdown']);
         self::assertStringNotContainsString('api_key', $doc['markdown']);
         self::assertStringNotContainsString('password', $doc['markdown']);
@@ -229,7 +413,7 @@ final class McpCapabilityMarkdownPresenterTest extends TestCase
 
         self::assertSame(1, $withNew['count']);
         self::assertSame('future.brand_new', $withNew['items'][0]['name']);
-        self::assertStringContainsString('## future.brand_new', $withNew['markdown']);
+        self::assertStringContainsString('### future.brand_new', $withNew['markdown']);
     }
 
     public function test_removed_capability_disappears(): void
@@ -256,6 +440,7 @@ final class McpCapabilityMarkdownPresenterTest extends TestCase
         self::assertNotNull($cap);
         self::assertTrue((bool) ($cap['read_only'] ?? false));
         self::assertSame(['site:read'], $cap['scopes'] ?? null);
+        self::assertContains('site_ref', $cap['required_context'] ?? []);
         self::assertContains('site profile', $cap['output_summary'] ?? []);
 
         $sync = (new ContentProjectCapabilityRegistry)->get('site.sync');
@@ -263,6 +448,21 @@ final class McpCapabilityMarkdownPresenterTest extends TestCase
         self::assertFalse((bool) ($sync['confirmation_requirement'] ?? true));
         self::assertContains('force_full', $sync['confirmation_modes'] ?? []);
         self::assertSame('Có khi dùng `force_full`', $sync['confirmation_note'] ?? null);
+        self::assertSame(['site_ref'], $sync['required_context'] ?? null);
+        self::assertStringContainsString('explicitly supplied WordPress site', (string) ($sync['description'] ?? ''));
+    }
+
+    public function test_global_registry_still_exists_and_gateway_unchanged_for_command_bus(): void
+    {
+        $registry = new ContentProjectCapabilityRegistry;
+        self::assertNotNull($registry->get('content_project.create'));
+        self::assertNotNull($registry->get('site.sync'));
+
+        $gatewaySource = (string) file_get_contents(
+            (new ReflectionClass(\App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentGateway::class))->getFileName(),
+        );
+        self::assertStringContainsString('commandBus->dispatch', $gatewaySource);
+        self::assertStringContainsString('CapabilityContextGuard', $gatewaySource);
     }
 
     public function test_agent_general_block_guards_and_presenter_wiring(): void
@@ -281,19 +481,19 @@ final class McpCapabilityMarkdownPresenterTest extends TestCase
         self::assertStringNotContainsString('mcpCapabilityDoc', $agentPageSource);
 
         self::assertStringNotContainsString('viewMcpCapabilitiesAction', $generalSource);
-        self::assertStringNotContainsString('mcp-capabilities', $resourceSource);
-        self::assertStringContainsString('McpCapabilityMarkdownPresenter', $generalSource);
-        self::assertStringContainsString('mcpCapabilityDoc', $generalSource);
-        self::assertStringContainsString('loadMcpCapabilityDoc', $generalSource);
-        self::assertFileDoesNotExist($this->addonView(
-            'filament/resources/domain-resource/pages/view-domain-mcp-capabilities.blade.php',
+        self::assertStringContainsString("'mcp'", $resourceSource);
+        self::assertStringNotContainsString('McpCapabilityMarkdownPresenter', $generalSource);
+        self::assertStringNotContainsString('mcpCapabilityDoc', $generalSource);
+        self::assertStringContainsString('view_mcp', $generalSource);
+
+        self::assertFileExists($this->addonView(
+            'filament/resources/domain-resource/pages/view-domain-mcp.blade.php',
         ));
 
         $domainGeneralView = (string) file_get_contents($this->addonView(
             'filament/resources/domain-resource/pages/general-domain.blade.php',
         ));
-        self::assertStringContainsString('MCP Markdown', $domainGeneralView);
-        self::assertStringContainsString('mcpCapabilityDoc', $domainGeneralView);
+        self::assertStringNotContainsString('MCP Markdown', $domainGeneralView);
 
         self::assertFileDoesNotExist($this->addonView(
             'filament/pages/partials/agent-workspace/general-panel.blade.php',

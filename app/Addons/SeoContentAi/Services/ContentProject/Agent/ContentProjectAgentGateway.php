@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services\ContentProject\Agent;
 
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Capabilities\CanonicalCapabilityRegistry;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Capabilities\CapabilityContextGuard;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionCodes;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResult;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
@@ -77,6 +78,9 @@ final class ContentProjectAgentGateway
         'gsc_intelligence.list_opportunities',
         'gsc_intelligence.get_opportunity',
         'gsc_intelligence.get_operation',
+
+        // SEO Audit — site-level read (Articles Optimal query).
+        'seo_audit.list',
     ];
 
     public function __construct(
@@ -92,6 +96,8 @@ final class ContentProjectAgentGateway
         private readonly KeywordIntelligenceReadService $keywordReads,
         private readonly SerpIntelligenceReadService $serpReads,
         private readonly GscIntelligenceReadService $gscReads,
+        private readonly \App\Addons\SeoContentAi\Services\SeoAudit\Agent\SeoAuditAgentReadService $seoAuditReads,
+        private readonly CapabilityContextGuard $contextGuard = new CapabilityContextGuard,
     ) {}
 
     /**
@@ -139,17 +145,27 @@ final class ContentProjectAgentGateway
         }
 
         if ($context->tenantRef === '' || $context->siteRef === '') {
+            $missing = [];
+            if ($context->tenantRef === '') {
+                $missing[] = 'tenant_ref';
+            }
+            if ($context->siteRef === '') {
+                $missing[] = 'site_ref';
+            }
+
             return AgentCapabilityResult::fail(
-                AgentErrorCodes::CONTEXT_MISSING,
-                'tenant_ref and site_ref are required.',
+                AgentErrorCodes::MISSING_REQUIRED_CONTEXT,
+                'Missing required context.',
+                data: ['required' => $missing],
             );
         }
 
         $siteId = ContentProjectPublicRef::resolveSiteIdStrict($context->siteRef);
         if (! $this->tenantMatchesSite($context->tenantRef, $context->siteRef, $siteId)) {
             return AgentCapabilityResult::fail(
-                AgentErrorCodes::TENANT_ACCESS_DENIED,
+                AgentErrorCodes::CONTEXT_MISMATCH,
                 'tenant_ref does not match site_ref.',
+                data: ['required' => ['site_ref'], 'mismatch' => 'tenant_ref'],
             );
         }
 
@@ -195,6 +211,17 @@ final class ContentProjectAgentGateway
                 AgentErrorCodes::CAPABILITY_NOT_FOUND,
                 'Capability not found.',
             );
+        }
+
+        if ($contextFail = $this->contextGuard->assert(
+            $cap,
+            [
+                'site_ref' => $context->siteRef,
+                'tenant_ref' => $context->tenantRef,
+            ],
+            $input,
+        )) {
+            return $this->withRequestMeta($contextFail, $context);
         }
 
         $schemaErrors = $this->schemaValidator->validate($capability, $input);
@@ -336,10 +363,12 @@ final class ContentProjectAgentGateway
             'gsc_intelligence.list_opportunities' => $this->gscReads->listOpportunities($context, $input),
             'gsc_intelligence.get_opportunity' => $this->gscReads->getOpportunity($context, $input),
             'gsc_intelligence.get_operation' => $this->gscReads->getOperation($context, $input),
+
+            'seo_audit.list' => $this->seoAuditReads->listArticles($context, $input),
             default => throw new InvalidArgumentException('Unsupported read capability.'),
         };
 
-        return AgentCapabilityResult::ok('agent.read_ok', 'Read successful.', $data);
+        return AgentCapabilityResult::ok('agent.read_ok', '', $data);
     }
 
     /**

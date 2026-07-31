@@ -37,6 +37,59 @@ final class SeoAuditKeywordFlagService
     }
 
     /**
+     * IDs kết quả audit: default = keyword review flags; khi chọn rule/aggregate = chỉ SQL rule filter.
+     *
+     * @param  Builder<SeoArticle>  $baseQuery
+     * @param  list<string>  $selectedRuleKeys
+     * @return list<int>
+     */
+    public function resolveResultArticleIds(
+        Builder $baseQuery,
+        array $selectedRuleKeys,
+        bool $filterLowSeoScore,
+        bool $filterTechnicalSeoScore,
+    ): array {
+        $selectedRuleKeys = $this->excludeNonAuditFilterRules($selectedRuleKeys);
+
+        $hasScoringSelection = $selectedRuleKeys !== []
+            || $filterLowSeoScore
+            || $filterTechnicalSeoScore;
+
+        if (! $hasScoringSelection) {
+            return $this->applyKeywordFlagScope($baseQuery)
+                ->pluck('articles.id')
+                ->map(static fn (mixed $id): int => (int) $id)
+                ->filter(static fn (int $id): bool => $id > 0)
+                ->unique()
+                ->values()
+                ->all();
+        }
+
+        return $this->auditScanService
+            ->buildFilteredQuery($baseQuery, $selectedRuleKeys, $filterLowSeoScore, $filterTechnicalSeoScore)
+            ->pluck('articles.id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->filter(static fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  list<string>  $selectedRuleKeys
+     * @return list<string>
+     */
+    public function excludeNonAuditFilterRules(array $selectedRuleKeys): array
+    {
+        return array_values(array_filter(
+            array_map(static fn (mixed $key): string => trim((string) $key), $selectedRuleKeys),
+            static fn (string $key): bool => $key !== ''
+                && $key !== SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD
+                && SeoScoringRulesRegistry::isRuleFilterable($key),
+        ));
+    }
+
+    /**
      * @param  Builder<SeoArticle>  $baseQuery
      * @param  list<string>  $selectedRuleKeys
      */
@@ -48,31 +101,14 @@ final class SeoAuditKeywordFlagService
         int $page = 1,
         int $perPage = 15,
     ): LengthAwarePaginator {
-        $keywordArticleIds = $this->applyKeywordFlagScope($baseQuery)
-            ->pluck('articles.id')
-            ->map(static fn (mixed $id): int => (int) $id)
-            ->filter(static fn (int $id): bool => $id > 0)
-            ->unique()
-            ->values()
-            ->all();
-
-        $hasScoringSelection = $selectedRuleKeys !== []
-            || $filterLowSeoScore
-            || $filterTechnicalSeoScore;
-
-        $ruleArticleIds = [];
-        if ($hasScoringSelection) {
-            $ruleArticleIds = $this->auditScanService
-                ->buildFilteredQuery($baseQuery, $selectedRuleKeys, $filterLowSeoScore, $filterTechnicalSeoScore)
-                ->pluck('articles.id')
-                ->map(static fn (mixed $id): int => (int) $id)
-                ->filter(static fn (int $id): bool => $id > 0)
-                ->unique()
-                ->values()
-                ->all();
-        }
-
-        $mergedIds = array_values(array_unique(array_merge($keywordArticleIds, $ruleArticleIds)));
+        // Root cause fix: khi user chọn rule/aggregate, KHÔNG UNION keyword_review flags.
+        // Trước đây OR keyword Warning/Danger → checkbox "Thiếu từ khóa chính" vẫn ra bài đã có keyword.
+        $mergedIds = $this->resolveResultArticleIds(
+            $baseQuery,
+            $selectedRuleKeys,
+            $filterLowSeoScore,
+            $filterTechnicalSeoScore,
+        );
         if ($mergedIds === []) {
             return new Paginator([], 0, $perPage, $page, ['path' => request()->url(), 'query' => request()->query()]);
         }
@@ -166,6 +202,8 @@ final class SeoAuditKeywordFlagService
         ));
         $hasFocusKeyword = $focusKeyword !== '';
 
+        $selectedRuleKeys = $this->excludeNonAuditFilterRules($selectedRuleKeys);
+
         $hasScoringSelection = $selectedRuleKeys !== []
             || $filterLowSeoScore
             || $filterTechnicalSeoScore;
@@ -183,12 +221,29 @@ final class SeoAuditKeywordFlagService
         }
 
         $sources = [];
-        if ($hasKeywordFlags) {
+        if (! $hasScoringSelection && $hasKeywordFlags) {
             $sources[] = 'keyword_review';
         }
         if ($matchesRules) {
             $sources[] = 'seo_rules';
         }
+
+        // Audit UI: không hiện issue "thiếu từ khóa chính".
+        $matchedKeys = array_values(array_filter(
+            $assessment['matched_rule_keys'] ?? [],
+            static fn (mixed $key): bool => (string) $key !== SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD,
+        ));
+        $activeViolationsForAudit = array_values(array_filter(
+            $assessment['active_violations'] ?? [],
+            static fn (array $item): bool => (string) ($item['key'] ?? '') !== SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD,
+        ));
+        $reasonLabels = array_values(array_filter(
+            array_map(
+                static fn (array $item): string => (string) ($item['label'] ?? ''),
+                $activeViolationsForAudit,
+            ),
+            static fn (string $label): bool => $label !== '',
+        ));
 
         return [
             'id' => (int) $article->id,
@@ -199,13 +254,10 @@ final class SeoAuditKeywordFlagService
             'edit_url' => ArticleResource::getUrl('edit', ['record' => $article]),
             'score' => $assessment['score'],
             'technical_score' => $assessment['technical_score'],
-            'matched_rule_keys' => $assessment['matched_rule_keys'],
-            'violations' => $assessment['matched_rule_keys'],
-            'reason_keys' => $assessment['matched_rule_keys'],
-            'reason_labels' => array_map(
-                static fn (array $item): string => (string) ($item['label'] ?? ''),
-                $assessment['active_violations'],
-            ),
+            'matched_rule_keys' => $matchedKeys,
+            'violations' => $matchedKeys,
+            'reason_keys' => $matchedKeys,
+            'reason_labels' => $reasonLabels,
             'is_low_quality' => $assessment['is_low_quality'],
             'is_analyzed' => SeoScoringStatus::hasBeenAnalyzed($article),
             'warning_count' => $keywordFlags['warning_count'],
@@ -285,16 +337,7 @@ final class SeoAuditKeywordFlagService
 
         foreach ($selectedRuleKeys as $ruleKey) {
             if ($ruleKey === SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD) {
-                if ($this->auditScanService->isMissingFocusKeywordOnly([$ruleKey], false, false)) {
-                    $missing = ! $article->articleMetas
-                        ->where('meta_key', 'seo_focus_keyword')
-                        ->filter(static fn ($meta): bool => trim((string) ($meta->meta_value ?? '')) !== '')
-                        ->isNotEmpty();
-
-                    if ($missing) {
-                        return true;
-                    }
-                }
+                continue;
             }
 
             if (in_array($ruleKey, $matchedRuleKeys, true)) {

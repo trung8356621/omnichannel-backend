@@ -23,14 +23,20 @@ final class ArticleCtaPlaceholderServiceTest extends TestCase
         $this->assertStringNotContainsString('[Website/Hotline]', $guide);
     }
 
-    public function test_format_cta_for_prompt_always_includes_guide(): void
+    public function test_format_cta_for_prompt_uses_resolved_contacts_not_placeholder_guide(): void
     {
         $service = new SiteDomainPromptContextService;
 
-        $text = $service->formatCtaForPrompt([], '');
+        $text = $service->formatCtaForPrompt(
+            [['type' => 'phone_1', 'value' => '090'], ['type' => 'email_1', 'value' => 'a@b.c']],
+            'Nhắc liên hệ tự nhiên.',
+        );
 
-        $this->assertStringContainsString('[phone]', $text);
-        $this->assertStringContainsString('[website]', $text);
+        $this->assertStringContainsString('Resolved Contact Context', $text);
+        $this->assertStringContainsString('phone: 090', $text);
+        $this->assertStringContainsString('email: a@b.c', $text);
+        $this->assertStringNotContainsString('[phone]', $text);
+        $this->assertStringNotContainsString('[website]', $text);
     }
 
     public function test_replace_without_site_leaves_placeholders(): void

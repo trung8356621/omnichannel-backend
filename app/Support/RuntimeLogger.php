@@ -80,10 +80,31 @@ final class RuntimeLogger
      */
     public static function report(Throwable $exception, array $context = []): void
     {
-        self::error($exception->getMessage(), array_merge([
+        $message = 'unknown error';
+        try {
+            $message = $exception->getMessage();
+        } catch (Throwable) {
+            $message = $exception::class.' (message unavailable)';
+        }
+
+        $trace = [];
+        try {
+            foreach (array_slice($exception->getTrace(), 0, 8) as $frame) {
+                $file = isset($frame['file']) && is_string($frame['file']) ? $frame['file'] : '[internal]';
+                $line = isset($frame['line']) && is_int($frame['line']) ? $frame['line'] : 0;
+                $class = isset($frame['class']) && is_string($frame['class']) ? $frame['class'] : '';
+                $fn = isset($frame['function']) && is_string($frame['function']) ? $frame['function'] : '';
+                $trace[] = ($class !== '' ? $class.'::' : '').$fn.' @ '.$file.':'.$line;
+            }
+        } catch (Throwable) {
+            $trace = [];
+        }
+
+        self::error($message, array_merge([
             'exception' => $exception::class,
             'file' => $exception->getFile(),
             'line' => $exception->getLine(),
+            'trace_top' => $trace,
         ], self::requestContext(), $context));
     }
 

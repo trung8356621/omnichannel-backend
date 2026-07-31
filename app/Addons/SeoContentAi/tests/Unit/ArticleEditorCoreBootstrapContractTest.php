@@ -23,7 +23,8 @@ final class ArticleEditorCoreBootstrapContractTest extends TestCase
             "'articleId'", "'connectionHash'", "'siteId'", "'title'", "'slug'",
             "'metaDescription'", "'focusKeyword'", "'permalinkBase'", "'permalinkSuffix'", "'siteDomain'",
             "'content'", "'status'", "'postType'", "'updatedAt'", "'expectedUpdatedAt'",
-            "'expectedContentHash'", "'featuredImageUrl'", "'endpoints'", "'settings'",
+            "'expectedContentHash'", "'featuredImageUrl'", "'supportsProductGallery'", "'isCanaryProduct'",
+            "'endpoints'", "'settings'",
         ] as $needle) {
             self::assertStringContainsString($needle, $body, "core bootstrap missing key {$needle}");
         }

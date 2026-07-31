@@ -4,14 +4,32 @@ Slash commands là entry point chính cho Agent Skills trong composer.
 
 ## UX
 
-1. Gõ `/` trong composer Agent Workspace → mở **slash palette** (`showPalette`, filter `paletteQuery`)
-2. Chọn skill → mở **skill form** (`activeSkillKey`, `skillFormSchema`, prefill từ context) — **không execute ngay**
-3. **Preview** (nếu `confirmation_policy` = `preview` hoặc capability dry_run) → message type `preview`
-4. **Confirm & Execute** → `AgentWorkspaceApplicationService::execute()` + optional `confirmation_token`
+1. Gõ `/` trong composer Agent Workspace → mở **slash palette client-side** (`window.AgentCommandCatalog` / `resources/js/agent/command-catalog.js`). Filter **không** gọi Livewire/backend.
+2. Chọn command → insert **template** + Tab/Shift+Tab nhảy placeholder; arg `project`/`member` mới request suggest (cache `_argCache` trong page session).
+3. Gửi CLI → `AgentCliCommandCatalog` + `AgentCliCommandParser` map sang skill/inputs → `selectSkill` / CommandBus path hiện có — **không** LLM parse deterministic commands.
+4. Skill `confirmation_policy=none` (read) → **auto-execute** sau preview; chỉ policy `preview`/`confirm` mới hỏi Yes/No.
 
-Palette search: slash, alias, name, description, category, skill key (`AgentSkillRegistry::search`). Keyboard: Arrow Up/Down, Enter, Escape (Alpine trên composer).
+Backend catalog SoT: `Services/AgentWorkspace/Cli/AgentCliCommandCatalog.php` (+ `toFrontendCatalog()`). FE mirror + optional `localStorage` key `agent.command-catalog.v1`.
 
-Popup Quick Assistant **không** host slash palette Agent — chỉ launcher sang page.
+Keyboard: Arrow Up/Down, Enter, Escape (Alpine). Popup Quick Assistant **không** host slash palette Agent.
+
+### CLI UX catalog (curated slash palette — không dump CanonicalCapabilityRegistry)
+
+Dropdown `/` = **user-facing CLI skills** (`AgentCliCommandCatalog` + FE mirror). Gate: `AgentCliCapabilityGate` (capability exists / agent-exposed / scope / context). Không hiện raw key kiểu `content_project.approve` trừ khi có slash intentionally designed.
+
+| Group | CLI | Capability / type |
+|-------|-----|-------------------|
+| Core | `/help` `/new-chat` `/context` | local_ui (`agent.help` / `agent.new_chat` / meta) |
+| Site | `/site-list` `/site-switch` `/site-info` | local_ui (stable `--site-id` / `--domain`) |
+| Site | `/site-health` | `content_project.get_site_health` (`--refresh` → `site.refresh_snapshot`) |
+| Site | `/site-sync` `/site-sync-keywords` `/site-sync-links` `/site-refresh-snapshot` | `site.sync` / `site.sync_keywords` / `site.sync_links` / `site.refresh_snapshot` |
+| Project | `/project-list` … `/project-archive` | `content_project.list_projects` / `get_status` / `create` / `update` / `generate` / `start_review` / `archive` |
+| Member | `/member-list` `/member-available` | local_ui; arg ổn định `--member-id` (hoặc email); không dùng tên hiển thị |
+| Keyword | `/keyword-suggest` `/keyword-add-to-project` | `keyword_intelligence.analyze_workspace` / `content_project.add_items` |
+| Audit | `/audit-list` `/audit-keyword-suggest` `/audit-add-to-project` | local + `content_project.add_items` |
+| Operation | `/daily-report` `/operation-status` | `content_project.get_daily_report` / `get_operation` |
+
+SoT mapping: `AgentCliCommandCatalog.php`. Skill registry slash table bên dưới = skill-layer aliases (vẫn tồn tại); palette Agent ưu tiên curated CLI ở trên.
 
 ## Aliases
 

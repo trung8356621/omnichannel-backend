@@ -20,10 +20,11 @@ final class SiteDomainPromptContextServiceTest extends TestCase
             new \App\Models\Site(['domain' => 'example.com']),
         );
         $this->assertStringContainsString('Hướng dẫn CTA', $merged);
-        $this->assertStringContainsString('[phone]', $merged);
-        $this->assertStringNotContainsString('phone_1: 090', $merged);
+        $this->assertStringContainsString('Resolved Contact Context', $merged);
+        $this->assertStringContainsString('phone: 090', $merged);
+        $this->assertStringContainsString('website: example.com', $merged);
+        $this->assertStringNotContainsString('[phone]', $merged);
         $this->assertStringNotContainsString('Giá trị đã cấu hình trên domain', $merged);
-        $this->assertStringNotContainsString('website: example.com', $merged);
         $this->assertStringContainsString(
             'báo giá → https://example.com/bao-gia',
             $service->formatLinksForPrompt([

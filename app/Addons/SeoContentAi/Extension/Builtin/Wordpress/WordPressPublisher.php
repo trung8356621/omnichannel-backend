@@ -17,7 +17,10 @@ use Throwable;
 
 /**
  * Built-in WordPress publisher — Application chỉ resolve qua PublisherResolver / ContentPublisherRegistry.
- * At-least-once + idempotent: reconcile wp_post_id / external_reference trước khi tạo mới.
+ *
+ * - No wp_post_id + queue actor → deliveryRequested (automation creates/syncs).
+ * - Existing wp_post_id → update path (never treat as noop solely because wp_post_id is set).
+ * - Manual actor → publishForArticle (create if needed, then sync content).
  */
 final class WordPressPublisher implements ContentPublisher
 {
@@ -27,58 +30,30 @@ final class WordPressPublisher implements ContentPublisher
 
     public function publish(ArticlePublishPayload $payload): PublishResult
     {
-        if ($payload->wpPostId !== null && $payload->wpPostId > 0) {
-            $this->recordAttempt($payload, 'published', null, $payload->wpPostId);
-
-            return new PublishResult(
-                success: true,
-                wpPostId: $payload->wpPostId,
-                message: 'Already published (wp_post_id present).',
-                alreadyPublished: true,
-                externalReference: $payload->externalReference,
-            );
-        }
-
-        $existing = $this->findByExternalReference($payload->siteId, $payload->externalReference);
-        if ($existing !== null && $existing > 0) {
-            $this->stampArticleWpPost($payload->articleId, $existing);
-            $this->recordAttempt($payload, 'published', null, $existing);
-
-            return new PublishResult(
-                success: true,
-                wpPostId: $existing,
-                message: 'Reconciled existing WordPress post.',
-                alreadyPublished: true,
-                externalReference: $payload->externalReference,
-            );
-        }
-
         $article = SeoArticle::query()->find($payload->articleId);
         if (! $article instanceof SeoArticle) {
             return new PublishResult(false, null, 'Article not found.');
         }
 
-        $freshWp = (int) ($article->wp_post_id ?? 0);
-        if ($freshWp > 0) {
-            $this->recordAttempt($payload, 'published', null, $freshWp);
-
-            return new PublishResult(
-                true,
-                $freshWp,
-                'Already published on article.',
-                true,
-                $payload->externalReference,
-            );
+        $existingFromRef = $this->findByExternalReference($payload->siteId, $payload->externalReference);
+        if ($existingFromRef !== null && $existingFromRef > 0 && (int) ($article->wp_post_id ?? 0) <= 0) {
+            $this->stampArticleWpPost($payload->articleId, $existingFromRef);
+            $article = $article->fresh() ?? $article;
         }
 
-        // Queue/system: ghi attempt + để runner emit business event (Automation WP context).
+        $wpPostId = (int) ($article->wp_post_id ?? $payload->wpPostId ?? 0);
+
+        // Queue/system: emit delivery so automation pushes latest local content
+        // (create OR update). Do not short-circuit on stale wp_post_id.
         if ($payload->actorUserId === null || $payload->actorUserId <= 0) {
-            $this->recordAttempt($payload, 'requested', null);
+            $this->recordAttempt($payload, 'requested', null, $wpPostId > 0 ? $wpPostId : null);
 
             return new PublishResult(
                 success: true,
-                wpPostId: null,
-                message: 'Publish delivery requested via queue event.',
+                wpPostId: $wpPostId > 0 ? $wpPostId : null,
+                message: $wpPostId > 0
+                    ? 'Publish update delivery requested via queue event.'
+                    : 'Publish delivery requested via queue event.',
                 alreadyPublished: false,
                 externalReference: $payload->externalReference,
                 deliveryRequested: true,
@@ -96,30 +71,32 @@ final class WordPressPublisher implements ContentPublisher
             );
 
             $result = $this->syncService->publishForArticle($article, $sideEffect);
-            $wpPostId = (int) ($article->fresh()?->wp_post_id ?? 0);
-            if ($wpPostId <= 0 && is_array($result)) {
-                $wpPostId = (int) ($result['wp_post_id'] ?? 0);
+            $resolvedWp = (int) ($article->fresh()?->wp_post_id ?? 0);
+            if ($resolvedWp <= 0 && is_array($result)) {
+                $resolvedWp = (int) ($result['wp_post_id'] ?? 0);
             }
 
-            if ($wpPostId <= 0 && is_array($result) && ! ($result['success'] ?? false)) {
+            if ($resolvedWp <= 0 && is_array($result) && ! ($result['success'] ?? false)) {
                 $message = (string) ($result['message'] ?? 'WordPress publish failed.');
                 $this->recordAttempt($payload, 'failed', $message);
 
                 return new PublishResult(false, null, $message, externalReference: $payload->externalReference);
             }
 
-            if ($wpPostId <= 0) {
+            if ($resolvedWp <= 0) {
                 $this->recordAttempt($payload, 'failed', 'publish returned no wp_post_id');
 
                 return new PublishResult(false, null, 'WordPress publish did not return wp_post_id.');
             }
 
-            $this->recordAttempt($payload, 'published', null, $wpPostId);
+            $this->recordAttempt($payload, 'published', null, $resolvedWp);
 
             return new PublishResult(
                 success: true,
-                wpPostId: $wpPostId,
-                message: 'Published to WordPress.',
+                wpPostId: $resolvedWp,
+                message: $wpPostId > 0
+                    ? 'Updated existing WordPress post.'
+                    : 'Published to WordPress.',
                 externalReference: $payload->externalReference,
             );
         } catch (Throwable $e) {

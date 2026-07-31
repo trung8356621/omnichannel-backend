@@ -30,6 +30,8 @@ final class GenerateProjectItemsHandler extends AbstractPublishingHandler
         private readonly SeoProjectWorkflowRunService $workflowRunService,
         private readonly ContentProjectDomainEvents $domainEvents,
         private readonly PipelineResolver $pipelineResolver,
+        private readonly \App\Addons\SeoContentAi\Services\ContentProject\ContentProjectGenerationRecoveryService $generationRecovery,
+        private readonly \App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier $classifier,
     ) {
         parent::__construct($tenantGuard, $businessLock, $previewToken);
     }
@@ -79,8 +81,8 @@ final class GenerateProjectItemsHandler extends AbstractPublishingHandler
                 $this->tenantGuard->assertTasksBelongToProject($project, $itemIds);
             }
 
-            $classifier = app(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier::class);
-            $preview = $classifier->preview($project);
+            $this->generationRecovery->reconcileProject($project);
+            $preview = $this->classifier->preview($project);
 
             if ($itemIds === []) {
                 if ($preview->runCount() <= 0) {

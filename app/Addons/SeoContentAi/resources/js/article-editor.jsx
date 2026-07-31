@@ -193,8 +193,11 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
         );
 
         if (normalizedAction === 'sync') {
+            const syncMode = document.querySelector('[data-seo-sync-mode]')?.getAttribute('data-seo-sync-mode');
             window.__seoArticleHeavyActionOverlay?.setStatusMessage?.(
-                'Đang đưa vào hàng đợi…',
+                syncMode === 'project_local_save'
+                    ? 'Đang lưu workspace…'
+                    : 'Đang đưa vào hàng đợi…',
             );
             const apiPayload = buildArticleEditorApiPayload(editorBundle, wire);
             const result = await syncArticleToWordPressViaApi(articleId, apiPayload);
@@ -767,6 +770,7 @@ function readArticleEditorBootstrap() {
         expectedUpdatedAt,
         expectedContentHash,
         supportsProductGallery,
+        isCanaryProduct,
         productCategoryOptions,
         initialProductGallery,
         aiDebug,
@@ -827,6 +831,7 @@ function mountArticleEditorPage() {
         expectedUpdatedAt,
         expectedContentHash,
         supportsProductGallery,
+        isCanaryProduct,
         productCategoryOptions,
         initialProductGallery,
         aiDebug,

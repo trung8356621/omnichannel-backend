@@ -63,6 +63,9 @@ final class ArticlesOptimal extends SeoPanelPage
     #[Url(as: 'lang')]
     public ?string $filterLanguage = null;
 
+    #[Url(as: 'post_type')]
+    public ?string $filterPostType = null;
+
     #[Url(as: 'scan')]
     public bool $hasScanned = false;
 
@@ -117,11 +120,23 @@ final class ArticlesOptimal extends SeoPanelPage
         $this->invalidateScanResults();
     }
 
+    public function updatedFilterPostType(): void
+    {
+        $this->invalidateScanResults();
+    }
+
     public function updatedSelectedScoringRuleKeys(): void
     {
         if ($this->scanState === 'scanning') {
             return;
         }
+
+        $this->selectedScoringRuleKeys = array_values(array_filter(
+            $this->selectedScoringRuleKeys,
+            static fn (mixed $key): bool => is_string($key)
+                && trim($key) !== ''
+                && $key !== \App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD,
+        ));
 
         $this->invalidateScanResults();
     }
@@ -185,6 +200,47 @@ final class ArticlesOptimal extends SeoPanelPage
                 default => mb_strtoupper((string) $lang),
             };
             $options[(string) $lang] = $label;
+        }
+
+        return $options;
+    }
+
+    /**
+     * Union post_type hiện có trên site (hoặc mọi site trong scope).
+     *
+     * @return array<string, string>
+     */
+    public function getPostTypeOptions(): array
+    {
+        $query = SeoArticle::query()
+            ->whereNotIn('type', ['category', 'product_category'])
+            ->where('status', '!=', 'trash')
+            ->whereNotNull('type')
+            ->where('type', '!=', '');
+
+        if ($this->filterSiteId !== null && $this->filterSiteId > 0) {
+            $query->where('site_id', $this->filterSiteId);
+        } elseif (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $siteIds = array_map('intval', array_keys($this->getSiteFilterOptions()));
+            if ($siteIds !== []) {
+                $query->whereIn('site_id', $siteIds);
+            }
+        }
+
+        $types = $query
+            ->select('type')
+            ->distinct()
+            ->orderBy('type')
+            ->pluck('type')
+            ->map(static fn (mixed $type): string => trim((string) $type))
+            ->filter(static fn (string $type): bool => $type !== '')
+            ->unique()
+            ->values()
+            ->all();
+
+        $options = [];
+        foreach ($types as $type) {
+            $options[$type] = $type;
         }
 
         return $options;
@@ -785,6 +841,11 @@ final class ArticlesOptimal extends SeoPanelPage
 
         if ($this->filterLanguage !== null && $this->filterLanguage !== '') {
             $query->where('language', $this->filterLanguage);
+        }
+
+        $postType = trim((string) ($this->filterPostType ?? ''));
+        if ($postType !== '') {
+            $query->where('type', $postType);
         }
 
         return $query;

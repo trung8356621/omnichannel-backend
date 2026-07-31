@@ -109,6 +109,24 @@ final class ContentProjectArchivePreviewAndDomainContextTest extends TestCase
         self::assertStringContainsString('includeGlobalSiteScope: false', $source);
     }
 
+    public function test_article_resolve_record_route_binding_uses_unscoped_query(): void
+    {
+        $method = new ReflectionMethod(ArticleResource::class, 'resolveRecordRouteBinding');
+        $source = $this->readMethodSource($method);
+
+        self::assertStringContainsString('getRecordRouteBindingEloquentQuery()', $source);
+        self::assertStringNotContainsString('static::getEloquentQuery()', $source);
+    }
+
+    public function test_project_resolve_record_route_binding_uses_unscoped_query(): void
+    {
+        $method = new ReflectionMethod(SeoProjectResource::class, 'resolveRecordRouteBinding');
+        $source = $this->readMethodSource($method);
+
+        self::assertStringContainsString('getRecordRouteBindingEloquentQuery()', $source);
+        self::assertStringNotContainsString('static::getEloquentQuery()', $source);
+    }
+
     public function test_edit_article_does_not_force_switch_global_domain(): void
     {
         $source = (string) file_get_contents((new ReflectionClass(EditArticle::class))->getFileName());

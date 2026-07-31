@@ -42,6 +42,7 @@ use Filament\Notifications\Notification;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\HtmlString;
 use Illuminate\Validation\ValidationException;
 
@@ -1128,6 +1129,21 @@ class SeoProjectResource extends SeoPanelResource
         }
 
         return $query;
+    }
+
+    /**
+     * Filament core resolveRecordRouteBinding() dùng getEloquentQuery() (có global site scope).
+     * Wire vào getRecordRouteBindingEloquentQuery() để mở project khác domain đang chọn.
+     */
+    public static function resolveRecordRouteBinding(int|string $key): ?Model
+    {
+        return app(static::getModel())
+            ->resolveRouteBindingQuery(
+                static::getRecordRouteBindingEloquentQuery(),
+                $key,
+                static::getRecordRouteKeyName(),
+            )
+            ->first();
     }
 
     public static function applyGlobalSiteScopeToProjectQuery(Builder $query): Builder

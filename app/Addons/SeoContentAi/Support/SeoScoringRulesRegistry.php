@@ -147,6 +147,21 @@ final class SeoScoringRulesRegistry
         return app(SeoScoringSettingsService::class)->isRuleEnabled($key);
     }
 
+    public static function isRuleFilterable(string $key): bool
+    {
+        $normalized = trim($key);
+        if ($normalized === '' || $normalized === self::KEY_MISSING_FOCUS_KEYWORD) {
+            return false;
+        }
+
+        $meta = self::ruleCatalog()[$normalized] ?? null;
+        if (! is_array($meta)) {
+            return false;
+        }
+
+        return (bool) ($meta['filterable'] ?? false);
+    }
+
     public static function isKnownKey(string $key): bool
     {
         $normalized = SeoScoringRuleMessageResolver::normalizeViolationKey($key);
@@ -413,7 +428,8 @@ final class SeoScoringRulesRegistry
         return [
             self::KEY_MISSING_FOCUS_KEYWORD => [
                 'category' => 'keyword',
-                'filterable' => true,
+                // Keyword chính = quyết định người dùng — không filter/issue trên SEO Audit.
+                'filterable' => false,
                 'short_label' => __('seo-content-ai::filament.articles_optimal.rule_short.missing_focus_keyword'),
                 'violation_keys' => ['seo.missing_focus_keyword', 'missing_focus_keyword'],
             ],

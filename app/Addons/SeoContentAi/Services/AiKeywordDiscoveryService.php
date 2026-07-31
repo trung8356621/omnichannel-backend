@@ -17,12 +17,19 @@ final class AiKeywordDiscoveryService
 {
     private const KEYWORD_COUNT = 12;
 
-    public function discover(string $seedKeyword, string $searchIntent, string $targetRegion): array
-    {
+    public function discover(
+        string $seedKeyword,
+        string $searchIntent,
+        string $targetRegion,
+        string $siteMcpContext = '',
+        ?int $limit = null,
+    ): array {
         $seedKeyword = Keyword::decodePhrase($seedKeyword);
         if ($seedKeyword === '') {
             throw new \InvalidArgumentException(__('seo-content-ai::filament.keyword.discovery_seed_required'));
         }
+
+        $count = $limit !== null ? max(1, min(50, $limit)) : self::KEYWORD_COUNT;
 
         $model = $this->resolveGeminiModel();
         $connection = $model->apiConnection;
@@ -30,9 +37,9 @@ final class AiKeywordDiscoveryService
             throw new PromptRunException(__('seo-content-ai::filament.keyword.discovery_no_gemini'));
         }
 
-        $prompt = $this->buildPrompt($seedKeyword, $searchIntent, $targetRegion);
+        $prompt = $this->buildPrompt($seedKeyword, $searchIntent, $targetRegion, $siteMcpContext, $count);
         $raw = $this->callGemini($connection, $model, $prompt);
-        $parsed = $this->parseSuggestions($raw);
+        $parsed = $this->parseSuggestions($raw, $count);
 
         if ($parsed === []) {
             throw new \InvalidArgumentException(__('seo-content-ai::filament.keyword.discovery_empty_response'));
@@ -51,7 +58,7 @@ final class AiKeywordDiscoveryService
      *     relevancy_reason: string,
      * }>
      */
-    private function parseSuggestions(string $raw): array
+    private function parseSuggestions(string $raw, int $limit = self::KEYWORD_COUNT): array
     {
         $raw = trim($raw);
         if ($raw === '') {
@@ -102,11 +109,16 @@ final class AiKeywordDiscoveryService
             ];
         }
 
-        return array_slice($suggestions, 0, self::KEYWORD_COUNT);
+        return array_slice($suggestions, 0, $limit);
     }
 
-    private function buildPrompt(string $seedKeyword, string $searchIntent, string $targetRegion): string
-    {
+    private function buildPrompt(
+        string $seedKeyword,
+        string $searchIntent,
+        string $targetRegion,
+        string $siteMcpContext = '',
+        int $count = self::KEYWORD_COUNT,
+    ): string {
         $intentLabel = match ($searchIntent) {
             'informational' => 'Informational',
             'commercial' => 'Commercial Investigation',
@@ -123,14 +135,18 @@ final class AiKeywordDiscoveryService
             default => $targetRegion,
         };
 
-        $count = (string) self::KEYWORD_COUNT;
+        $countLabel = (string) $count;
+        $siteBlock = trim($siteMcpContext);
+        $siteSection = $siteBlock !== ''
+            ? "Site MCP Keyword Context (use for business fit; do not invent unrelated niches):\n{$siteBlock}\n\n"
+            : '';
 
         return <<<PROMPT
-Seed keyword: "{$seedKeyword}"
+{$siteSection}Seed keyword: "{$seedKeyword}"
 Preferred search intent focus: {$intentLabel}
 Target region / market: {$regionLabel}
 
-Act as a senior SEO strategist. Suggest exactly {$count} long-tail keyword opportunities closely related to the seed.
+Act as a senior SEO strategist. Suggest exactly {$countLabel} long-tail keyword opportunities closely related to the seed.
 
 Return ONLY a valid JSON array (no markdown prose). Each object MUST use these keys:
 - keyword (string)

@@ -111,6 +111,10 @@ final class AgentConversationService
             throw new RuntimeException('agent.quota.messages_exceeded');
         }
 
+        $sanitizer = app(AgentMessageOutputSanitizer::class);
+        $content = $sanitizer->sanitize($content);
+        $structured = $sanitizer->sanitizeStructured($structured);
+
         $message = SeoAgentMessage::query()->create([
             'public_ref' => 'amsg_'.Str::lower((string) Str::ulid()),
             'conversation_id' => $conversation->id,

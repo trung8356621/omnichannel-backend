@@ -30,7 +30,7 @@ final class AgentCliArgumentSuggestService
 
         foreach ($options as $id => $label) {
             $value = (string) $id;
-            $labelStr = (string) $label;
+            $labelStr = '#'.$value.' · '.(string) $label;
             if ($needle !== ''
                 && ! str_contains(strtolower($value), $needle)
                 && ! str_contains(strtolower($labelStr), $needle)) {
@@ -46,7 +46,7 @@ final class AgentCliArgumentSuggestService
     }
 
     /**
-     * @return list<array{value: string, label: string}>
+     * @return list<array{value: string, label: string, id?: int, email?: string, name?: string}>
      */
     public function suggestMembers(AgentWorkspaceContext $context, string $query = '', bool $availableOnly = false): array
     {
@@ -58,23 +58,28 @@ final class AgentCliArgumentSuggestService
         $users = User::query()
             ->where('parent_id', $ownerId)
             ->where('role', User::ROLE_STAFF)
-            ->orderBy('name')
+            ->orderBy('id')
             ->limit(50)
             ->get();
 
         $out = [];
         foreach ($users as $user) {
+            $id = (int) $user->id;
             $email = (string) $user->email;
             $name = (string) ($user->display_name ?? $user->name ?? $email);
-            $label = $name.' <'.$email.'>';
+            $label = '#'.$id.' · '.$email.' · '.$name;
             if ($needle !== ''
+                && ! str_contains((string) $id, $needle)
                 && ! str_contains(strtolower($email), $needle)
                 && ! str_contains(strtolower($name), $needle)) {
                 continue;
             }
             $out[] = [
-                'value' => $email,
+                'value' => (string) $id,
                 'label' => $label,
+                'id' => $id,
+                'email' => $email,
+                'name' => $name,
             ];
         }
 

@@ -39,7 +39,7 @@ final class ContentProjectAgentReadService
     {
         $actor = $context->toActorContext();
         $siteId = (int) ($context->resolvedSiteId ?? 0);
-        $query = SeoProject::query()->orderByDesc('id')->limit(100);
+        $query = SeoProject::query()->with('user')->orderByDesc('id')->limit(100);
         if ($siteId > 0) {
             $query->where('site_id', $siteId);
         }
@@ -47,7 +47,13 @@ final class ContentProjectAgentReadService
         $rows = [];
         foreach ($query->get() as $project) {
             try {
-                $rows[] = $this->serializeProject($this->reads->project($project, $actor), $context);
+                $row = $this->serializeProject($this->reads->project($project, $actor), $context);
+                $row['project_id'] = (int) $project->getKey();
+                $memberName = trim((string) ($project->user?->name ?? ''));
+                if ($memberName !== '') {
+                    $row['member_name'] = $memberName;
+                }
+                $rows[] = $row;
             } catch (RuntimeException) {
                 continue;
             }
@@ -62,11 +68,18 @@ final class ContentProjectAgentReadService
     public function getProject(AgentExecutionContext $context, array $input): array
     {
         $project = $this->findProject($input, $context);
-
-        return $this->serializeProject(
+        $project->loadMissing('user');
+        $row = $this->serializeProject(
             $this->reads->project($project, $context->toActorContext()),
             $context,
         );
+        $row['project_id'] = (int) $project->getKey();
+        $memberName = trim((string) ($project->user?->name ?? ''));
+        if ($memberName !== '') {
+            $row['member_name'] = $memberName;
+        }
+
+        return $row;
     }
 
     /**
@@ -116,6 +129,7 @@ final class ContentProjectAgentReadService
     public function getStatus(AgentExecutionContext $context, array $input): array
     {
         $project = $this->findProject($input, $context);
+        $project->loadMissing('user');
         $items = $this->reads->items($project, $context->toActorContext());
 
         $phases = [];
@@ -130,8 +144,14 @@ final class ContentProjectAgentReadService
         $nextActions = $this->recommendedNextActions($dominantPhase, $blockers);
 
         return [
+            'project_id' => (int) $project->getKey(),
+            'name' => (string) ($project->name ?? ''),
+            'month' => $project->month instanceof \DateTimeInterface
+                ? $project->month->format('Y-m-d')
+                : (is_string($project->month ?? null) ? (string) $project->month : null),
+            'member_name' => trim((string) ($project->user?->name ?? '')),
+            'archived' => $project->archived_at !== null,
             'project_ref' => ContentProjectPublicRef::project((int) $project->getKey()),
-            'site_ref' => ContentProjectPublicRef::site((int) ($context->resolvedSiteId ?? $project->site_id)),
             'phase' => $dominantPhase,
             'phase_counts' => $phases,
             'allowed_capabilities' => $allowed,
@@ -193,8 +213,14 @@ final class ContentProjectAgentReadService
     public function getSiteHealth(AgentExecutionContext $context, array $input = []): array
     {
         $siteId = (int) ($context->resolvedSiteId ?? 0);
+        $siteRef = trim((string) ($input['site_ref'] ?? $context->siteRef ?? ''));
+
+        if ($siteId <= 0 && $siteRef === '') {
+            throw new RuntimeException('Thiếu site_ref — chọn site trước khi chạy /site-health.');
+        }
+
         if ($siteId <= 0) {
-            return ['sites' => []];
+            throw new RuntimeException('site_ref không resolve được site hiện tại: '.$siteRef);
         }
 
         $snapshots = $this->siteHealth->snapshot([$siteId]);
@@ -203,6 +229,14 @@ final class ContentProjectAgentReadService
             unset($row['site_id']);
             $row['site_ref'] = ContentProjectPublicRef::site($siteId);
             $sites[] = $row;
+        }
+
+        if ($sites === []) {
+            return [
+                'sites' => [],
+                'error' => 'Không lấy được snapshot health cho site hiện tại (site_id='.$siteId.').',
+                'site_ref' => ContentProjectPublicRef::site($siteId),
+            ];
         }
 
         return ['sites' => $sites];
@@ -285,11 +319,19 @@ final class ContentProjectAgentReadService
     private function serializeProject(object $dto, AgentExecutionContext $context): array
     {
         $data = $dto->toArray();
-        unset($data['site_id']);
-        $siteId = (int) ($context->resolvedSiteId ?? ($dto->siteId ?? 0));
-        if ($siteId > 0) {
-            $data['site_ref'] = ContentProjectPublicRef::site($siteId);
+        unset($data['site_id'], $data['site_ref']);
+
+        $projectRef = trim((string) ($data['project_ref'] ?? ''));
+        if ($projectRef !== '' && ! isset($data['project_id'])) {
+            try {
+                $data['project_id'] = ContentProjectPublicRef::decodeProject($projectRef);
+            } catch (\Throwable) {
+                // keep without numeric id
+            }
         }
+
+        // $context retained for call-site compatibility; site_ref must not leak to chat DTO.
+        unset($context);
 
         return $data;
     }

@@ -553,6 +553,8 @@
 
 .seo-global-chat__user-message {
     max-width: 78%;
+    width: fit-content;
+    min-width: 0;
     border-radius: 1.125rem;
     border-bottom-right-radius: 0.25rem;
     padding: 0.45rem 0.7rem;
@@ -560,6 +562,13 @@
     color: #fff;
     font-size: 0.8125rem;
     line-height: 1.45;
+    /* Do NOT use pre-wrap on the bubble — Livewire @if morph comments leave
+       newlines that stretch the bubble into a tall thin strip. */
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.seo-global-chat__user-message > .whitespace-pre-wrap {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
@@ -596,6 +605,11 @@
     color: #050505;
     font-size: 0.8125rem;
     line-height: 1.5;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.seo-global-chat__assistant-message > .whitespace-pre-wrap {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }

@@ -9,11 +9,11 @@
 | Tài liệu | Nội dung |
 |----------|----------|
 | **[Bản đồ Frontend React/Vite](MAP_SEO_FRONTEND.md)** | **Vite entries, component hierarchy, API clients, Alpine bridge** |
-| [Domain Management](MAP_SEO_DOMAIN.md) | Menu Domain, 14 services, settings CTA/tone/links, sync cache, queue jobs |
+| [Domain Management](MAP_SEO_DOMAIN.md) | Menu Domain, official Site MCP + draft (`site_mcp_draft`, verified product_cat parent=0 → Main Topics), CTA/tone/links, sync cache, queue jobs |
 | [Chỉnh sửa Giao diện & React Editor](MAP_SEO_EDITOR.md) | EditArticle, SeoArticleEditor, Livewire bridge, media picker; draft auto + nút `!`; Fix slug all ([image-slug-rename.md](article-editor/image-slug-rename.md)); Sync enqueue đóng tab |
 | [Article SEO Audit](MAP_SEO_AUDIT.md) | ArticlesOptimal — optimistic skip/assign (Alpine hide row + `skipRender`); project capacity ≤2 toast, 0 ẩn select |
 | [Xử lý Thư viện ảnh, Upload & Watermark](MAP_SEO_MEDIA.md) | `/api/seo/media/*`, SeoMediaController, upload pipeline |
-| [Cơ chế Đồng bộ & Cầu nối WordPress](MAP_SEO_WP.md) | WP bridge inbound, sync outbound, plugin `omi-seo-ai-bridge` ≥1.0.61 (`clear_faqs`) |
+| [Cơ chế Đồng bộ & Cầu nối WordPress](MAP_SEO_WP.md) | WP bridge inbound, sync outbound, plugin `omi-seo-ai-bridge` ≥1.0.68 (`product_category_taxonomy_export`) |
 | **[Site Sync V2](SITE_SYNC_V2.md)** | **Wave4 cutover/shadow/comparison/rollback — CUTOVER/SHADOW/COMPARISON/ROLLBACK/TEST_PLAYBOOK** |
 | [Content Projects & Workflow](MAP_SEO_PROJECTS.md) | Project → Items → Article; SeoProjectRun internal; Run History routes redirect; Operation Center; CommandBus |
 | [Content Project Operations](CONTENT_PROJECT_OPERATIONS.md) | Ops dashboard, metrics, replay, health, daily report (admin only) |

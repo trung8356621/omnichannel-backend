@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services\ContentProject\Application;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AddContentProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ApproveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveContentProjectCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AutoScheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CancelProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CreateContentProjectCommand;
@@ -29,6 +30,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UpdateC
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\AddContentProjectItemsHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ApproveProjectItemsHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ArchiveContentProjectHandler;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ArchiveProjectItemsHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\AutoScheduleProjectItemsHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\CancelProjectItemPublishingHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\CreateContentProjectHandler;
@@ -142,6 +144,7 @@ final class ContentProjectCommandBusRegistrar
             SkipProjectItemPublishingCommand::class => SkipProjectItemPublishingHandler::class,
             CancelProjectItemPublishingCommand::class => CancelProjectItemPublishingHandler::class,
             ArchiveContentProjectCommand::class => ArchiveContentProjectHandler::class,
+            ArchiveProjectItemsCommand::class => ArchiveProjectItemsHandler::class,
             RestoreContentProjectCommand::class => RestoreContentProjectHandler::class,
 
             // Keyword Intelligence — additive, không đổi các entry Content Project ở trên.

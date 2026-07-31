@@ -46,7 +46,7 @@ final class ContentProjectMcpToolCatalog
 
             $tools[] = [
                 'name' => $toolName,
-                'description' => (string) ($cap['description'] ?? $toolName),
+                'description' => (string) ($cap['presentation_description'] ?? $cap['description'] ?? $toolName),
                 'inputSchema' => $schema,
             ];
         }
@@ -68,16 +68,28 @@ final class ContentProjectMcpToolCatalog
     private function readToolDefinitions(): array
     {
         return [
-            $this->readTool('content_project.list_projects', 'List content projects for site context.', []),
-            $this->readTool('content_project.get_project', 'Get a content project by project_ref.', ['project_ref']),
-            $this->readTool('content_project.list_items', 'List items for a project.', ['project_ref']),
-            $this->readTool('content_project.get_item', 'Get a single item by item_ref.', ['item_ref']),
-            $this->readTool('content_project.get_status', 'Get lifecycle status and allowed capabilities.', ['project_ref']),
-            $this->readTool('content_project.get_publishing_queue', 'Get publishing queue for a project.', ['project_ref']),
-            $this->readTool('content_project.get_timeline', 'Get business timeline for a project.', ['project_ref']),
-            $this->readTool('content_project.get_daily_report', 'Get daily ops report.', []),
-            $this->readTool('content_project.get_site_health', 'Get site health snapshot.', []),
-            $this->readTool('content_project.get_operation', 'Get operation log entry by operation_ref.', ['operation_ref']),
+            $this->readTool(
+                'content_project.list_projects',
+                'List Content Projects belonging to the explicitly supplied site context. Read-only. Do not use this capability to create, edit, run, or switch projects.',
+                ['site_ref'],
+            ),
+            $this->readTool(
+                'content_project.get_project',
+                'Get one Content Project by project_ref within the explicitly supplied site context. Read-only. Do not invent or switch project context.',
+                ['site_ref', 'project_ref'],
+            ),
+            $this->readTool('content_project.list_items', 'List items for an explicitly supplied project_ref. Read-only.', ['site_ref', 'project_ref']),
+            $this->readTool('content_project.get_item', 'Get a single item by item_ref. Read-only.', ['item_ref']),
+            $this->readTool(
+                'content_project.get_status',
+                'Get lifecycle status and progress for an explicitly supplied project_ref. Read-only. Do not run generation from this tool.',
+                ['site_ref', 'project_ref'],
+            ),
+            $this->readTool('content_project.get_publishing_queue', 'Get publishing queue for a project. Read-only.', ['site_ref', 'project_ref']),
+            $this->readTool('content_project.get_timeline', 'Get business timeline for a project. Read-only.', ['site_ref', 'project_ref']),
+            $this->readTool('content_project.get_daily_report', 'Get daily ops report for the current site context. Read-only.', ['site_ref']),
+            $this->readTool('content_project.get_site_health', 'Get site health snapshot for the current site context. Read-only.', ['site_ref']),
+            $this->readTool('content_project.get_operation', 'Get operation log entry by operation_ref. Read-only.', ['operation_ref']),
 
             // Keyword Intelligence — additive read surface.
             $this->readTool('keyword_intelligence.list_workspaces', 'List keyword workspaces for site context.', []),
@@ -121,6 +133,13 @@ final class ContentProjectMcpToolCatalog
             $this->readTool('gsc_intelligence.list_opportunities', 'List GSC opportunities for a property.', ['property_ref']),
             $this->readTool('gsc_intelligence.get_opportunity', 'Get a GSC opportunity by opportunity_ref.', ['property_ref', 'opportunity_ref']),
             $this->readTool('gsc_intelligence.get_operation', 'Get GSC sync operation by operation_ref.', ['operation_ref']),
+
+            // SEO Audit — site-level read (same query surface as Articles Optimal).
+            $this->readTool(
+                'seo_audit.list',
+                'List articles needing SEO audit work for the current site context. Read-only. Optional post_type filter (empty/all = all types). Does not require project_ref.',
+                ['site_ref'],
+            ),
         ];
     }
 
@@ -184,7 +203,25 @@ final class ContentProjectMcpToolCatalog
     private function readTool(string $name, string $description, array $required): array
     {
         $properties = [];
-        foreach (['project_ref', 'item_ref', 'operation_ref', 'date', 'workspace_ref', 'query_ref', 'snapshot_ref', 'evidence_ref', 'gap_ref', 'cluster_ref', 'property_ref', 'sync_run_ref', 'mapping_ref', 'aggregate_ref', 'opportunity_ref'] as $field) {
+        foreach ([
+            'site_ref',
+            'project_ref',
+            'item_ref',
+            'operation_ref',
+            'date',
+            'workspace_ref',
+            'query_ref',
+            'snapshot_ref',
+            'evidence_ref',
+            'gap_ref',
+            'cluster_ref',
+            'property_ref',
+            'sync_run_ref',
+            'mapping_ref',
+            'aggregate_ref',
+            'opportunity_ref',
+            'selected_items',
+        ] as $field) {
             $properties[$field] = ['type' => 'string'];
         }
 
@@ -197,6 +234,9 @@ final class ContentProjectMcpToolCatalog
                 'required' => $required,
                 'additionalProperties' => false,
             ],
+            'side_effects' => 'none',
+            'confirmation_policy' => 'none',
+            'mode' => 'read',
         ];
     }
 }

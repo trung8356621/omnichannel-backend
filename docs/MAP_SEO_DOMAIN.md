@@ -16,6 +16,7 @@
 /seo/{connection_hash}/domains/create             → CreateDomain
 /seo/{connection_hash}/domains/{record}/edit      → EditDomain
 /seo/{connection_hash}/domains/{record}/general   → GeneralDomain (overview)
+/seo/{connection_hash}/domains/{record}/mcp       → ViewDomainMcp (MCP HTML docs — manager)
 /seo/{connection_hash}/domains/{record}/internal-links → ListDomainInternalLinks
 /seo/{connection_hash}/domains/settings           → DomainGlobalCtaSettings
 ```
@@ -28,8 +29,9 @@
 |------|------|-------|
 | **ListDomains** | `domains` | Danh sách domain + header actions: Global CTA settings, Add domain |
 | **CreateDomain** | `create` | Tạo domain mới với SEO defaults (tone, short_description, CTA) |
-| **EditDomain** | `{record}/edit` | Edit domain + CTA/tone/links + persist SEO meta |
-| **GeneralDomain** | `{record}/general` | **Overview chính**: API tokens, **MCP Markdown** (readonly collapsible từ `McpCapabilityMarkdownPresenter` / Capability Registry — không còn route/page `/mcp-capabilities` riêng), score distribution, sync stats, top keywords/links, technical SEO summary. Actions: delete, incremental sync, metadata resync, keyword resync, link audit, test sync |
+| **EditDomain** | `{record}/edit` | Official **Site MCP Knowledge Profile** form (tone/CTA/links/short description) + header **Generate/Regenerate draft** / **Show draft panel**. Draft = fixed right drawer (`site_meta.site_mcp_draft` only; never overwrite official). Views: `edit-domain.blade.php`, `partials/site-mcp-draft-panel.blade.php` |
+| **GeneralDomain** | `{record}/general` | **Overview chính** (site-specific): API tokens, score distribution, sync stats, top keywords/links, official Site MCP summary + link **Chỉnh sửa / Generate draft** → Edit. Header: nút **MCP Markdown** → `ViewDomainMcp` (Agent docs — khác Site MCP). **Không** embed draft generator / global MCP catalog tại đây |
+| **ViewDomainMcp** | `{record}/mcp` | Readonly **Developer MCP Reference** (Agent `CanonicalCapabilityRegistry` docs) — **không** phải Site MCP Knowledge Profile. Domain URL = navigation shell only. Manager-only |
 | **ListDomainInternalLinks** | `{record}/internal-links` | Internal links với tab keywords/links |
 | **RedirectDomainInfoToEdit** | `{record}/info` | Redirect `/info` → `/edit` |
 | **DomainGlobalCtaSettings** | `domains/settings` | Global CTA settings (working_hours, zalo...) — lưu WpOption |
@@ -50,7 +52,8 @@
 | 2 | **AllDomainsDashboardService** | `Services/AllDomainsDashboardService.php` | Dashboard tổng hợp tất cả domain: health overview, content project progress, team productivity |
 | 3 | **SeoMainDomainService** | `Services/SeoMainDomainService.php` | Quản lý "miền chính" per user (meta key `seo_is_main`). Set, unset, resolve, deduplicate primary sites |
 | 4 | **ClearDomainArticlesService** | `Services/ClearDomainArticlesService.php` | Xóa vĩnh viễn toàn bộ SeoArticle + SeoPromptResultLink của domain |
-| 5 | **SiteDomainPromptContextService** | `Services/SiteDomainPromptContextService.php` | **Cốt lõi Technical SEO**: lưu/đọc tone of voice, short_description (≤300 từ), CTA (phone_1-3, email_1-3, zalo, address, facebook, other), link list (keyword→URL), cta_intro. Merge CTA global → domain. Cung cấp `promptVariablesForSite()` cho AI prompt |
+| 5 | **SiteDomainPromptContextService** | `Services/SiteDomainPromptContextService.php` | **Official Site MCP Knowledge Profile** (UI: Edit Domain): tone, short_description (≤300 từ), CTA slots, link list, cta_intro. Meta `seo_domain_prompt_context`. Prompt vars `promptVariablesForSite()` |
+| 5b | **SiteMcp\*** (draft) | `Services/SiteMcp/` | **Site MCP draft** (Knowledge Profile, không phải Agent MCP): `SiteMcpDiscovery` ưu tiên live WP `product_cat` → staging verified → không heuristic; `SiteMcpProductCatIdentity` (canonical term + parent_term_id kể cả `0`); `SiteMcpProductCatLiveSource` (GET taxonomy terms / refresh `/terms`); `SiteMcpGenerator` (`news_manual` / `production_catalog` / `ecommerce_catalog`) — Main Topics = `product_cat` + `term_id>0` + `parent_term_id===0` only; `SiteMcpDraft` / `Preview` / `KeywordExtractor` / `OfficialGuard` / `ContactDiscovery`. Counts: `product_cat_total` / `root_product_cat` / `child_product_cat`; availability `available\|unavailable\|incomplete`; warning `PRODUCT_CATEGORY_TAXONOMY_CAPABILITY_MISSING` vs `ROOT_PRODUCT_CATEGORIES_NOT_AVAILABLE` |
 | 6 | **DomainCtaEditorService** | `Services/DomainCtaEditorService.php` | Format CTA list cho article editor (href, plain_text, can_insert) |
 | 7 | **DomainLinkListEditorService** | `Services/DomainLinkListEditorService.php` | Cung cấp link list cho article editor kèm article_count (số bài đã chèn anchor). Có `forArticle()` lọc theo nội dung bài |
 | 8 | **SeoDomainCtaGlobalSettingsService** | `Services/SeoDomainCtaGlobalSettingsService.php` | Global CTA settings (WpOption `seo_domain_cta_global_settings`): `default_cta_intro`, `global_cta` (working_hours, address, facebook, zalo) |
@@ -63,7 +66,7 @@
 | 10 | **MetadataDomainSyncRunner** | `Services/MetadataDomainSyncRunner.php` | Chạy metadata resync theo chunk (ngôn ngữ, Polylang, SEO meta) |
 | 11 | **KeywordDomainResyncService** | `Services/KeywordDomainResyncService.php` | Reset & resync keywords: xóa CTA-blacklisted, xóa orphan linked keywords, rescan articles → link maps, focus keyword sync |
 | 12 | **WordPressPluginDomainsOverviewService** | `Services/WordPressPluginDomainsOverviewService.php` | Kiểm tra version WordPress plugin (omi-seo-ai-bridge) trên từng domain |
-| 13 | **SyncDomainContentService** | `Services/SyncDomainContentService.php` | Đồng bộ nội dung từ WordPress: full sync, prepareIncrementalSync, processIncrementalChunk, prepareMetadataResync, resetAndFullSync, importPushedItems (posts/pages/categories/products) |
+| 13 | **SyncDomainContentService** | `Services/SyncDomainContentService.php` | Đồng bộ nội dung từ WordPress: full sync, prepareIncrementalSync, processIncrementalChunk, prepareMetadataResync, resetAndFullSync, importPushedItems. Taxonomy: persist `wp_parent_id` kể cả `"0"` (không xóa khi parent=0 — Site MCP fail-closed) + `wp_term_count` |
 | 14 | **DomainLinkListKeywordSyncService** | `Services/DomainLinkListKeywordSyncService.php` | Đồng bộ link list → keywords table. Upsert/Remove link trong domain context |
 
 ---
@@ -75,7 +78,8 @@
 | Layer | Service | Storage | Fields |
 |-------|---------|--------|--------|
 | **Global** | `SeoDomainCtaGlobalSettingsService` | WpOption `seo_domain_cta_global_settings` | `default_cta_intro`, `global_cta` (working_hours, address, facebook, zalo) |
-| **Domain** | `SiteDomainPromptContextService` | Site meta `seo_domain_prompt_context` | `tone`, `short_description`, `cta_intro`, `cta[]`, `links[]` |
+| **Domain (official)** | `SiteDomainPromptContextService` | Site meta `seo_domain_prompt_context` | `tone`, `short_description`, `cta_intro`, `cta[]`, `links[]` |
+| **Domain (draft)** | `SiteMcp\SiteMcpDraft` | Site meta `site_mcp_draft` | Knowledge Profile draft JSON (topics/pages/generation); AI context = topics only (no URLs); never auto-apply |
 | **Form** | `PersistsDomainPromptContext` trait | Auto-save khi form submit + sync link list → keywords |
 
 ### 4.2 DomainTechnicalSeoForm (4 sections)
@@ -130,8 +134,11 @@ CreateDomain/EditDomain
 | `Filament/Resources/DomainResource.php` | Resource (Site model) |
 | `Filament/Resources/DomainResource/Pages/ListDomains.php` | Page |
 | `Filament/Resources/DomainResource/Pages/CreateDomain.php` | Page |
-| `Filament/Resources/DomainResource/Pages/EditDomain.php` | Page |
-| `Filament/Resources/DomainResource/Pages/GeneralDomain.php` | Page (1044 dòng) |
+| `Filament/Resources/DomainResource/Pages/EditDomain.php` | Page — official Site MCP + draft drawer |
+| `resources/views/.../edit-domain.blade.php` + `partials/site-mcp-draft-panel.blade.php` | Edit layout + fixed draft drawer |
+| `Filament/Resources/DomainResource/Pages/GeneralDomain.php` | Page (overview; link Edit for Site MCP draft; nút MCP Markdown → ViewDomainMcp) |
+| `Filament/Resources/DomainResource/Pages/ViewDomainMcp.php` | Page — Developer/Agent MCP docs (`/{record}/mcp`) — khác Site MCP |
+| `Services/SiteMcp/{SiteMcpDraft,Discovery,Generator,Preview,KeywordExtractor,OfficialGuard,ContactDiscovery,ProductCatIdentity,ProductCatLiveSource}.php` | Site MCP Knowledge Profile draft pipeline (verified product_cat roots → Main Topics) |
 | `Filament/Resources/DomainResource/Pages/ListDomainInternalLinks.php` | Page |
 | `Filament/Resources/DomainResource/Pages/RedirectDomainInfoToEdit.php` | Page |
 | `Filament/Resources/DomainResource/Pages/ArticleDomainMismatch.php` | Page |
@@ -187,8 +194,11 @@ CreateDomain/EditDomain
 ```
 Resource: Filament/Resources/DomainResource.php
 Overview page: Filament/Resources/DomainResource/Pages/GeneralDomain.php
-Technical SEO: Services/SiteDomainPromptContextService.php + Forms/DomainTechnicalSeoForm.php
+Official Site MCP: Services/SiteDomainPromptContextService.php + Forms/DomainTechnicalSeoForm.php + EditDomain
+Site MCP draft: Services/SiteMcp/* → site_meta.site_mcp_draft (EditDomain drawer; live/staging product_cat parent=0 → Main Topics)
+Developer/Agent MCP docs: ViewDomainMcp (CanonicalCapabilityRegistry) — not Site MCP
 Global CTA: Filament/Pages/DomainGlobalCtaSettings.php + Services/SeoDomainCtaGlobalSettingsService.php
 Dashboard widgets: Filament/Widgets/AllDomains{List,Projects,Team}Widget.php
 Sync core: Services/SyncDomainContentService.php
 ```
+

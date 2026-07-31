@@ -127,6 +127,11 @@ return [
         /** Run item status=processing older than this (minutes) may be reclaimed. */
         'run_item_stale_minutes' => (int) env('SEO_CONTENT_PROJECT_RUN_ITEM_STALE_MINUTES', 30),
         /**
+         * Task stuck in Writing/Generating without fresh heartbeat/active worker.
+         * 0 = derive from max(run_item_stale_minutes, heartbeat_stale_minutes).
+         */
+        'generation_task_stale_minutes' => (int) env('SEO_CONTENT_PROJECT_GENERATION_TASK_STALE_MINUTES', 0),
+        /**
          * Tạm: log 1 event / cancel + snapshot busy khi build stepsForTask.
          * Tắt sau khi chốt root cause Ngắt (A/B/C/D). Không log prompt/AI output.
          */

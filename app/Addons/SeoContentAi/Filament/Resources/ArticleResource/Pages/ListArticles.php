@@ -42,6 +42,65 @@ class ListArticles extends ListRecords
     #[Url(as: 'tab')]
     public string $contentTab = self::TAB_POSTS;
 
+    public const DEFAULT_RECORDS_PER_PAGE = 30;
+
+    /**
+     * Per-page qua GET (?perPage=) — không persist session (tránh treo khi chọn max/all).
+     *
+     * @return array<string, mixed>
+     */
+    protected function queryString(): array
+    {
+        return [
+            'tableRecordsPerPage' => [
+                'as' => 'perPage',
+                'except' => self::DEFAULT_RECORDS_PER_PAGE,
+            ],
+        ];
+    }
+
+    public function updatedTableRecordsPerPage(): void
+    {
+        session()->forget($this->getTablePerPageSessionKey());
+        $this->resetPage();
+    }
+
+    public function getDefaultTableRecordsPerPageSelectOption(): int|string
+    {
+        session()->forget($this->getTablePerPageSessionKey());
+
+        $pageOptions = array_map(
+            static fn (int|string $option): int|string => is_numeric($option) ? (int) $option : $option,
+            $this->getTable()->getPaginationPageOptions(),
+        );
+
+        $fromQuery = request()->query('perPage');
+        if ($fromQuery !== null && $fromQuery !== '') {
+            $candidate = is_numeric($fromQuery) ? (int) $fromQuery : $fromQuery;
+            if (in_array($candidate, $pageOptions, true)) {
+                return $candidate;
+            }
+        }
+
+        if ($this->tableRecordsPerPage !== null && $this->tableRecordsPerPage !== '') {
+            $candidate = is_numeric($this->tableRecordsPerPage)
+                ? (int) $this->tableRecordsPerPage
+                : $this->tableRecordsPerPage;
+            if (in_array($candidate, $pageOptions, true)) {
+                return $candidate;
+            }
+        }
+
+        $default = $this->getTable()->getDefaultPaginationPageOption() ?? self::DEFAULT_RECORDS_PER_PAGE;
+        $default = is_numeric($default) ? (int) $default : $default;
+
+        if (in_array($default, $pageOptions, true)) {
+            return $default;
+        }
+
+        return $pageOptions[0] ?? self::DEFAULT_RECORDS_PER_PAGE;
+    }
+
     public function mount(): void
     {
         parent::mount();

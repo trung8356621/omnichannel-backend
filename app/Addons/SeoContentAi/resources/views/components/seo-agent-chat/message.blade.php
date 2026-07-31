@@ -7,19 +7,22 @@
 
 @php
     $isUser = $role === 'user';
+    // Execution cards own the body — avoid duplicating summary in message content.
+    $executionTypes = ['execution_result', 'execution_error', 'execution_preview', 'execution_confirmation'];
+    $showContent = filled($content) && ! in_array((string) $messageType, $executionTypes, true);
 @endphp
 
 <div class="{{ $isUser ? 'seo-global-chat__user-row' : 'seo-global-chat__assistant-row' }}">
-    @unless ($isUser)
+    <?php if (! $isUser): ?>
         <span class="seo-global-chat__assistant-icon">
             <x-seo-content-ai::seo-agent-chat.star-icon />
         </span>
-    @endunless
+    <?php endif; ?>
 
     <div class="{{ $isUser ? 'seo-global-chat__user-message' : 'seo-global-chat__assistant-message' }} {{ $messageType === 'error' ? 'is-error' : '' }}">
-        @if (filled($content))
+        <?php if ($showContent): ?>
             <div class="whitespace-pre-wrap">{{ $content }}</div>
-        @endif
+        <?php endif; ?>
 
         {{ $slot }}
     </div>

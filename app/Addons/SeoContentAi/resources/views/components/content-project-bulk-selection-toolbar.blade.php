@@ -49,5 +49,17 @@
             <button type="button" wire:click="bulkSkipPublish" class="fi-btn fi-btn-color-gray fi-size-sm">Skip</button>
             <button type="button" wire:click="bulkCancelPublish" wire:confirm="Cancel publishing?" class="fi-btn fi-btn-color-danger fi-size-sm">Cancel</button>
         </div>
+
+        <div class="flex flex-wrap gap-2">
+            <span class="w-full text-[10px] font-semibold uppercase tracking-wide text-danger-600 sm:w-auto sm:self-center dark:text-danger-400">Lifecycle</span>
+            <button
+                type="button"
+                wire:click="archiveSelected"
+                wire:confirm="{{ __('seo-content-ai::filament.projects.archive_selected_confirm', ['count' => (int) $selectedCount]) }}"
+                class="fi-btn fi-btn-color-danger fi-size-sm"
+            >
+                {{ __('seo-content-ai::filament.projects.archive_selected') }}
+            </button>
+        </div>
     </div>
 @endif

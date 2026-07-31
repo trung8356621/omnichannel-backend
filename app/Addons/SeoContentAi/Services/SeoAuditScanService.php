@@ -137,11 +137,8 @@ final class SeoAuditScanService
         bool $filterLowSeoScore,
         bool $filterTechnicalSeoScore,
     ): bool {
-        $selectedRuleKeys = $this->normalizeSelectedRuleKeys($selectedRuleKeys);
-
-        return $selectedRuleKeys === [SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD]
-            && ! $filterLowSeoScore
-            && ! $filterTechnicalSeoScore;
+        // missing_focus_keyword removed from SEO Audit filter surface.
+        return false;
     }
 
     /**
@@ -155,18 +152,20 @@ final class SeoAuditScanService
         bool $filterTechnicalSeoScore,
     ): Builder {
         $selectedRuleKeys = $this->normalizeSelectedRuleKeys($selectedRuleKeys);
+        // SEO Audit không còn filter "thiếu từ khóa chính".
+        $selectedRuleKeys = array_values(array_filter(
+            $selectedRuleKeys,
+            static fn (string $key): bool => $key !== SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD,
+        ));
         $query = clone $baseQuery;
 
         $hasScoringSelection = $selectedRuleKeys !== [] || $filterLowSeoScore || $filterTechnicalSeoScore;
-        $missingKeywordOnly = $this->isMissingFocusKeywordOnly($selectedRuleKeys, $filterLowSeoScore, $filterTechnicalSeoScore);
 
-        if (! $hasScoringSelection || ! $missingKeywordOnly) {
-            $query->where(function (Builder $analyzedScope): void {
-                $analyzedScope->whereHas('articleMetas', static function (Builder $meta): void {
-                    $meta->where('meta_key', SeoScoringRulesRegistry::META_KEY_VIOLATIONS);
-                })->orWhereNotNull('seo_score');
-            });
-        }
+        $query->where(function (Builder $analyzedScope): void {
+            $analyzedScope->whereHas('articleMetas', static function (Builder $meta): void {
+                $meta->where('meta_key', SeoScoringRulesRegistry::META_KEY_VIOLATIONS);
+            })->orWhereNotNull('seo_score');
+        });
 
         if (! $hasScoringSelection) {
             return $query;
@@ -186,10 +185,6 @@ final class SeoAuditScanService
         $query->where(function (Builder $orGroup) use ($enabledRuleKeys, $filterLowSeoScore, $filterTechnicalSeoScore, $threshold): void {
             foreach ($enabledRuleKeys as $ruleKey) {
                 if ($ruleKey === SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD) {
-                    $orGroup->orWhere(function (Builder $missingKeyword): void {
-                        $this->applyMissingFocusKeywordScope($missingKeyword);
-                    });
-
                     continue;
                 }
 

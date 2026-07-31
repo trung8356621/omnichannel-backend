@@ -166,11 +166,15 @@ Lưu kết quả test workflow cho một task. Columns: `task_id` (FK → `seo_t
 /seo/{connection_hash}/content-projects/{record}   → ViewSeoProject (operations workspace — Run Results UX)
 /seo/{connection_hash}/content-projects/{record}/edit → EditSeoProject (settings form)
 /seo/{connection_hash}/content-projects/{record}/publishing-queue → ContentProjectPublishingQueue
-/seo/{connection_hash}/content-operations          → ContentProjectOperationsCenter (manager+; tabs gồm **Site Sync**: runs/events/diagnostics; `SiteSyncOperationsCenter` ẩn sidebar nav)
+/seo/{connection_hash}/content-operations          → ContentProjectOperationsCenter (manager+; tabs gồm **Site Sync**: runs/events/diagnostics; tab **Runtime** cũng có **MCP Reference** markdown; `SiteSyncOperationsCenter` ẩn sidebar nav)
 /admin/content-operations                          → ContentOperationsRedirect → SEO ops
 ```
 
 `ContentProjectOperationsCenter` tab **Site Sync**: recent runs (nút theo status — completed: report/diagnostic/reconcile; failed: resume; running: cancel), inbound events, diagnostics. Không còn menu sidebar riêng **Site Sync Ops**.
+
+**Scheduler flags (VALUE_NONE):** Trong `SeoContentAiServiceProvider`, cron đăng ký string `--apply` / `--sync` (vd. `seo:content-project:recover-stale-generation --apply`, `agent:metrics:aggregate --sync`) — **không** `['--apply' => true]` (Symfony biến thành `--apply=1` → fail). `RecoverContentProjectStaleGenerationCommand` mỗi 10 phút.
+
+**MCP / Agent capability contract:** `ContentProjectCapabilityRegistry` + `CanonicalCapabilityRegistry` — mỗi cap có `capability_kind` (`system_action` vs site_feature keys trong `SiteSyncSchema`), `required_context`, `side_effect_level`, `action_domain`. Fail-closed: `CapabilityContextGuard` → `missing_required_context` / `context_mismatch`. UI domain: `/domains/{id}/mcp` (`ViewDomainMcp` = Markdown→sanitized HTML docs only); Agent slash palette = curated `AgentCliCommandCatalog` (không dump registry). General chỉ nút link, không embed catalog.
 
 `ViewSeoProject` = màn hình điều hành chính (dashboard vận hành compact):
 
@@ -296,6 +300,7 @@ Redirect stub only — xem §3.5. Prompt timeline per article: article editor / 
 | `BusinessHookEmitter` | `taskFailed`, `runCompleted`, `taskArchived`, `articleArchived` / `articleRestored` |
 | Rule `sync-article-to-wordpress` | Seed **enabled+published** (business) — `article.completed` → linear `wordpress.article.sync` → `product-review.create` → `product-review.sync-wp` on `automation-external` |
 | `WordPressManualSyncService` | Manual only (`ManualSyncContext` + `ManualWordPressSyncJob` on `seo`); emit `wordpress.synced` origin=manual; không giả automation |
+| `ContentProjectWorkspaceSaveService` | Editor Sync khi bài thuộc Content Project active = **Save Workspace** (`project_local_save`): `article.content.update` + stamp flags/hash; **không** WP API / không enqueue `seo`. TX ngắn chỉ quanh stamp (`last_synced_at` + sync flags) — không bọc cả persist (tránh Lock wait `articles.body`) |
 | `automation:audit-wordpress-coupling` / `automation:audit-coupling` | Audit automatic/manual callers + ownership collisions |
 
 Invariant: `SeoProjectWorkflowRunService` / `CreateArticlesFromTaskService` / `ArticleScheduleReconcileService` **không** import WP outbound hub. Completion → business event only. Chi tiết: [AUTOMATION_CUTOVER_AUDIT.md](automation/AUTOMATION_CUTOVER_AUDIT.md).
@@ -534,9 +539,10 @@ ArchiveContentProjectService.restore(project, userId)
 
 **Global domain (UI context, không phải auth):**
 - List Content Projects / Articles: vẫn filter theo `SeoAccessControl::globalSiteId()`.
-- Detail/edit/preview: `getRecordRouteBindingEloquentQuery()` **không** áp global site scope. `canView` project dùng `canAccessSite`, không dùng `getEloquentQuery()` đã scope domain.
+- Detail/edit/preview: `getRecordRouteBindingEloquentQuery()` **không** áp global site scope. `ArticleResource` / `SeoProjectResource` **override** `resolveRecordRouteBinding()` (Filament core mặc định gọi `getEloquentQuery()` — thiếu override = 404 khi mở record khác domain). `canView` project dùng `canAccessSite`, không dùng `getEloquentQuery()` đã scope domain.
 - Edit article khác domain: mở được, note badge, **không** auto `setGlobalSiteId`, **không** 404 giả.
 - Legacy run routes redirect via `getRecordRouteBindingEloquentQuery()` / `SeoProjectRun.project`.
+- Guard tests: `ContentProjectArchivePreviewAndDomainContextTest` (`test_article_resolve_record_route_binding_uses_unscoped_query`, project twin).
 
 **“Hoàn tất duyệt”** (`ArticleReviewService` action `archive`): chỉ `review_status=archived` + audit log. **Không** detach task, **không** `content_archived_at`.
 

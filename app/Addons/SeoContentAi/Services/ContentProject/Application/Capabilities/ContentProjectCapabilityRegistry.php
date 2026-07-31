@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Enums\ContentProjectLifecyclePhase;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AddContentProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ApproveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveContentProjectCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AutoScheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CancelProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CreateContentProjectCommand;
@@ -71,22 +72,42 @@ final class ContentProjectCapabilityRegistry
         return [
             $this->cap(
                 'content_project.create',
-                'Create a Content Project',
+                'Create a Content Project inside the explicitly supplied site context. This action does not create, discover, or switch sites.',
                 CreateContentProjectCommand::class,
                 'content_project.create',
                 riskLevel: 'write',
                 idempotencySupport: true,
                 dryRunSupport: false,
                 inputSchema: [
-                    'attributes' => ['type' => 'object', 'required' => true],
+                    'attributes' => [
+                        'type' => 'object',
+                        'required' => true,
+                        'description' => 'Bounded project fields only (name, month, member_ref, ...). Site comes from site_ref context — not an open-ended payload and not a site switcher.',
+                    ],
                     'tasksData' => ['type' => 'array', 'required' => false],
                 ],
                 phases: null,
                 confirmation: false,
+                presentation: [
+                    'description' => 'Create a Content Project inside the explicitly supplied site context. This action does not create, discover, or switch sites. Global workflow capability — not a per-site feature flag.',
+                    'category' => 'content_project',
+                    'capability_kind' => CapabilityKind::SYSTEM_ACTION,
+                    'action_domain' => 'content_project',
+                    'required_context' => ['site_ref'],
+                    'side_effect_level' => 'write',
+                    'input_summary' => [
+                        'site_ref (required context)',
+                        'attributes.name',
+                        'attributes.month',
+                        'attributes.member_ref',
+                        'tasksData (optional)',
+                    ],
+                    'output_summary' => ['project_ref', 'operation_id'],
+                ],
             ),
             $this->cap(
                 'content_project.update',
-                'Update Content Project metadata',
+                'Update Content Project metadata for an explicitly supplied project_ref within the current site context. Does not sync or switch sites.',
                 UpdateContentProjectCommand::class,
                 'content_project.update',
                 riskLevel: 'write',
@@ -94,10 +115,21 @@ final class ContentProjectCapabilityRegistry
                 dryRunSupport: false,
                 inputSchema: [
                     'project_ref' => ['type' => 'string', 'required' => true],
-                    'attributes' => ['type' => 'object', 'required' => true],
+                    'attributes' => [
+                        'type' => 'object',
+                        'required' => true,
+                        'description' => 'Bounded project metadata fields only. Not a free-form payload.',
+                    ],
                 ],
                 phases: null,
                 confirmation: false,
+                presentation: [
+                    'description' => 'Update Content Project metadata for an explicitly supplied project_ref within the current site context. Does not sync or switch sites.',
+                    'category' => 'content_project',
+                    'required_context' => ['site_ref', 'project_ref'],
+                    'side_effect_level' => 'write',
+                    'input_summary' => ['site_ref (context)', 'project_ref', 'attributes (bounded)'],
+                ],
             ),
             $this->cap(
                 'content_project.sync_items',
@@ -154,7 +186,7 @@ final class ContentProjectCapabilityRegistry
             ),
             $this->cap(
                 'content_project.generate',
-                'Generate / start AI workflow for project items',
+                'Run generation for the explicitly selected Content Project. Requires a project identifier. This action may invoke AI generation and must never select a project implicitly. Does not sync sites or create projects.',
                 GenerateProjectItemsCommand::class,
                 'content_project.generate',
                 riskLevel: 'write',
@@ -171,6 +203,12 @@ final class ContentProjectCapabilityRegistry
                     ContentProjectLifecyclePhase::Review->value,
                 ],
                 confirmation: false,
+                presentation: [
+                    'description' => 'Run generation for the explicitly selected Content Project. Requires a project identifier. This action may invoke AI generation and must never select a project implicitly. Does not sync sites or create projects.',
+                    'required_context' => ['site_ref', 'project_ref'],
+                    'side_effect_level' => 'write',
+                    'input_summary' => ['site_ref (context)', 'project_ref (required)', 'item_refs (optional)'],
+                ],
             ),
             $this->cap(
                 'content_project.rerun',
@@ -398,6 +436,31 @@ final class ContentProjectCapabilityRegistry
                     'confirmation_token' => ['type' => 'string', 'required' => false],
                 ],
                 phases: null,
+                confirmation: true,
+            ),
+            $this->cap(
+                'content_project.archive_items',
+                'Archive selected project items (keeps WordPress posts)',
+                ArchiveProjectItemsCommand::class,
+                'content_project.archive_items',
+                riskLevel: 'destructive',
+                idempotencySupport: true,
+                dryRunSupport: true,
+                inputSchema: [
+                    'project_ref' => ['type' => 'string', 'required' => true],
+                    'item_refs' => ['type' => 'array', 'required' => true],
+                    'note' => ['type' => 'string', 'required' => false],
+                    'dry_run' => ['type' => 'boolean', 'required' => false],
+                    'confirmation_token' => ['type' => 'string', 'required' => false],
+                ],
+                phases: [
+                    ContentProjectLifecyclePhase::Draft->value,
+                    ContentProjectLifecyclePhase::Review->value,
+                    ContentProjectLifecyclePhase::Approved->value,
+                    ContentProjectLifecyclePhase::WaitingPublish->value,
+                    ContentProjectLifecyclePhase::Published->value,
+                    ContentProjectLifecyclePhase::Failed->value,
+                ],
                 confirmation: true,
             ),
             $this->cap(
@@ -1117,55 +1180,69 @@ final class ContentProjectCapabilityRegistry
             $this->cap('gsc_intelligence.create_content_project', 'Create content project from approved GSC opportunities', \App\Addons\SeoContentAi\Services\GscIntelligence\Application\Commands\CreateContentProjectFromGscOpportunitiesCommand::class, 'gsc_intelligence.create_content_project', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: ['property_ref' => ['type' => 'string', 'required' => true], 'opportunity_refs' => ['type' => 'array', 'required' => true], 'project_attributes' => ['type' => 'object', 'required' => false], 'confirmation_token' => ['type' => 'string', 'required' => false]], phases: null, confirmation: true),
 
             // Site Sync V2
-            $this->cap('site.discover', 'Detect site capability + profile', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\DiscoverSiteCommand::class, 'site.discover', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: [], phases: null, confirmation: false, presentation: [
+            $this->cap('site.discover', 'Discover SEO provider and site feature availability for the explicitly supplied site_ref. Returns site_feature flags — not MCP system actions.', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\DiscoverSiteCommand::class, 'site.discover', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: [], phases: null, confirmation: false, presentation: [
                 'label' => 'site.discover',
-                'description' => 'Phát hiện thông tin website, plugin SEO và capability hiện có.',
+                'description' => 'Discover SEO provider and site feature availability for the explicitly supplied site_ref. Output keys (seo_score, focus_keyword, …) are site_feature flags — not callable MCP tools.',
                 'category' => 'site_sync',
+                'capability_kind' => CapabilityKind::SYSTEM_ACTION,
+                'action_domain' => 'site_sync',
+                'required_context' => ['site_ref'],
+                'side_effect_level' => 'none',
                 'read_only' => true,
                 'scopes' => ['site:read'],
-                'input_summary' => ['site_id'],
-                'output_summary' => ['site profile', 'SEO provider', 'plugin version', 'capabilities', 'fallback status'],
+                'input_summary' => ['site_ref (required context)'],
+                'output_summary' => ['site profile', 'SEO provider', 'plugin version', 'site_feature capabilities', 'fallback status'],
                 'examples' => ['Phân tích website này đang dùng plugin SEO gì và có những khả năng nào.'],
             ]),
-            $this->cap('site.sync', 'Run full site sync orchestrator', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RunSiteSyncCommand::class, 'site.sync', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: ['mode' => ['type' => 'string', 'required' => false], 'force_snapshot' => ['type' => 'boolean', 'required' => false]], phases: null, confirmation: false, presentation: [
+            $this->cap('site.sync', 'Synchronize the explicitly supplied WordPress site. Do not use this capability to create or update Content Projects.', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RunSiteSyncCommand::class, 'site.sync', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: ['mode' => ['type' => 'string', 'required' => false], 'force_snapshot' => ['type' => 'boolean', 'required' => false]], phases: null, confirmation: false, presentation: [
                 'label' => 'site.sync',
-                'description' => 'Đồng bộ và kiểm tra website qua Site Sync V2.',
+                'description' => 'Synchronize the explicitly supplied WordPress site. Requires site_ref. Do not use this to create/update Content Projects. Never infer site from UI route or capability catalog.',
                 'category' => 'site_sync',
+                'capability_kind' => CapabilityKind::SYSTEM_ACTION,
+                'action_domain' => 'site_sync',
+                'required_context' => ['site_ref'],
+                'side_effect_level' => 'write',
                 'read_only' => false,
                 'scopes' => ['site:sync'],
                 'confirmation_modes' => ['force_full'],
                 'confirmation_note' => 'Có khi dùng `force_full`',
-                'input_summary' => ['site_id', 'mode: incremental | bootstrap | force_full'],
+                'input_summary' => ['site_ref (required context)', 'mode: incremental | bootstrap | force_full'],
                 'output_summary' => ['operation_id', 'run_id', 'trạng thái', 'tóm tắt kết quả'],
-                'examples' => ['Đồng bộ website này.'],
+                'examples' => ['Đồng bộ website với site_ref đã cung cấp.'],
             ]),
-            $this->cap('site.sync_keywords', 'Sync provider keywords (+ workspace fallback)', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\SyncSiteKeywordsCommand::class, 'site.sync_keywords', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: [], phases: null, confirmation: false, presentation: [
+            $this->cap('site.sync_keywords', 'Sync provider keywords for the explicitly supplied site_ref (+ workspace fallback). Not a Content Project action.', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\SyncSiteKeywordsCommand::class, 'site.sync_keywords', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: [], phases: null, confirmation: false, presentation: [
                 'label' => 'site.sync_keywords',
-                'description' => 'Đồng bộ keyword của các bài thay đổi hoặc theo phạm vi được chọn.',
+                'description' => 'Sync provider keywords for the explicitly supplied site_ref (+ workspace fallback). Not a Content Project action.',
                 'category' => 'site_sync',
+                'required_context' => ['site_ref'],
+                'side_effect_level' => 'write',
                 'scopes' => ['site:sync'],
-                'input_summary' => ['site_id', 'scope (optional)'],
+                'input_summary' => ['site_ref (required context)', 'scope (optional)'],
                 'output_summary' => ['operation_id', 'keyword sync summary'],
-                'examples' => ['Đồng bộ keyword website này.'],
+                'examples' => ['Đồng bộ keyword website với site_ref đã cung cấp.'],
             ]),
-            $this->cap('site.sync_links', 'Sync URL catalog + validate changed links', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\SyncSiteLinksCommand::class, 'site.sync_links', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: [], phases: null, confirmation: false, presentation: [
+            $this->cap('site.sync_links', 'Sync URL catalog and validate changed links for the explicitly supplied site_ref.', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\SyncSiteLinksCommand::class, 'site.sync_links', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: [], phases: null, confirmation: false, presentation: [
                 'label' => 'site.sync_links',
-                'description' => 'Đồng bộ catalog URL và kiểm tra link đã thay đổi.',
+                'description' => 'Sync URL catalog and validate changed links for the explicitly supplied site_ref.',
                 'category' => 'site_sync',
+                'required_context' => ['site_ref'],
+                'side_effect_level' => 'write',
                 'scopes' => ['site:sync'],
-                'input_summary' => ['site_id'],
+                'input_summary' => ['site_ref (required context)'],
                 'output_summary' => ['operation_id', 'link catalog summary'],
-                'examples' => ['Đồng bộ link website này.'],
+                'examples' => ['Đồng bộ link website với site_ref đã cung cấp.'],
             ]),
-            $this->cap('site.discover_contacts', 'Discover contacts / profile suggest', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\DiscoverSiteContactsCommand::class, 'site.discover_contacts', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: [], phases: null, confirmation: false, presentation: [
+            $this->cap('site.discover_contacts', 'Suggest contacts/profile for the explicitly supplied site_ref (does not overwrite manual contacts).', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\DiscoverSiteContactsCommand::class, 'site.discover_contacts', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: [], phases: null, confirmation: false, presentation: [
                 'label' => 'site.discover_contacts',
-                'description' => 'Gợi ý contacts / profile từ WordPress (không ghi đè manual).',
+                'description' => 'Suggest contacts/profile for the explicitly supplied site_ref (does not overwrite manual contacts).',
                 'category' => 'site_sync',
+                'required_context' => ['site_ref'],
+                'side_effect_level' => 'none',
                 'read_only' => true,
                 'scopes' => ['site:read'],
-                'input_summary' => ['site_id'],
+                'input_summary' => ['site_ref (required context)'],
                 'output_summary' => ['suggested contacts', 'profile hints'],
-                'examples' => ['Tìm contact / profile gợi ý của website này.'],
+                'examples' => ['Tìm contact / profile gợi ý của website với site_ref đã cung cấp.'],
             ]),
             $this->cap('site.refresh_snapshot', 'Force full snapshot sync', \App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RefreshSiteSnapshotCommand::class, 'site.refresh_snapshot', riskLevel: 'write', idempotencySupport: true, dryRunSupport: false, inputSchema: [], phases: null, confirmation: true, presentation: [
                 'label' => 'site.refresh_snapshot',
@@ -1313,6 +1390,10 @@ final class ContentProjectCapabilityRegistry
                 $prop['format'] = $def['format'];
             }
 
+            if (isset($def['description']) && is_string($def['description']) && $def['description'] !== '') {
+                $prop['description'] = $def['description'];
+            }
+
             $properties[$field] = $prop;
 
             if (($def['required'] ?? false) === true) {
@@ -1348,6 +1429,10 @@ final class ContentProjectCapabilityRegistry
      *     label?: string,
      *     description?: string,
      *     category?: string,
+     *     capability_kind?: string,
+     *     action_domain?: string,
+     *     required_context?: list<string>,
+     *     side_effect_level?: string,
      *     read_only?: bool,
      *     scopes?: list<string>,
      *     confirmation_modes?: list<string>,
@@ -1381,6 +1466,7 @@ final class ContentProjectCapabilityRegistry
         $visibility = (string) ($meta['visibility'] ?? 'public');
         $internal = (bool) ($meta['internal'] ?? ($visibility === 'internal'));
         $readOnly = (bool) ($meta['read_only'] ?? ($riskLevel === 'read'));
+        $category = (string) ($meta['category'] ?? self::inferPresentationCategory($name));
         $inputSummary = array_values(array_map(
             static fn (mixed $v): string => (string) $v,
             (array) ($meta['input_summary'] ?? array_keys($inputSchema)),
@@ -1389,6 +1475,15 @@ final class ContentProjectCapabilityRegistry
             static fn (mixed $v): string => (string) $v,
             (array) ($meta['confirmation_modes'] ?? ($confirmation ? ['confirm'] : [])),
         ));
+        $requiredContext = array_values(array_filter(array_map(
+            static fn (mixed $v): string => trim((string) $v),
+            (array) ($meta['required_context'] ?? self::inferRequiredContext($name, $inputSchema)),
+        ), static fn (string $v): bool => $v !== ''));
+        $sideEffectLevel = (string) ($meta['side_effect_level'] ?? match (true) {
+            $readOnly => 'none',
+            $confirmation => 'destructive',
+            default => 'write',
+        });
 
         return [
             'name' => $name,
@@ -1403,7 +1498,11 @@ final class ContentProjectCapabilityRegistry
             'confirmation_requirement' => $confirmation,
             'label' => (string) ($meta['label'] ?? $name),
             'presentation_description' => (string) ($meta['description'] ?? $description),
-            'category' => (string) ($meta['category'] ?? self::inferPresentationCategory($name)),
+            'category' => $category,
+            'capability_kind' => (string) ($meta['capability_kind'] ?? CapabilityKind::SYSTEM_ACTION),
+            'action_domain' => (string) ($meta['action_domain'] ?? $category),
+            'required_context' => $requiredContext,
+            'side_effect_level' => $sideEffectLevel,
             'read_only' => $readOnly,
             'scopes' => array_values(array_map(
                 static fn (mixed $v): string => (string) $v,
@@ -1429,6 +1528,28 @@ final class ContentProjectCapabilityRegistry
             'agent_exposed' => (bool) ($meta['agent_exposed'] ?? true),
             'mcp_exposed' => array_key_exists('mcp_exposed', $meta) ? $meta['mcp_exposed'] : null,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $inputSchema
+     * @return list<string>
+     */
+    private static function inferRequiredContext(string $name, array $inputSchema): array
+    {
+        $ctx = ['site_ref'];
+
+        foreach (['project_ref', 'workspace_ref', 'property_ref', 'item_ref'] as $field) {
+            $def = $inputSchema[$field] ?? null;
+            if (is_array($def) && ($def['required'] ?? false) === true) {
+                $ctx[] = $field;
+            }
+        }
+
+        if (str_starts_with($name, 'site.') && ! in_array('site_ref', $ctx, true)) {
+            $ctx[] = 'site_ref';
+        }
+
+        return array_values(array_unique($ctx));
     }
 
     private static function inferPresentationCategory(string $name): string

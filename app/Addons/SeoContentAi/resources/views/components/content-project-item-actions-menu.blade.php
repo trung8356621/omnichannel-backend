@@ -22,6 +22,17 @@
         >
             <x-filament::icon icon="heroicon-o-arrow-top-right-on-square" class="h-4 w-4" />
         </a>
+    @elseif ($a['run_again'])
+        <button
+            type="button"
+            wire:click="rerunOne({{ $tid }})"
+            wire:confirm="{{ __('seo-content-ai::filament.projects.ops_run_again_confirm') }}"
+            class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-warning-600 ring-1 ring-gray-200 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-warning-400 dark:ring-gray-700 dark:hover:bg-gray-800"
+            aria-label="{{ __('seo-content-ai::filament.projects.ops_run_again') }}"
+            title="{{ __('seo-content-ai::filament.projects.ops_run_again') }}"
+        >
+            <x-filament::icon icon="heroicon-o-arrow-path" class="h-4 w-4" />
+        </button>
     @elseif ($a['generate'])
         <button
             type="button"
@@ -52,7 +63,7 @@
             x-transition
             @click.outside="open = false"
             role="menu"
-            class="absolute right-0 z-30 mt-1 max-h-72 w-56 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-900"
+            class="absolute right-0 z-50 mt-1 max-h-72 w-56 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-900"
         >
             @if ($a['has_content'])
                 <p class="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400">Content</p>
@@ -61,6 +72,18 @@
                 @endif
                 @if ($a['generate'])
                     <button role="menuitem" type="button" wire:click="generateOne({{ $tid }})" @click="open = false" class="block w-full px-3 py-1.5 text-left text-xs hover:bg-gray-50 focus:bg-gray-50 focus:outline-none dark:hover:bg-gray-800">Generate</button>
+                @endif
+                @if ($a['run_again'])
+                    <button
+                        role="menuitem"
+                        type="button"
+                        wire:click="rerunOne({{ $tid }})"
+                        wire:confirm="{{ __('seo-content-ai::filament.projects.ops_run_again_confirm') }}"
+                        @click="open = false"
+                        class="block w-full px-3 py-1.5 text-left text-xs hover:bg-gray-50 focus:bg-gray-50 focus:outline-none dark:hover:bg-gray-800"
+                    >
+                        {{ __('seo-content-ai::filament.projects.ops_run_again') }}
+                    </button>
                 @endif
                 @if ($a['regen_outline'])
                     <button role="menuitem" type="button" wire:click="regenOutline({{ $tid }})" wire:confirm="Regenerate outline?" @click="open = false" class="block w-full px-3 py-1.5 text-left text-xs hover:bg-gray-50 focus:outline-none dark:hover:bg-gray-800">Regenerate outline</button>
@@ -110,6 +133,23 @@
                 @endif
                 @if ($a['cancel'])
                     <button role="menuitem" type="button" wire:click="cancelPublishOne({{ $tid }})" wire:confirm="Cancel publishing?" @click="open = false" class="block w-full px-3 py-1.5 text-left text-xs text-danger-600 hover:bg-danger-50 focus:outline-none dark:text-danger-400 dark:hover:bg-danger-500/10">Cancel</button>
+                @endif
+            @endif
+
+            @if ($a['has_lifecycle'])
+                <div class="my-1 border-t border-gray-100 dark:border-gray-800"></div>
+                <p class="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400">Lifecycle</p>
+                @if ($a['archive_item'])
+                    <button
+                        role="menuitem"
+                        type="button"
+                        wire:click="archiveOne({{ $tid }})"
+                        wire:confirm="{{ __('seo-content-ai::filament.projects.archive_item_confirm') }}"
+                        @click="open = false"
+                        class="block w-full px-3 py-1.5 text-left text-xs text-danger-600 hover:bg-danger-50 focus:outline-none dark:text-danger-400 dark:hover:bg-danger-500/10"
+                    >
+                        {{ __('seo-content-ai::filament.projects.archive_item') }}
+                    </button>
                 @endif
             @endif
 

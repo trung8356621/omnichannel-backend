@@ -124,6 +124,7 @@ final class ContentProjectApplicationApiFoundationTest extends TestCase
             'ScheduleProjectItemsCommand',
             'PublishProjectItemsNowCommand',
             'ArchiveContentProjectCommand',
+            'ArchiveProjectItemsCommand',
             'RestoreContentProjectCommand',
             'ApproveProjectItemsCommand',
         ] as $command) {
@@ -146,9 +147,10 @@ final class ContentProjectApplicationApiFoundationTest extends TestCase
         $path = dirname(__DIR__, 2).'/Extension/Builtin/Wordpress/WordPressPublisher.php';
         $source = (string) file_get_contents($path);
         self::assertStringContainsString('findByExternalReference', $source);
-        self::assertStringContainsString('Already published', $source);
-        self::assertStringContainsString('Reconciled', $source);
+        self::assertStringContainsString('deliveryRequested', $source);
+        self::assertStringContainsString('Publish update delivery requested', $source);
         self::assertStringContainsString('publishForArticle', $source);
+        self::assertStringNotContainsString('Already published (wp_post_id present)', $source);
     }
 
     public function test_publish_handler_uses_publisher_resolver_not_wordpress_impl(): void

@@ -765,13 +765,109 @@ export function closeEditorTabOrRedirectToSyncQueue() {
 }
 
 /**
- * Hoàn tất Sync WP — enqueue thành công: clear draft, đóng tab ngay (không poll worker).
+ * Close editor after proven Content Project local save (not Sync Queue).
  *
- * @param {{ reload?: boolean, clear_local_state?: boolean, queued?: boolean, close_editor?: boolean, notification?: Record<string, string>, operation?: object, notificationShown?: boolean }} result
+ * @param {string|null|undefined} projectUrl
+ */
+export function closeEditorAfterProjectLocalSave(projectUrl) {
+    const fallback = typeof window.__SEO_ARTICLES_LIST_URL__ === 'string'
+        && window.__SEO_ARTICLES_LIST_URL__.trim() !== ''
+        ? window.__SEO_ARTICLES_LIST_URL__.trim()
+        : '/seo/articles';
+    const url = typeof projectUrl === 'string' && projectUrl.trim() !== ''
+        ? projectUrl.trim()
+        : fallback;
+
+    try {
+        window.close();
+    } catch {
+        // ignore
+    }
+
+    try {
+        if (!window.closed) {
+            window.location.replace(url);
+        }
+    } catch {
+        window.location.href = url;
+    }
+
+    window.setTimeout(() => {
+        try {
+            if (!window.closed) {
+                window.location.replace(url);
+            }
+        } catch {
+            window.location.href = url;
+        }
+    }, 50);
+}
+
+/**
+ * Hoàn tất Sync WP — enqueue thành công: clear draft, đóng tab ngay (không poll worker).
+ * Content Project local save: chỉ đóng sau khi server trả save_mode=project_local_save + content_hash.
+ *
+ * @param {{ reload?: boolean, clear_local_state?: boolean, queued?: boolean, close_editor?: boolean, workspace_only?: boolean, save_mode?: string, notification?: Record<string, string>, operation?: object, notificationShown?: boolean, data?: Record<string, unknown>, success?: boolean }} result
  * @param {number} articleId
  * @param {number} siteId
  */
 export function finishArticleSyncFromApi(result, articleId, siteId) {
+    const saveMode = String(result?.save_mode ?? result?.data?.save_mode ?? '');
+    const workspaceOnly = result?.workspace_only === true
+        || saveMode === 'project_local_save'
+        || String(result?.status ?? result?.data?.status ?? '') === 'workspace_saved';
+
+    if (workspaceOnly) {
+        const data = result?.data && typeof result.data === 'object' ? result.data : {};
+        const savedArticleId = Number(data.article_id ?? articleId) || 0;
+        const contentHash = String(data.content_hash ?? '').trim();
+        const savedAt = String(data.saved_at ?? '').trim();
+        const proven = result?.success !== false
+            && savedArticleId > 0
+            && contentHash !== ''
+            && savedAt !== '';
+
+        if (result.notification && result.notificationShown !== true) {
+            showArticleEditorFilamentToast(result.notification);
+        }
+
+        if (!proven) {
+            window.__seoEndArticleHeavyActionClient?.();
+            if (!result.notification) {
+                showArticleEditorFilamentToast({
+                    title: 'Save failed',
+                    body: String(result?.message ?? 'Workspace save was not confirmed.'),
+                    status: 'danger',
+                });
+            }
+
+            return;
+        }
+
+        if (result.close_editor === false) {
+            window.__seoEndArticleHeavyActionClient?.();
+
+            return;
+        }
+
+        window.__SEO_EDITOR_EXITING__ = true;
+        window.__seoArticleOperationTracker?.stop?.();
+        prepareEditorExitAfterSyncEnqueue(articleId, siteId);
+
+        if (window.__seoArticleHeavyActionOverlay) {
+            window.__seoArticleHeavyActionOverlay.persistUntilUnload = false;
+            window.__seoArticleHeavyActionOverlay.locked = false;
+        }
+        window.__seoArticleHeavyActionOverlay?.hide?.();
+
+        window.dispatchEvent(new CustomEvent('article-project-local-save-succeeded', { detail: result }));
+        closeEditorAfterProjectLocalSave(
+            typeof data.project_url === 'string' ? data.project_url : null,
+        );
+
+        return;
+    }
+
     if (result.queued) {
         // Quan trọng: đặt EXITING + navigate TRƯỚC Livewire cancel.
         // Nếu gọi Livewire trước, Alpine init lại → bootstrap thấy job queued → overlay Elapsed.

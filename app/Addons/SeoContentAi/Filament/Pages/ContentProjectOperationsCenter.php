@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Models\ContentProjectOperation;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SiteSync\SeoSiteSyncInboundEvent;
 use App\Addons\SeoContentAi\Models\SiteSync\SeoSiteSyncRun;
+use App\Addons\SeoContentAi\Services\ContentProject\Agent\Mcp\McpCapabilityMarkdownPresenter;
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\AgentExecutionContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\ContentProjectAgentPlanApplicationService;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
@@ -107,6 +108,9 @@ final class ContentProjectOperationsCenter extends SeoPanelPage
     /** @var list<array<string, mixed>> */
     public array $runtimeRows = [];
 
+    /** @var array<string, mixed> */
+    public array $mcpCapabilityDoc = [];
+
     public ?int $siteSyncFilterSiteId = null;
 
     /** @var list<array<string, mixed>> */
@@ -197,6 +201,7 @@ final class ContentProjectOperationsCenter extends SeoPanelPage
         }
 
         $this->runtimeRows = SeoExtensions::buildRuntimeSnapshot();
+        $this->loadMcpCapabilityDoc();
     }
 
     public function refreshTab(?string $tab = null): void
@@ -212,7 +217,7 @@ final class ContentProjectOperationsCenter extends SeoPanelPage
                 'commands' => $this->loadOperations(),
                 'analytics' => $this->loadAnalytics($sites),
                 'health' => $this->loadHealth($sites),
-                'runtime' => $this->runtimeRows = SeoExtensions::buildRuntimeSnapshot(),
+                'runtime' => $this->loadRuntimeTab(),
                 'timeline' => $this->loadTimeline(),
                 'report' => $this->dailyReport = app(ContentProjectDailyReportService::class)
                     ->buildForDate(Carbon::yesterday(), $sites),
@@ -516,6 +521,33 @@ final class ContentProjectOperationsCenter extends SeoPanelPage
                 'can_replay' => ! $op->success,
             ];
         })->all();
+    }
+
+    private function loadRuntimeTab(): void
+    {
+        $this->runtimeRows = SeoExtensions::buildRuntimeSnapshot();
+        $this->loadMcpCapabilityDoc();
+    }
+
+    private function loadMcpCapabilityDoc(): void
+    {
+        try {
+            $this->mcpCapabilityDoc = app(McpCapabilityMarkdownPresenter::class)->present(
+                includeInternal: true,
+                filter: McpCapabilityMarkdownPresenter::FILTER_ALL,
+            );
+        } catch (Throwable) {
+            $this->mcpCapabilityDoc = [
+                'title' => 'MCP Capabilities',
+                'filter' => McpCapabilityMarkdownPresenter::FILTER_ALL,
+                'filters' => [],
+                'items' => [],
+                'internal_items' => [],
+                'markdown' => '',
+                'include_internal' => true,
+                'count' => 0,
+            ];
+        }
     }
 
     private function loadSiteSync(): void

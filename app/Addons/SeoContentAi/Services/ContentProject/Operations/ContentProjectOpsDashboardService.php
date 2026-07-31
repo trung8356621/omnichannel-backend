@@ -59,7 +59,17 @@ final class ContentProjectOpsDashboardService
             });
 
         $waiting = (int) (clone $taskQuery)->where('status', SeoProjectTask::STATUS_PENDING)->count();
-        $runningTasks = (int) (clone $taskQuery)->where('status', SeoProjectTask::STATUS_WRITING)->count();
+        $staleMinutes = max(1, (int) config('seo-content-ai.content_project.generation_task_stale_minutes', 0));
+        if ($staleMinutes <= 0) {
+            $staleMinutes = max(
+                max(1, (int) config('seo-content-ai.content_project.run_item_stale_minutes', 30)),
+                max(1, (int) config('seo-content-ai.content_project.heartbeat_stale_minutes', 20)),
+            );
+        }
+        $runningTasks = (int) (clone $taskQuery)
+            ->where('status', SeoProjectTask::STATUS_WRITING)
+            ->where('updated_at', '>=', now()->subMinutes($staleMinutes))
+            ->count();
 
         $runQuery = SeoProjectRun::query()
             ->whereIn('status', [SeoProjectRun::STATUS_RUNNING, SeoProjectRun::STATUS_STOPPING])

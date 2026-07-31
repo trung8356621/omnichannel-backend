@@ -16,6 +16,7 @@ final class ArticleLastSavedTimestampService
     /** Origin ActionContext được phép ghi last_manual_saved_at. */
     private const MANUAL_SAVE_ORIGINS = [
         'article_editor',
+        'content_project_workspace_save',
     ];
 
     public function touchManualSaved(SeoArticle $article): void

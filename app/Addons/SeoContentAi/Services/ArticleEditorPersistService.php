@@ -40,6 +40,14 @@ final class ArticleEditorPersistService
     ): array {
         $html = $this->persistLocalSilent($article, $context, $html);
 
+        return $this->buildPersistResult($article, $html);
+    }
+
+    /**
+     * @return array{success: bool, message: string, html?: string}
+     */
+    public function buildPersistResult(SeoArticle $article, string $html): array
+    {
         if (strlen(trim($html)) < 50 && $this->articleHadSubstantialContent($article)) {
             return [
                 'success' => false,
@@ -47,16 +55,29 @@ final class ArticleEditorPersistService
             ];
         }
 
-        $saveBody = 'Content is saved only in SEO system. Use "Sync" to push to WordPress.';
-
         return [
             'success' => true,
-            'message' => $saveBody,
+            'message' => 'Content is saved only in SEO system. Use "Sync" to push to WordPress.',
             'html' => $html,
         ];
     }
 
     public function persistLocalSilent(
+        SeoArticle $article,
+        ArticleEditorSaveContext $context,
+        string $html,
+    ): string {
+        $html = $this->writeArticleRow($article, $context, $html);
+        $this->runAfterPersistSideEffects($article, $context, $html);
+
+        return $html;
+    }
+
+    /**
+     * Critical section only: sanitize + UPDATE `articles` row.
+     * Keep this free of heavy meta/revision/link work so callers can hold a short DB TX.
+     */
+    public function writeArticleRow(
         SeoArticle $article,
         ArticleEditorSaveContext $context,
         string $html,
@@ -81,6 +102,20 @@ final class ArticleEditorPersistService
             'user_id' => auth()->id(),
         ]);
 
+        return $html;
+    }
+
+    /**
+     * Post-row side effects — must run outside the short article-row transaction.
+     */
+    public function runAfterPersistSideEffects(
+        SeoArticle $article,
+        ArticleEditorSaveContext $context,
+        string $html,
+    ): void {
+        $slug = $context->normalizedSlug();
+        $publishAt = $context->resolvePublishAtForSave();
+
         $this->syncContentProjectScheduledPublish($article->fresh() ?? $article, $context->status, $publishAt);
 
         $this->postImages->syncFromHtml($article, $html);
@@ -103,8 +138,6 @@ final class ArticleEditorPersistService
         );
 
         $this->keywordLinks->reconcileForArticle($article->fresh(), $html);
-
-        return $html;
     }
 
     private function guardArticleBodyBeforeSave(SeoArticle $article, string $html): string

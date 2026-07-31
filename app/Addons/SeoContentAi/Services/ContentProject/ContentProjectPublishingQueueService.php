@@ -71,17 +71,31 @@ final class ContentProjectPublishingQueueService
     }
 
     /**
+     * Explicit Publish Now — normalize due time + Waiting, then runner publishes via WP.
+     * Past/null scheduled_publish_at must not block this path.
+     *
      * @param  list<int>  $taskIds
      */
     public function publishNow(SeoProject $project, array $taskIds): int
     {
-        return $this->schedule($project, $taskIds, now());
+        return $this->enqueueExplicitPublish($project, $taskIds, asRetry: false);
+    }
+
+    /**
+     * Explicit Retry Publish — Failed/Cancelled (and stale due Waiting) become queue-eligible.
+     * Past/null scheduled_publish_at must not block; clears stale failure fields.
+     *
+     * @param  list<int>  $taskIds
+     */
+    public function retry(SeoProject $project, array $taskIds): int
+    {
+        return $this->enqueueExplicitPublish($project, $taskIds, asRetry: true);
     }
 
     /**
      * @param  list<int>  $taskIds
      */
-    public function retry(SeoProject $project, array $taskIds): int
+    private function enqueueExplicitPublish(SeoProject $project, array $taskIds, bool $asRetry): int
     {
         $this->assertProjectActive($project);
         $ids = $this->normalizeIds($taskIds);
@@ -89,30 +103,80 @@ final class ContentProjectPublishingQueueService
             return 0;
         }
 
+        $this->assertTasksEligibleForSchedule($project, $ids);
+
+        if (! Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_queue_status')) {
+            return $this->batchUpdate($project, $ids, [
+                'scheduled_publish_at' => now(),
+            ]);
+        }
+
         $tasks = SeoProjectTask::query()
             ->where('project_id', (int) $project->getKey())
             ->whereIn('id', $ids)
+            ->whereNull('archived_at')
             ->get();
 
-        $this->assertTransitionForTasks($project, $ids, ContentProjectPublishQueueStatus::Retrying);
+        $affected = 0;
+        $now = now();
 
-        $affected = SeoProjectTask::query()
-            ->where('project_id', (int) $project->getKey())
-            ->whereIn('id', $ids)
-            ->where('publish_queue_status', ContentProjectPublishQueueStatus::Failed->value)
-            ->update([
-                'scheduled_publish_at' => now(),
-                'publish_queue_status' => ContentProjectPublishQueueStatus::Retrying->value,
-                'publish_retry_count' => DB::raw('publish_retry_count + 1'),
+        foreach ($tasks as $task) {
+            $from = ContentProjectPublishQueueStatus::tryFrom((string) ($task->publish_queue_status ?? ''))
+                ?? ContentProjectPublishQueueStatus::None;
+
+            if ($from === ContentProjectPublishQueueStatus::Processing) {
+                continue;
+            }
+
+            if ($asRetry) {
+                $retryable = in_array($from, [
+                    ContentProjectPublishQueueStatus::Failed,
+                    ContentProjectPublishQueueStatus::Cancelled,
+                    ContentProjectPublishQueueStatus::Waiting,
+                    ContentProjectPublishQueueStatus::Retrying,
+                    ContentProjectPublishQueueStatus::None,
+                    ContentProjectPublishQueueStatus::Published,
+                ], true);
+                if (! $retryable) {
+                    continue;
+                }
+
+                $to = $from === ContentProjectPublishQueueStatus::Failed
+                    ? ContentProjectPublishQueueStatus::Retrying
+                    : ContentProjectPublishQueueStatus::Waiting;
+            } else {
+                // Published → Waiting = update existing WP post with latest local content.
+                $to = ContentProjectPublishQueueStatus::Waiting;
+            }
+
+            $this->transitionGuard->assertCanTransition($from, $to);
+
+            $payload = [
+                'scheduled_publish_at' => $now,
+                'publish_queue_status' => $to->value,
                 'last_publish_error' => null,
-            ]);
+            ];
 
-        RuntimeLogger::info('content_project_publish_retry', [
+            if ($asRetry && $from === ContentProjectPublishQueueStatus::Failed) {
+                $payload['publish_retry_count'] = DB::raw('publish_retry_count + 1');
+            }
+
+            $updated = SeoProjectTask::query()
+                ->where('project_id', (int) $project->getKey())
+                ->whereKey((int) $task->getKey())
+                ->whereNull('archived_at')
+                ->update($payload);
+
+            $affected += (int) $updated;
+        }
+
+        RuntimeLogger::info($asRetry ? 'content_project_publish_retry' : 'content_project_publish_now', [
             'project_id' => (int) $project->getKey(),
-            'affected' => (int) $affected,
+            'affected' => $affected,
+            'as_retry' => $asRetry,
         ]);
 
-        return (int) $affected;
+        return $affected;
     }
 
     /**

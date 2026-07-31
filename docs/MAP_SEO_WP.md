@@ -11,6 +11,7 @@
 - Lịch đăng (`scheduled`) sống **chỉ trên Laravel**; cron tới giờ mới sync. **Không** gửi `draft` / WP `future` khi đồng bộ.
 - Plugin `omi-seo-ai-bridge` ≥ **1.0.57**: chặn demote `publish/private/future` → `draft`; elevate admin + `force_post_status`; clamp `post_date` tương lai khi publish.
 - Plugin `omi-seo-ai-bridge` ≥ **1.0.61**: `editor-sync` / `apply_supplementary_sync_fields` — `faqs:[]` **không** xóa `_omi_seo_faqs` nếu meta đang có, trừ khi `clear_faqs` (tránh sync Laravel gửi [] nhầm → shortcode `[omi_faq]` trống trên frontend).
+- Plugin `omi-seo-ai-bridge` ≥ **1.0.68**: capability `product_category_taxonomy_export`; `map_term` canonical (`term_id`, `parent_term_id` kể cả `0`, `taxonomy`, `url`, `post_count`, `page_type=taxonomy`); `GET /omi-seo-ai/v1/taxonomies/{taxonomy}/terms`. Laravel Site MCP draft ưu tiên live taxonomy; sync persist `wp_parent_id="0"` (không xóa khi parent=0).
 - Inbound WP → Laravel (push trash / force_delete) vẫn phản ánh trạng thái WP — xem bridge bên dưới.
 
 ---
@@ -110,7 +111,7 @@ flowchart TB
 - A disabled rule blocks future automatic executions, not an explicit manual user sync and not necessarily an execution already mid-flight before disable (pending/processing get `cancellation_requested_at`).
 - Content Project and Article completion never dispatch WordPress jobs directly.
 - WordPress automation jobs use `automation-external` (action) / `automation-critical` (rule bootstrap). Legacy manual queue job uses `seo` — not `default`.
-- Manual entry: `WordPressManualSyncService` → `ArticleWpSyncLeaseService::enqueue` (`seo_article_wp_sync_jobs` + meta `wp_sync_queue`) → `ManualWordPressSyncJob` (queue `seo`, `syncJobId`) → claim/heartbeat → `ArticleWordPressBusinessSequence`. **Không** cần Automation Rule. Enqueue lock: `acquireEnqueueLock` ưu tiên `Cache::store('database')` (`cache_locks`), retry; file-driver `fopen` fail không chặn enqueue (DB `lockForUpdate` vẫn serialize) + log `manual_wordpress_sync.lock_failed`. `isActive` (force-stale expired; sau auto-retry coi job mới active). Terminal: complete/fail/cancel/stale. **`markStale` auto-retry tối đa 3** (`MAX_STALE_AUTO_RETRIES`, settings `stale_auto_retries`, source `stale_auto_retry`); force unlock/`--force` tắt. Watchdog `seo:wordpress-sync-lease-watchdog`. Idempotency create: WP meta `_teamvia_article_id` / `_teamvia_sync_key` + `GET .../posts/find-by-article`. **Editor UX sau enqueue:** `finishArticleSyncFromApi` / `exitEditorAfterWordpressSyncQueued` — đóng tab hoặc `location.replace` Sync Queue ngay; **không** poll Elapsed trên Edit Article. Controller `POST .../sync-wp` (`queued` + `close_editor`), EditArticle sync button.
+- Manual entry: `WordPressManualSyncService` → local persist `article.content.update` (`UpdateArticleContentAction` + `ArticleEditorPersistService` TX ngắn / retry Lock wait 1205) → `ArticleWpSyncLeaseService::enqueue` (`seo_article_wp_sync_jobs` + meta `wp_sync_queue`) → `ManualWordPressSyncJob` (queue `seo`, `syncJobId`) → claim/heartbeat → `ArticleWordPressBusinessSequence`. **Không** cần Automation Rule. Content Project active → `ContentProjectWorkspaceSaveService` (Laravel-only, không WP API). Enqueue lock: `acquireEnqueueLock` ưu tiên `Cache::store('database')` (`cache_locks`), retry; file-driver `fopen` fail không chặn enqueue (DB `lockForUpdate` vẫn serialize) + log `manual_wordpress_sync.lock_failed`. `isActive` (force-stale expired; sau auto-retry coi job mới active). Terminal: complete/fail/cancel/stale. **`markStale` auto-retry tối đa 3** (`MAX_STALE_AUTO_RETRIES`, settings `stale_auto_retries`, source `stale_auto_retry`); force unlock/`--force` tắt. Watchdog `seo:wordpress-sync-lease-watchdog`. Idempotency create: WP meta `_teamvia_article_id` / `_teamvia_sync_key` + `GET .../posts/find-by-article`. **Editor UX sau enqueue:** `finishArticleSyncFromApi` / `exitEditorAfterWordpressSyncQueued` — đóng tab hoặc `location.replace` Sync Queue ngay; **không** poll Elapsed trên Edit Article. Controller `POST .../sync-wp` (`queued` + `close_editor`), EditArticle sync button.
 - `ArticleScheduleReconcileService` = Laravel status only — **no** WordPress API.
 - System cron `ScheduledArticlePublishRunner` = due scheduled posts already linked (`wp_post_id>0`); not `article.completed`.
 
@@ -173,6 +174,8 @@ flowchart LR
 - Bài mới từ Laravel **không** tạo `future` trên WP nữa — chỉ còn legacy `future` cần dọn qua UI này.
 
 **Lưu ý hosting:** Server vẫn cần `php artisan schedule:run` (Laravel) để đăng bài theo lịch SEO. WP-Cron tắt không thay thế cron hệ thống Laravel.
+
+**Site Sync reconcile (cron):** `seo:site-sync-reconcile` (`ReconcileSiteSyncCommand`) — scan site có meta `seo_read_token` (không dùng cột `sites.settings`; cột đó không tồn tại). Auth WP = `seo_read_token` + `sites.domain` (`WordPressSiteSyncClient::authContext`). Schedule hourly `seo-content-ai:site-sync-reconcile-quick`. Chi tiết V2: [SITE_SYNC_V2_OPERATIONS.md](SITE_SYNC_V2_OPERATIONS.md).
 
 ### ExternalPluginRegistry
 

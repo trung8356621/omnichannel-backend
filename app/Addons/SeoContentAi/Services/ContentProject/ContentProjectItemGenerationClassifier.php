@@ -51,12 +51,10 @@ final class ContentProjectItemGenerationClassifier
         ));
         $total = count($decisions);
 
-        $failClosed = false;
-        $failReason = '';
-        if ($hasHistoricalExecution && $total > 0 && $runCount === $total) {
-            $failClosed = true;
-            $failReason = 'fail_closed_would_rerun_entire_project_with_history';
-        }
+        $failClosed = $this->shouldFailClosed($hasHistoricalExecution, $total, $runCount, $decisions);
+        $failReason = $failClosed
+            ? 'fail_closed_would_rerun_entire_project_with_history'
+            : '';
 
         return new ContentProjectGeneratePendingPreview(
             projectId: $projectId,
@@ -66,6 +64,57 @@ final class ContentProjectItemGenerationClassifier
             failClosed: $failClosed,
             failClosedReason: $failReason,
         );
+    }
+
+    /**
+     * Fail-closed chỉ khi selection = cả project + đã có lịch sử execution
+     * VÀ không phải recovery hợp lệ (1 item / toàn bộ failed_without_output).
+     *
+     * @param  list<ContentProjectItemGenerationDecision>  $decisions
+     */
+    public function shouldFailClosed(
+        bool $hasHistoricalExecution,
+        int $total,
+        int $runCount,
+        array $decisions,
+    ): bool {
+        if (! $hasHistoricalExecution || $total <= 0 || $runCount !== $total) {
+            return false;
+        }
+
+        // 1 item project: Generate pending / recover đúng 1 item — không phải full-project hazard.
+        if ($total === 1) {
+            return false;
+        }
+
+        // Toàn bộ runnable = failed không output → recovery sau stale/worker chết, cho chạy.
+        if ($this->allRunnableHaveReasons($decisions, ['failed_without_output'])) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  list<ContentProjectItemGenerationDecision>  $decisions
+     * @param  list<string>  $reasons
+     */
+    private function allRunnableHaveReasons(array $decisions, array $reasons): bool
+    {
+        $allowed = array_fill_keys($reasons, true);
+        $sawRunnable = false;
+
+        foreach ($decisions as $decision) {
+            if (! $decision instanceof ContentProjectItemGenerationDecision || ! $decision->shouldRun()) {
+                continue;
+            }
+            $sawRunnable = true;
+            if (! isset($allowed[$decision->reason])) {
+                return false;
+            }
+        }
+
+        return $sawRunnable;
     }
 
     /**

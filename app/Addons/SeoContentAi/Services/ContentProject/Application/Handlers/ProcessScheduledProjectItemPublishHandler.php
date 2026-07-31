@@ -30,6 +30,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentP
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueService;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectQueueHealthService;
+use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use Illuminate\Support\Facades\Schema;
 use InvalidArgumentException;
 
@@ -45,6 +46,7 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
         private readonly BusinessHookEmitter $emitter,
         private readonly ContentProjectDomainEvents $domainEvents,
         private readonly ContentProjectIdempotencyStore $idempotencyStore,
+        private readonly ArticleWordPressSyncFlagService $syncFlags,
     ) {
         parent::__construct($tenantGuard, $businessLock, $previewToken);
     }
@@ -178,6 +180,7 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
         if ($publishResult->alreadyPublished && $publishResult->wpPostId !== null && $publishResult->wpPostId > 0) {
             $this->queue->markPublished($task->fresh() ?? $task);
             $this->health->rememberSuccess(1);
+            $this->rememberPublishedContentHash($article);
             $this->domainEvents->dispatchAfterCommit(new ArticlePublished(
                 projectId: $projectId,
                 itemId: $itemId,
@@ -231,10 +234,24 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
                 articleId: (int) $article->id,
                 attemptRef: $attemptRef,
             ));
+
+            // Queue accepted delivery — do NOT clear has_unpublished_changes here.
+            // WordPressArticleSyncService remembers published hash after real WP success.
+            $this->queue->markPublished($task->fresh() ?? $task);
+            $this->health->rememberSuccess(1);
+
+            return ContentProjectActionResult::ok(
+                ContentProjectActionCodes::ITEMS_PUBLISH_QUEUED,
+                'Publish delivery requested.',
+                $projectId,
+                [$itemId],
+                metadata: ['attempt_ref' => $attemptRef, 'delivery_requested' => true],
+            );
         }
 
         $this->queue->markPublished($task->fresh() ?? $task);
         $this->health->rememberSuccess(1);
+        $this->rememberPublishedContentHash($article);
 
         return ContentProjectActionResult::ok(
             ContentProjectActionCodes::ITEMS_PUBLISH_QUEUED,
@@ -242,6 +259,15 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
             $projectId,
             [$itemId],
             metadata: ['attempt_ref' => $attemptRef],
+        );
+    }
+
+    private function rememberPublishedContentHash(SeoArticle $article): void
+    {
+        $fresh = $article->fresh() ?? $article;
+        $this->syncFlags->rememberPublishedContentHash(
+            $fresh,
+            hash('sha256', trim((string) ($fresh->body ?? ''))),
         );
     }
 

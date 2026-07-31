@@ -30,6 +30,7 @@ final class ContentProjectPublishTransitionGuard
         ],
         'failed' => [
             ContentProjectPublishQueueStatus::Retrying,
+            ContentProjectPublishQueueStatus::Waiting,
             ContentProjectPublishQueueStatus::Cancelled,
             ContentProjectPublishQueueStatus::Skipped,
         ],
@@ -44,7 +45,10 @@ final class ContentProjectPublishTransitionGuard
         'skipped' => [
             ContentProjectPublishQueueStatus::Waiting,
         ],
-        'published' => [],
+        'published' => [
+            // Republish / update existing WordPress post after local edits.
+            ContentProjectPublishQueueStatus::Waiting,
+        ],
     ];
 
     public function assertCanTransition(

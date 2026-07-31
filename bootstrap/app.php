@@ -5,6 +5,12 @@ use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Support\Facades\Route;
 
+// Before vendor ModelNotFoundException autoloads: safe setModel for nested-array ids
+// (Livewire ImplicitlyBoundMethod / route binding). Prevents ErrorException mask.
+if (! class_exists(\Illuminate\Database\Eloquent\ModelNotFoundException::class, false)) {
+    require __DIR__.'/../app/Support/Patches/IlluminateModelNotFoundException.php';
+}
+
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         web: __DIR__.'/../routes/web.php',

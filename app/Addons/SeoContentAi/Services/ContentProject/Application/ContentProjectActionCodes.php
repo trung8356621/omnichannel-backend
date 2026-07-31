@@ -37,6 +37,8 @@ final class ContentProjectActionCodes
 
     public const PROJECT_ARCHIVED = 'project.archived';
 
+    public const ITEMS_ARCHIVED = 'items.archived';
+
     public const PROJECT_RESTORED = 'project.restored';
 
     public const PREVIEW_READY = 'preview.ready';

@@ -10,19 +10,23 @@ use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentCapabilityDiagnosticsSe
 use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentChatTemplateRegistry;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentConversationService;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentIntentRouter;
+use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentMessageOutputSanitizer;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentSkillAvailabilityService;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentSkillRecommendationService;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentSkillRegistry;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceApplicationService;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceContextService;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\Cli\AgentCliArgumentSuggestService;
+use App\Addons\SeoContentAi\Services\AgentWorkspace\Cli\AgentCliCapabilityGate;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\Cli\AgentCliCommandCatalog;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\Cli\AgentCliCommandParser;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\ConversationalAgentFlowService;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\Dtos\AgentIntentResolution;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\Dtos\AgentWorkspaceContext;
 use App\Addons\SeoContentAi\Models\AgentWorkspace\SeoAgentExecution;
+use App\Addons\SeoContentAi\Services\SiteMcp\SiteMcpKeywordSuggestCliService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Models\Site;
 use App\Models\User;
 use App\Support\RuntimeLogger;
 use Filament\Notifications\Notification;
@@ -67,6 +71,12 @@ final class AgentWorkspacePage extends SeoPanelPage
     public bool $composerSubmitting = false;
 
     public string $composerError = '';
+
+    /** Client idempotency key for the in-flight composer submit. */
+    public ?string $clientRequestId = null;
+
+    /** Last successfully accepted client request id (dedupe retries). */
+    public ?string $lastHandledClientRequestId = null;
 
     public string $paletteQuery = '';
 
@@ -351,9 +361,24 @@ final class AgentWorkspacePage extends SeoPanelPage
             $conversation = $this->requireConversation($context);
 
             // Refresh draft from persistence when possible.
-            $this->hydrateActiveDraftFromConversation($conversation);
+            $this->loadActiveDraftFromConversation($conversation);
 
             if ($this->conversationFlowState === ConversationalAgentFlowService::STATE_AWAITING_CONFIRMATION) {
+                // Slash / CLI never answers Yes/No.
+                if (str_starts_with(ltrim($value), '/')) {
+                    app(AgentConversationService::class)->appendMessage(
+                        $conversation,
+                        role: 'assistant',
+                        messageType: 'agent_clarification',
+                        content: 'Đang chờ xác nhận hành động hiện tại. Trả lời Yes hoặc No — slash command mới phải gửi lại sau khi hủy, hoặc dùng lệnh hợp lệ từ catalog.',
+                        structured: null,
+                        createdBy: $context->actorUserId,
+                    );
+                    $this->refreshMessages($conversation);
+
+                    return;
+                }
+
                 if (mb_strtolower($value) === 'edit') {
                     $this->editFieldChoiceMode = true;
                     $this->currentInputKey = null;
@@ -423,13 +448,13 @@ final class AgentWorkspacePage extends SeoPanelPage
                     return;
                 }
 
-                // YES
+                // YES — chỉ hợp lệ khi có active confirmation token hoặc read execute-via-ref.
                 if ($this->pendingExecutionRef === null) {
                     app(AgentConversationService::class)->appendMessage(
                         $conversation,
                         role: 'assistant',
                         messageType: 'agent_error',
-                        content: 'Thiếu execution_ref. Vui lòng bắt đầu lại.',
+                        content: 'Không có hành động đang chờ xác nhận.',
                         structured: null,
                         createdBy: $context->actorUserId,
                     );
@@ -440,30 +465,66 @@ final class AgentWorkspacePage extends SeoPanelPage
                     return;
                 }
 
-                // Confirm path
-                if ($this->confirmationRef !== null && $this->confirmationRef !== '') {
-                    app(AgentWorkspaceApplicationService::class)->confirmExecution($context, $this->pendingExecutionRef, $this->confirmationRef);
+                $token = is_string($this->pendingConfirmationToken) ? trim($this->pendingConfirmationToken) : '';
+                $skillPolicy = is_array($this->skillMeta) ? (string) ($this->skillMeta['confirmation_policy'] ?? 'none') : 'none';
+                $needsToken = in_array($skillPolicy, ['preview', 'confirm'], true);
+
+                if ($needsToken && $token === '') {
+                    app(AgentConversationService::class)->appendMessage(
+                        $conversation,
+                        role: 'assistant',
+                        messageType: 'agent_error',
+                        content: 'Confirmation đã hết hạn hoặc không hợp lệ. Vui lòng chạy lại lệnh.',
+                        structured: null,
+                        createdBy: $context->actorUserId,
+                    );
                     $this->clearDraftPersist($conversation);
-                    $this->conversationFlowState = ConversationalAgentFlowService::STATE_COMPLETED;
+                    $this->pendingConfirmationToken = null;
+                    $this->pendingExecutionRef = null;
+                    $this->conversationFlowState = ConversationalAgentFlowService::STATE_FAILED;
                     $this->refreshMessages($conversation);
 
                     return;
                 }
 
-                // No-confirm path: reuse execution ref via _execution_ref.
-                $formInput = is_array($this->skillForm) ? $this->skillForm : [];
-                $formInput['_execution_ref'] = $this->pendingExecutionRef;
+                if ($token !== '') {
+                    $result = app(AgentWorkspaceApplicationService::class)->confirmExecution(
+                        $context,
+                        $this->pendingExecutionRef,
+                        $token,
+                    );
+                } else {
+                    // Read / none confirmation: reuse preview execution_ref.
+                    $formInput = is_array($this->skillForm) ? $this->skillForm : [];
+                    $formInput['_execution_ref'] = $this->pendingExecutionRef;
 
-                app(AgentWorkspaceApplicationService::class)->execute(
-                    $context,
-                    $conversation,
-                    (string) $this->activeSkillKey,
-                    $formInput,
-                    confirmationToken: null,
-                );
+                    $result = app(AgentWorkspaceApplicationService::class)->execute(
+                        $context,
+                        $conversation,
+                        (string) $this->activeSkillKey,
+                        $formInput,
+                        confirmationToken: null,
+                    );
+                }
+
+                if (! ($result['ok'] ?? false)) {
+                    app(AgentConversationService::class)->appendMessage(
+                        $conversation,
+                        role: 'assistant',
+                        messageType: 'agent_error',
+                        content: (string) ($result['message'] ?? 'Không thực thi được.'),
+                        structured: ['card' => 'error', 'code' => (string) ($result['code'] ?? 'execute_failed')],
+                        createdBy: $context->actorUserId,
+                    );
+                    $this->conversationFlowState = ConversationalAgentFlowService::STATE_FAILED;
+                    $this->refreshMessages($conversation);
+
+                    return;
+                }
 
                 $this->clearDraftPersist($conversation);
-                $this->conversationFlowState = ConversationalAgentFlowService::STATE_EXECUTING;
+                $this->pendingConfirmationToken = null;
+                $this->conversationFlowState = ConversationalAgentFlowService::STATE_COMPLETED;
                 $this->refreshMessages($conversation);
 
                 return;
@@ -542,13 +603,46 @@ final class AgentWorkspacePage extends SeoPanelPage
                         ? $preview['execution_ref']
                         : null;
 
+                    $this->pendingConfirmationToken = isset($preview['confirmation_token']) && is_string($preview['confirmation_token'])
+                        ? $preview['confirmation_token']
+                        : null;
                     $this->confirmationRef = null;
-                    if ($this->pendingExecutionRef !== null) {
-                        $exec = SeoAgentExecution::query()
-                            ->where('public_ref', $this->pendingExecutionRef)
-                            ->where('conversation_id', $conversation->id)
-                            ->first();
-                        $this->confirmationRef = $exec?->confirmation_token_hash;
+
+                    $requiresConfirmation = (bool) ($preview['requires_confirmation'] ?? false);
+                    $executable = (bool) ($preview['executable'] ?? false);
+
+                    if ($executable && ! $requiresConfirmation && is_string($this->pendingExecutionRef) && $this->pendingExecutionRef !== '') {
+                        $formInput = is_array($this->skillForm) ? $this->skillForm : [];
+                        $formInput['_execution_ref'] = $this->pendingExecutionRef;
+                        $result = app(AgentWorkspaceApplicationService::class)->execute(
+                            $context,
+                            $conversation,
+                            (string) $this->activeSkillKey,
+                            $formInput,
+                            confirmationToken: null,
+                        );
+
+                        if (! ($result['ok'] ?? false)) {
+                            app(AgentConversationService::class)->appendMessage(
+                                $conversation,
+                                role: 'assistant',
+                                messageType: 'agent_error',
+                                content: (string) ($result['message'] ?? 'Không thực thi được.'),
+                                structured: ['card' => 'error', 'code' => (string) ($result['code'] ?? 'execute_failed')],
+                                createdBy: $context->actorUserId,
+                            );
+                            $this->conversationFlowState = ConversationalAgentFlowService::STATE_FAILED;
+                            $this->refreshMessages($conversation);
+
+                            return;
+                        }
+
+                        $this->clearDraftPersist($conversation);
+                        $this->pendingConfirmationToken = null;
+                        $this->conversationFlowState = ConversationalAgentFlowService::STATE_COMPLETED;
+                        $this->refreshMessages($conversation);
+
+                        return;
                     }
 
                     $this->conversationFlowState = ConversationalAgentFlowService::STATE_AWAITING_CONFIRMATION;
@@ -581,13 +675,10 @@ final class AgentWorkspacePage extends SeoPanelPage
             }
         } finally {
             $this->draftBusy = false;
+            $this->dispatch('agent-focus-composer');
         }
     }
-
-    /**
-     * Load active draft fields from context_summary when page refreshed.
-     */
-    private function hydrateActiveDraftFromConversation(SeoAgentConversation $conversation): void
+    private function loadActiveDraftFromConversation(SeoAgentConversation $conversation): void
     {
         $summary = is_array($conversation->context_summary) ? $conversation->context_summary : [];
         $draft = $summary[self::DRAFT_CONTEXT_KEY] ?? null;
@@ -656,7 +747,9 @@ final class AgentWorkspacePage extends SeoPanelPage
             'draft_ref' => $this->draftRef,
             'conversation_id' => $conversation->id,
             'actor_user_id' => $this->requireContext()->actorUserId,
-            'connection_hash' => (string) request()->route('connection_hash'),
+            'connection_hash' => is_string(request()->route('connection_hash'))
+                ? (string) request()->route('connection_hash')
+                : (string) (session('seo_current_connection_hash') ?? ''),
             'source' => $source,
             'skill_key' => $this->activeSkillKey,
             'command' => $command,
@@ -733,6 +826,7 @@ final class AgentWorkspacePage extends SeoPanelPage
             $this->draftRef = 'ad_'.Str::lower((string) Str::ulid());
             $this->confirmationRef = null;
             $this->pendingExecutionRef = null;
+            $this->pendingConfirmationToken = null;
             $this->previewPayload = null;
 
             $prefillOverrides = is_array($this->skillForm) ? $this->skillForm : [];
@@ -812,7 +906,9 @@ final class AgentWorkspacePage extends SeoPanelPage
                     'draft_ref' => $this->draftRef,
                     'conversation_id' => $conversation->id,
                     'actor_user_id' => $context->actorUserId,
-                    'connection_hash' => (string) request()->route('connection_hash'),
+                    'connection_hash' => is_string(request()->route('connection_hash'))
+                ? (string) request()->route('connection_hash')
+                : (string) (session('seo_current_connection_hash') ?? ''),
                     'source' => $source,
                     'skill_key' => $skill->key,
                     'command' => $commandText,
@@ -846,13 +942,47 @@ final class AgentWorkspacePage extends SeoPanelPage
                 ? $preview['execution_ref']
                 : null;
 
+            $this->pendingConfirmationToken = isset($preview['confirmation_token']) && is_string($preview['confirmation_token'])
+                ? $preview['confirmation_token']
+                : null;
             $this->confirmationRef = null;
-            if ($this->pendingExecutionRef !== null) {
-                $exec = SeoAgentExecution::query()
-                    ->where('public_ref', $this->pendingExecutionRef)
-                    ->where('conversation_id', $conversation->id)
-                    ->first();
-                $this->confirmationRef = $exec?->confirmation_token_hash;
+
+            $requiresConfirmation = (bool) ($preview['requires_confirmation'] ?? false);
+            $executable = (bool) ($preview['executable'] ?? false);
+
+            // Read / none policy: execute immediately — do not ask Yes.
+            if ($executable && ! $requiresConfirmation && is_string($this->pendingExecutionRef) && $this->pendingExecutionRef !== '') {
+                $formInput = is_array($this->skillForm) ? $this->skillForm : [];
+                $formInput['_execution_ref'] = $this->pendingExecutionRef;
+                $result = app(AgentWorkspaceApplicationService::class)->execute(
+                    $context,
+                    $conversation,
+                    $skill->key,
+                    $formInput,
+                    confirmationToken: null,
+                );
+
+                if (! ($result['ok'] ?? false)) {
+                    app(AgentConversationService::class)->appendMessage(
+                        $conversation,
+                        role: 'assistant',
+                        messageType: 'agent_error',
+                        content: (string) ($result['message'] ?? 'Không thực thi được.'),
+                        structured: ['card' => 'error', 'code' => (string) ($result['code'] ?? 'execute_failed')],
+                        createdBy: $context->actorUserId,
+                    );
+                    $this->conversationFlowState = ConversationalAgentFlowService::STATE_FAILED;
+                    $this->refreshMessages($conversation);
+
+                    return;
+                }
+
+                $this->clearDraftPersist($conversation);
+                $this->pendingConfirmationToken = null;
+                $this->conversationFlowState = ConversationalAgentFlowService::STATE_COMPLETED;
+                $this->refreshMessages($conversation);
+
+                return;
             }
 
             $this->conversationFlowState = ConversationalAgentFlowService::STATE_AWAITING_CONFIRMATION;
@@ -862,7 +992,9 @@ final class AgentWorkspacePage extends SeoPanelPage
                 'draft_ref' => $this->draftRef,
                 'conversation_id' => $conversation->id,
                 'actor_user_id' => $context->actorUserId,
-                'connection_hash' => (string) request()->route('connection_hash'),
+                'connection_hash' => is_string(request()->route('connection_hash'))
+                ? (string) request()->route('connection_hash')
+                : (string) (session('seo_current_connection_hash') ?? ''),
                 'source' => $source,
                 'skill_key' => $skill->key,
                 'command' => $commandText,
@@ -872,7 +1004,7 @@ final class AgentWorkspacePage extends SeoPanelPage
                 'current_input_key' => null,
                 'preview_ref' => null,
                 'execution_ref' => $this->pendingExecutionRef,
-                'confirmation_ref' => $this->confirmationRef,
+                'confirmation_ref' => null,
                 'expires_at' => $expiresAt,
             ];
             $conversation->context_summary = $ctx;
@@ -1157,16 +1289,26 @@ final class AgentWorkspacePage extends SeoPanelPage
 
     public function pollExecution(string $executionRef): void
     {
-        // Refresh conversation messages — status cards read from message structured payload.
-        // No business queue table queries from UI.
-        if ($executionRef === '') {
+        // Light message refresh only — status cards read from structured payload.
+        // Avoid full workspace boot on every poll tick.
+        if (trim($executionRef) === '') {
             return;
         }
-        $this->refreshConversationState();
+
+        $this->refreshActiveConversationMessages();
     }
 
-    public function sendMessage(?string $message = null): void
+    public function sendMessage(?string $message = null, ?string $clientRequestId = null): void
     {
+        if (is_string($clientRequestId) && $clientRequestId !== '') {
+            if ($this->lastHandledClientRequestId === $clientRequestId) {
+                $this->dispatch('agent-focus-composer');
+
+                return;
+            }
+            $this->clientRequestId = $clientRequestId;
+        }
+
         if (is_string($message)) {
             $normalized = trim($message);
             if ($normalized !== '') {
@@ -1181,19 +1323,75 @@ final class AgentWorkspacePage extends SeoPanelPage
         $this->submitComposer();
     }
 
+    /**
+     * True when timeline has queued/running execution cards (drives conditional wire:poll).
+     */
+    public function hasActiveExecutionPoll(): bool
+    {
+        return $this->activeExecutionRefs() !== [];
+    }
+
     public function pollActiveExecutions(): void
     {
+        try {
+            $refs = $this->activeExecutionRefs();
+            if ($refs === []) {
+                return;
+            }
+
+            // One light refresh covers all active cards — no N× full workspace rebuild.
+            $this->refreshActiveConversationMessages();
+        } catch (Throwable $e) {
+            RuntimeLogger::report($e, [
+                'page' => 'agent-workspace',
+                'action' => 'pollActiveExecutions',
+                'conversation_ref' => $this->conversationRef,
+            ]);
+        }
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function activeExecutionRefs(): array
+    {
+        $refs = [];
+
         foreach ($this->messages as $message) {
             if (! is_array($message)) {
                 continue;
             }
+
             $structured = is_array($message['structured_content'] ?? null) ? $message['structured_content'] : [];
-            $status = (string) ($structured['status'] ?? '');
-            $ref = (string) ($structured['execution_ref'] ?? '');
+            $status = $this->stringifyStructuredScalar($structured['status'] ?? null);
+            $ref = $this->stringifyStructuredScalar($structured['execution_ref'] ?? null);
+
             if ($ref !== '' && in_array($status, ['queued', 'running'], true)) {
-                $this->pollExecution($ref);
+                $refs[] = $ref;
             }
         }
+
+        return array_values(array_unique($refs));
+    }
+
+    private function refreshActiveConversationMessages(): void
+    {
+        $context = $this->requireContext();
+        $conversation = $this->requireConversation($context);
+        $this->refreshMessages($conversation);
+    }
+
+    private function stringifyStructuredScalar(mixed $value): string
+    {
+        if (is_string($value)) {
+            return trim($value);
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return trim((string) $value);
+        }
+
+        return '';
     }
 
     public function submitComposer(): void
@@ -1226,9 +1424,24 @@ final class AgentWorkspacePage extends SeoPanelPage
                 createdBy: $context->actorUserId,
             );
             $messageAccepted = true;
+            if (is_string($this->clientRequestId) && $this->clientRequestId !== '') {
+                $this->lastHandledClientRequestId = $this->clientRequestId;
+            }
             $this->composerText = '';
             $this->showPalette = false;
             $this->refreshMessages($conversation);
+
+            // Restore draft state before routing — Livewire public props alone can be stale.
+            $this->loadActiveDraftFromConversation($conversation);
+
+            // Slash command mới không bao giờ là Yes/No — kể cả khi đang awaiting confirmation.
+            if (str_starts_with(ltrim($text), '/')) {
+                if ($this->tryHandleCliComposer($text, $context, $conversation)) {
+                    $this->dispatch('agent-focus-composer');
+
+                    return;
+                }
+            }
 
             // Draft composer path: next user message answers the active draft (chat-only CLI UX).
             if ($this->conversationFlowState === ConversationalAgentFlowService::STATE_AWAITING_INPUT
@@ -1238,13 +1451,6 @@ final class AgentWorkspacePage extends SeoPanelPage
                 $this->answerConversation($text);
 
                 return;
-            }
-
-            // Static CLI commands (UX catalog) — before general intent router.
-            if (str_starts_with(ltrim($text), '/')) {
-                if ($this->tryHandleCliComposer($text, $context, $conversation)) {
-                    return;
-                }
             }
 
             // Memory proposals — never auto-persist.
@@ -1360,6 +1566,8 @@ final class AgentWorkspacePage extends SeoPanelPage
             }
         } finally {
             $this->composerSubmitting = false;
+            $this->clientRequestId = null;
+            $this->dispatch('agent-focus-composer');
         }
     }
 
@@ -1591,14 +1799,10 @@ final class AgentWorkspacePage extends SeoPanelPage
 
     public function updatedComposerText(): void
     {
-        $text = $this->composerText;
-        if (str_starts_with(ltrim($text), '/')) {
-            $this->showPalette = true;
-            $query = ltrim(explode(' ', ltrim($text), 2)[0] ?? '/', '/');
-            $this->paletteQuery = $query === '' ? '' : $query;
-            $this->refreshPalette();
-        } else {
+        // Slash palette filter runs client-side (AgentCommandCatalog). No Livewire refresh on "/".
+        if (! str_starts_with(ltrim($this->composerText), '/')) {
             $this->showPalette = false;
+            $this->cliArgumentSuggestions = [];
         }
     }
 
@@ -1952,8 +2156,8 @@ final class AgentWorkspacePage extends SeoPanelPage
         $context = $this->requireContext();
         $this->refreshConversationList($context);
         $conversation = $this->requireConversation($context);
-        $this->hydrateActiveDraftFromConversation($conversation);
-        $this->hydrateKeywordContext($conversation);
+        $this->loadActiveDraftFromConversation($conversation);
+        $this->loadKeywordContextFromConversation($conversation);
         $this->refreshMessages($conversation);
         $this->refreshSuggestions($context);
         $this->refreshPalette();
@@ -1976,21 +2180,38 @@ final class AgentWorkspacePage extends SeoPanelPage
 
     private function refreshMessages(SeoAgentConversation $conversation): void
     {
+        $sanitizer = app(AgentMessageOutputSanitizer::class);
+
         $this->messages = SeoAgentMessage::query()
             ->where('conversation_id', $conversation->id)
             ->orderBy('id')
             ->limit(200)
             ->get()
-            ->map(static fn (SeoAgentMessage $m): array => [
-                'public_ref' => $m->public_ref,
-                'role' => $m->role,
-                'message_type' => $m->message_type,
-                'content' => $m->content,
-                'structured_content' => $m->structured_content,
-                'skill_key' => $m->skill_key,
-                'operation_ref' => $m->operation_ref,
-                'created_at' => $m->created_at?->toIso8601String(),
-            ])
+            ->map(function (SeoAgentMessage $m) use ($sanitizer): array {
+                $content = $sanitizer->sanitize(is_string($m->content) ? $m->content : null);
+                $structured = is_array($m->structured_content) ? $m->structured_content : null;
+                $structuredClean = $sanitizer->sanitizeStructured($structured);
+
+                // Lazy normalize contaminated rows already in DB.
+                $dirty = ($content !== $m->content)
+                    || (is_array($structured) && $structuredClean !== $structured);
+                if ($dirty) {
+                    $m->content = $content;
+                    $m->structured_content = $structuredClean;
+                    $m->save();
+                }
+
+                return [
+                    'public_ref' => $m->public_ref,
+                    'role' => $m->role,
+                    'message_type' => $m->message_type,
+                    'content' => $content,
+                    'structured_content' => $structuredClean,
+                    'skill_key' => $m->skill_key,
+                    'operation_ref' => $m->operation_ref,
+                    'created_at' => $m->created_at?->toIso8601String(),
+                ];
+            })
             ->all();
     }
 
@@ -2071,7 +2292,7 @@ final class AgentWorkspacePage extends SeoPanelPage
                     $conversation,
                     role: 'assistant',
                     messageType: 'agent_error',
-                    content: "No keyword context found.\nRun /keyword-suggest first or input keywords manually.",
+                    content: "Không tìm thấy danh sách keyword gần nhất.\nHãy chạy /keyword-suggest trước hoặc nhập nguyên từ khóa.",
                     createdBy: $context->actorUserId,
                 );
                 $this->refreshMessages($conversation);
@@ -2080,13 +2301,37 @@ final class AgentWorkspacePage extends SeoPanelPage
             }
 
             if (str_starts_with($error, 'missing_required:') || str_starts_with($error, 'missing_positional:')) {
-                $def = AgentCliCommandCatalog::get(explode(' ', trim($text))[0] ?? '');
+                $commandToken = explode(' ', trim($text))[0] ?? '';
+                $def = AgentCliCommandCatalog::get($commandToken);
                 if ($def !== null) {
+                    $message = "Thiếu tham số bắt buộc.\nExample:\n".$def['example'];
+                    if (($def['command'] ?? '') === '/site-switch') {
+                        $message = "Thiếu site-id hoặc domain.\nExample:\n/site-switch --site-id=\"7\"\nhoặc\n/site-switch --domain=\"congtybalo.com\"";
+                    } elseif (($def['command'] ?? '') === '/project-run') {
+                        $message = "Thiếu project.\nChọn một Content Project để chạy:\n\n/project-run --project-id=\"\"";
+                        $this->composerText = AgentCliCommandCatalog::buildTemplate($def);
+                        $this->cliHelpPanel = [
+                            'command' => $def['command'],
+                            'description' => $def['description'],
+                            'example' => $def['example'],
+                        ];
+                        $this->dispatch('agent-cli-template-ready');
+                    } elseif (($def['command'] ?? '') === '/project-view') {
+                        $message = "Thiếu project.\nChọn một Content Project:\n\n/project-view --project-id=\"\"";
+                        $this->composerText = AgentCliCommandCatalog::buildTemplate($def);
+                        $this->cliHelpPanel = [
+                            'command' => $def['command'],
+                            'description' => $def['description'],
+                            'example' => $def['example'],
+                        ];
+                        $this->dispatch('agent-cli-template-ready');
+                    }
+
                     app(AgentConversationService::class)->appendMessage(
                         $conversation,
                         role: 'assistant',
                         messageType: 'agent_clarification',
-                        content: "Thiếu tham số bắt buộc.\nExample:\n".$def['example'],
+                        content: $message,
                         createdBy: $context->actorUserId,
                     );
                     $this->refreshMessages($conversation);
@@ -2098,19 +2343,69 @@ final class AgentWorkspacePage extends SeoPanelPage
             return false;
         }
 
+        $command = (string) ($parsed['command'] ?? '');
+        $definition = AgentCliCommandCatalog::get($command);
+        if (($definition['requires_site'] ?? false) === true
+            && (trim((string) ($context->siteRef ?? '')) === '' || (int) ($context->siteRef ?? 0) <= 0)
+        ) {
+            app(AgentConversationService::class)->appendMessage(
+                $conversation,
+                role: 'assistant',
+                messageType: 'agent_clarification',
+                content: "No site selected.\n\nUse:\n/site-list\n/site-switch",
+                createdBy: $context->actorUserId,
+            );
+            $this->refreshMessages($conversation);
+
+            return true;
+        }
+
+        $cliInputs = is_array($parsed['inputs'] ?? null) ? $parsed['inputs'] : [];
+        $cliProjectRef = trim((string) ($cliInputs['project_ref'] ?? ''));
+        if ($cliProjectRef !== '') {
+            $bound = $this->bindCliProjectRefToContext($cliProjectRef, $context, $conversation);
+            if ($bound === null) {
+                return true;
+            }
+            $context = $bound;
+        }
+
+        $gate = app(AgentCliCapabilityGate::class)->resolve($command, $context);
+        if (! ($gate['ok'] ?? false)) {
+            $reason = (string) ($gate['reason'] ?? 'capability_unavailable');
+            $cliError = match (true) {
+                str_starts_with($reason, 'missing_context:') => 'Thiếu context: '.substr($reason, strlen('missing_context:')).'. Chọn site/project rồi thử lại.',
+                str_starts_with($reason, 'missing_scope:') => 'Không đủ quyền (scope): '.substr($reason, strlen('missing_scope:')),
+                str_starts_with($reason, 'capability_not_exposed:') => 'Capability không expose cho Agent: '.substr($reason, strlen('capability_not_exposed:')),
+                str_starts_with($reason, 'capability_unavailable:') => 'Capability không có trong CanonicalCapabilityRegistry / READ surface: '.substr($reason, strlen('capability_unavailable:')),
+                default => 'Không thực thi được lệnh '.$command.': '.$reason,
+            };
+            app(AgentConversationService::class)->appendMessage(
+                $conversation,
+                role: 'assistant',
+                messageType: 'agent_error',
+                content: $cliError,
+                structured: ['card' => 'error', 'code' => $reason],
+                createdBy: $context->actorUserId,
+            );
+            $this->refreshMessages($conversation);
+
+            return true;
+        }
+
         if ($parsed['is_meta'] ?? false) {
             $this->handleMetaCliCommand($parsed, $context, $conversation);
 
             return true;
         }
 
-        $skillKey = (string) ($parsed['skill_key'] ?? '');
+        $skillKey = (string) ($parsed['skill_key'] ?? $gate['skill_key'] ?? '');
         if ($skillKey === '') {
             return false;
         }
 
         $this->skillForm = is_array($parsed['inputs'] ?? null) ? $parsed['inputs'] : [];
-        $this->activeCliCommand = (string) ($parsed['command'] ?? null);
+        $this->activeCliCommand = $command;
         $this->cliHelpPanel = null;
         $this->suppressUserCommandAppend = true;
         $this->selectSkill($skillKey);
@@ -2130,13 +2425,73 @@ final class AgentWorkspacePage extends SeoPanelPage
             $members = app(AgentCliArgumentSuggestService::class)
                 ->suggestMembers($context, '', $availableOnly);
 
-            $lines = ["Members (".count($members).')'];
-            foreach ($members as $row) {
-                $lines[] = '- '.$row['label'];
-            }
-            if ($members === []) {
+            $presented = (new \App\Addons\SeoContentAi\Services\AgentWorkspace\Execution\Presentation\MemberListPresenter)
+                ->present($members, $availableOnly);
+
+            app(AgentConversationService::class)->appendMessage(
+                $conversation,
+                role: 'assistant',
+                messageType: 'agent_result',
+                content: (string) ($presented['summary'] ?? ''),
+                structured: ['rendered' => $presented],
+                createdBy: $context->actorUserId,
+            );
+            $this->refreshMessages($conversation);
+
+            return;
+        }
+
+        if ($command === '/audit-keyword-suggest') {
+            app(AgentConversationService::class)->appendMessage(
+                $conversation,
+                role: 'assistant',
+                messageType: 'agent_status',
+                content: 'SEO Audit keyword suggest chưa có Agent skill riêng. Mở Articles Optimal (SEO Audit) trong panel SEO.',
+                createdBy: $context->actorUserId,
+            );
+            $this->refreshMessages($conversation);
+
+            return;
+        }
+
+        if ($command === '/keyword-suggest') {
+            $this->handleKeywordSuggestCli($parsed, $context, $conversation);
+
+            return;
+        }
+
+        if ($command === '/context') {
+            $actor = auth()->user();
+            $lines = [
+                'Context hiện tại',
+                '',
+                'Site',
+                'ID: '.$context->siteId,
+                'Domain: '.$context->siteName,
+                'Site ref: '.$context->siteRef,
+                '',
+            ];
+            if ($context->projectRef) {
+                $lines[] = 'Project';
+                try {
+                    $projectId = \App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectPublicRef::decodeProject($context->projectRef);
+                    $lines[] = 'ID: '.$projectId;
+                } catch (\Throwable) {
+                    $lines[] = 'Ref: '.$context->projectRef;
+                }
+                if ($context->projectPhase) {
+                    $lines[] = 'Phase: '.$context->projectPhase;
+                }
+                $lines[] = '';
+            } else {
+                $lines[] = 'Project';
                 $lines[] = '(none)';
+                $lines[] = '';
             }
+            $lines[] = 'Actor';
+            $lines[] = 'ID: '.$context->actorUserId;
+            $lines[] = 'Email: '.($actor instanceof User ? (string) $actor->email : '—');
+            $lines[] = 'Role: '.$context->role;
 
             app(AgentConversationService::class)->appendMessage(
                 $conversation,
@@ -2150,15 +2505,20 @@ final class AgentWorkspacePage extends SeoPanelPage
             return;
         }
 
-        if (in_array($command, ['/audit-list', '/audit-keyword-suggest'], true)) {
-            app(AgentConversationService::class)->appendMessage(
-                $conversation,
-                role: 'assistant',
-                messageType: 'agent_status',
-                content: 'SEO Audit chưa có Agent skill riêng. Mở Articles Optimal (SEO Audit) trong panel SEO.',
-                createdBy: $context->actorUserId,
-            );
-            $this->refreshMessages($conversation);
+        if ($command === '/site-info') {
+            $this->appendSiteInfoMessage($context, $conversation);
+
+            return;
+        }
+
+        if ($command === '/site-list') {
+            $this->appendSiteListMessage($context, $conversation);
+
+            return;
+        }
+
+        if ($command === '/site-switch') {
+            $this->handleSiteSwitch($parsed, $context, $conversation);
 
             return;
         }
@@ -2169,6 +2529,95 @@ final class AgentWorkspacePage extends SeoPanelPage
             role: 'assistant',
             messageType: 'agent_status',
             content: ($def['description'] ?? 'Command')."\nExample:\n".($def['example'] ?? ''),
+            createdBy: $context->actorUserId,
+        );
+        $this->refreshMessages($conversation);
+    }
+
+    /**
+     * @param  array<string, mixed>  $parsed
+     */
+    private function handleKeywordSuggestCli(
+        array $parsed,
+        AgentWorkspaceContext $context,
+        SeoAgentConversation $conversation,
+    ): void {
+        $siteId = (int) ($context->siteId ?? 0);
+        if ($siteId <= 0) {
+            app(AgentConversationService::class)->appendMessage(
+                $conversation,
+                role: 'assistant',
+                messageType: 'agent_clarification',
+                content: "No site selected.\n\nUse:\n/site-list\n/site-switch",
+                createdBy: $context->actorUserId,
+            );
+            $this->refreshMessages($conversation);
+
+            return;
+        }
+
+        $site = Site::query()->find($siteId);
+        if (! $site instanceof Site) {
+            app(AgentConversationService::class)->appendMessage(
+                $conversation,
+                role: 'assistant',
+                messageType: 'agent_error',
+                content: 'Site không tồn tại.',
+                createdBy: $context->actorUserId,
+            );
+            $this->refreshMessages($conversation);
+
+            return;
+        }
+
+        $inputs = is_array($parsed['inputs'] ?? null) ? $parsed['inputs'] : [];
+        $keyword = trim((string) ($inputs['keyword'] ?? ''));
+        $limit = (int) ($inputs['limit'] ?? 10);
+        $useRaw = $inputs['use_site_mcp'] ?? $inputs['use-site-mcp'] ?? 'yes';
+        if (is_bool($useRaw)) {
+            $useSiteMcp = $useRaw;
+        } else {
+            $normalized = mb_strtolower(trim((string) $useRaw));
+            $useSiteMcp = $normalized === '' || ! in_array($normalized, ['no', '0', 'false', 'off'], true);
+        }
+
+        $result = app(SiteMcpKeywordSuggestCliService::class)->suggest(
+            $site,
+            $keyword,
+            $limit > 0 ? $limit : 10,
+            $useSiteMcp,
+        );
+
+        if (($result['ok'] ?? false) !== true) {
+            app(AgentConversationService::class)->appendMessage(
+                $conversation,
+                role: 'assistant',
+                messageType: 'agent_clarification',
+                content: (string) ($result['message'] ?? 'Không gợi ý được keyword.'),
+                createdBy: $context->actorUserId,
+            );
+            $this->refreshMessages($conversation);
+
+            return;
+        }
+
+        $keywords = is_array($result['keywords'] ?? null) ? $result['keywords'] : [];
+        $this->storeKeywordContext(array_map('strval', $keywords));
+
+        $presented = (new \App\Addons\SeoContentAi\Services\AgentWorkspace\Execution\Presentation\KeywordSuggestionPresenter)
+            ->present(['keywords' => $keywords]);
+
+        $body = implode("\n", is_array($result['lines'] ?? null) ? $result['lines'] : []);
+        app(AgentConversationService::class)->appendMessage(
+            $conversation,
+            role: 'assistant',
+            messageType: 'agent_result',
+            content: $body !== '' ? $body : (string) ($presented['summary'] ?? ''),
+            structured: [
+                'rendered' => $presented,
+                'keywords' => $keywords,
+                'use_site_mcp' => $useSiteMcp,
+            ],
             createdBy: $context->actorUserId,
         );
         $this->refreshMessages($conversation);
@@ -2206,7 +2655,7 @@ final class AgentWorkspacePage extends SeoPanelPage
         }
     }
 
-    private function hydrateKeywordContext(SeoAgentConversation $conversation): void
+    private function loadKeywordContextFromConversation(SeoAgentConversation $conversation): void
     {
         $summary = is_array($conversation->context_summary) ? $conversation->context_summary : [];
         $ctx = $summary[self::KEYWORD_CONTEXT_KEY] ?? null;
@@ -2227,8 +2676,298 @@ final class AgentWorkspacePage extends SeoPanelPage
 
         $keywords = $ctx['keywords'] ?? [];
         if (is_array($keywords)) {
-            $this->keywordContext = array_map(static fn ($v): string => (string) $v, $keywords);
+            $normalized = [];
+            foreach ($keywords as $v) {
+                if (is_string($v) || is_int($v) || is_float($v)) {
+                    $normalized[] = trim((string) $v);
+                }
+            }
+            $this->keywordContext = array_values(array_filter($normalized, static fn (string $v): bool => $v !== ''));
         }
+    }
+
+    private function appendSiteListMessage(AgentWorkspaceContext $context, SeoAgentConversation $conversation): void
+    {
+        $siteIds = SeoAccessControl::accessibleSiteIds();
+        $lines = ['Site list', ''];
+        if ($siteIds === []) {
+            $lines[] = 'Không có site trong phạm vi tài khoản.';
+        } else {
+            $sites = \App\Models\Site::query()
+                ->whereIn('id', $siteIds)
+                ->orderBy('id')
+                ->get(['id', 'domain']);
+            $connectionHash = is_string(request()->route('connection_hash'))
+                ? (string) request()->route('connection_hash')
+                : (string) (session('seo_current_connection_hash') ?? '—');
+            foreach ($sites as $site) {
+                $id = (int) $site->id;
+                $lines[] = 'ID: '.$id;
+                $lines[] = 'Domain: '.(string) ($site->domain ?: '—');
+                $lines[] = 'Connection hash: '.$connectionHash;
+                $lines[] = 'Status: active';
+                $lines[] = 'Current: '.($id === (int) $context->siteId ? 'yes' : 'no');
+                $lines[] = '';
+            }
+        }
+
+        app(AgentConversationService::class)->appendMessage(
+            $conversation,
+            role: 'assistant',
+            messageType: 'agent_result',
+            content: implode("\n", $lines),
+            createdBy: $context->actorUserId,
+        );
+        $this->refreshMessages($conversation);
+    }
+
+    private function appendSiteInfoMessage(AgentWorkspaceContext $context, SeoAgentConversation $conversation): void
+    {
+        $site = \App\Models\Site::query()->find((int) $context->siteId);
+        $domain = $site instanceof \App\Models\Site ? (string) ($site->domain ?: '') : $context->siteName;
+        $connectionHash = is_string(request()->route('connection_hash'))
+            ? (string) request()->route('connection_hash')
+            : (string) (session('seo_current_connection_hash') ?? '—');
+
+        $healthRows = app(\App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectSiteHealthService::class)
+            ->snapshot([(int) $context->siteId]);
+        $health = is_array($healthRows[0] ?? null) ? $healthRows[0] : [];
+
+        $lines = [
+            'Site info',
+            'ID: '.$context->siteId,
+            'Domain: '.($domain !== '' ? $domain : '—'),
+            'Connection hash: '.$connectionHash,
+            'WordPress URL: '.($domain !== '' ? 'https://'.$domain : '—'),
+            'Plugin: '.(string) ($health['plugin_version'] ?? '—'),
+            'Last sync: '.(string) ($health['sync_status'] ?? $health['last_sync'] ?? '—'),
+            'Capabilities: '.(! empty($health['capabilities_loaded']) ? 'loaded' : 'missing'),
+            'WP reachable: '.(string) ($health['wp_reachable'] ?? '—'),
+            'Token: '.(string) ($health['token_ok'] ?? '—'),
+            '',
+            'Agent context',
+            'Site ref: '.$context->siteRef,
+            'Project: '.($context->projectRef ?: '(none)'),
+            'Role: '.$context->role,
+        ];
+
+        app(AgentConversationService::class)->appendMessage(
+            $conversation,
+            role: 'assistant',
+            messageType: 'agent_result',
+            content: implode("\n", $lines),
+            createdBy: $context->actorUserId,
+        );
+        $this->refreshMessages($conversation);
+    }
+
+    /**
+     * @param  array<string, mixed>  $parsed
+     */
+    private function handleSiteSwitch(array $parsed, AgentWorkspaceContext $context, SeoAgentConversation $conversation): void
+    {
+        $inputs = is_array($parsed['inputs'] ?? null) ? $parsed['inputs'] : [];
+        $siteIdRaw = trim((string) ($inputs['site_id'] ?? ''));
+        $domainRaw = trim((string) ($inputs['domain'] ?? ''));
+
+        if ($siteIdRaw === '' && $domainRaw === '') {
+            app(AgentConversationService::class)->appendMessage(
+                $conversation,
+                role: 'assistant',
+                messageType: 'agent_error',
+                content: "Thiếu site-id hoặc domain.\nExample:\n/site-switch --site-id=\"7\"\nhoặc\n/site-switch --domain=\"congtybalo.com\"",
+                createdBy: $context->actorUserId,
+            );
+            $this->refreshMessages($conversation);
+
+            return;
+        }
+
+        $idFromSite = null;
+        if ($siteIdRaw !== '') {
+            if (! ctype_digit($siteIdRaw)) {
+                app(AgentConversationService::class)->appendMessage(
+                    $conversation,
+                    role: 'assistant',
+                    messageType: 'agent_error',
+                    content: 'site-id không hợp lệ: '.$siteIdRaw,
+                    createdBy: $context->actorUserId,
+                );
+                $this->refreshMessages($conversation);
+
+                return;
+            }
+            $idFromSite = (int) $siteIdRaw;
+        }
+
+        $idFromDomain = null;
+        if ($domainRaw !== '') {
+            $idFromDomain = $this->resolveAccessibleSiteIdByDomain($domainRaw);
+        }
+
+        $targetId = 0;
+        if ($idFromSite !== null && $domainRaw !== '') {
+            if ($idFromDomain === null || $idFromDomain <= 0) {
+                app(AgentConversationService::class)->appendMessage(
+                    $conversation,
+                    role: 'assistant',
+                    messageType: 'agent_error',
+                    content: 'site-id và domain không cùng một site.',
+                    createdBy: $context->actorUserId,
+                );
+                $this->refreshMessages($conversation);
+
+                return;
+            }
+            if ($idFromSite !== $idFromDomain) {
+                app(AgentConversationService::class)->appendMessage(
+                    $conversation,
+                    role: 'assistant',
+                    messageType: 'agent_error',
+                    content: 'site-id và domain không cùng một site.',
+                    createdBy: $context->actorUserId,
+                );
+                $this->refreshMessages($conversation);
+
+                return;
+            }
+            $targetId = $idFromSite;
+        } elseif ($idFromSite !== null) {
+            $targetId = $idFromSite;
+        } elseif ($idFromDomain !== null && $idFromDomain > 0) {
+            $targetId = $idFromDomain;
+        }
+
+        if ($targetId <= 0) {
+            $hint = $domainRaw !== ''
+                ? 'Không tìm thấy site với domain "'.$domainRaw.'".'
+                : 'Không tìm thấy site.';
+            app(AgentConversationService::class)->appendMessage(
+                $conversation,
+                role: 'assistant',
+                messageType: 'agent_error',
+                content: $hint."\nExample:\n/site-switch --site-id=\"7\"\nhoặc\n/site-switch --domain=\"congtybalo.com\"",
+                createdBy: $context->actorUserId,
+            );
+            $this->refreshMessages($conversation);
+
+            return;
+        }
+
+        if (! SeoAccessControl::canAccessSite($targetId)) {
+            app(AgentConversationService::class)->appendMessage(
+                $conversation,
+                role: 'assistant',
+                messageType: 'agent_error',
+                content: 'Không có quyền truy cập site ID '.$targetId.'.',
+                createdBy: $context->actorUserId,
+            );
+            $this->refreshMessages($conversation);
+
+            return;
+        }
+
+        SeoAccessControl::setGlobalSiteId($targetId);
+        $this->workspaceContext = [];
+        $this->bootWorkspace();
+
+        $fresh = $this->requireContext();
+        $cleared = $context->projectRef !== null && $context->projectRef !== '';
+        $lines = [
+            'Switched site',
+            '',
+            'ID: '.$fresh->siteId,
+            'Domain: '.$fresh->siteName,
+            'Project context: '.($cleared || $fresh->projectRef === null ? 'cleared' : $fresh->projectRef),
+        ];
+
+        app(AgentConversationService::class)->appendMessage(
+            $this->requireConversation($fresh),
+            role: 'assistant',
+            messageType: 'agent_result',
+            content: implode("\n", $lines),
+            createdBy: $fresh->actorUserId,
+        );
+        $this->refreshMessages($this->requireConversation($fresh));
+        $this->dispatch('agent-focus-composer');
+    }
+
+    private function resolveAccessibleSiteIdByDomain(string $domainRaw): int
+    {
+        $needle = \App\Addons\SeoContentAi\Support\SeoLinkMapLinkTypeClassifier::normalizeDomainHost($domainRaw);
+        if ($needle === '') {
+            return 0;
+        }
+
+        $sites = Site::query()
+            ->whereIn('id', SeoAccessControl::accessibleSiteIds())
+            ->get(['id', 'domain']);
+
+        foreach ($sites as $site) {
+            $candidate = \App\Addons\SeoContentAi\Support\SeoLinkMapLinkTypeClassifier::normalizeDomainHost(
+                (string) ($site->domain ?? '')
+            );
+            if ($candidate !== '' && $candidate === $needle) {
+                return (int) $site->id;
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * Resolve --project-id into workspace project_ref before capability gate.
+     */
+    private function bindCliProjectRefToContext(
+        string $projectRef,
+        AgentWorkspaceContext $context,
+        SeoAgentConversation $conversation,
+    ): ?AgentWorkspaceContext {
+        try {
+            $projectId = \App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectPublicRef::resolveProjectIdStrict($projectRef);
+        } catch (\Throwable) {
+            app(AgentConversationService::class)->appendMessage(
+                $conversation,
+                role: 'assistant',
+                messageType: 'agent_error',
+                content: 'project-id không hợp lệ.',
+                createdBy: $context->actorUserId,
+            );
+            $this->refreshMessages($conversation);
+
+            return null;
+        }
+
+        $project = \App\Addons\SeoContentAi\Models\SeoProject::query()->find($projectId);
+        if ($project === null) {
+            app(AgentConversationService::class)->appendMessage(
+                $conversation,
+                role: 'assistant',
+                messageType: 'agent_error',
+                content: 'Không tìm thấy project #'.$projectId.'.',
+                createdBy: $context->actorUserId,
+            );
+            $this->refreshMessages($conversation);
+
+            return null;
+        }
+
+        if ((int) $project->site_id !== (int) $context->siteId) {
+            app(AgentConversationService::class)->appendMessage(
+                $conversation,
+                role: 'assistant',
+                messageType: 'agent_error',
+                content: "Project #{$projectId} không thuộc site hiện tại.\nHãy chuyển site hoặc kiểm tra lại project-id.",
+                createdBy: $context->actorUserId,
+            );
+            $this->refreshMessages($conversation);
+
+            return null;
+        }
+
+        $this->workspaceContext['project_ref'] = $projectRef;
+
+        return $this->requireContext();
     }
 
     private function requireContext(): AgentWorkspaceContext

@@ -21,6 +21,12 @@ final class AgentErrorCodes
 
     public const CONTEXT_MISSING = 'agent.context_missing';
 
+    /** Structured fail-closed when capability required_context is absent. */
+    public const MISSING_REQUIRED_CONTEXT = 'missing_required_context';
+
+    /** Project/workspace does not belong to the supplied site context. */
+    public const CONTEXT_MISMATCH = 'context_mismatch';
+
     public const RATE_LIMITED = 'agent.rate_limited';
 
     public const CONFIRMATION_REQUIRED = 'confirmation.required';

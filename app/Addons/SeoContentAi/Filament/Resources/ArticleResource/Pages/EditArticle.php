@@ -1124,15 +1124,10 @@ class EditArticle extends SeoEditRecord
 
     private function persistTaxonomyParentId(int $parentId): void
     {
-        if ($parentId <= 0) {
-            $this->record->articleMetas()->where('meta_key', 'wp_parent_id')->delete();
-
-            return;
-        }
-
+        // Root terms use parent 0 — persist as "0", never delete (Site MCP fail-closed).
         $this->record->articleMetas()->updateOrCreate(
             ['meta_key' => 'wp_parent_id'],
-            ['meta_value' => (string) $parentId],
+            ['meta_value' => (string) max(0, $parentId)],
         );
     }
 
@@ -3689,6 +3684,8 @@ class EditArticle extends SeoEditRecord
             'expectedContentHash' => $bodyHash,
             'featuredImageUrl' => $this->featuredImageUrl,
             'supportsProductGallery' => $this->supportsProductGallery(),
+            'isCanaryProduct' => in_array(strtolower(trim((string) $metaMap->get('is_canary', ''))), ['1', 'true', 'yes'], true)
+                || strtolower(trim((string) $metaMap->get('canary_type', ''))) === 'product_gallery',
             'productGalleryReady' => $this->supportsProductGallery()
                 ? \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::isReadyOnArticle($this->record)
                 : false,

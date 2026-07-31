@@ -51,7 +51,11 @@ final class ReconcileSiteSyncCommand extends Command
         $sites = $siteId !== null
             ? Site::query()->whereKey((int) $siteId)->get()
             : Site::query()
-                ->whereNotNull('settings->wordpress_url')
+                ->whereHas('metas', static function ($q): void {
+                    $q->where('meta_key', 'seo_read_token')
+                        ->whereNotNull('meta_value')
+                        ->where('meta_value', '!=', '');
+                })
                 ->orderBy('id')
                 ->limit((int) $this->option('limit'))
                 ->get();

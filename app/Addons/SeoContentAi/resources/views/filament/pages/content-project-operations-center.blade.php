@@ -437,7 +437,7 @@
             </x-filament::section>
         </div>
 
-        {{-- Runtime Info --}}
+        {{-- Runtime Info + Developer MCP Reference --}}
         <div x-show="tab === 'runtime'" x-cloak class="space-y-4">
             <div class="flex flex-wrap items-center justify-between gap-3">
                 <p class="text-sm text-gray-500 dark:text-gray-400">
@@ -459,6 +459,26 @@
                 </x-filament::button>
             </div>
             @include('seo-content-ai::filament.pages.partials.runtime-info-grid', ['runtimeRows' => $runtimeRows])
+
+            <x-filament::section>
+                @php
+                    $mcpDoc = is_array($this->mcpCapabilityDoc ?? null) ? $this->mcpCapabilityDoc : [];
+                    $mcpMarkdown = (string) ($mcpDoc['markdown'] ?? '');
+                    $mcpCount = (int) ($mcpDoc['count'] ?? 0);
+                @endphp
+                <details class="group">
+                    <summary class="cursor-pointer select-none list-none text-sm font-semibold text-gray-950 dark:text-white">
+                        MCP Reference
+                        @if ($mcpCount > 0)
+                            <span class="ml-2 font-normal text-gray-500 dark:text-gray-400">({{ $mcpCount }})</span>
+                        @endif
+                    </summary>
+                    <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                        Global system_action catalog from CanonicalCapabilityRegistry. Not site_feature flags. Not bound to a domain page.
+                    </p>
+                    <pre class="mt-3 max-h-[28rem] overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs leading-relaxed text-gray-800 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-200">{{ $mcpMarkdown !== '' ? $mcpMarkdown : 'No MCP capabilities available.' }}</pre>
+                </details>
+            </x-filament::section>
         </div>
 
         {{-- Timeline --}}

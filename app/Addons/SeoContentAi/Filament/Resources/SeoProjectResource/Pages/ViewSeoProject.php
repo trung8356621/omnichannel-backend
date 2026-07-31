@@ -12,6 +12,8 @@ use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ApproveProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectPublicRef;
@@ -255,6 +257,7 @@ final class ViewSeoProject extends Page
         $this->queueFilter = '';
         $this->scheduledFilter = '';
         $this->failedOnly = false;
+        $this->clearSelection();
         if ($resetPage) {
             $this->resetPage();
         }
@@ -263,60 +266,76 @@ final class ViewSeoProject extends Page
     public function updatedSearch(): void
     {
         $this->resetPage();
+        $this->clearSelection();
     }
 
     public function updatedTypeFilter(): void
     {
         $this->resetPage();
+        $this->clearSelection();
     }
 
     public function updatedGenerationFilter(): void
     {
         $this->resetPage();
+        $this->clearSelection();
     }
 
     public function updatedLifecycleFilter(): void
     {
         $this->resetPage();
+        $this->clearSelection();
     }
 
     public function updatedQueueFilter(): void
     {
         $this->resetPage();
+        $this->clearSelection();
     }
 
     public function updatedScheduledFilter(): void
     {
         $this->resetPage();
+        $this->clearSelection();
     }
 
     public function updatedFailedOnly(): void
     {
         $this->resetPage();
+        $this->clearSelection();
+    }
+
+    public function updatedSelectedTaskIds(): void
+    {
+        $this->selectedTaskIds = $this->normalizeSelectedIds($this->selectedTaskIds);
     }
 
     public function toggleSelect(int $taskId): void
     {
-        if (in_array($taskId, $this->selectedTaskIds, true)) {
+        $ids = $this->normalizeSelectedIds($this->selectedTaskIds);
+        if (in_array($taskId, $ids, true)) {
             $this->selectedTaskIds = array_values(array_filter(
-                $this->selectedTaskIds,
+                $ids,
                 static fn (int $id): bool => $id !== $taskId,
             ));
 
             return;
         }
 
-        $this->selectedTaskIds[] = $taskId;
+        $ids[] = $taskId;
+        $this->selectedTaskIds = $ids;
     }
 
     public function selectPage(): void
     {
+        $ids = $this->normalizeSelectedIds($this->selectedTaskIds);
         foreach ($this->operationsPayload['rows'] ?? [] as $row) {
             $id = (int) ($row['task_id'] ?? 0);
-            if ($id > 0 && ! in_array($id, $this->selectedTaskIds, true)) {
-                $this->selectedTaskIds[] = $id;
+            if ($id > 0 && ! in_array($id, $ids, true)) {
+                $ids[] = $id;
             }
         }
+        $this->selectedTaskIds = $ids;
     }
 
     public function clearSelection(): void
@@ -324,10 +343,109 @@ final class ViewSeoProject extends Page
         $this->selectedTaskIds = [];
     }
 
+    public function getHasSelectionProperty(): bool
+    {
+        return count($this->normalizeSelectedIds($this->selectedTaskIds)) > 0;
+    }
+
+    public function getSelectedCountProperty(): int
+    {
+        return count($this->normalizeSelectedIds($this->selectedTaskIds));
+    }
+
     /** @return list<int> */
     protected function selectedItemIds(): array
     {
-        return $this->selectedTaskIds;
+        return $this->normalizeSelectedIds($this->selectedTaskIds);
+    }
+
+    /**
+     * @param  list<int|string>  $ids
+     * @return list<int>
+     */
+    private function normalizeSelectedIds(array $ids): array
+    {
+        return array_values(array_unique(array_filter(
+            array_map(static fn (mixed $id): int => (int) $id, $ids),
+            static fn (int $id): bool => $id > 0,
+        )));
+    }
+
+    public function archiveSelected(): void
+    {
+        $this->dispatchArchive($this->selectedItemIds());
+    }
+
+    public function archiveOne(int $taskId): void
+    {
+        $this->dispatchArchive([$taskId]);
+    }
+
+    /**
+     * @param  list<int>  $taskIds
+     */
+    private function dispatchArchive(array $taskIds): void
+    {
+        abort_if(SeoAccessControl::isContentManager(), 403);
+        abort_unless(SeoAccessControl::canMutateContentProjects(), 403);
+
+        $ids = $this->normalizeSelectedIds($taskIds);
+        if ($ids === []) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.queue_select_required'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $project = $this->requireProject();
+        $this->bulkRunning = true;
+
+        try {
+            $result = app(ContentProjectCommandBus::class)->dispatch(
+                new ArchiveProjectItemsCommand(
+                    (int) $project->getKey(),
+                    $ids,
+                ),
+                ActorContext::user(
+                    auth()->id() !== null ? (int) auth()->id() : null,
+                    (int) ($project->site_id ?? 0) ?: null,
+                ),
+            );
+
+            Notification::make()
+                ->title($result->success
+                    ? __('seo-content-ai::filament.projects.archive_item_completed')
+                    : __('seo-content-ai::filament.projects.archive_failed'))
+                ->body($result->success
+                    ? __('seo-content-ai::filament.projects.archive_item_completed_body', [
+                        'archived' => (int) ($result->metadata['affected_count'] ?? count($ids)),
+                    ])
+                    : $result->message)
+                ->{$result->success ? 'success' : 'danger'}()
+                ->send();
+
+            if ($result->success) {
+                $archived = array_flip($ids);
+                $this->selectedTaskIds = array_values(array_filter(
+                    $this->normalizeSelectedIds($this->selectedTaskIds),
+                    static fn (int $id): bool => ! isset($archived[$id]),
+                ));
+            }
+        } catch (Throwable $e) {
+            RuntimeLogger::report($e, [
+                'endpoint' => 'content_project.items.archive',
+                'project_id' => (int) $project->getKey(),
+            ]);
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.archive_failed'))
+                ->body($e->getMessage())
+                ->danger()
+                ->send();
+        } finally {
+            $this->bulkRunning = false;
+        }
     }
 
     public function openExecutionDetails(int $taskId): void
@@ -376,6 +494,24 @@ final class ViewSeoProject extends Page
     public function generateOne(int $taskId): void
     {
         $this->dispatchGenerate([$taskId]);
+    }
+
+    public function rerunOne(int $taskId): void
+    {
+        $project = $this->requireProject();
+        if (! SeoAccessControl::canAccessContentProjectRun($project)) {
+            Notification::make()->title('Forbidden')->danger()->send();
+
+            return;
+        }
+
+        $this->dispatchBus(new RerunProjectItemsCommand(
+            (int) $project->id,
+            [(int) $taskId],
+            SeoProjectRun::MODE_FULL,
+        ));
+        // Force Livewire re-read so Running / Failed badges update after engine kick.
+        $this->resetPage();
     }
 
     public function bulkRegenOutline(): void

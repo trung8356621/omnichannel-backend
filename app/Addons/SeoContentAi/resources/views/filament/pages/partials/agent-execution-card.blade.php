@@ -2,31 +2,44 @@
     $display = is_array($structured['display'] ?? null) ? $structured['display'] : [];
     $execution = is_array($structured['execution'] ?? null) ? $structured['execution'] : [];
     $rendered = is_array($structured['rendered'] ?? null) ? $structured['rendered'] : [];
-    $status = (string) ($structured['status'] ?? $execution['status'] ?? 'unknown');
-    $executionRef = (string) ($structured['execution_ref'] ?? $execution['execution_ref'] ?? '');
+    $statusRaw = $structured['status'] ?? $execution['status'] ?? 'unknown';
+    $executionRefRaw = $structured['execution_ref'] ?? $execution['execution_ref'] ?? '';
+    $status = is_scalar($statusRaw) ? (string) $statusRaw : 'unknown';
+    $executionRef = is_scalar($executionRefRaw) ? (string) $executionRefRaw : '';
     $retryable = (bool) (($rendered['details']['retryable'] ?? false) || ($execution['error_category'] ?? '') === 'rate_limited');
     $inputSummary = is_array($structured['input_summary'] ?? null) ? $structured['input_summary'] : [];
     $previewPayload = is_array($structured['preview'] ?? null) ? $structured['preview'] : [];
+    $hideEnvelope = (bool) ($rendered['hide_envelope'] ?? false);
+    $userFacingSummary = trim((string) ($rendered['summary'] ?? $rendered['body'] ?? ''));
 @endphp
 
+@if ($hideEnvelope && in_array($messageType, ['execution_result', 'execution_error'], true))
+    <div class="mt-2 whitespace-pre-wrap text-sm text-gray-800 dark:text-gray-100">
+        {{ $userFacingSummary !== '' ? $userFacingSummary : 'Hoàn tất.' }}
+    </div>
+@else
 <div class="mt-2 rounded-xl border border-gray-200 bg-white p-3 text-sm dark:border-gray-700 dark:bg-gray-950">
     <div class="flex items-start justify-between gap-2">
         <div>
             <div class="font-semibold text-gray-950 dark:text-white">
                 {{ $rendered['title'] ?? ($display['action'] ?? 'Execution') }}
             </div>
-            <div class="mt-0.5 font-mono text-[11px] text-gray-500">{{ $executionRef }}</div>
+            @if ($executionRef !== '' && ! $hideEnvelope)
+                <div class="mt-0.5 font-mono text-[11px] text-gray-500">{{ $executionRef }}</div>
+            @endif
         </div>
-        <span class="seo-agent-workspace__badge">{{ $status }}</span>
+        @if (! $hideEnvelope)
+            <span class="seo-agent-workspace__badge">{{ $status }}</span>
+        @endif
     </div>
 
     @if (! empty($rendered['summary']) || ! empty($display['message']))
-        <div class="mt-2 text-gray-700 dark:text-gray-200">
+        <div class="mt-2 whitespace-pre-wrap text-gray-700 dark:text-gray-200">
             {{ $rendered['summary'] ?? ($display['message'] ?? '') }}
         </div>
     @endif
 
-    @if (in_array($messageType, ['execution_preview', 'execution_confirmation'], true) && $status !== 'failed')
+    @if ($messageType === 'execution_confirmation' && $status !== 'failed')
         <div class="mt-3 flex flex-wrap gap-2">
             <x-filament::button
                 size="sm"
@@ -66,7 +79,7 @@
         @foreach (($rendered['links'] ?? []) as $link)
             <div class="mt-1 text-xs">
                 → {{ $link['label'] ?? 'Link' }}
-                @if (! empty($link['ref']))
+                @if (! empty($link['ref']) && ! $hideEnvelope)
                     <span class="font-mono">({{ $link['ref'] }})</span>
                 @endif
             </div>
@@ -97,11 +110,12 @@
         <div class="mt-2 text-[11px] text-gray-500">Không có Run All — chỉ chạy từng bước.</div>
     @endif
 
-    @if (in_array($messageType, ['execution_preview', 'execution_confirmation'], true))
+    @if ($messageType === 'execution_preview' || $messageType === 'execution_confirmation')
         @if ($inputSummary !== [])
             <div class="mt-3 text-xs opacity-90">
                 <div class="font-semibold">Ảnh hưởng:</div>
                 @foreach ($inputSummary as $k => $v)
+                    @continue(in_array((string) $k, ['site_ref', 'tenant_ref', 'connection_hash', 'actor_ref'], true))
                     <div><span class="opacity-70">{{ $k }}:</span> {{ is_scalar($v) ? $v : json_encode($v) }}</div>
                 @endforeach
             </div>
@@ -116,3 +130,4 @@
         @endif
     @endif
 </div>
+@endif

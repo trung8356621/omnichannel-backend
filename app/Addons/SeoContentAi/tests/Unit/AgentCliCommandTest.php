@@ -19,6 +19,13 @@ final class AgentCliCommandTest extends TestCase
         self::assertStringContainsString('--project-id=31', $def['example']);
     }
 
+    public function test_catalog_has_core_commands(): void
+    {
+        foreach (['/help', '/new-chat', '/context', '/site-health', '/daily-report', '/operation-status'] as $cmd) {
+            self::assertNotNull(AgentCliCommandCatalog::get($cmd), $cmd);
+        }
+    }
+
     public function test_catalog_search_filters_by_prefix(): void
     {
         $rows = AgentCliCommandCatalog::search('proj');
@@ -79,5 +86,36 @@ final class AgentCliCommandTest extends TestCase
             self::assertNotSame('', trim($row['description']), $row['command']);
             self::assertNotSame('', trim($row['example']), $row['command']);
         }
+    }
+
+    public function test_site_switch_accepts_domain_with_empty_site_id_placeholder(): void
+    {
+        $parser = new AgentCliCommandParser();
+        $parsed = $parser->parse('/site-switch --site-id="" --domain="baloquatang.net"');
+        self::assertTrue($parsed['ok'] ?? false);
+        self::assertSame('/site-switch', $parsed['command'] ?? null);
+        self::assertArrayNotHasKey('site_id', $parsed['inputs'] ?? []);
+        self::assertSame('baloquatang.net', $parsed['inputs']['domain'] ?? null);
+    }
+
+    public function test_site_switch_accepts_site_id_alone(): void
+    {
+        $parser = new AgentCliCommandParser();
+        $parsed = $parser->parse('/site-switch --site-id="5"');
+        self::assertTrue($parsed['ok'] ?? false);
+        self::assertSame('5', $parsed['inputs']['site_id'] ?? null);
+        self::assertArrayNotHasKey('domain', $parsed['inputs'] ?? []);
+    }
+
+    public function test_site_switch_requires_site_id_or_domain(): void
+    {
+        $parser = new AgentCliCommandParser();
+        $empty = $parser->parse('/site-switch --site-id="" --domain=""');
+        self::assertFalse($empty['ok'] ?? true);
+        self::assertSame('missing_required:site_id_or_domain', $empty['error'] ?? null);
+
+        $bare = $parser->parse('/site-switch');
+        self::assertFalse($bare['ok'] ?? true);
+        self::assertSame('missing_required:site_id_or_domain', $bare['error'] ?? null);
     }
 }

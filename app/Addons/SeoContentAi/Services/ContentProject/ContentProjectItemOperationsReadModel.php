@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\ContentProject;
 
+use App\Addons\SeoContentAi\Enums\ContentProjectLifecyclePhase;
 use App\Addons\SeoContentAi\Enums\SeoProjectRunItemStatus;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
@@ -13,6 +14,7 @@ use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectLifecycle;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectStatusBadgePresenter;
+use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use Carbon\Carbon;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
@@ -27,6 +29,9 @@ final class ContentProjectItemOperationsReadModel
         private readonly ContentProjectLifecycle $lifecycle,
         private readonly ContentProjectDashboardStatsService $stats,
         private readonly ContentProjectItemGenerationClassifier $classifier,
+        private readonly ArticleWordPressSyncFlagService $syncFlags,
+        private readonly ContentProjectExecutionStalenessPolicy $staleness,
+        private readonly ContentProjectGenerationRecoveryService $generationRecovery,
     ) {}
 
     /**
@@ -40,6 +45,7 @@ final class ContentProjectItemOperationsReadModel
      *     failed_only?: bool,
      *     page?: int,
      *     per_page?: int,
+     *     reconcile_stale?: bool,
      * }  $filters
      * @return array{
      *     project_id: int,
@@ -53,6 +59,15 @@ final class ContentProjectItemOperationsReadModel
     public function forProject(SeoProject $project, array $filters = []): array
     {
         $projectId = (int) $project->getKey();
+        if (($filters['reconcile_stale'] ?? true) === true) {
+            // Once per HTTP request — page visit reconciles without auto-starting generation.
+            $guardKey = 'seo.cp.stale_gen_reconciled.'.$projectId;
+            if (! app()->bound($guardKey)) {
+                $this->generationRecovery->reconcileProject($project);
+                app()->instance($guardKey, true);
+            }
+        }
+
         $baseStats = $this->stats->forProject($project);
 
         $tasks = SeoProjectTask::query()
@@ -87,9 +102,9 @@ final class ContentProjectItemOperationsReadModel
         $failed = 0;
         foreach ($rows as $row) {
             $gs = (string) $row['generation_status'];
-            if ($gs === SeoProjectTask::STATUS_WRITING) {
+            if (! empty($row['is_genuinely_running'])) {
                 $running++;
-            } elseif ($gs === SeoProjectTask::STATUS_FAILED) {
+            } elseif ($gs === SeoProjectTask::STATUS_FAILED || ! empty($row['is_generation_stale'])) {
                 $failed++;
             } elseif ($row['can_generate'] === true) {
                 $pending++;
@@ -184,9 +199,29 @@ final class ContentProjectItemOperationsReadModel
         }
 
         $lastActivityCarbon = $this->resolveLastActivity($task, $article, $exec);
-        $genBadge = ContentProjectStatusBadgePresenter::generation($genStatus, $exec['status'] ?? null);
-        $lifeBadge = ContentProjectStatusBadgePresenter::lifecycle($phase->value);
+        $staleEval = $this->staleness->evaluateTask($task);
+        $isStaleGeneration = (bool) ($staleEval['stale'] ?? false);
+        $isGenuineRunning = (string) ($task->status ?? '') === SeoProjectTask::STATUS_WRITING
+            && ! $isStaleGeneration
+            && (bool) ($staleEval['has_fresh_active_execution'] ?? false);
+        $hasResumableCheckpoint = ! $isGenuineRunning
+            && ! $isStaleGeneration
+            && $exec !== null
+            && in_array(strtolower((string) ($exec['status'] ?? '')), ['failed', 'cancelled', 'stopped', 'timeout'], true)
+            && trim((string) ($exec['action'] ?? '')) !== '';
+
+        $displayGenStatus = $isStaleGeneration ? SeoProjectTask::STATUS_FAILED : $genStatus;
+        $displayPhase = $isStaleGeneration
+            ? ContentProjectLifecyclePhase::Failed
+            : $phase;
+
+        $genBadge = ContentProjectStatusBadgePresenter::generation($displayGenStatus, $exec['status'] ?? null);
+        $lifeBadge = ContentProjectStatusBadgePresenter::lifecycle($displayPhase->value);
         $queueBadge = ContentProjectStatusBadgePresenter::queue($queueStatus);
+
+        if ($isStaleGeneration && ($message === '' || $message === null)) {
+            $message = ContentProjectGenerationRecoveryService::RECOVERY_MESSAGE;
+        }
 
         return [
             'index' => $index,
@@ -205,10 +240,10 @@ final class ContentProjectItemOperationsReadModel
                 ? ArticleResource::getUrl('edit', ['record' => $articleId])
                 : null,
             'article_slug' => $article instanceof SeoArticle ? (string) ($article->slug ?? '') : '',
-            'generation_status' => $genStatus,
+            'generation_status' => $displayGenStatus,
             'execution_status' => $exec['status'] ?? null,
             'current_step' => $exec['action'] ?? null,
-            'lifecycle' => $phase->value,
+            'lifecycle' => $displayPhase->value,
             'queue_status' => $queueStatus,
             'scheduled_at' => $task->scheduled_publish_at?->format('d/m/Y H:i'),
             'scheduled_raw' => $task->scheduled_publish_at?->toIso8601String(),
@@ -217,12 +252,19 @@ final class ContentProjectItemOperationsReadModel
             'last_activity' => $lastActivityCarbon?->diffForHumans() ?? '—',
             'last_activity_full' => $lastActivityCarbon?->format('d/m/Y H:i:s'),
             'last_run_at' => $exec['finished_at'] ?? $exec['started_at'] ?? null,
-            'can_generate' => $decision->shouldRun(),
+            'can_generate' => $decision->shouldRun() || $isStaleGeneration,
             'can_regen' => $type !== SeoProjectTask::TYPE_IMPROVE && $articleId > 0,
+            'can_run_again' => $isStaleGeneration
+                || (string) ($task->status ?? '') === SeoProjectTask::STATUS_FAILED,
+            'is_generation_stale' => $isStaleGeneration,
+            'is_genuinely_running' => $isGenuineRunning,
+            'has_resumable_checkpoint' => $hasResumableCheckpoint,
             'is_improve' => $type === SeoProjectTask::TYPE_IMPROVE,
             'generation_badge' => $genBadge,
             'lifecycle_badge' => $lifeBadge,
             'queue_badge' => $queueBadge,
+            'has_unpublished_changes' => $article instanceof SeoArticle
+                && $this->syncFlags->hasUnpublishedChanges($article),
         ];
     }
 

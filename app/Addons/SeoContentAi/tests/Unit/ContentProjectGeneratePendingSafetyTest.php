@@ -153,7 +153,7 @@ final class ContentProjectGeneratePendingSafetyTest extends TestCase
         self::assertSame($preview->runCount(), count($preview->runnableTaskIds()));
     }
 
-    public function test_fail_closed_when_all_selected_with_history(): void
+    public function test_fail_closed_when_all_never_generated_with_history(): void
     {
         $decisions = [];
         for ($i = 1; $i <= 3; $i++) {
@@ -164,6 +164,13 @@ final class ContentProjectGeneratePendingSafetyTest extends TestCase
                 'lifecycle_phase' => ContentProjectLifecyclePhase::Draft->value,
             ]);
         }
+
+        $runCount = count(array_filter(
+            $decisions,
+            static fn (ContentProjectItemGenerationDecision $d): bool => $d->shouldRun(),
+        ));
+
+        self::assertTrue($this->classifier->shouldFailClosed(true, 3, $runCount, $decisions));
 
         $preview = new ContentProjectGeneratePendingPreview(
             projectId: 1,
@@ -177,6 +184,36 @@ final class ContentProjectGeneratePendingSafetyTest extends TestCase
         self::assertTrue($preview->failClosed);
         self::assertTrue($preview->requiresTechnicalConfirm());
         self::assertSame(3, $preview->runCount());
+    }
+
+    public function test_single_item_failed_recovery_not_fail_closed(): void
+    {
+        $decisions = [
+            $this->classifier->classifySnapshot([
+                'task_id' => 331,
+                'type' => SeoProjectTask::TYPE_CREATE,
+                'status' => SeoProjectTask::STATUS_FAILED,
+                'lifecycle_phase' => ContentProjectLifecyclePhase::Failed->value,
+            ]),
+        ];
+
+        self::assertSame('failed_without_output', $decisions[0]->reason);
+        self::assertFalse($this->classifier->shouldFailClosed(true, 1, 1, $decisions));
+    }
+
+    public function test_all_failed_without_output_multi_not_fail_closed(): void
+    {
+        $decisions = [];
+        for ($i = 1; $i <= 3; $i++) {
+            $decisions[] = $this->classifier->classifySnapshot([
+                'task_id' => $i,
+                'type' => SeoProjectTask::TYPE_CREATE,
+                'status' => SeoProjectTask::STATUS_FAILED,
+                'lifecycle_phase' => ContentProjectLifecyclePhase::Failed->value,
+            ]);
+        }
+
+        self::assertFalse($this->classifier->shouldFailClosed(true, 3, 3, $decisions));
     }
 
     public function test_ui_has_project_operations_not_run_history_hub(): void

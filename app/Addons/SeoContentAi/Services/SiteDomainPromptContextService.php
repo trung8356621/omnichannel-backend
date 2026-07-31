@@ -61,13 +61,20 @@ final class SiteDomainPromptContextService
     /** @var array<string, mixed>|null */
     private ?array $testSitePayload = null;
 
-    public const DEFAULT_CTA_INTRO = 'Tạo một bảng so sánh hoặc danh sách liệt kê (bullet points) để tăng khả năng đạt Featured Snippet. Kêu gọi hành động (CTA) ở mỗi heading — dùng placeholder [phone], [website], [email], … (xem danh sách bên dưới), không tự đặt tên khác.';
+    public const DEFAULT_CTA_INTRO = 'Tạo một bảng so sánh hoặc danh sách liệt kê (bullet points) để tăng khả năng đạt Featured Snippet. Kêu gọi hành động (CTA) ở mỗi heading — chỉ dùng thông tin liên hệ đã resolve bên dưới, không bịa số điện thoại / email / mạng xã hội.';
+
+    public const COMPANY_SHORT_IDENTITY_MAX = 80;
 
     /**
      * @param  array{
      *     tone?: string,
+     *     company_short_identity?: string,
      *     short_description?: string,
      *     cta_intro?: string,
+     *     phones?: list<array{value?: string}|string>,
+     *     emails?: list<array{value?: string}|string>,
+     *     socials?: list<array{network?: string, url?: string, value?: string}>,
+     *     address?: string,
      *     cta?: list<array{type?: string, value?: string}>,
      *     links?: list<array{keyword?: string, link?: string}>,
      * }  $payload
@@ -77,8 +84,13 @@ final class SiteDomainPromptContextService
         $service = new self;
         $service->testSitePayload = [
             'tone' => trim((string) ($payload['tone'] ?? '')),
+            'company_short_identity' => trim((string) ($payload['company_short_identity'] ?? '')),
             'short_description' => trim((string) ($payload['short_description'] ?? '')),
             'cta_intro' => trim((string) ($payload['cta_intro'] ?? '')),
+            'phones' => is_array($payload['phones'] ?? null) ? $payload['phones'] : [],
+            'emails' => is_array($payload['emails'] ?? null) ? $payload['emails'] : [],
+            'socials' => is_array($payload['socials'] ?? null) ? $payload['socials'] : [],
+            'address' => trim((string) ($payload['address'] ?? '')),
             'cta' => is_array($payload['cta'] ?? null) ? $payload['cta'] : [],
             'links' => is_array($payload['links'] ?? null) ? $payload['links'] : [],
         ];
@@ -173,10 +185,58 @@ final class SiteDomainPromptContextService
             $ctaIntro = app(SeoDomainCtaGlobalSettingsService::class)->getDefaultCtaIntro();
         }
 
+        $phones = $this->normalizeContactValueList($decoded['phones'] ?? null);
+        $emails = $this->normalizeContactValueList($decoded['emails'] ?? null);
+        $socials = $this->normalizeSocialList($decoded['socials'] ?? null);
+        $address = trim((string) ($decoded['address'] ?? ''));
+        if ($address === '') {
+            $address = $this->ctaValueFromRows($cta, 'address');
+        }
+
+        // Legacy phone_1..3 / email_1..3 → lists when lists empty.
+        if ($phones === []) {
+            foreach (self::PHONE_SLOT_TYPES as $slot) {
+                $value = $this->ctaValueFromRows($cta, $slot);
+                if ($value !== '') {
+                    $phones[] = ['value' => $value];
+                }
+            }
+        }
+        if ($emails === []) {
+            foreach (self::EMAIL_SLOT_TYPES as $slot) {
+                $value = $this->ctaValueFromRows($cta, $slot);
+                if ($value !== '') {
+                    $emails[] = ['value' => $value];
+                }
+            }
+        }
+        if ($socials === []) {
+            foreach ($cta as $row) {
+                $type = mb_strtolower(trim((string) ($row['type'] ?? '')));
+                $value = trim((string) ($row['value'] ?? ''));
+                if ($value === '') {
+                    continue;
+                }
+                if (in_array($type, ['facebook', 'instagram', 'youtube', 'linkedin', 'tiktok', 'zalo', 'x', 'twitter', 'pinterest', 'threads'], true)) {
+                    $socials[] = [
+                        'network' => $type === 'twitter' ? 'x' : $type,
+                        'url' => $value,
+                    ];
+                }
+            }
+        }
+
         return [
             'tone' => trim((string) ($decoded['tone'] ?? '')),
+            'company_short_identity' => $this->clampCompanyShortIdentity(
+                (string) ($decoded['company_short_identity'] ?? '')
+            ),
             'short_description' => trim((string) ($decoded['short_description'] ?? '')),
             'cta_intro' => $ctaIntro,
+            'phones' => $phones,
+            'emails' => $emails,
+            'socials' => $socials,
+            'address' => $address,
             'cta' => $cta,
             'links' => $links,
         ];
@@ -427,8 +487,19 @@ final class SiteDomainPromptContextService
     /**
      * @param  array{
      *     tone?: string,
+     *     company_short_identity?: string,
      *     short_description?: string,
      *     cta_intro?: string,
+     *     phones?: list<array{value?: string}|string>,
+     *     emails?: list<array{value?: string}|string>,
+     *     socials?: list<array{network?: string, url?: string, value?: string}>,
+     *     address?: string,
+     *     phone_1?: string,
+     *     phone_2?: string,
+     *     phone_3?: string,
+     *     email_1?: string,
+     *     email_2?: string,
+     *     email_3?: string,
      *     cta?: list<array{type?: string, value?: string}>,
      *     links?: list<array{keyword?: string, link?: string}>,
      * }  $payload
@@ -438,8 +509,10 @@ final class SiteDomainPromptContextService
         $site = $site instanceof Site ? $site : Site::query()->findOrFail((int) $site);
 
         $tone = trim((string) ($payload['tone'] ?? ''));
+        $companyShort = $this->clampCompanyShortIdentity((string) ($payload['company_short_identity'] ?? ''));
         $shortDescription = trim((string) ($payload['short_description'] ?? ''));
         $ctaIntro = trim((string) ($payload['cta_intro'] ?? ''));
+        $address = trim((string) ($payload['address'] ?? ''));
 
         if ($this->countWords($shortDescription) > self::MAX_SHORT_DESCRIPTION_WORDS) {
             throw new \InvalidArgumentException(
@@ -448,16 +521,55 @@ final class SiteDomainPromptContextService
             );
         }
 
+        $phones = $this->normalizeContactValueList($payload['phones'] ?? null);
+        $emails = $this->normalizeContactValueList($payload['emails'] ?? null);
+        $socials = $this->normalizeSocialList($payload['socials'] ?? null);
+
+        // Legacy slot keys still accepted.
+        if ($phones === []) {
+            foreach (self::PHONE_SLOT_TYPES as $slot) {
+                $value = trim((string) ($payload[$slot] ?? ''));
+                if ($value !== '') {
+                    $phones[] = ['value' => $value];
+                }
+            }
+        }
+        if ($emails === []) {
+            foreach (self::EMAIL_SLOT_TYPES as $slot) {
+                $value = trim((string) ($payload[$slot] ?? ''));
+                if ($value !== '') {
+                    $emails[] = ['value' => $value];
+                }
+            }
+        }
+
         $contactSlots = [
-            'phone_1' => trim((string) ($payload['phone_1'] ?? '')),
-            'phone_2' => trim((string) ($payload['phone_2'] ?? '')),
-            'phone_3' => trim((string) ($payload['phone_3'] ?? '')),
-            'email_1' => trim((string) ($payload['email_1'] ?? '')),
-            'email_2' => trim((string) ($payload['email_2'] ?? '')),
-            'email_3' => trim((string) ($payload['email_3'] ?? '')),
+            'phone_1' => $phones[0]['value'] ?? '',
+            'phone_2' => $phones[1]['value'] ?? '',
+            'phone_3' => $phones[2]['value'] ?? '',
+            'email_1' => $emails[0]['value'] ?? '',
+            'email_2' => $emails[1]['value'] ?? '',
+            'email_3' => $emails[2]['value'] ?? '',
         ];
 
-        $cta = $this->mergeContactSlotsIntoCta($contactSlots, $payload['cta'] ?? []);
+        $extraCta = is_array($payload['cta'] ?? null) ? $payload['cta'] : [];
+        foreach (array_slice($phones, 3) as $row) {
+            $extraCta[] = ['type' => 'phone', 'value' => $row['value']];
+        }
+        foreach (array_slice($emails, 3) as $row) {
+            $extraCta[] = ['type' => 'email', 'value' => $row['value']];
+        }
+        foreach ($socials as $row) {
+            $extraCta[] = [
+                'type' => (string) ($row['network'] ?? ''),
+                'value' => (string) ($row['url'] ?? ''),
+            ];
+        }
+        if ($address !== '') {
+            $extraCta[] = ['type' => 'address', 'value' => $address];
+        }
+
+        $cta = $this->mergeContactSlotsIntoCta($contactSlots, $extraCta);
 
         $links = [];
         foreach ($payload['links'] ?? [] as $row) {
@@ -474,8 +586,13 @@ final class SiteDomainPromptContextService
 
         $json = json_encode([
             'tone' => $tone,
+            'company_short_identity' => $companyShort,
             'short_description' => $shortDescription,
             'cta_intro' => $ctaIntro,
+            'phones' => $phones,
+            'emails' => $emails,
+            'socials' => $socials,
+            'address' => $address,
             'cta' => $cta,
             'links' => $links,
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -635,6 +752,8 @@ final class SiteDomainPromptContextService
         if ($site === null) {
             return [
                 'site_domain' => '',
+                'site_company_short_identity' => '',
+                'site_website_type' => '',
                 'site_short_description' => '',
                 'site_cta' => '',
                 'site_links' => '',
@@ -642,33 +761,251 @@ final class SiteDomainPromptContextService
         }
 
         $payload = $this->getForSite($site);
+        $websiteType = trim((string) ($site->getMeta('seo_domain_type') ?? ''));
+
+        $ctaText = $this->formatCtaForPrompt(
+            $payload['cta'],
+            $this->resolveEffectiveCtaIntro((string) ($payload['cta_intro'] ?? '')),
+            $site,
+        );
 
         return [
             'site_domain' => trim((string) $site->domain),
+            'site_company_short_identity' => (string) ($payload['company_short_identity'] ?? ''),
+            'site_website_type' => $websiteType,
             'site_short_description' => $payload['short_description'],
-            'site_cta' => $this->formatCtaForPrompt(
-                $payload['cta'],
-                $this->resolveEffectiveCtaIntro((string) ($payload['cta_intro'] ?? '')),
-                $site,
-            ),
+            'site_cta' => $ctaText,
             // Link list không đưa vào prompt (tiết kiệm token); dùng DomainLinkListKeywordSyncService + gợi ý editor.
             'site_links' => '',
         ];
     }
 
     /**
+     * Final CTA context for AI — resolved contacts only, never raw [phone]/[email] placeholders.
+     *
      * @param  list<array{type: string, value: string}>  $items
      */
     public function formatCtaForPrompt(array $items, string $intro = '', Site|int|null $site = null): string
     {
         $intro = trim($intro);
-        $guide = app(ArticleCtaPlaceholderService::class)->placeholderGuideForPrompt();
+        // Writing guidance must not leak unresolved placeholders into AI prompts.
+        $intro = $this->stripCtaPlaceholders($intro);
+        $resolved = $this->resolveContactContextForPrompt($items, $site);
 
-        if ($intro === '') {
-            return $guide;
+        $parts = [];
+        if ($intro !== '') {
+            $parts[] = $intro;
+        }
+        if ($resolved !== '') {
+            $parts[] = "Resolved Contact Context:\n".$resolved;
         }
 
-        return $intro."\n\n".$guide;
+        $text = trim(implode("\n\n", $parts));
+        app(\App\Addons\SeoContentAi\Services\SiteMcp\SiteMcpContextAssembler::class)
+            ->assertNoUnresolvedPlaceholders($text);
+
+        return $text;
+    }
+
+    public function stripCtaPlaceholders(string $text): string
+    {
+        foreach (\App\Addons\SeoContentAi\Services\SiteMcp\SiteMcpContextAssembler::PLACEHOLDER_PATTERN_TYPES as $type) {
+            $text = (string) preg_replace('/\['.preg_quote($type, '/').'\]/iu', '', $text);
+        }
+
+        return trim(preg_replace('/[ \t]{2,}/u', ' ', $text) ?? $text);
+    }
+
+    /**
+     * @param  list<array{type?: string, value?: string}>  $items
+     */
+    public function resolveContactContextForPrompt(array $items, Site|int|null $site = null): string
+    {
+        $lines = [];
+        $phonePool = [];
+        $emailPool = [];
+        $seen = [];
+
+        foreach ($items as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $type = mb_strtolower(trim((string) ($row['type'] ?? '')));
+            $value = trim((string) ($row['value'] ?? ''));
+            if ($type === '' || $value === '') {
+                continue;
+            }
+            if (in_array($type, self::PHONE_SLOT_TYPES, true) || $type === 'phone' || $type === 'hotline') {
+                $phonePool[] = $value;
+                continue;
+            }
+            if (in_array($type, self::EMAIL_SLOT_TYPES, true) || $type === 'email') {
+                $emailPool[] = $value;
+                continue;
+            }
+            if ($type === 'website') {
+                continue;
+            }
+            if (isset($seen[$type])) {
+                continue;
+            }
+            $seen[$type] = true;
+            $lines[] = $type.': '.$value;
+        }
+
+        $phonePool = array_values(array_unique($phonePool));
+        $emailPool = array_values(array_unique($emailPool));
+        if ($phonePool !== []) {
+            $lines[] = 'phone: '.$phonePool[array_rand($phonePool)];
+        }
+        if ($emailPool !== []) {
+            $lines[] = 'email: '.$emailPool[array_rand($emailPool)];
+        }
+
+        if ($site !== null) {
+            $siteModel = $site instanceof Site ? $site : Site::query()->find((int) $site);
+            $domain = trim((string) ($siteModel?->domain ?? ''));
+            if ($domain !== '') {
+                $lines[] = 'website: '.$domain;
+            }
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return list<array{value: string}>
+     */
+    public function phonesFromPayload(array $payload): array
+    {
+        $phones = $this->normalizeContactValueList($payload['phones'] ?? null);
+        if ($phones !== []) {
+            return $phones;
+        }
+        foreach (self::PHONE_SLOT_TYPES as $slot) {
+            $value = $this->ctaValueFromRows($payload['cta'] ?? [], $slot);
+            if ($value !== '') {
+                $phones[] = ['value' => $value];
+            }
+        }
+
+        return $phones;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return list<array{value: string}>
+     */
+    public function emailsFromPayload(array $payload): array
+    {
+        $emails = $this->normalizeContactValueList($payload['emails'] ?? null);
+        if ($emails !== []) {
+            return $emails;
+        }
+        foreach (self::EMAIL_SLOT_TYPES as $slot) {
+            $value = $this->ctaValueFromRows($payload['cta'] ?? [], $slot);
+            if ($value !== '') {
+                $emails[] = ['value' => $value];
+            }
+        }
+
+        return $emails;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return list<array{network: string, url: string}>
+     */
+    public function socialsFromPayload(array $payload): array
+    {
+        $socials = $this->normalizeSocialList($payload['socials'] ?? null);
+        if ($socials !== []) {
+            return $socials;
+        }
+        foreach ($payload['cta'] ?? [] as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $type = mb_strtolower(trim((string) ($row['type'] ?? '')));
+            $value = trim((string) ($row['value'] ?? ''));
+            if ($value === '') {
+                continue;
+            }
+            if (in_array($type, ['facebook', 'instagram', 'youtube', 'linkedin', 'tiktok', 'zalo', 'x', 'twitter', 'pinterest', 'threads'], true)) {
+                $socials[] = [
+                    'network' => $type === 'twitter' ? 'x' : $type,
+                    'url' => $value,
+                ];
+            }
+        }
+
+        return $socials;
+    }
+
+    /**
+     * @param  mixed  $raw
+     * @return list<array{value: string}>
+     */
+    public function normalizeContactValueList(mixed $raw): array
+    {
+        if (! is_array($raw)) {
+            return [];
+        }
+        $out = [];
+        foreach ($raw as $row) {
+            if (is_string($row)) {
+                $value = trim($row);
+            } elseif (is_array($row)) {
+                $value = trim((string) ($row['value'] ?? ''));
+            } else {
+                continue;
+            }
+            if ($value === '') {
+                continue;
+            }
+            $out[] = ['value' => $value];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  mixed  $raw
+     * @return list<array{network: string, url: string}>
+     */
+    public function normalizeSocialList(mixed $raw): array
+    {
+        if (! is_array($raw)) {
+            return [];
+        }
+        $out = [];
+        foreach ($raw as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $network = mb_strtolower(trim((string) ($row['network'] ?? $row['type'] ?? '')));
+            $url = trim((string) ($row['url'] ?? $row['value'] ?? ''));
+            if ($network === '' || $url === '') {
+                continue;
+            }
+            if ($network === 'twitter') {
+                $network = 'x';
+            }
+            $out[] = ['network' => $network, 'url' => $url];
+        }
+
+        return $out;
+    }
+
+    public function clampCompanyShortIdentity(string $value): string
+    {
+        $value = trim(preg_replace('/\s+/u', ' ', $value) ?? $value);
+        if (mb_strlen($value) <= self::COMPANY_SHORT_IDENTITY_MAX) {
+            return $value;
+        }
+
+        return rtrim(mb_substr($value, 0, self::COMPANY_SHORT_IDENTITY_MAX));
     }
 
     /**
@@ -782,8 +1119,13 @@ final class SiteDomainPromptContextService
     {
         return [
             'tone' => '',
+            'company_short_identity' => '',
             'short_description' => '',
             'cta_intro' => app(SeoDomainCtaGlobalSettingsService::class)->getDefaultCtaIntro(),
+            'phones' => [],
+            'emails' => [],
+            'socials' => [],
+            'address' => '',
             'cta' => [],
             'links' => [],
         ];

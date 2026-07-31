@@ -9,7 +9,6 @@ use App\Addons\SeoContentAi\Jobs\RunIncrementalDomainSyncJob;
 use App\Addons\SeoContentAi\Jobs\RunKeywordDomainResyncJob;
 use App\Addons\SeoContentAi\Jobs\RunMetadataDomainSyncJob;
 use App\Addons\SeoContentAi\Services\ClearDomainArticlesService;
-use App\Addons\SeoContentAi\Services\ContentProject\Agent\Mcp\McpCapabilityMarkdownPresenter;
 use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\IncrementalDomainSyncRunner;
 use App\Addons\SeoContentAi\Services\LinkMapStatusAuditService;
@@ -143,9 +142,6 @@ class GeneralDomain extends Page
 
     public bool $siteSyncNeedsBootstrap = false;
 
-    /** @var array<string, mixed> */
-    public array $mcpCapabilityDoc = [];
-
     public function mount(int|string $record): void
     {
         $this->record = $this->resolveRecord($record);
@@ -165,29 +161,6 @@ class GeneralDomain extends Page
         $this->restoreMetadataSyncProgressFromCache();
         $this->refreshKeywordResyncProgress();
         $this->refreshSiteSyncV2Progress();
-        $this->loadMcpCapabilityDoc();
-    }
-
-    public function loadMcpCapabilityDoc(): void
-    {
-        try {
-            $includeInternal = SeoAccessControl::canAccessManagerFeatures();
-            $this->mcpCapabilityDoc = app(McpCapabilityMarkdownPresenter::class)->present(
-                includeInternal: $includeInternal,
-                filter: McpCapabilityMarkdownPresenter::FILTER_ALL,
-            );
-        } catch (\Throwable) {
-            $this->mcpCapabilityDoc = [
-                'title' => 'MCP Capabilities',
-                'filter' => McpCapabilityMarkdownPresenter::FILTER_ALL,
-                'filters' => [],
-                'items' => [],
-                'internal_items' => [],
-                'markdown' => '',
-                'include_internal' => false,
-                'count' => 0,
-            ];
-        }
     }
 
     public function refreshKeywordResyncProgress(): void
@@ -874,6 +847,12 @@ class GeneralDomain extends Page
     protected function getHeaderActions(): array
     {
         return [
+            Action::make('view_mcp')
+                ->label('MCP Markdown')
+                ->icon('heroicon-o-code-bracket')
+                ->color('gray')
+                ->url(DomainResource::getUrl('mcp', ['record' => $this->getRecord()]))
+                ->visible(fn (): bool => SeoAccessControl::canAccessManagerFeatures()),
             $this->deleteDomainAction(),
         ];
     }

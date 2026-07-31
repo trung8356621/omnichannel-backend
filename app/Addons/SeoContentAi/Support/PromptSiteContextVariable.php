@@ -25,6 +25,8 @@ final class PromptSiteContextVariable
     {
         return [
             'site_domain',
+            'site_company_short_identity',
+            'site_website_type',
             'site_short_description',
             'site_cta',
             'site_links',

@@ -34,7 +34,7 @@ final class AgentSkillGroupCatalog
                 'serp.collect', 'serp.list_content_gaps', 'serp.validate_cluster',
             ]],
             ['key' => 'gsc', 'label' => 'GSC', 'label_vi' => 'GSC', 'description' => 'GSC opportunities (when skills exist).', 'skill_keys' => []],
-            ['key' => 'seo_audit', 'label' => 'SEO Audit', 'label_vi' => 'SEO Audit', 'description' => 'Audit actions when exposed.', 'skill_keys' => []],
+            ['key' => 'seo_audit', 'label' => 'SEO Audit', 'label_vi' => 'SEO Audit', 'description' => 'Audit articles needing SEO work.', 'skill_keys' => ['seo_audit.list']],
             ['key' => 'reports_health', 'label' => 'Reports & Health', 'label_vi' => 'Báo cáo & sức khỏe', 'description' => 'Site health, daily report, timeline.', 'skill_keys' => [
                 'operations.site_health', 'operations.daily_report', 'operations.operation_status', 'content_project.timeline',
             ]],

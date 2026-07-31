@@ -35,3 +35,5 @@ Legacy storage: `pending`→draft, `completed`→succeeded (`AgentExecutionStatu
 - Terminal không execute lại; retry = execution/attempt mới.
 - Browser không đặt idempotency key.
 - Không CommandBus từ Livewire/Blade.
+- **Scope bridge:** `DefaultAgentExecutionOrchestrator::toAgentContext()` phải pass `scopes: $context->scopes` từ `AgentWorkspaceContext` (fail-closed qua `ContentProjectAgentPolicy::assertScopes`). Không hardcode `scopes: []`.
+- Read / `confirmation_policy=none`: sau preview executable → `execute` với `_execution_ref` ngay (không chờ Yes).

@@ -24,6 +24,7 @@ final class AgentResultRendererRegistry
             new ContentProjectResultRenderer,
             new KeywordResultRenderer,
             new SerpResultRenderer,
+            new SeoAuditResultRenderer,
             new GenericAgentResultRenderer,
         ];
     }

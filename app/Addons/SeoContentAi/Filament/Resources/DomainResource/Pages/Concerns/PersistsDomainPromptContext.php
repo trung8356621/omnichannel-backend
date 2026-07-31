@@ -49,15 +49,14 @@ trait PersistsDomainPromptContext
 
         $this->pendingPromptContext = [
             'tone' => trim((string) ($ctx['tone'] ?? '')),
+            'company_short_identity' => trim((string) ($ctx['company_short_identity'] ?? '')),
             'short_description' => (string) ($ctx['short_description'] ?? ''),
             'cta_intro' => (string) ($ctx['cta_intro'] ?? ''),
-            'phone_1' => trim((string) ($ctx['phone_1'] ?? '')),
-            'phone_2' => trim((string) ($ctx['phone_2'] ?? '')),
-            'phone_3' => trim((string) ($ctx['phone_3'] ?? '')),
-            'email_1' => trim((string) ($ctx['email_1'] ?? '')),
-            'email_2' => trim((string) ($ctx['email_2'] ?? '')),
-            'email_3' => trim((string) ($ctx['email_3'] ?? '')),
-            'cta' => $this->repeaterItemsFromState($ctx['cta'] ?? []),
+            'phones' => $this->repeaterItemsFromState($ctx['phones'] ?? []),
+            'emails' => $this->repeaterItemsFromState($ctx['emails'] ?? []),
+            'socials' => $this->repeaterItemsFromState($ctx['socials'] ?? []),
+            'address' => trim((string) ($ctx['address'] ?? '')),
+            'cta' => [],
             'links' => $this->repeaterItemsFromState($ctx['links'] ?? []),
         ];
     }
@@ -98,17 +97,19 @@ trait PersistsDomainPromptContext
     {
         $service = app(SiteDomainPromptContextService::class);
 
+        $phones = $service->phonesFromPayload($context);
+        $emails = $service->emailsFromPayload($context);
+        $socials = $service->socialsFromPayload($context);
+
         return [
             'tone' => (string) ($context['tone'] ?? ''),
+            'company_short_identity' => (string) ($context['company_short_identity'] ?? ''),
             'short_description' => (string) ($context['short_description'] ?? ''),
             'cta_intro' => (string) ($context['cta_intro'] ?? ''),
-            'phone_1' => $service->ctaValueFromRows($context['cta'] ?? [], 'phone_1'),
-            'phone_2' => $service->ctaValueFromRows($context['cta'] ?? [], 'phone_2'),
-            'phone_3' => $service->ctaValueFromRows($context['cta'] ?? [], 'phone_3'),
-            'email_1' => $service->ctaValueFromRows($context['cta'] ?? [], 'email_1'),
-            'email_2' => $service->ctaValueFromRows($context['cta'] ?? [], 'email_2'),
-            'email_3' => $service->ctaValueFromRows($context['cta'] ?? [], 'email_3'),
-            'cta' => $this->repeaterStateForFill($this->filterDedicatedCtaRows($context['cta'] ?? [])),
+            'phones' => $this->repeaterStateForFill($phones),
+            'emails' => $this->repeaterStateForFill($emails),
+            'socials' => $this->repeaterStateForFill($socials),
+            'address' => $service->ctaValueFromRows($context['cta'] ?? [], 'address'),
             'links' => $this->repeaterStateForFill($context['links'] ?? []),
         ];
     }

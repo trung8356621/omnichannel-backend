@@ -1349,14 +1349,16 @@ class SyncDomainContentService
         }
 
         if ($isTaxonomy) {
-            $parentId = max(0, (int) ($item['parent_id'] ?? 0));
-            if ($parentId > 0) {
+            // Preserve parent=0 as explicit meta. Never delete on zero — Site MCP
+            // fail-closed treats missing wp_parent_id as incomplete (not root).
+            $this->persistTaxonomyParentMeta($article, $item, $forceOverwrite);
+
+            if (array_key_exists('post_count', $item) || array_key_exists('count', $item)) {
+                $postCount = (int) ($item['post_count'] ?? $item['count'] ?? 0);
                 $article->articleMetas()->updateOrCreate(
-                    ['meta_key' => 'wp_parent_id'],
-                    ['meta_value' => (string) $parentId],
+                    ['meta_key' => 'wp_term_count'],
+                    ['meta_value' => (string) $postCount],
                 );
-            } else {
-                $article->articleMetas()->where('meta_key', 'wp_parent_id')->delete();
             }
 
             $article->articleMetas()->whereIn('meta_key', [
@@ -1386,6 +1388,40 @@ class SyncDomainContentService
         } elseif ($forceOverwrite) {
             $article->articleMetas()->where('meta_key', 'wp_product_gallery')->delete();
         }
+    }
+
+    /**
+     * Persist taxonomy parent identity. Integer 0 must survive as meta value "0".
+     * Missing parent keys leave incomplete identity (Site MCP fail-closed excludes them).
+     *
+     * @param  array<string, mixed>  $item
+     */
+    private function persistTaxonomyParentMeta(SeoArticle $article, array $item, bool $forceOverwrite): void
+    {
+        $hasParent = array_key_exists('parent_term_id', $item) || array_key_exists('parent_id', $item);
+        if (! $hasParent) {
+            if ($forceOverwrite) {
+                $article->articleMetas()->where('meta_key', 'wp_parent_id')->delete();
+            }
+
+            return;
+        }
+
+        $raw = array_key_exists('parent_term_id', $item)
+            ? $item['parent_term_id']
+            : $item['parent_id'];
+
+        if ($raw === null || $raw === '') {
+            $article->articleMetas()->where('meta_key', 'wp_parent_id')->delete();
+
+            return;
+        }
+
+        $parentId = (int) $raw;
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => 'wp_parent_id'],
+            ['meta_value' => (string) $parentId],
+        );
     }
 
     /**

@@ -38,6 +38,13 @@ final class ContentProjectDashboardStatsService
 
         $hasQueueStatus = Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_queue_status');
         $hasPublishPublishedAt = Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_published_at');
+        $staleMinutes = max(1, (int) config('seo-content-ai.content_project.generation_task_stale_minutes', 0));
+        if ($staleMinutes <= 0) {
+            $staleMinutes = max(
+                max(1, (int) config('seo-content-ai.content_project.run_item_stale_minutes', 30)),
+                max(1, (int) config('seo-content-ai.content_project.heartbeat_stale_minutes', 20)),
+            );
+        }
 
         $queueWaiting = $hasQueueStatus
             ? "SUM(CASE WHEN t.publish_queue_status IN ('waiting','processing','retrying') OR t.scheduled_publish_at IS NOT NULL THEN 1 ELSE 0 END)"
@@ -57,7 +64,9 @@ final class ContentProjectDashboardStatsService
             SELECT
                 COUNT(*) AS total_items,
                 SUM(CASE WHEN t.archived_at IS NULL AND t.status = 'pending' THEN 1 ELSE 0 END) AS waiting_ai,
-                SUM(CASE WHEN t.archived_at IS NULL AND t.status = 'writing' THEN 1 ELSE 0 END) AS ai_running,
+                SUM(CASE WHEN t.archived_at IS NULL AND t.status = 'writing'
+                    AND t.updated_at >= DATE_SUB(NOW(), INTERVAL {$staleMinutes} MINUTE)
+                    THEN 1 ELSE 0 END) AS ai_running,
                 SUM(CASE WHEN t.archived_at IS NULL AND (t.status = 'reviewing' OR (t.status = 'completed' AND COALESCE(a.is_reviewed,0) = 0)) THEN 1 ELSE 0 END) AS waiting_review,
                 SUM(CASE WHEN t.archived_at IS NULL AND t.status = 'completed' AND COALESCE(a.is_reviewed,0) = 1
                     AND t.scheduled_publish_at IS NULL

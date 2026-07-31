@@ -21,6 +21,7 @@ final class ContentProjectSkills
                 'capability' => 'content_project.list_projects',
                 'sort_order' => 20,
                 'required_scopes' => ['content-project:read'],
+                'confirmation_policy' => 'none',
             ],
             [
                 'key' => 'content_project.create',
@@ -92,6 +93,7 @@ final class ContentProjectSkills
                 'sort_order' => 22,
                 'is_featured' => true,
                 'required_scopes' => ['content-project:read'],
+                'confirmation_policy' => 'none',
                 'availability_policy' => ['requires_context' => ['project_ref']],
                 'form_schema' => [
                     ['key' => 'project_ref', 'label' => 'Content Project', 'type' => 'project', 'required' => true],

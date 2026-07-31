@@ -11,8 +11,10 @@ php artisan seo:site-sync-v2-backfill {site_id} --execute --only=links,keywords 
 
 ## Scheduler
 
-- Hourly: `seo-content-ai:site-sync-reconcile-quick` (`--mode=quick --limit=30`)
-- Skips when site lock held by sync run.
+- Hourly: `seo-content-ai:site-sync-reconcile-quick` (`seo:site-sync-reconcile --mode=quick --limit=30`)
+- Scan sites: `whereHas(metas.seo_read_token)` — **not** `sites.settings` (column missing on core `sites`)
+- Skips when site lock held by sync run; non-V2 writers skipped in loop (`SiteSyncCutoverStateService::isV2Writer`)
+- Flag options (`--sync` / `--apply`) on other SEO schedules must be string form, not `['--flag' => true]`
 
 ## Handshake / Diagnostic / Cutover
 

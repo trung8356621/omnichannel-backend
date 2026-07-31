@@ -7,8 +7,9 @@ namespace App\Addons\SeoContentAi\Services\ContentProject\Agent\Mcp;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Capabilities\CanonicalCapabilityRegistry;
 
 /**
- * Presentation-only MCP capability markdown for Agent Workspace General.
+ * Presentation-only MCP capability markdown for Operation Center (developer/MCP reference).
  * Source of truth: CanonicalCapabilityRegistry — never hard-codes tool lists.
+ * Global catalog — not bound to a Domain General page or site_feature manifest.
  */
 final class McpCapabilityMarkdownPresenter
 {
@@ -194,10 +195,11 @@ final class McpCapabilityMarkdownPresenter
         if ($internal) {
             $status[] = 'internal-only';
         }
-        if ($agentExposed) {
+        // Disabled caps must not advertise agent/MCP exposure.
+        if ($enabled && $agentExposed) {
             $status[] = 'exposed-to-agent';
         }
-        if ($mcpExposed) {
+        if ($enabled && $mcpExposed) {
             $status[] = 'exposed-to-mcp';
         }
 
@@ -231,6 +233,13 @@ final class McpCapabilityMarkdownPresenter
             'title' => (string) ($cap['label'] ?? $name),
             'description' => (string) ($cap['presentation_description'] ?? $cap['description'] ?? $name),
             'type' => $type,
+            'capability_kind' => (string) ($cap['capability_kind'] ?? 'system_action'),
+            'action_domain' => (string) ($cap['action_domain'] ?? $cap['category'] ?? 'general'),
+            'required_context' => array_values(array_filter(array_map(
+                static fn (mixed $v): string => trim((string) $v),
+                (array) ($cap['required_context'] ?? []),
+            ), static fn (string $v): bool => $v !== '')),
+            'side_effect_level' => (string) ($cap['side_effect_level'] ?? ($readOnly ? 'none' : 'write')),
             'scopes' => $scopes,
             'input_summary' => $inputSummary,
             'output_summary' => $outputSummary,
@@ -324,7 +333,12 @@ final class McpCapabilityMarkdownPresenter
      */
     private function toMarkdown(array $items, bool $hasInternalSection): string
     {
-        $lines = ['# MCP Capabilities', ''];
+        $lines = [
+            '# MCP Capabilities',
+            '',
+            '_Global system_action catalog from CanonicalCapabilityRegistry. Not site_feature flags. Not bound to any Domain General page._',
+            '',
+        ];
 
         $public = [];
         $internal = [];
@@ -358,23 +372,38 @@ final class McpCapabilityMarkdownPresenter
     private function appendCapabilityMarkdown(array &$lines, array $item): void
     {
         $name = (string) ($item['name'] ?? '');
-        $lines[] = '## '.$name;
+        $lines[] = '### '.$name;
         $lines[] = '';
-        $lines[] = '**Loại:** '.(string) ($item['type'] ?? 'Write');
-        $lines[] = '**Mô tả:** '.(string) ($item['description'] ?? '');
+        $lines[] = 'Kind: '.(string) ($item['capability_kind'] ?? 'system_action');
+        $lines[] = 'Domain: '.(string) ($item['action_domain'] ?? $item['category'] ?? 'general');
+        $requiredContext = (array) ($item['required_context'] ?? []);
+        $lines[] = 'Required context: '.($requiredContext === []
+            ? '—'
+            : implode(', ', array_map(static fn (mixed $c): string => (string) $c, $requiredContext)));
         $scopes = (array) ($item['scopes'] ?? []);
         $scopeText = $scopes === [] ? '—' : implode(', ', array_map(
             static fn (mixed $s): string => '`'.(string) $s.'`',
             $scopes,
         ));
-        $lines[] = '**Scope:** '.$scopeText;
-        $lines[] = '**Confirmation:** '.(string) ($item['confirmation_policy'] ?? 'Không');
+        $lines[] = 'Required scopes: '.$scopeText;
+        $lines[] = 'Confirmation: '.(string) ($item['confirmation_policy'] ?? 'Không');
+        $lines[] = 'Side effects: '.(string) ($item['side_effect_level'] ?? ($item['type'] ?? 'Write'));
+        $lines[] = 'Type: '.(string) ($item['type'] ?? 'Write');
+        $lines[] = 'Description: '.(string) ($item['description'] ?? '');
+        $exposed = [];
+        if (($item['exposed_to_agent'] ?? false) === true) {
+            $exposed[] = 'agent';
+        }
+        if (($item['exposed_to_mcp'] ?? false) === true) {
+            $exposed[] = 'mcp';
+        }
+        $lines[] = 'Exposed: '.($exposed === [] ? '—' : implode(', ', $exposed));
         $status = (array) ($item['status'] ?? []);
         if ($status !== []) {
-            $lines[] = '**Status:** '.implode(', ', array_map(static fn (mixed $s): string => (string) $s, $status));
+            $lines[] = 'Status: '.implode(', ', array_map(static fn (mixed $s): string => (string) $s, $status));
         }
         $lines[] = '';
-        $lines[] = '### Input';
+        $lines[] = '#### Input schema';
         $lines[] = '';
         $inputs = (array) ($item['input_summary'] ?? []);
         if ($inputs === []) {
@@ -385,7 +414,7 @@ final class McpCapabilityMarkdownPresenter
             }
         }
         $lines[] = '';
-        $lines[] = '### Output';
+        $lines[] = '#### Output schema';
         $lines[] = '';
         $outputs = (array) ($item['output_summary'] ?? []);
         if ($outputs === []) {
@@ -398,7 +427,7 @@ final class McpCapabilityMarkdownPresenter
         $examples = (array) ($item['examples'] ?? []);
         if ($examples !== []) {
             $lines[] = '';
-            $lines[] = '### Ví dụ';
+            $lines[] = '#### Examples';
             $lines[] = '';
             foreach ($examples as $example) {
                 $lines[] = '`'.(string) $example.'`';

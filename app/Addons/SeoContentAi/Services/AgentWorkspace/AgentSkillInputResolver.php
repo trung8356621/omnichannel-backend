@@ -109,8 +109,21 @@ final class AgentSkillInputResolver
         }
 
         if ($skill->key === 'keyword.analyze') {
+            $useSiteMcp = $input['use_site_mcp'] ?? $input['use-site-mcp'] ?? 'yes';
+            if (is_bool($useSiteMcp)) {
+                $useSiteMcpFlag = $useSiteMcp;
+            } else {
+                $normalized = mb_strtolower(trim((string) $useSiteMcp));
+                $useSiteMcpFlag = ! in_array($normalized, ['no', '0', 'false', 'off'], true);
+            }
+
             return [
-                'workspace_ref' => (string) ($input['workspace_ref'] ?? ''),
+                'site_ref' => $context->siteRef,
+                'keyword' => trim((string) ($input['keyword'] ?? '')),
+                'limit' => (int) ($input['limit'] ?? 10),
+                'use_site_mcp' => $useSiteMcpFlag,
+                // Internal workspace remains optional fallback — never required from CLI.
+                'workspace_ref' => (string) ($input['workspace_ref'] ?? $context->workspaceRef ?? ''),
                 'scope' => (string) ($input['scope'] ?? 'unanalyzed'),
                 'strategy' => (string) ($input['strategy'] ?? 'balanced'),
                 'use_ai_intent' => (bool) ($input['use_ai_intent'] ?? true),
@@ -139,7 +152,16 @@ final class AgentSkillInputResolver
     public function summarize(array $resolved): array
     {
         $summary = $resolved;
-        unset($summary['credentials'], $summary['api_key'], $summary['raw_prompt']);
+        unset(
+            $summary['credentials'],
+            $summary['api_key'],
+            $summary['raw_prompt'],
+            $summary['site_ref'],
+            $summary['tenant_ref'],
+            $summary['connection_hash'],
+            $summary['actor_ref'],
+            $summary['actor_user_id'],
+        );
 
         if (isset($summary['tasksData']) && is_array($summary['tasksData'])) {
             $summary['items_count'] = count($summary['tasksData']);

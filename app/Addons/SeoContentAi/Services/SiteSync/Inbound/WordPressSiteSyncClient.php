@@ -187,6 +187,114 @@ final class WordPressSiteSyncClient
     }
 
     /**
+     * Canonical taxonomy term list from WordPress bridge.
+     *
+     * @return array{success: bool, message: string, terms?: list<array<string, mixed>>}
+     */
+    public function fetchTaxonomyTerms(Site $site, string $taxonomy, bool $hideEmpty = false): array
+    {
+        $auth = $this->authContext($site);
+        if ($auth['error'] !== null) {
+            return ['success' => false, 'message' => $auth['error']];
+        }
+
+        $taxonomy = trim($taxonomy);
+        if ($taxonomy === '') {
+            return ['success' => false, 'message' => 'taxonomy empty'];
+        }
+
+        try {
+            $response = Http::timeout(45)
+                ->acceptJson()
+                ->withToken($auth['token'])
+                ->get($auth['base'].'/wp-json/omi-seo-ai/v1/taxonomies/'.$taxonomy.'/terms', [
+                    'hide_empty' => $hideEmpty ? 1 : 0,
+                ]);
+
+            if (! $response->successful()) {
+                return [
+                    'success' => false,
+                    'message' => 'taxonomy terms HTTP '.$response->status(),
+                ];
+            }
+
+            $json = $response->json();
+            $terms = is_array($json['terms'] ?? null) ? $json['terms'] : [];
+
+            return [
+                'success' => (bool) ($json['success'] ?? true),
+                'message' => (string) ($json['message'] ?? 'ok'),
+                'terms' => array_values(array_filter(
+                    $terms,
+                    static fn (mixed $row): bool => is_array($row),
+                )),
+            ];
+        } catch (Throwable $e) {
+            RuntimeLogger::warning('site_sync.taxonomy_terms_failed', [
+                'site_id' => (int) $site->id,
+                'taxonomy' => $taxonomy,
+                'error' => $e->getMessage(),
+            ]);
+
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Single taxonomy term (older bridges already expose parent_id on this route).
+     *
+     * @return array{success: bool, message: string, term?: array<string, mixed>}
+     */
+    public function fetchTerm(Site $site, string $taxonomy, int $termId): array
+    {
+        $auth = $this->authContext($site);
+        if ($auth['error'] !== null) {
+            return ['success' => false, 'message' => $auth['error']];
+        }
+
+        if ($termId <= 0 || trim($taxonomy) === '') {
+            return ['success' => false, 'message' => 'invalid term'];
+        }
+
+        try {
+            $response = Http::timeout(20)
+                ->acceptJson()
+                ->withToken($auth['token'])
+                ->get($auth['base'].'/wp-json/omi-seo-ai/v1/terms/'.$taxonomy.'/'.$termId);
+
+            if (! $response->successful()) {
+                return [
+                    'success' => false,
+                    'message' => 'term HTTP '.$response->status(),
+                ];
+            }
+
+            $json = $response->json();
+            $term = is_array($json['post'] ?? null)
+                ? $json['post']
+                : (is_array($json['term'] ?? null) ? $json['term'] : null);
+            if (! is_array($term)) {
+                return ['success' => false, 'message' => 'term payload invalid'];
+            }
+
+            return [
+                'success' => (bool) ($json['success'] ?? true),
+                'message' => (string) ($json['message'] ?? 'ok'),
+                'term' => $term,
+            ];
+        } catch (Throwable $e) {
+            RuntimeLogger::warning('site_sync.term_failed', [
+                'site_id' => (int) $site->id,
+                'taxonomy' => $taxonomy,
+                'term_id' => $termId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
+
+    /**
      * @param  array<string, mixed>|null  $json
      * @return array{success: bool, message: string, batch?: SiteSyncBatchData}
      */

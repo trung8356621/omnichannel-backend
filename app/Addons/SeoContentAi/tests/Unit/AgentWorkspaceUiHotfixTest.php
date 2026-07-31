@@ -70,7 +70,6 @@ final class AgentWorkspaceUiHotfixTest extends TestCase
         self::assertStringContainsString('onComposerEnter($event)', $source);
         self::assertStringContainsString('composerSubmitting', $source);
         self::assertStringNotContainsString('action="javascript:', $source);
-        self::assertStringNotContainsString("x-on:keydown.enter.prevent=\"if (\$wire.showPalette) { selectPalette(); } else { \$wire.", $source);
 
         $page = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/views/filament/pages/agent-workspace.blade.php',
@@ -78,6 +77,8 @@ final class AgentWorkspaceUiHotfixTest extends TestCase
         self::assertStringContainsString('shiftKey', $page);
         self::assertStringContainsString('submitAgentComposer', $page);
         self::assertStringContainsString("Alpine.data('seoAgentWorkspace'", $page);
+        self::assertStringContainsString('refreshLocalPalette', $page);
+        self::assertStringContainsString('paletteOpen', $page);
     }
 
     public function test_agent_workspace_view_has_single_root_vite_and_no_nested_form_markers(): void
@@ -93,9 +94,7 @@ final class AgentWorkspaceUiHotfixTest extends TestCase
             'Vite assets must load inside Filament page root',
         );
 
-        // Skill drawer uses shared partial once (not duplicated inline form impl).
-        self::assertSame(1, substr_count($source, 'agent-skill-form'));
-        self::assertStringContainsString('seo-agent-workspace__skill-drawer', $source);
+        self::assertStringContainsString('command-catalog.js', $source);
         self::assertStringContainsString('seo-agent-workspace__palette', $source);
         self::assertStringContainsString('submitAgentComposer', $source);
         self::assertStringContainsString('type="button"', $source);
@@ -110,14 +109,13 @@ final class AgentWorkspaceUiHotfixTest extends TestCase
 
         self::assertStringContainsString('seo-agent-workspace__template-card', $source);
         self::assertStringContainsString('action="selectTemplate"', $source);
-        self::assertStringContainsString('selectPaletteElement($el)', $source);
-        self::assertStringContainsString('value="{{ $row[\'key\'] }}"', $source);
+        self::assertStringContainsString('selectPaletteRow(row)', $source);
+        self::assertStringContainsString('filteredCommands', $source);
         self::assertStringContainsString('wire:key="agent-template-', $source);
-        self::assertStringContainsString('wire:key="agent-palette-', $source);
         self::assertStringContainsString('wire:key="agent-msg-', $source);
+        self::assertStringContainsString('AgentCommandCatalog', $source);
         self::assertStringNotContainsString('@js(', $source);
         self::assertStringNotContainsString('Js::from(', $source);
-        self::assertStringNotContainsString("x-bind:class=\"{ ", $source);
         self::assertStringNotContainsString('@click=', $source);
     }
 
@@ -161,7 +159,7 @@ final class AgentWorkspaceUiHotfixTest extends TestCase
         self::assertStringContainsString('openSkill', $body);
         self::assertStringContainsString('AgentWorkspaceApplicationService', $body);
         self::assertStringNotContainsString('gateway->execute', $body);
-        self::assertStringContainsString('agent-focus-skill-form', $body);
+        self::assertStringContainsString('requiresConfirmation', $body);
     }
 
     private function methodExistsInSource(string $source, string $methodName): bool
