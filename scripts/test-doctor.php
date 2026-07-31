@@ -72,5 +72,5 @@ if ($result->ok()) {
     exit(0);
 }
 
-fwrite(STDERR, 'test:doctor failed. See docs/TESTING.md'.PHP_EOL);
+fwrite(STDERR, 'test:doctor failed. See docs/operations/TESTING.md'.PHP_EOL);
 exit(1);

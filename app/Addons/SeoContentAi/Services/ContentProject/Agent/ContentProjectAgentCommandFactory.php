@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services\ContentProject\Agent;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AddContentProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ApproveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveContentProjectCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AutoScheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CancelProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CreateContentProjectCommand;
@@ -145,6 +146,13 @@ final class ContentProjectAgentCommandFactory
                 $this->projectRef($input),
                 isset($input['note']) ? (string) $input['note'] : null,
                 (bool) ($input['confirm_waiting_publish'] ?? false),
+                (bool) ($input['dry_run'] ?? false),
+                isset($input['confirmation_token']) ? (string) $input['confirmation_token'] : null,
+            ),
+            'content_project.archive_items' => new ArchiveProjectItemsCommand(
+                $this->projectRef($input),
+                $this->itemRefs($input),
+                isset($input['note']) ? (string) $input['note'] : null,
                 (bool) ($input['dry_run'] ?? false),
                 isset($input['confirmation_token']) ? (string) $input['confirmation_token'] : null,
             ),

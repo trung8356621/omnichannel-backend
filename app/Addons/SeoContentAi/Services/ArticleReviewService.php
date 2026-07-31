@@ -22,6 +22,8 @@ use Throwable;
  * Single source of truth cho workflow review bài viết:
  * submit_review (CM) → approve (planner+) → archive/Hoàn tất duyệt (manager).
  *
+ * Canonical column: `articles.review_status` (+ `reviewed_at` approval timestamp).
+ *
  * Action `archive` chỉ cập nhật trạng thái nghiệp vụ (review_status = archived).
  * Không detach task, không set content_archived_at, không tạo archive lẻ.
  * Đơn vị lưu trữ kho = Content Project ({@see ArchiveContentProjectService}).
@@ -51,6 +53,114 @@ final class ArticleReviewService
     public function __construct(
         private readonly SeoProjectTaskLifecycleService $taskLifecycle,
     ) {}
+
+    /**
+     * Canonical "approved for lifecycle/publish" — ONLY review_status=approved.
+     * Archived is NOT approved.
+     */
+    public function isCanonicallyApproved(SeoArticle $article): bool
+    {
+        return $this->resolveStatus($article) === ArticleReviewStatus::Approved;
+    }
+
+    /**
+     * Content Project / bulk path: force review_status=approved from draft|pending_review.
+     * Idempotent when already approved. Archived (hoàn tất duyệt) is NOT approved — conflict.
+     * Does NOT emit BusinessHook / ContentProjectItemsApproved.
+     *
+     * @return array{
+     *     already_approved: bool,
+     *     review: ?SeoArticleReview,
+     *     status: ArticleReviewStatus,
+     *     deleted_media_count: int
+     * }
+     */
+    public function ensureApproved(
+        SeoArticle $article,
+        User $user,
+        ?string $note = null,
+        string $source = 'content_project',
+    ): array {
+        $this->authorize(ArticleReviewActionType::Approve, $user);
+        $normalizedNote = $this->normalizeNote($note);
+        $this->lastSideEffectMeta = [];
+
+        return DB::connection($article->getConnectionName())->transaction(
+            function () use ($article, $user, $normalizedNote, $source): array {
+                /** @var SeoArticle|null $locked */
+                $locked = SeoArticle::query()
+                    ->whereKey($article->getKey())
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $locked instanceof SeoArticle) {
+                    throw ArticleReviewException::invalidTransition(
+                        __('seo-content-ai::filament.article_review.errors.invalid_transition'),
+                    );
+                }
+
+                $current = $this->resolveStatus($locked);
+                if ($current === ArticleReviewStatus::Archived) {
+                    throw ArticleReviewException::conflict(
+                        'Article is archived (hoàn tất duyệt); reopen before approve.',
+                    );
+                }
+
+                if ($current === ArticleReviewStatus::Approved) {
+                    $deleted = $this->applyApprovalSideEffects($locked, true);
+
+                    $article->setRawAttributes($locked->getAttributes());
+                    $article->syncOriginal();
+
+                    return [
+                        'already_approved' => true,
+                        'review' => null,
+                        'status' => $current,
+                        'deleted_media_count' => $deleted,
+                    ];
+                }
+
+                $from = $current;
+                $to = ArticleReviewStatus::Approved;
+
+                $deleted = $this->applyApprovalSideEffects($locked, true);
+                $locked->forceFill([
+                    'review_status' => $to->value,
+                    'reviewed_at' => $locked->reviewed_at ?? now(),
+                ])->save();
+
+                $review = SeoArticleReview::query()->create([
+                    'article_id' => (int) $locked->getKey(),
+                    'action_type' => ArticleReviewActionType::Approve->value,
+                    'from_status' => $from->value,
+                    'to_status' => $to->value,
+                    'reviewer_id' => (int) $user->id,
+                    'reviewer_role' => SeoAccessControl::effectiveRole(),
+                    'note' => $normalizedNote !== null
+                        ? $normalizedNote
+                        : 'ensureApproved:'.$source,
+                ]);
+
+                $article->setRawAttributes($locked->getAttributes());
+                $article->syncOriginal();
+
+                RuntimeLogger::info('seo.article_review.ensure_approved', [
+                    'article_id' => (int) $locked->getKey(),
+                    'from' => $from->value,
+                    'to' => $to->value,
+                    'source' => $source,
+                    'already_approved' => false,
+                ]);
+
+                return [
+                    'already_approved' => false,
+                    'review' => $review,
+                    'status' => $to,
+                    'deleted_media_count' => $deleted,
+                ];
+            },
+        );
+    }
 
     public function performAction(
         SeoArticle $article,
@@ -150,10 +260,8 @@ final class ArticleReviewService
 
         if ($status === ArticleReviewStatus::Approved) {
             if ($this->actorMay($user, ArticleReviewActionType::Archive)) {
-                // Manager (canFinalize): "Complete" — approved → archived.
                 $actions[] = $this->describeAction(ArticleReviewActionType::Archive);
             } elseif ($this->actorMay($user, ArticleReviewActionType::Unapprove)) {
-                // Planner (canApprove, không canFinalize): bỏ duyệt — approved → pending_review.
                 $actions[] = $this->describeAction(ArticleReviewActionType::Unapprove);
             }
         }
@@ -172,14 +280,7 @@ final class ArticleReviewService
             return $stored;
         }
 
-        if ($article->content_archived_at !== null) {
-            return ArticleReviewStatus::Archived;
-        }
-
-        if ((bool) $article->is_reviewed) {
-            return ArticleReviewStatus::Approved;
-        }
-
+        // content_archived_at = Content Project archive flag — NOT review_status archived.
         return ArticleReviewStatus::Draft;
     }
 
@@ -298,14 +399,35 @@ final class ArticleReviewService
     private function applySideEffects(SeoArticle $article, User $user, ArticleReviewActionType $action): void
     {
         match ($action) {
-            ArticleReviewActionType::Approve => ArticleResource::markArticleReviewed($article),
-            // Hoàn tất duyệt: chỉ trạng thái nghiệp vụ — không archive lẻ / không detach.
+            ArticleReviewActionType::Approve => $this->applyApprovalSideEffects($article, true),
             ArticleReviewActionType::Archive => $this->completeReviewWithoutDetaching($article),
-            // Mở lại: về approved; dọn cờ legacy content_archived_* + restore task đã detach (dữ liệu cũ).
             ArticleReviewActionType::Reopen => $this->reopenReviewKeepingProjectLinks($article, $user),
-            ArticleReviewActionType::Unapprove => ArticleResource::markArticleUnreviewed($article),
+            ArticleReviewActionType::Unapprove => $this->applyApprovalSideEffects($article, false),
             default => null,
         };
+    }
+
+    /**
+     * Approve-side media cleanup + reviewed_at; unapprove clears reviewed_at.
+     *
+     * @return int deleted local media count when approving
+     */
+    private function applyApprovalSideEffects(SeoArticle $article, bool $approved): int
+    {
+        if (! $approved) {
+            $article->forceFill(['reviewed_at' => null])->save();
+
+            return 0;
+        }
+
+        $deleted = ArticleResource::deleteLocalMediaForArticle($article);
+        app(ArticleWpSyncQueueService::class)->clearQueueEntry($article->fresh() ?? $article);
+
+        if ($article->reviewed_at === null) {
+            $article->forceFill(['reviewed_at' => now()])->save();
+        }
+
+        return $deleted;
     }
 
     /**

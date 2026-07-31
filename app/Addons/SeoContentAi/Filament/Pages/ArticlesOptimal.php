@@ -133,9 +133,7 @@ final class ArticlesOptimal extends SeoPanelPage
 
         $this->selectedScoringRuleKeys = array_values(array_filter(
             $this->selectedScoringRuleKeys,
-            static fn (mixed $key): bool => is_string($key)
-                && trim($key) !== ''
-                && $key !== \App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD,
+            static fn (mixed $key): bool => is_string($key) && trim($key) !== '',
         ));
 
         $this->invalidateScanResults();

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers;
 
+use App\Addons\SeoContentAi\Enums\SeoProjectTaskStatus;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
@@ -15,6 +16,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Contracts\Conten
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectBusinessLock;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPreviewToken;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectTaskStatusNormalizer;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -68,6 +70,33 @@ final class UpdateContentProjectItemHandler extends AbstractPublishingHandler
                     $projectId,
                     affectedItemIds: [$itemId],
                 );
+            }
+
+            if (array_key_exists('status', $allowed)) {
+                try {
+                    $normalized = ContentProjectTaskStatusNormalizer::normalizeOrFail(
+                        is_string($allowed['status'] ?? null) ? (string) $allowed['status'] : null,
+                    );
+                } catch (InvalidArgumentException $e) {
+                    return ContentProjectActionResult::fail(
+                        ContentProjectActionCodes::VALIDATION_FAILED,
+                        $e->getMessage(),
+                        $projectId,
+                        affectedItemIds: [$itemId],
+                    );
+                }
+
+                // Manual status writes limited to non-terminal workflow labels — archive/cancel via dedicated commands.
+                if (in_array($normalized, [SeoProjectTaskStatus::Archived, SeoProjectTaskStatus::Cancelled], true)) {
+                    return ContentProjectActionResult::fail(
+                        ContentProjectActionCodes::VALIDATION_FAILED,
+                        'Use archive/cancel commands — cannot set status='.$normalized->value.' via item update.',
+                        $projectId,
+                        affectedItemIds: [$itemId],
+                    );
+                }
+
+                $allowed['status'] = $normalized->value;
             }
 
             $task->update($allowed);

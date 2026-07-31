@@ -24,7 +24,6 @@ use App\Addons\SeoContentAi\Services\SeoProjectKeywordListParser;
 use App\Addons\SeoContentAi\Services\SeoProjectRunPreflightService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskMoveService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
-use App\Addons\SeoContentAi\Services\RunEngine\ContentProjectRunEngine;
 use App\Addons\SeoContentAi\Services\SeoProjectRunConsolidationService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -1365,7 +1364,7 @@ class SeoProjectResource extends SeoPanelResource
     }
 
     /**
-     * Start generate via CommandBus + PHP RunEngine — stay on project workspace (no Run History UI).
+     * Start generate via CommandBus (handler creates run, prepares queue, starts RunEngine once).
      *
      * @param  array<string, mixed>|null  $settings
      */
@@ -1374,10 +1373,7 @@ class SeoProjectResource extends SeoPanelResource
         $settings = is_array($settings) ? $settings : [];
         $settings['use_php_engine'] = true;
 
-        $run = static::createProjectWorkflowRun($project, $mode, $settings);
-        app(ContentProjectRunEngine::class)->start($run);
-
-        return $run;
+        return static::createProjectWorkflowRun($project, $mode, $settings);
     }
 
     public static function makeGeneratePendingItemsAction(SeoProject $project): \Filament\Actions\Action
@@ -1570,8 +1566,13 @@ class SeoProjectResource extends SeoPanelResource
     public static function createProjectWorkflowRun(SeoProject $project, string $mode, ?array $settings = null): SeoProjectRun
     {
         $itemRefs = [];
-        if (is_array($settings) && isset($settings['task_ids']) && is_array($settings['task_ids'])) {
-            $itemRefs = array_values($settings['task_ids']);
+        $runSettings = [];
+        if (is_array($settings)) {
+            if (isset($settings['task_ids']) && is_array($settings['task_ids'])) {
+                $itemRefs = array_values($settings['task_ids']);
+            }
+            $runSettings = $settings;
+            unset($runSettings['task_ids'], $runSettings['technical_confirm_full_rerun']);
         }
 
         $result = app(ContentProjectCommandBus::class)->dispatch(
@@ -1580,6 +1581,7 @@ class SeoProjectResource extends SeoPanelResource
                 $itemRefs,
                 $mode,
                 (bool) (($settings['technical_confirm_full_rerun'] ?? false)),
+                $runSettings,
             ),
             ActorContext::user(
                 auth()->id() !== null ? (int) auth()->id() : null,
@@ -1600,11 +1602,6 @@ class SeoProjectResource extends SeoPanelResource
         $run = SeoProjectRun::query()->find($runId);
         if (! $run instanceof SeoProjectRun) {
             throw new \RuntimeException('Workflow run not found after generate command.');
-        }
-
-        // prepareRunQueue đã chạy trong GenerateProjectItemsHandler — chỉ update settings nếu cần.
-        if (is_array($settings) && $settings !== []) {
-            $run = app(SeoProjectWorkflowRunService::class)->updateRunSettings($run, $settings);
         }
 
         return $run;

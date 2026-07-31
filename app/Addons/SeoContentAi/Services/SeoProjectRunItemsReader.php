@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Enums\ArticleReviewStatus;
 use App\Addons\SeoContentAi\Enums\ContentProjectErrorCode;
 use App\Addons\SeoContentAi\Enums\SeoProjectRunItemStatus;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
@@ -258,6 +259,12 @@ final class SeoProjectRunItemsReader
                 : 'Task gốc không còn tồn tại.';
         }
 
+        $articleModel = $item->relationLoaded('article') ? $item->article : null;
+        $articleReviewStatus = $articleModel instanceof \App\Addons\SeoContentAi\Models\SeoArticle
+            ? (is_string($articleModel->review_status ?? null) ? (string) $articleModel->review_status : null)
+            : null;
+        $articleIsApproved = $articleReviewStatus === ArticleReviewStatus::Approved->value;
+
         return new SeoProjectRunItemViewData(
             runItemId: (int) $item->id,
             taskId: $item->task_id !== null ? (int) $item->task_id : null,
@@ -296,6 +303,8 @@ final class SeoProjectRunItemsReader
             rewriteNotes: $task instanceof SeoProjectTask && $task->type === SeoProjectTask::TYPE_REWRITE
                 ? ($task->rewrite_notes !== null ? (string) $task->rewrite_notes : null)
                 : null,
+            articleReviewStatus: $articleReviewStatus,
+            articleIsApproved: $articleIsApproved,
         );
     }
 
@@ -469,6 +478,8 @@ final class SeoProjectRunItemsReader
                 galleryDescription: $row->galleryDescription,
                 rewriteMode: $row->rewriteMode,
                 rewriteNotes: $row->rewriteNotes,
+                articleReviewStatus: $row->articleReviewStatus,
+                articleIsApproved: $row->articleIsApproved,
                 extra: $row->extra,
             );
         });

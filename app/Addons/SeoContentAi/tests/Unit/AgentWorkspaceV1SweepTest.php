@@ -29,7 +29,7 @@ final class AgentWorkspaceV1SweepTest extends TestCase
 
     public function test_freeze_doc_exists(): void
     {
-        $path = dirname(__DIR__, 5).'/docs/AGENT_WORKSPACE_V1_FREEZE.md';
+        $path = dirname(__DIR__, 5).'/docs/modules/AGENT_WORKSPACE.md';
         self::assertFileExists($path);
     }
 }

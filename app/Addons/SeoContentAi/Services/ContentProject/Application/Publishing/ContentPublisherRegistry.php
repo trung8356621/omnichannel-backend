@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing;
 
+use InvalidArgumentException;
+
 /**
  * Application-facing publisher registry — Core chỉ biết interface ContentPublisher.
+ * Duplicate keys fail closed (parity Extension PublisherRegistry).
  */
 final class ContentPublisherRegistry
 {
@@ -14,6 +17,10 @@ final class ContentPublisherRegistry
 
     public function register(string $key, ContentPublisher $publisher): void
     {
+        if (isset($this->publishers[$key])) {
+            throw new InvalidArgumentException("Content publisher [{$key}] already registered.");
+        }
+
         $this->publishers[$key] = $publisher;
     }
 

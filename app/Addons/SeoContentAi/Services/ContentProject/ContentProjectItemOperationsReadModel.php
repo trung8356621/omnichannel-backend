@@ -4,8 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\ContentProject;
 
-use App\Addons\SeoContentAi\Enums\ContentProjectLifecyclePhase;
-use App\Addons\SeoContentAi\Enums\SeoProjectRunItemStatus;
+use App\Addons\SeoContentAi\Enums\ContentProjectItemAction;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
@@ -28,7 +27,6 @@ final class ContentProjectItemOperationsReadModel
     public function __construct(
         private readonly ContentProjectLifecycle $lifecycle,
         private readonly ContentProjectDashboardStatsService $stats,
-        private readonly ContentProjectItemGenerationClassifier $classifier,
         private readonly ArticleWordPressSyncFlagService $syncFlags,
         private readonly ContentProjectExecutionStalenessPolicy $staleness,
         private readonly ContentProjectGenerationRecoveryService $generationRecovery,
@@ -159,17 +157,23 @@ final class ContentProjectItemOperationsReadModel
     {
         $tid = (int) $task->id;
         $article = $task->article;
-        $phase = $this->lifecycle->resolvePhase($task, $article instanceof SeoArticle ? $article : null);
+        $staleEval = $this->staleness->evaluateTask($task);
+        $isStaleGeneration = (bool) ($staleEval['stale'] ?? false);
+        $runError = $exec !== null
+            ? trim((string) ($exec['error_message'] ?? $exec['message'] ?? ''))
+            : '';
+        $state = $this->lifecycle->resolveState(
+            $task,
+            $article instanceof SeoArticle ? $article : null,
+            [
+                'run_item_status' => $exec['status'] ?? null,
+                'run_item_error' => $runError !== '' ? $runError : null,
+                'stale_generation' => $isStaleGeneration,
+                'execution_running' => (bool) ($staleEval['has_fresh_active_execution'] ?? false),
+            ],
+        );
+        $phase = $state->lifecycleState;
         $type = SeoProjectTask::normalizeType($task->type);
-        $decision = $this->classifier->classifyTask($task, [
-            'successful_execution' => $exec !== null && in_array(
-                strtolower((string) ($exec['status'] ?? '')),
-                [SeoProjectRunItemStatus::Success->value, 'completed'],
-                true,
-            ),
-            'last_run_item_status' => $exec['status'] ?? null,
-            'generation_meta_complete' => $article instanceof SeoArticle && $article->last_ai_content_at !== null,
-        ]);
 
         $articleId = (int) ($task->article_id ?? 0);
         $keyword = trim((string) ($task->keyword ?? ''));
@@ -184,11 +188,8 @@ final class ContentProjectItemOperationsReadModel
 
         $primary = $title !== '' ? $title : ($keyword !== '' ? $keyword : '#'.$tid);
 
-        $message = '';
-        if ($exec !== null) {
-            $message = trim((string) ($exec['error_message'] ?? $exec['message'] ?? ''));
-        }
-        if ($message === '' && $task->last_publish_error !== null) {
+        $message = $state->currentError ?? '';
+        if ($message === '' && $state->currentErrorSource->value === 'publish' && $task->last_publish_error !== null) {
             $message = (string) $task->last_publish_error;
         }
 
@@ -199,8 +200,6 @@ final class ContentProjectItemOperationsReadModel
         }
 
         $lastActivityCarbon = $this->resolveLastActivity($task, $article, $exec);
-        $staleEval = $this->staleness->evaluateTask($task);
-        $isStaleGeneration = (bool) ($staleEval['stale'] ?? false);
         $isGenuineRunning = (string) ($task->status ?? '') === SeoProjectTask::STATUS_WRITING
             && ! $isStaleGeneration
             && (bool) ($staleEval['has_fresh_active_execution'] ?? false);
@@ -211,9 +210,7 @@ final class ContentProjectItemOperationsReadModel
             && trim((string) ($exec['action'] ?? '')) !== '';
 
         $displayGenStatus = $isStaleGeneration ? SeoProjectTask::STATUS_FAILED : $genStatus;
-        $displayPhase = $isStaleGeneration
-            ? ContentProjectLifecyclePhase::Failed
-            : $phase;
+        $displayPhase = $phase;
 
         $genBadge = ContentProjectStatusBadgePresenter::generation($displayGenStatus, $exec['status'] ?? null);
         $lifeBadge = ContentProjectStatusBadgePresenter::lifecycle($displayPhase->value);
@@ -245,6 +242,12 @@ final class ContentProjectItemOperationsReadModel
             'current_step' => $exec['action'] ?? null,
             'lifecycle' => $displayPhase->value,
             'queue_status' => $queueStatus,
+            'item_state' => $state->toArray(),
+            'current_error_source' => $state->currentErrorSource->value,
+            'available_actions' => array_map(
+                static fn ($a): string => $a->value,
+                $state->availableActions,
+            ),
             'scheduled_at' => $task->scheduled_publish_at?->format('d/m/Y H:i'),
             'scheduled_raw' => $task->scheduled_publish_at?->toIso8601String(),
             'is_scheduled' => $task->scheduled_publish_at !== null,
@@ -252,8 +255,11 @@ final class ContentProjectItemOperationsReadModel
             'last_activity' => $lastActivityCarbon?->diffForHumans() ?? '—',
             'last_activity_full' => $lastActivityCarbon?->format('d/m/Y H:i:s'),
             'last_run_at' => $exec['finished_at'] ?? $exec['started_at'] ?? null,
-            'can_generate' => $decision->shouldRun() || $isStaleGeneration,
-            'can_regen' => $type !== SeoProjectTask::TYPE_IMPROVE && $articleId > 0,
+            // Batch E: derive solely from ActionGuard availableActions — single source of truth.
+            'can_generate' => in_array(ContentProjectItemAction::Generate, $state->availableActions, true),
+            'can_regen' => $articleId > 0
+                && $type !== SeoProjectTask::TYPE_IMPROVE
+                && in_array(ContentProjectItemAction::Rerun, $state->availableActions, true),
             'can_run_again' => $isStaleGeneration
                 || (string) ($task->status ?? '') === SeoProjectTask::STATUS_FAILED,
             'is_generation_stale' => $isStaleGeneration,

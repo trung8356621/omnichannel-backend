@@ -14,8 +14,7 @@ final class SeoAuditScanServiceTest extends TestCase
     {
         $service = app(SeoAuditScanService::class);
 
-        // Rule removed from SEO Audit filter surface — no longer a "fast path only" selection.
-        $this->assertFalse($service->isMissingFocusKeywordOnly(
+        $this->assertTrue($service->isMissingFocusKeywordOnly(
             [SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD],
             false,
             false,

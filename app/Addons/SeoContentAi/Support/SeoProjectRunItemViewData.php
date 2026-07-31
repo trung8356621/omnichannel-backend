@@ -72,6 +72,8 @@ final class SeoProjectRunItemViewData
         public readonly ?string $galleryDescription = null,
         public readonly ?string $rewriteMode = null,
         public readonly ?string $rewriteNotes = null,
+        public readonly ?string $articleReviewStatus = null,
+        public readonly bool $articleIsApproved = false,
         public readonly array $extra = [],
     ) {}
 
@@ -131,6 +133,8 @@ final class SeoProjectRunItemViewData
             'duplicate_identity_detected' => $this->duplicateIdentityDetected,
             'steps' => $this->steps,
             'last_run_at' => $this->lastRunAt,
+            'article_review_status' => $this->articleReviewStatus,
+            'article_is_approved' => $this->articleIsApproved,
         ];
 
         return array_merge($row, $this->extra);

@@ -235,10 +235,9 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
                 attemptRef: $attemptRef,
             ));
 
-            // Queue accepted delivery — do NOT clear has_unpublished_changes here.
-            // WordPressArticleSyncService remembers published hash after real WP success.
-            $this->queue->markPublished($task->fresh() ?? $task);
-            $this->health->rememberSuccess(1);
+            // Delivery requested only — keep Processing until WordPress sync confirms success.
+            // Do NOT markPublished here (prevents false Published before WP evidence).
+            $this->queue->markProcessing($task->fresh() ?? $task);
 
             return ContentProjectActionResult::ok(
                 ContentProjectActionCodes::ITEMS_PUBLISH_QUEUED,

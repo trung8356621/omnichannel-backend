@@ -106,6 +106,9 @@ final class SiteSyncFeatureFlags
         return (bool) $fb;
     }
 
+    /**
+     * @deprecated Zero callers — do not use for contract decisions.
+     */
     public function acceptV1Contract(): bool
     {
         return (bool) $this->cfg('accept_v1_contract', true);
@@ -121,6 +124,9 @@ final class SiteSyncFeatureFlags
         return (string) $this->cfg('mode_default', 'legacy_active');
     }
 
+    /**
+     * @deprecated Zero callers — do not use for contract decisions.
+     */
     public function shadowComparisonEnabled(): bool
     {
         return (bool) $this->cfg('shadow_comparison', true);

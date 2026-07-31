@@ -136,11 +136,13 @@ final class ContentProjectRunEnginePhase1Test extends TestCase
         self::assertStringContainsString('startPhpEngineProgressPoll', $js);
         self::assertStringContainsString('JS không được orchestration article', $js);
 
-        // Run History UI removed — generate starts from SeoProjectResource + PHP engine.
+        // Run History UI removed — generate orchestration lives in CommandBus handler (engine start once).
         $resource = $this->source('Filament/Resources/SeoProjectResource.php');
         self::assertStringContainsString('startGeneratePendingItems', $resource);
-        self::assertStringContainsString('ContentProjectRunEngine::class)->start', $resource);
+        self::assertStringNotContainsString('ContentProjectRunEngine::class)->start', $resource);
         self::assertStringContainsString('getProjectWorkspaceUrl', $resource);
+        $generateHandler = $this->source('Services/ContentProject/Application/Handlers/GenerateProjectItemsHandler.php');
+        self::assertStringContainsString('runEngine->start', $generateHandler);
 
         self::assertStringContainsString('getProjectWorkspaceUrl', $view);
         self::assertStringContainsString('redirect', $view);

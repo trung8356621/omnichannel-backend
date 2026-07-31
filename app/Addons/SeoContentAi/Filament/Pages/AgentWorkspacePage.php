@@ -37,7 +37,7 @@ use Throwable;
 /**
  * Agent Workspace — /seo/{connection_hash}/agent
  *
- * @see docs/AGENT_WORKSPACE.md
+ * @see docs/modules/AGENT_WORKSPACE.md
  */
 final class AgentWorkspacePage extends SeoPanelPage
 {

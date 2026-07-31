@@ -259,7 +259,6 @@ class EditArticle extends SeoEditRecord
         $perf = app(ArticleEditorPerfDebug::class);
         $perf->start('edit_article_mount');
         $this->hydrateArticleState();
-        $this->syncReviewedStatusFromExistingReviews();
 
         if ((int) ($this->record->wp_post_id ?? 0) > 0) {
             $this->wordpressMetadataStale = true;
@@ -349,7 +348,6 @@ class EditArticle extends SeoEditRecord
         $this->editorPreparingMessage = '';
         // Same as mount: hydrate from local DB only, no remote WP HTTP.
         $this->hydrateArticleState();
-        $this->syncReviewedStatusFromExistingReviews();
 
         if ((int) ($this->record->wp_post_id ?? 0) > 0) {
             $this->wordpressMetadataStale = true;
@@ -2418,7 +2416,9 @@ class EditArticle extends SeoEditRecord
 
     public function getReviewStatusLabel(): string
     {
-        return (bool) $this->record->is_reviewed
+        $approved = app(ArticleReviewService::class)->isCanonicallyApproved($this->record);
+
+        return $approved
             ? __('seo-content-ai::filament.article_list.reviewed')
             : __('seo-content-ai::filament.article_list.not_reviewed');
     }
@@ -2848,7 +2848,6 @@ class EditArticle extends SeoEditRecord
         $this->record->refresh();
         $reviews = $this->getVirtualReviewsPayload();
         $this->reviewsCountForEditor = count($reviews);
-        $this->syncReviewedStatusFromExistingReviews($reviews);
         $this->dispatch('virtual-reviews-updated', reviews: $reviews);
 
         return $reviews;
@@ -2892,33 +2891,6 @@ class EditArticle extends SeoEditRecord
     {
         return app(\App\Addons\SeoContentAi\Services\ProductReview\ArticleProductReviewStoreService::class)
             ->listForEditor($this->record);
-    }
-
-    /**
-     * @param  list<array{author: string, content: string, rating?: int|null, date: string}>|null  $reviews
-     */
-    private function syncReviewedStatusFromExistingReviews(?array $reviews = null): void
-    {
-        if ((bool) $this->record->is_reviewed) {
-            return;
-        }
-
-        // Mount path (Phase 2 perf): only need to know "any pending review at all?" —
-        // exists() avoids hydrating + mapping every row via getVirtualReviewsPayload().
-        $hasPending = $reviews !== null
-            ? count($reviews) > 0
-            : app(\App\Addons\SeoContentAi\Services\ProductReview\ArticleProductReviewStoreService::class)
-                ->hasPendingReviews($this->record);
-
-        if (! $hasPending) {
-            return;
-        }
-
-        $this->record->update([
-            'is_reviewed' => true,
-            'reviewed_at' => $this->record->reviewed_at ?? now(),
-        ]);
-        $this->record->refresh();
     }
 
     /**

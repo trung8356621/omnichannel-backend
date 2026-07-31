@@ -4,8 +4,14 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\ContentProject\Application\Dtos;
 
+/**
+ * @phpstan-type ItemStateArray array<string, mixed>
+ */
 final class ContentProjectItemDto
 {
+    /**
+     * @param  ItemStateArray|null  $state
+     */
     public function __construct(
         public readonly string $itemRef,
         public readonly string $projectRef,
@@ -18,12 +24,13 @@ final class ContentProjectItemDto
         public readonly ?string $lastPublishError,
         public readonly ?string $publishPublishedAt,
         public readonly ?string $title,
+        public readonly ?array $state = null,
     ) {}
 
     /** @return array<string, mixed> */
     public function toArray(): array
     {
-        return [
+        $row = [
             'item_ref' => $this->itemRef,
             'project_ref' => $this->projectRef,
             'article_ref' => $this->articleRef,
@@ -36,5 +43,14 @@ final class ContentProjectItemDto
             'publish_published_at' => $this->publishPublishedAt,
             'title' => $this->title,
         ];
+
+        if ($this->state !== null) {
+            $row['state'] = $this->state;
+            $row['current_error'] = $this->state['current_error'] ?? null;
+            $row['current_error_source'] = $this->state['current_error_source'] ?? null;
+            $row['available_actions'] = $this->state['available_actions'] ?? [];
+        }
+
+        return $row;
     }
 }

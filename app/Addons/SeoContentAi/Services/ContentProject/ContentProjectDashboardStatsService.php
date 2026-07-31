@@ -12,7 +12,9 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * Aggregate dashboard stats — 1–2 query, không N+1.
+ * Aggregate dashboard stats.
+ * Bucket semantics: ContentProjectItemDashboardBucketMapper (tested vs resolver fixtures).
+ * SQL CASE below must stay equivalent to ContentProjectItemDashboardBucketMapper::fromRawRow().
  */
 final class ContentProjectDashboardStatsService
 {
@@ -46,33 +48,52 @@ final class ContentProjectDashboardStatsService
             );
         }
 
-        $queueWaiting = $hasQueueStatus
-            ? "SUM(CASE WHEN t.publish_queue_status IN ('waiting','processing','retrying') OR t.scheduled_publish_at IS NOT NULL THEN 1 ELSE 0 END)"
-            : 'SUM(CASE WHEN t.scheduled_publish_at IS NOT NULL THEN 1 ELSE 0 END)';
-
-        $publishedExpr = $hasPublishPublishedAt
-            ? "SUM(CASE WHEN t.publish_published_at IS NOT NULL OR t.publish_queue_status = 'published' OR LOWER(COALESCE(a.status,'')) IN ('published','publish') THEN 1 ELSE 0 END)"
+        $notArchived = "t.archived_at IS NULL AND t.status != 'archived'";
+        $isPublished = $hasPublishPublishedAt
+            ? "(t.publish_published_at IS NOT NULL OR ".($hasQueueStatus ? "t.publish_queue_status = 'published' OR " : '')."LOWER(COALESCE(a.status,'')) IN ('published','publish'))"
             : ($hasQueueStatus
-                ? "SUM(CASE WHEN t.publish_queue_status = 'published' OR LOWER(COALESCE(a.status,'')) IN ('published','publish') THEN 1 ELSE 0 END)"
-                : "SUM(CASE WHEN LOWER(COALESCE(a.status,'')) IN ('published','publish') THEN 1 ELSE 0 END)");
+                ? "(t.publish_queue_status = 'published' OR LOWER(COALESCE(a.status,'')) IN ('published','publish'))"
+                : "LOWER(COALESCE(a.status,'')) IN ('published','publish')");
+
+        // Exclusive precedence mirrors ContentProjectItemDashboardBucketMapper::fromRawRow().
+        $queueWaiting = $hasQueueStatus
+            ? "SUM(CASE WHEN {$notArchived} AND NOT {$isPublished} AND (t.publish_queue_status IN ('waiting','processing','retrying') OR t.scheduled_publish_at IS NOT NULL) THEN 1 ELSE 0 END)"
+            : "SUM(CASE WHEN {$notArchived} AND NOT {$isPublished} AND t.scheduled_publish_at IS NOT NULL THEN 1 ELSE 0 END)";
+
+        $publishedExpr = "SUM(CASE WHEN {$notArchived} AND {$isPublished} THEN 1 ELSE 0 END)";
 
         $failedExpr = $hasQueueStatus
-            ? "SUM(CASE WHEN t.status = 'failed' OR t.publish_queue_status = 'failed' THEN 1 ELSE 0 END)"
-            : "SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END)";
+            ? "SUM(CASE WHEN {$notArchived} AND NOT {$isPublished}
+                AND NOT (t.publish_queue_status IN ('waiting','processing','retrying') OR t.scheduled_publish_at IS NOT NULL)
+                AND (t.status = 'failed' OR t.publish_queue_status = 'failed')
+                THEN 1 ELSE 0 END)"
+            : "SUM(CASE WHEN {$notArchived} AND NOT {$isPublished}
+                AND t.scheduled_publish_at IS NULL
+                AND t.status = 'failed'
+                THEN 1 ELSE 0 END)";
+
+        $waitingReviewExpr = "SUM(CASE WHEN {$notArchived} AND NOT {$isPublished}
+            AND NOT (".($hasQueueStatus ? "t.publish_queue_status IN ('waiting','processing','retrying') OR " : '')."t.scheduled_publish_at IS NOT NULL)
+            AND t.status != 'failed'
+            AND ".($hasQueueStatus ? "COALESCE(t.publish_queue_status,'none') != 'failed' AND " : '')."
+            (t.status = 'reviewing' OR (t.status = 'completed' AND COALESCE(a.review_status,'') != 'approved'))
+            THEN 1 ELSE 0 END)";
 
         $row = DB::connection('omi_seo_ai')->selectOne("
             SELECT
                 COUNT(*) AS total_items,
-                SUM(CASE WHEN t.archived_at IS NULL AND t.status = 'pending' THEN 1 ELSE 0 END) AS waiting_ai,
-                SUM(CASE WHEN t.archived_at IS NULL AND t.status = 'writing'
+                SUM(CASE WHEN {$notArchived} AND NOT {$isPublished}
+                    AND NOT (".($hasQueueStatus ? "t.publish_queue_status IN ('waiting','processing','retrying') OR " : '')."t.scheduled_publish_at IS NOT NULL)
+                    AND t.status = 'pending' THEN 1 ELSE 0 END) AS waiting_ai,
+                SUM(CASE WHEN {$notArchived} AND NOT {$isPublished}
+                    AND t.status = 'writing'
                     AND t.updated_at >= DATE_SUB(NOW(), INTERVAL {$staleMinutes} MINUTE)
                     THEN 1 ELSE 0 END) AS ai_running,
-                SUM(CASE WHEN t.archived_at IS NULL AND (t.status = 'reviewing' OR (t.status = 'completed' AND COALESCE(a.is_reviewed,0) = 0)) THEN 1 ELSE 0 END) AS waiting_review,
-                SUM(CASE WHEN t.archived_at IS NULL AND t.status = 'completed' AND COALESCE(a.is_reviewed,0) = 1
+                {$waitingReviewExpr} AS waiting_review,
+                SUM(CASE WHEN {$notArchived} AND NOT {$isPublished}
+                    AND t.status = 'completed' AND a.review_status = 'approved'
                     AND t.scheduled_publish_at IS NULL
                     AND ".($hasQueueStatus ? "COALESCE(t.publish_queue_status,'none') IN ('none','cancelled','skipped')" : '1=1')."
-                    AND LOWER(COALESCE(a.status,'')) NOT IN ('published','publish')
-                    ".($hasPublishPublishedAt ? 'AND t.publish_published_at IS NULL' : '')."
                     THEN 1 ELSE 0 END) AS approved,
                 {$queueWaiting} AS waiting_publish,
                 {$publishedExpr} AS published,

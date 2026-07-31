@@ -25,29 +25,29 @@ Ghi nhận: class/hàm/component/route mới hoặc đổi tên, luồng nghiệ
 
 ### 2. Chọn file docs vệ tinh
 
-Đọc **chỉ** mục Menu trong `docs/SUPER_MAP_INDEX.md` (không đọc full file nếu >100 dòng — dùng grep/offset).
+Đọc **chỉ** mục Modules/Architecture trong `docs/README.md` (không đọc full file nếu >100 dòng — dùng grep/offset).
 
 | Vùng code | File docs |
 |-----------|-----------|
-| React/Vite, JSX, `resources/js/` addon SEO | `docs/MAP_SEO_FRONTEND.md` |
-| Domain, site settings | `docs/MAP_SEO_DOMAIN.md` |
-| Article editor, EditArticle, Livewire bridge | `docs/MAP_SEO_EDITOR.md` |
-| SEO audit, ArticlesOptimal, tab Reviewed | `docs/MAP_SEO_AUDIT.md` |
-| Media, upload, watermark | `docs/MAP_SEO_MEDIA.md` |
-| WP sync, bridge plugin | `docs/MAP_SEO_WP.md` |
-| Content projects, workflow | `docs/MAP_SEO_PROJECTS.md` |
-| Settings, prompts, AI connections | `docs/MAP_SEO_SETTINGS.md` |
-| Team, RBAC | `docs/MAP_SEO_TEAM.md` |
-| Thay đổi core (không thuộc addon SEO) | `docs/FEATURE_MAP_FULL.md` |
+| React/Vite, JSX, `resources/js/` addon SEO | `docs/modules/ARTICLE_EDITOR.md` |
+| Domain, site settings | `docs/modules/SITE_MCP_AND_DOMAINS.md` |
+| Article editor, EditArticle, Livewire bridge | `docs/modules/ARTICLE_EDITOR.md` |
+| SEO audit, ArticlesOptimal, tab Reviewed | `docs/modules/SEO_AUDIT_AND_KEYWORDS.md` |
+| Media, upload, watermark | `docs/modules/MEDIA_AND_GALLERY.md` |
+| WP sync, bridge plugin | `docs/modules/WORDPRESS_BRIDGE.md` / `docs/modules/SITE_SYNC.md` |
+| Content projects, workflow | `docs/modules/CONTENT_PROJECTS.md` |
+| Settings, prompts, AI connections | `docs/modules/PROMPTS_AND_AI.md` |
+| Team, RBAC | `docs/modules/SITE_MCP_AND_DOMAINS.md` |
+| Thay đổi core (không thuộc addon SEO) | `docs/architecture/SYSTEM_OVERVIEW.md` |
 
 Nhiều vùng → cập nhật nhiều file tương ứng.
 
 ### 3. Cập nhật docs
 
-- Mở đúng section liên quan trong file vệ tinh (grep tên class/hàm trước).
+- Mở đúng section liên quan trong module canonical (grep tên class/hàm trước).
 - **Chèn hoặc sửa** entry ngắn gọn: tên symbol, vai trò 1 dòng, đường dẫn file.
-- Không rewrite cả file. Không tạo file docs mới trừ khi SUPER_MAP_INDEX đã có entry tương ứng.
-- Nếu thêm file/service quan trọng mới → cập nhật thêm 1 dòng trong bảng Menu `docs/SUPER_MAP_INDEX.md` nếu chưa có.
+- Không rewrite cả file. Không tạo file docs mới ngoài tree canonical (`docs/modules|contracts|architecture|operations`).
+- Nếu thêm module/service quan trọng mới → cập nhật thêm 1 dòng trong `docs/README.md` nếu chưa có.
 
 ### 4. Phản hồi user
 

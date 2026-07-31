@@ -80,7 +80,35 @@ final class CanonicalCapabilityRegistry
             return false;
         }
 
-        return (string) ($cap['risk_level'] ?? '') === 'write';
+        if ((string) ($cap['risk_level'] ?? '') !== 'write') {
+            return false;
+        }
+
+        if ((bool) ($cap['internal'] ?? false)) {
+            return false;
+        }
+
+        return (bool) ($cap['agent_exposed'] ?? true);
+    }
+
+    /**
+     * MCP write surface — core delegates to {@see ContentProjectCapabilityRegistry::isMcpWriteExposed()};
+     * extension caps fall back to the agent-exposed check plus an explicit
+     * `mcp_exposed === false` opt-out.
+     */
+    public function isMcpWriteExposed(string $name): bool
+    {
+        if ($this->core->get($name) !== null) {
+            return $this->core->isMcpWriteExposed($name);
+        }
+
+        if (! $this->isAgentWriteExposed($name)) {
+            return false;
+        }
+
+        $cap = $this->get($name);
+
+        return ($cap['mcp_exposed'] ?? null) !== false;
     }
 
     /**

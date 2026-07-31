@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\ContentProject;
 
+use App\Addons\SeoContentAi\Enums\ArticleReviewStatus;
 use App\Addons\SeoContentAi\Enums\ContentProjectPublishQueueStatus;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
@@ -22,7 +23,7 @@ final class ContentProjectTimelineService
     {
         $tasks = SeoProjectTask::query()
             ->where('project_id', (int) $project->getKey())
-            ->with(['article:id,status,is_reviewed,reviewed_at,published_at'])
+            ->with(['article:id,status,review_status,reviewed_at,published_at'])
             ->get(['id', 'status', 'completed_at', 'scheduled_publish_at', 'publish_queue_status', 'publish_published_at', 'archived_at', 'article_id']);
 
         $aiFinishedAt = $tasks
@@ -32,7 +33,9 @@ final class ContentProjectTimelineService
         $reviewCompletedAt = $tasks
             ->map(static function (SeoProjectTask $t) {
                 $article = $t->article;
-                if ($article && (bool) ($article->is_reviewed ?? false) && $article->reviewed_at) {
+                if ($article
+                    && ArticleReviewStatus::tryFromString((string) ($article->review_status ?? '')) === ArticleReviewStatus::Approved
+                    && $article->reviewed_at) {
                     return $article->reviewed_at;
                 }
 

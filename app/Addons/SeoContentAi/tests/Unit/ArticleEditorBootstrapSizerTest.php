@@ -12,7 +12,7 @@ use PHPUnit\Framework\TestCase;
  * ArticleEditorBootstrapSizer::bytes()/kb() are pure (json_encode + strlen).
  *
  * Numbers here are cross-checked against `php -r` measurements recorded in
- * docs/audits/ARTICLE_EDITOR_PHASE2_BOOTSTRAP_SIZES.md.
+ * docs/archive/historical-reports/ARTICLE_EDITOR_PHASE2_BOOTSTRAP_SIZES.md.
  */
 final class ArticleEditorBootstrapSizerTest extends TestCase
 {

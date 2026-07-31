@@ -183,7 +183,7 @@ final class AutomationWorkflowMapDefinitions
             'edges' => [
                 ['from' => 'ga.trigger', 'to' => 'ga.run_started', 'type' => 'next', 'evidence' => 'GenerateProjectItemsHandler → startRun'],
                 ['from' => 'ga.rerun', 'to' => 'ga.run_started', 'type' => 'manual', 'evidence' => 'RerunProjectItemsHandler → startRun'],
-                ['from' => 'ga.run_started', 'to' => 'ga.pipeline', 'type' => 'queued', 'evidence' => 'ContentProjectRunEngine::start → RunContentProjectArticleJob (Filament path)'],
+                ['from' => 'ga.run_started', 'to' => 'ga.pipeline', 'type' => 'queued', 'evidence' => 'GenerateProjectItemsHandler → ContentProjectRunEngine::start → RunContentProjectArticleJob'],
                 ['from' => 'ga.pipeline', 'to' => 'ga.outline', 'type' => 'next', 'evidence' => 'ArticlePipelineDefinition order'],
                 ['from' => 'ga.outline', 'to' => 'ga.content', 'type' => 'next', 'evidence' => 'ArticlePipelineDefinition order'],
                 ['from' => 'ga.content', 'to' => 'ga.image', 'type' => 'optional', 'evidence' => 'ArticlePipelineDefinition required=false'],
@@ -225,7 +225,7 @@ final class AutomationWorkflowMapDefinitions
                     'canonical' => 'content_project.approve',
                     'type' => 'capability',
                     'label_key' => 'seo-content-ai::filament.automation.flows.workflows.review.nodes.approve',
-                    'evidence' => 'ApproveProjectItemsHandler — SeoArticle.is_reviewed + project STATUS_APPROVED',
+                    'evidence' => 'ApproveProjectItemsHandler — SeoArticle.review_status=approved + project STATUS_APPROVED',
                     'run_mode' => 'command_bus',
                     'component_match' => ['capability:content_project.approve', 'content_project.approve'],
                 ],

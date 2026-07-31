@@ -176,7 +176,7 @@ class ListArticles extends ListRecords
         } elseif ($tab === self::TAB_QUEUE) {
             unset($filters['category_id'], $filters['post_type'], $filters['taxonomy'], $filters['type']);
         } elseif ($tab === self::TAB_REVIEWED || $tab === self::TAB_SKIPPED) {
-            unset($filters['category_id'], $filters['post_type'], $filters['taxonomy'], $filters['type'], $filters['is_reviewed']);
+            unset($filters['category_id'], $filters['post_type'], $filters['taxonomy'], $filters['type']);
         } else {
             unset($filters['taxonomy']);
             if (trim((string) ($filters['language']['value'] ?? '')) === '') {
@@ -232,7 +232,7 @@ class ListArticles extends ListRecords
                 }
 
                 if ($this->contentTab === self::TAB_REVIEWED) {
-                    return $query->where('is_reviewed', true)->whereNotNull('reviewed_at');
+                    return ArticleResource::applyApprovedReviewScope($query)->whereNotNull('reviewed_at');
                 }
 
                 if (in_array($this->contentTab, [self::TAB_POSTS, self::TAB_CATEGORIES, self::TAB_QUEUE], true)) {

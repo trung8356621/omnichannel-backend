@@ -14,13 +14,14 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ApproveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemStepCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectPublicRef;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceDeepLink;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemOperationsReadModel;
-use App\Addons\SeoContentAi\Services\ContentProjectBulkRerunService;
+use App\Addons\SeoContentAi\Enums\ContentProjectRerunFromStep;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Support\RuntimeLogger;
 use Filament\Actions;
@@ -516,22 +517,22 @@ final class ViewSeoProject extends Page
 
     public function bulkRegenOutline(): void
     {
-        $this->dispatchBulkStep($this->selectedTaskIds, ContentProjectBulkRerunService::ACTION_OUTLINE);
+        $this->dispatchBulkStep($this->selectedTaskIds, ContentProjectRerunFromStep::Outline->value);
     }
 
     public function bulkRegenArticle(): void
     {
-        $this->dispatchBulkStep($this->selectedTaskIds, ContentProjectBulkRerunService::ACTION_ARTICLE);
+        $this->dispatchBulkStep($this->selectedTaskIds, ContentProjectRerunFromStep::Article->value);
     }
 
     public function regenOutline(int $taskId): void
     {
-        $this->dispatchBulkStep([$taskId], ContentProjectBulkRerunService::ACTION_OUTLINE);
+        $this->dispatchBulkStep([$taskId], ContentProjectRerunFromStep::Outline->value);
     }
 
     public function regenArticle(int $taskId): void
     {
-        $this->dispatchBulkStep([$taskId], ContentProjectBulkRerunService::ACTION_ARTICLE);
+        $this->dispatchBulkStep([$taskId], ContentProjectRerunFromStep::Article->value);
     }
 
     public function startReviewSelected(): void
@@ -667,32 +668,23 @@ final class ViewSeoProject extends Page
             return;
         }
 
-        $run = SeoProjectRun::query()
-            ->where('project_id', (int) $project->id)
-            ->orderByDesc('id')
-            ->first();
-
-        if (! $run instanceof SeoProjectRun) {
+        $fromStep = ContentProjectRerunFromStep::tryFromMixed($action);
+        if (! $fromStep instanceof ContentProjectRerunFromStep) {
             Notification::make()
-                ->title(__('seo-content-ai::filament.projects.item_regen_needs_execution'))
-                ->warning()
+                ->title('Failed')
+                ->body('Unsupported step action.')
+                ->danger()
                 ->send();
 
             return;
         }
 
-        try {
-            $result = app(ContentProjectBulkRerunService::class)
-                ->execute($run, $project, $filtered, $action, true);
-            Notification::make()
-                ->title($result['success'] ? 'OK' : 'Failed')
-                ->body((string) $result['message'])
-                ->{$result['success'] ? 'success' : 'danger'}()
-                ->send();
-        } catch (Throwable $e) {
-            RuntimeLogger::report($e, ['endpoint' => 'content_project.operations.bulk_step']);
-            Notification::make()->title('Rerun failed')->body($e->getMessage())->danger()->send();
-        }
+        $this->dispatchBus(new RerunProjectItemStepCommand(
+            (int) $project->id,
+            $filtered,
+            $fromStep,
+            includeDownstream: false,
+        ));
     }
 
     private function dispatchBus(object $command): void

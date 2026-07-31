@@ -886,6 +886,7 @@ final class WordPressArticleSyncService
             $article->fresh() ?? $article,
             hash('sha256', trim((string) (($article->fresh() ?? $article)->body ?? $postContent ?? ''))),
         );
+        $this->confirmContentProjectPublishDelivery($article->fresh() ?? $article);
         app(ArticleLastSavedTimestampService::class)->touchSynced($article);
         $this->timestampService->sync($article, $decoded);
 
@@ -913,6 +914,31 @@ final class WordPressArticleSyncService
                 : false,
             'step_detail' => implode(', ', $stepDetails),
         ];
+    }
+
+    /**
+     * Confirm Content Project publishing queue only after real WP sync success.
+     */
+    private function confirmContentProjectPublishDelivery(SeoArticle $article): void
+    {
+        if (! \Illuminate\Support\Facades\Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_queue_status')) {
+            return;
+        }
+
+        $processing = \App\Addons\SeoContentAi\Enums\ContentProjectPublishQueueStatus::Processing->value;
+        $tasks = SeoProjectTask::query()
+            ->where('article_id', (int) $article->id)
+            ->where('publish_queue_status', $processing)
+            ->get();
+
+        if ($tasks->isEmpty()) {
+            return;
+        }
+
+        $queue = app(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueService::class);
+        foreach ($tasks as $task) {
+            $queue->markPublished($task);
+        }
     }
 
     private function hydratePostImagesCatalogAfterSync(SeoArticle $article, string $postContent): void

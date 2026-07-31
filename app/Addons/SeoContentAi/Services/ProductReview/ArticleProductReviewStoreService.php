@@ -245,8 +245,8 @@ final class ArticleProductReviewStoreService
     }
 
     /**
-     * Cheap existence check (no row hydration) — for mount-time "should we flip
-     * is_reviewed" checks that don't need the full row payload (Phase 2 perf).
+     * Cheap existence check (no row hydration) — for mount-time review_status
+     * checks that don't need the full row payload (Phase 2 perf).
      */
     public function hasPendingReviews(SeoArticle $article): bool
     {

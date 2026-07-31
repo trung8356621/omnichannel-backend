@@ -111,17 +111,18 @@ final class PromptExecutionOrchestrationTest extends TestCase
         self::assertStringNotContainsString('node_1780563019334', (string) $resolved['message']);
     }
 
-    public function test_job_aligns_start_step_resolver_not_raw_resolve_seo_task_alone(): void
+    public function test_editor_rerun_aligns_start_step_resolver_via_command_bus(): void
     {
-        $job = (string) file_get_contents(dirname(__DIR__, 2).'/Jobs/RerunArticlePipelineJob.php');
         $service = (string) file_get_contents(dirname(__DIR__, 2).'/Services/ArticlePipelineRerunService.php');
+        $handler = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/ContentProject/Application/Handlers/RerunProjectItemStepHandler.php',
+        );
 
-        self::assertStringContainsString('ArticlePipelineRerunStartStepResolver', $job);
         self::assertStringContainsString('ArticlePipelineRerunStartStepResolver', $service);
-        self::assertStringContainsString('resolution_strategy', $service);
-        self::assertStringContainsString('semantic_key', $service);
-        self::assertStringContainsString('seo.article_rerun.requested', $service);
-        self::assertStringNotContainsString('$catalog->resolveSeoTask($task)', $job);
+        self::assertStringContainsString('RerunProjectItemStepCommand', $service);
+        self::assertStringContainsString('commandBus->dispatch', $service);
+        self::assertStringContainsString('runEngine->start', $handler);
+        self::assertFileDoesNotExist(dirname(__DIR__, 2).'/Jobs/RerunArticlePipelineJob.php');
     }
 
     public function test_step_retry_has_terminal_guards_and_discard_after_provider(): void

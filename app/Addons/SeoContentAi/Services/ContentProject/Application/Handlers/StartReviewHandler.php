@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers;
 
+use App\Addons\SeoContentAi\Enums\ContentProjectItemAction;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
@@ -15,6 +16,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Events\ContentPr
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectBusinessLock;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPreviewToken;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemActionGuard;
 use InvalidArgumentException;
 
 final class StartReviewHandler extends AbstractPublishingHandler
@@ -24,6 +26,7 @@ final class StartReviewHandler extends AbstractPublishingHandler
         ContentProjectBusinessLock $businessLock,
         ContentProjectPreviewToken $previewToken,
         private readonly ContentProjectDomainEvents $domainEvents,
+        private readonly ContentProjectItemActionGuard $actionGuard = new ContentProjectItemActionGuard,
     ) {
         parent::__construct($tenantGuard, $businessLock, $previewToken);
     }
@@ -50,7 +53,8 @@ final class StartReviewHandler extends AbstractPublishingHandler
             $query = SeoProjectTask::query()
                 ->where('project_id', $projectId)
                 ->active()
-                ->whereIn('status', [SeoProjectTask::STATUS_COMPLETED, SeoProjectTask::STATUS_PENDING]);
+                ->whereIn('status', [SeoProjectTask::STATUS_COMPLETED, SeoProjectTask::STATUS_PENDING])
+                ->with(['article']);
 
             $itemIds = $this->resolveItemIds($command->itemRefs);
             if ($itemIds !== []) {
@@ -58,7 +62,17 @@ final class StartReviewHandler extends AbstractPublishingHandler
                 $query->whereIn('id', $itemIds);
             }
 
-            $affectedIds = $query->pluck('id')->map(static fn ($id): int => (int) $id)->all();
+            $tasks = $query->get();
+            $affectedIds = [];
+            foreach ($tasks as $task) {
+                $this->actionGuard->assertCan(
+                    ContentProjectItemAction::StartReview,
+                    $task,
+                    $task->relationLoaded('article') ? $task->article : null,
+                );
+                $affectedIds[] = (int) $task->getKey();
+            }
+
             if ($affectedIds === []) {
                 return ContentProjectActionResult::fail(
                     ContentProjectActionCodes::ITEMS_NOT_FOUND,

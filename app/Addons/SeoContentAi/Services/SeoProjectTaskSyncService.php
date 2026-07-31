@@ -272,11 +272,26 @@ final class SeoProjectTaskSyncService
             }
 
             throw ValidationException::withMessages([
-                'tasks_data' => ContentProjectErrorCode::SyncDuplicateInput->value,
-                'tasks_data.'.$prev->inputIndex => ContentProjectErrorCode::SyncDuplicateInput->value,
-                'tasks_data.'.$row->inputIndex => ContentProjectErrorCode::SyncDuplicateInput->value,
+                'tasks_data' => __('seo-content-ai::filament.projects.sync_duplicate_input'),
+                'tasks_data.'.$prev->inputIndex => __('seo-content-ai::filament.projects.sync_duplicate_input_row'),
+                'tasks_data.'.$row->inputIndex => __('seo-content-ai::filament.projects.sync_duplicate_input_row'),
             ]);
         }
+    }
+
+    /**
+     * Preflight cho Edit/Create form — trùng identity (type+post_type+source) với task_id khác.
+     *
+     * @param  list<array<string, mixed>>  $tasksData
+     */
+    public function assertNoDuplicateTasksData(SeoProject $project, array $tasksData): void
+    {
+        $rows = $this->normalizer->normalize(
+            $project,
+            $tasksData,
+            $project->site_id !== null ? (int) $project->site_id : null,
+        );
+        $this->assertNoDuplicateInput($rows);
     }
 
     /**

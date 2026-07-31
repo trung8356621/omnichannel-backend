@@ -6,11 +6,16 @@ namespace App\Addons\SeoContentAi\Observers;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleTocExtractionService;
-use Illuminate\Support\Facades\Log;
+use App\Support\RuntimeLogger;
 use Throwable;
 
 final class SeoArticleObserver
 {
+    /**
+     * TOC extract must not run mid-transaction (handlers wrap article saves).
+     */
+    public bool $afterCommit = true;
+
     public function __construct(
         private readonly ArticleTocExtractionService $tocExtraction,
     ) {}
@@ -24,8 +29,8 @@ final class SeoArticleObserver
         try {
             $this->tocExtraction->extractForArticle($article);
         } catch (Throwable $e) {
-            // Bóc tách TOC là tác vụ phụ — không được làm fail thao tác lưu bài.
-            Log::warning('SeoArticleObserver: TOC extraction failed', [
+            // TOC is best-effort — never fail the article save path.
+            RuntimeLogger::warning('SeoArticleObserver: TOC extraction failed', [
                 'article_id' => $article->id,
                 'error' => $e->getMessage(),
             ]);

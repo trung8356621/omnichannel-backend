@@ -330,20 +330,35 @@ final class ContentProjectRunEngine
             return;
         }
 
-        $pending = RunContentProjectArticleJob::dispatch(
-            runId: $dispatch['run_id'],
-            taskId: $dispatch['task_id'],
-            runItemId: $dispatch['run_item_id'],
-            attempt: $dispatch['attempt'],
-            dispatchToken: $dispatch['token'],
-        )->onQueue(ContentProjectRunEngineFeature::queueName());
+        $run->refresh();
+        $settings = is_array($run->settings) ? $run->settings : [];
+        $sync = (bool) ($settings['rerun_sync'] ?? false);
 
-        if (! app()->runningInConsole()) {
-            $pending->afterResponse();
+        if ($sync) {
+            RunContentProjectArticleJob::dispatchSync(
+                runId: $dispatch['run_id'],
+                taskId: $dispatch['task_id'],
+                runItemId: $dispatch['run_item_id'],
+                attempt: $dispatch['attempt'],
+                dispatchToken: $dispatch['token'],
+            );
+        } else {
+            $pending = RunContentProjectArticleJob::dispatch(
+                runId: $dispatch['run_id'],
+                taskId: $dispatch['task_id'],
+                runItemId: $dispatch['run_item_id'],
+                attempt: $dispatch['attempt'],
+                dispatchToken: $dispatch['token'],
+            )->onQueue(ContentProjectRunEngineFeature::queueName());
+
+            if (! app()->runningInConsole()) {
+                $pending->afterResponse();
+            }
         }
 
         RuntimeLogger::info('content_project_run.article_dispatched', $dispatch + [
             'feature_flag' => ContentProjectRunEngineFeature::enabledFor($run->fresh() ?? $run),
+            'sync' => $sync,
         ]);
     }
 

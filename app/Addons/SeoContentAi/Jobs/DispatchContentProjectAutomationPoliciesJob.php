@@ -60,12 +60,17 @@ final class DispatchContentProjectAutomationPoliciesJob implements ShouldQueue
                 $siteRef = ContentProjectPublicRef::site((int) $policy->site_id);
                 $context = AgentExecutionContext::fromArray([
                     'actor_ref' => 'agent:policy:'.$policy->public_ref,
-                    'actor_type' => 'agent',
+                    'actor_type' => 'system',
                     'tenant_ref' => 'tenant:'.$policy->tenant_id,
                     'site_ref' => $siteRef,
                     'request_ref' => 'policy-dispatch:'.$policy->public_ref.':'.$period,
                     'resolved_site_id' => (int) $policy->site_id,
-                    'scopes' => ['content-project:admin'],
+                    'scopes' => app(\App\Addons\SeoContentAi\Services\ContentProject\Agent\AgentScopeEvaluator::class)
+                        ->forSystemActor([
+                            'content-project:read',
+                            'content-project:publish',
+                            'content-project:schedule',
+                        ]),
                 ]);
 
                 $draft = $application->createDraft($context, 'Scheduled automation: '.$policy->name, [

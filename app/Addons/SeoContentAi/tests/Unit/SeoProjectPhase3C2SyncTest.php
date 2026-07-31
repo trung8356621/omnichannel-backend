@@ -220,8 +220,9 @@ final class SeoProjectPhase3C2SyncTest extends TestCase
         $service = $this->app->make(SeoProjectTaskSyncService::class);
         // Dùng reflection để inject normalizer stub khó — kiểm tra assertNoDuplicateInput policy qua source.
         $source = file_get_contents((new ReflectionClass(SeoProjectTaskSyncService::class))->getFileName() ?: '');
-        $this->assertStringContainsString('SyncDuplicateInput', (string) $source);
         $this->assertStringContainsString('assertNoDuplicateInput', (string) $source);
+        $this->assertStringContainsString('assertNoDuplicateTasksData', (string) $source);
+        $this->assertStringContainsString('sync_duplicate_input', (string) $source);
     }
 
     public function test_editable_whitelist_does_not_include_system_fields(): void

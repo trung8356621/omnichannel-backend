@@ -76,7 +76,7 @@ final class TestDoctorCommand extends Command
 
         $this->newLine();
         $this->warn('Không dùng `php artisan optimize:clear` để sửa “No tests found”.');
-        $this->warn('Xem docs/TESTING.md — chạy `composer test:ci` trước khi coi suite xanh.');
+        $this->warn('Xem docs/operations/TESTING.md — chạy `composer test:ci` trước khi coi suite xanh.');
 
         return self::FAILURE;
     }

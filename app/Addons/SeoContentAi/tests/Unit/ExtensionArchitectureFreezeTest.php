@@ -120,17 +120,17 @@ final class ExtensionArchitectureFreezeTest extends TestCase
             getcwd().DIRECTORY_SEPARATOR.'docs',
         ];
 
-        $names = [
-            'ARCHITECTURE_FREEZE_V1.md',
-            'ARCHITECTURE_DECISIONS.md',
-            'BUILTIN_WORDPRESS_EXTENSION.md',
-            'EXTENSION_SECURITY_BOUNDARY.md',
+        $candidates = [
+            'architecture'.DIRECTORY_SEPARATOR.'ARCHITECTURE_FREEZE_V1.md',
+            'architecture'.DIRECTORY_SEPARATOR.'ARCHITECTURE_DECISIONS.md',
+            'modules'.DIRECTORY_SEPARATOR.'EXTENSION_SDK.md',
+            'contracts'.DIRECTORY_SEPARATOR.'EXTENSION_AND_REGISTRY_CONTRACTS.md',
         ];
 
         $foundAny = false;
         foreach ($roots as $root) {
-            foreach ($names as $name) {
-                $path = $root.DIRECTORY_SEPARATOR.$name;
+            foreach ($candidates as $rel) {
+                $path = $root.DIRECTORY_SEPARATOR.$rel;
                 if (is_file($path)) {
                     $foundAny = true;
                     $body = (string) file_get_contents($path);
@@ -171,6 +171,6 @@ final class ExtensionArchitectureFreezeTest extends TestCase
         self::assertSame('/^[a-z0-9][a-z0-9._-]*$/', $config['extension_id_pattern'] ?? null);
         self::assertIsArray($config['event_versions'] ?? null);
         self::assertIsArray($config['forbidden_dependency_rules'] ?? null);
-        self::assertSame(['cp_', 'cpi_'], $config['public_reference_prefixes'] ?? null);
+        self::assertSame(['cp_', 'cpi_', 'ssr_'], $config['public_reference_prefixes'] ?? null);
     }
 }

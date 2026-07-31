@@ -12,6 +12,10 @@ use App\Models\ApiConnection;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 
+/**
+ * @deprecated HTTP routes removed — Agent Workspace is sole chat/execution surface.
+ * Service retained temporarily; do not re-register routes or add new callers.
+ */
 final class GlobalAiChatService
 {
     private const MAX_HISTORY_MESSAGES = 12;

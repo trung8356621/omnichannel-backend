@@ -11,7 +11,9 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SyncContentProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UpdateContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionCodes;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResult;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
+use App\Addons\SeoContentAi\Enums\ContentProjectErrorCode;
 use App\Addons\SeoContentAi\Services\SeoProjectArticleOwnerSyncService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskMoveService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
@@ -101,6 +103,8 @@ class EditSeoProject extends SeoEditRecord
         $projectSiteId = isset($data['site_id']) ? (int) $data['site_id'] : null;
         $sanitized = app(SeoProjectTaskSyncService::class)->sanitizeTasksData($tasksData, $projectSiteId);
 
+        app(SeoProjectTaskSyncService::class)->assertNoDuplicateTasksData($record, is_array($tasksData) ? $tasksData : []);
+
         app(SeoProjectTaskSyncService::class)->assertWithinMonthlyLimit($data['month'], $sanitized);
 
         $data['total_tasks'] = count($sanitized);
@@ -165,7 +169,7 @@ class EditSeoProject extends SeoEditRecord
             );
 
             if (! $syncResult->success) {
-                throw new RuntimeException($syncResult->message);
+                $this->throwSyncFailureAsValidation($syncResult);
             }
         } else {
             app(SeoProjectArticleOwnerSyncService::class)->syncProjectArticles($projectForCompare);
@@ -175,6 +179,50 @@ class EditSeoProject extends SeoEditRecord
         $fresh = SeoProject::query()->findOrFail($projectId);
 
         return $fresh;
+    }
+
+    private function throwSyncFailureAsValidation(ContentProjectActionResult $result): never
+    {
+        if ($result->code === ContentProjectActionCodes::VALIDATION_FAILED || $result->errors !== []) {
+            $mapped = [];
+            foreach ($result->errors as $key => $messages) {
+                $formKey = str_starts_with((string) $key, 'data.') ? (string) $key : 'data.'.$key;
+                $mapped[$formKey] = array_values(array_map(
+                    fn (mixed $message): string => $this->localizeSyncErrorMessage((string) $message),
+                    is_array($messages) ? $messages : [(string) $messages],
+                ));
+            }
+
+            if ($mapped === []) {
+                $mapped['data.tasks_data'] = [$this->localizeSyncErrorMessage($result->message)];
+            }
+
+            throw ValidationException::withMessages($mapped);
+        }
+
+        throw new RuntimeException($this->localizeSyncErrorMessage($result->message));
+    }
+
+    private function localizeSyncErrorMessage(string $message): string
+    {
+        $trimmed = trim($message);
+        if ($trimmed === ContentProjectErrorCode::SyncDuplicateInput->value
+            || str_starts_with($trimmed, ContentProjectErrorCode::SyncDuplicateInput->value)
+        ) {
+            return (string) __('seo-content-ai::filament.projects.sync_duplicate_input');
+        }
+
+        foreach (ContentProjectErrorCode::cases() as $code) {
+            if ($trimmed === $code->value || str_starts_with($trimmed, $code->value.' ')) {
+                $key = 'seo-content-ai::filament.projects.error_'.$code->name;
+                $translated = (string) __($key);
+                if ($translated !== $key) {
+                    return $translated;
+                }
+            }
+        }
+
+        return $trimmed;
     }
 
     protected function getHeaderActions(): array

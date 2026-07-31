@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers;
 
+use App\Addons\SeoContentAi\Enums\ContentProjectItemAction;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\GenerateProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionCodes;
@@ -16,8 +18,13 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Events\ContentPr
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectBusinessLock;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPreviewToken;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectGenerationRecoveryService;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier;
+use App\Addons\SeoContentAi\Services\RunEngine\ContentProjectRunEngine;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
 use App\Addons\SeoContentAi\Extension\Resolvers\PipelineResolver;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemActionGuard;
+use App\Support\RuntimeLogger;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -30,8 +37,10 @@ final class GenerateProjectItemsHandler extends AbstractPublishingHandler
         private readonly SeoProjectWorkflowRunService $workflowRunService,
         private readonly ContentProjectDomainEvents $domainEvents,
         private readonly PipelineResolver $pipelineResolver,
-        private readonly \App\Addons\SeoContentAi\Services\ContentProject\ContentProjectGenerationRecoveryService $generationRecovery,
-        private readonly \App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier $classifier,
+        private readonly ContentProjectGenerationRecoveryService $generationRecovery,
+        private readonly ContentProjectItemGenerationClassifier $classifier,
+        private readonly ContentProjectRunEngine $runEngine,
+        private readonly ContentProjectItemActionGuard $actionGuard = new ContentProjectItemActionGuard,
     ) {
         parent::__construct($tenantGuard, $businessLock, $previewToken);
     }
@@ -110,6 +119,8 @@ final class GenerateProjectItemsHandler extends AbstractPublishingHandler
                 }
             }
 
+            $this->assertGenerateAllowed($itemIds);
+
             if ($preview->failClosed && ! $command->technicalConfirmFullRerun) {
                 return ContentProjectActionResult::fail(
                     ContentProjectActionCodes::VALIDATION_FAILED,
@@ -119,39 +130,99 @@ final class GenerateProjectItemsHandler extends AbstractPublishingHandler
                 );
             }
 
-            $settings = [
-                'task_ids' => $itemIds,
-                'technical_confirm_full_rerun' => $command->technicalConfirmFullRerun,
-            ];
+            $settings = array_merge(
+                $command->settings,
+                [
+                    'task_ids' => $itemIds,
+                    'technical_confirm_full_rerun' => $command->technicalConfirmFullRerun,
+                    'use_php_engine' => true,
+                ],
+            );
 
-            return $this->businessLock->withLock(
+            $run = $this->businessLock->withLock(
                 $this->businessLock->projectGenerate($projectId),
-                function () use ($project, $projectId, $command, $itemIds, $settings): ContentProjectActionResult {
+                function () use ($project, $projectId, $command, $itemIds, $settings): SeoProjectRun {
                     $run = $this->workflowRunService->startRun($project, $command->mode, $settings);
                     $limit = $command->mode === SeoProjectRun::MODE_TEST
                         ? SeoProjectWorkflowRunService::TEST_RUN_LIMIT
                         : null;
+                    // Critical: startRun alone creates an empty run — queue + engine kick required.
                     $run = $this->workflowRunService->prepareRunQueue($project, $run, $limit);
-                    $runId = (int) $run->getKey();
-                    $executionRef = ContentProjectPublicRef::execution($runId);
+                    $executionRef = ContentProjectPublicRef::execution((int) $run->getKey());
                     $this->domainEvents->dispatchAfterCommit(new ContentProjectGenerationRequested(
                         $projectId,
                         $executionRef,
                         $itemIds,
                     ));
 
-                    return ContentProjectActionResult::ok(
-                        ContentProjectActionCodes::ITEMS_GENERATE_REQUESTED,
-                        'Generate pending started for '.count($itemIds).' item(s).',
-                        $projectId,
-                        $itemIds,
-                        metadata: [
-                            'execution_ref' => $executionRef,
-                            'task_ids' => $itemIds,
-                        ],
-                    );
+                    return $run;
                 },
             );
+
+            try {
+                // Idempotent: ContentProjectRunEngine::start skips duplicate dispatch when already live.
+                $this->runEngine->start($run);
+            } catch (\Throwable $e) {
+                RuntimeLogger::report($e, [
+                    'endpoint' => 'content_project.generate_engine_start',
+                    'project_id' => $projectId,
+                    'run_id' => (int) $run->getKey(),
+                    'task_ids' => $itemIds,
+                ]);
+
+                return ContentProjectActionResult::fail(
+                    ContentProjectActionCodes::FAILED,
+                    'Generate queue prepared but engine start failed: '.$e->getMessage(),
+                    $projectId,
+                    affectedItemIds: $itemIds,
+                    metadata: [
+                        'execution_ref' => ContentProjectPublicRef::execution((int) $run->getKey()),
+                        'task_ids' => $itemIds,
+                        'engine_started' => false,
+                    ],
+                );
+            }
+
+            RuntimeLogger::info('content_project.generate_started', [
+                'project_id' => $projectId,
+                'run_id' => (int) $run->getKey(),
+                'task_ids' => $itemIds,
+            ]);
+
+            return ContentProjectActionResult::ok(
+                ContentProjectActionCodes::ITEMS_GENERATE_REQUESTED,
+                'Generate pending started for '.count($itemIds).' item(s).',
+                $projectId,
+                $itemIds,
+                metadata: [
+                    'execution_ref' => ContentProjectPublicRef::execution((int) $run->getKey()),
+                    'task_ids' => $itemIds,
+                    'engine_started' => true,
+                ],
+            );
         });
+    }
+
+    /**
+     * @param  list<int>  $itemIds
+     */
+    private function assertGenerateAllowed(array $itemIds): void
+    {
+        if ($itemIds === []) {
+            return;
+        }
+
+        $tasks = SeoProjectTask::query()
+            ->whereIn('id', $itemIds)
+            ->with(['article'])
+            ->get();
+
+        foreach ($tasks as $task) {
+            $this->actionGuard->assertCan(
+                ContentProjectItemAction::Generate,
+                $task,
+                $task->relationLoaded('article') ? $task->article : null,
+            );
+        }
     }
 }

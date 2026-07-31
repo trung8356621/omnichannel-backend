@@ -12,6 +12,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentP
 use Carbon\Carbon;
 use InvalidArgumentException;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use ReflectionClass;
 use ReflectionProperty;
 use Throwable;
@@ -71,6 +72,19 @@ final class ContentProjectCommandBus
 
         try {
             $result = $handler->handle($command, $actor);
+        } catch (ValidationException $e) {
+            $flat = [];
+            foreach ($e->errors() as $messages) {
+                foreach ($messages as $message) {
+                    $flat[] = (string) $message;
+                }
+            }
+            $result = ContentProjectActionResult::fail(
+                ContentProjectActionCodes::VALIDATION_FAILED,
+                $flat[0] ?? $e->getMessage(),
+                errors: $e->errors(),
+                metadata: ['exception' => ValidationException::class],
+            );
         } catch (Throwable $e) {
             $result = ContentProjectActionResult::fail(
                 ContentProjectActionCodes::FAILED,

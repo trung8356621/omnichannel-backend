@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\ContentProject;
 
-use App\Addons\SeoContentAi\Enums\ContentProjectLifecyclePhase;
+use App\Addons\SeoContentAi\Enums\ContentProjectItemAction;
 use App\Addons\SeoContentAi\Enums\ContentProjectPublishQueueStatus;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
-use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectLifecycle;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemActionGuard;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPublishTransitionGuard;
 use App\Support\RuntimeLogger;
 use Carbon\Carbon;
@@ -18,12 +18,13 @@ use RuntimeException;
 
 /**
  * Publishing Queue operations — batch-first, không đụng AI workflow.
+ * Eligibility: ContentProjectItemActionGuard (shared with read-model available_actions).
  */
 final class ContentProjectPublishingQueueService
 {
     public function __construct(
-        private readonly ContentProjectLifecycle $lifecycle,
         private readonly ContentProjectPublishTransitionGuard $transitionGuard,
+        private readonly ContentProjectItemActionGuard $actionGuard = new ContentProjectItemActionGuard,
     ) {}
 
     /**
@@ -38,7 +39,7 @@ final class ContentProjectPublishingQueueService
             return 0;
         }
 
-        $this->assertTasksEligibleForSchedule($project, $ids);
+        $this->assertTasksCan($project, $ids, ContentProjectItemAction::Schedule);
 
         return $this->batchUpdate($project, $ids, [
             'scheduled_publish_at' => $at,
@@ -57,6 +58,8 @@ final class ContentProjectPublishingQueueService
         if ($ids === []) {
             return 0;
         }
+
+        $this->assertTasksCan($project, $ids, ContentProjectItemAction::Unschedule);
 
         return $this->batchUpdate($project, $ids, [
             'scheduled_publish_at' => null,
@@ -103,7 +106,11 @@ final class ContentProjectPublishingQueueService
             return 0;
         }
 
-        $this->assertTasksEligibleForSchedule($project, $ids);
+        $this->assertTasksCan(
+            $project,
+            $ids,
+            $asRetry ? ContentProjectItemAction::RetryPublish : ContentProjectItemAction::PublishNow,
+        );
 
         if (! Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_queue_status')) {
             return $this->batchUpdate($project, $ids, [
@@ -190,6 +197,7 @@ final class ContentProjectPublishingQueueService
             return 0;
         }
 
+        $this->assertTasksCan($project, $ids, ContentProjectItemAction::SkipPublish);
         $this->assertTransitionForTasks($project, $ids, ContentProjectPublishQueueStatus::Skipped);
 
         return $this->batchUpdate($project, $ids, [
@@ -213,6 +221,7 @@ final class ContentProjectPublishingQueueService
             return 0;
         }
 
+        $this->assertTasksCan($project, $ids, ContentProjectItemAction::CancelPublish);
         $this->assertTransitionForTasks($project, $ids, ContentProjectPublishQueueStatus::Cancelled);
 
         return $this->batchUpdate($project, $ids, [
@@ -278,7 +287,7 @@ final class ContentProjectPublishingQueueService
     /**
      * @param  list<int>  $taskIds
      */
-    private function assertTasksEligibleForSchedule(SeoProject $project, array $taskIds): void
+    private function assertTasksCan(SeoProject $project, array $taskIds, ContentProjectItemAction $action): void
     {
         $tasks = SeoProjectTask::query()
             ->where('project_id', (int) $project->getKey())
@@ -287,16 +296,11 @@ final class ContentProjectPublishingQueueService
             ->get();
 
         foreach ($tasks as $task) {
-            $phase = $this->lifecycle->resolvePhase($task);
-            if ($phase === ContentProjectLifecyclePhase::Archived) {
-                throw new RuntimeException('Không schedule item Archived.');
-            }
-            if ($phase === ContentProjectLifecyclePhase::Generating) {
-                throw new RuntimeException('Không schedule khi AI đang chạy trên item.');
-            }
-            if ($phase === ContentProjectLifecyclePhase::Draft) {
-                throw new RuntimeException('Item Draft chưa đủ điều kiện Publish.');
-            }
+            $this->actionGuard->assertCan(
+                $action,
+                $task,
+                $task->relationLoaded('article') ? $task->article : null,
+            );
         }
     }
 

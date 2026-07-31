@@ -43,7 +43,11 @@ class SeoProjectTask extends Model
 
     public const STATUS_PENDING = 'pending';
 
+    public const STATUS_DRAFT = 'draft';
+
     public const STATUS_WRITING = 'writing';
+
+    public const STATUS_PROCESSING = 'processing';
 
     public const STATUS_REVIEWING = 'reviewing';
 

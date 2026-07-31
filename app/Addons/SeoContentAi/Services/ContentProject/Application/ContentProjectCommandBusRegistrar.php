@@ -19,6 +19,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\Restore
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ResumeProjectExecutionCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RetryProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemStepCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ScheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SkipProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
@@ -42,6 +43,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\Restore
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ResumeProjectExecutionHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\RetryProjectItemPublishingHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\RerunProjectItemsHandler;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\RerunProjectItemStepHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ScheduleProjectItemsHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\SkipProjectItemPublishingHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\StartReviewHandler;
@@ -130,6 +132,7 @@ final class ContentProjectCommandBusRegistrar
             UpdateContentProjectItemCommand::class => UpdateContentProjectItemHandler::class,
             GenerateProjectItemsCommand::class => GenerateProjectItemsHandler::class,
             RerunProjectItemsCommand::class => RerunProjectItemsHandler::class,
+            RerunProjectItemStepCommand::class => RerunProjectItemStepHandler::class,
             StartReviewCommand::class => StartReviewHandler::class,
             ApproveProjectItemsCommand::class => ApproveProjectItemsHandler::class,
             ScheduleProjectItemsCommand::class => ScheduleProjectItemsHandler::class,

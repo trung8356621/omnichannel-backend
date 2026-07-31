@@ -211,7 +211,51 @@ final class SiteSyncDeltaEventIngestor
                 $payload['mode'] = SiteSyncSchema::MODE_DELTA;
             }
             $batch = SiteSyncBatchData::fromArray($payload);
+
+            $existingBatchId = (int) ((is_array($event->meta) ? ($event->meta['batch_id'] ?? 0) : 0));
+            if ($existingBatchId > 0) {
+                $existingBatch = \App\Addons\SeoContentAi\Models\SiteSync\SeoSiteSyncBatch::query()->find($existingBatchId);
+                if ($existingBatch !== null && $existingBatch->applied_at !== null) {
+                    $this->storeRemoteSnapshotOnly($site, $event, $payload);
+                    $event->forceFill([
+                        'status' => SeoSiteSyncInboundEvent::STATUS_COMPLETED,
+                        'processed_at' => now(),
+                        'last_error_code' => null,
+                        'last_error_message' => null,
+                        'meta' => array_merge(is_array($event->meta) ? $event->meta : [], [
+                            'batch_id' => $existingBatchId,
+                            'resumed_idempotent' => true,
+                        ]),
+                    ])->save();
+
+                    return;
+                }
+                if ($existingBatch !== null) {
+                    $this->reconciler->apply($site, $existingBatch);
+                    $this->storeRemoteSnapshotOnly($site, $event, $payload);
+                    $event->forceFill([
+                        'status' => SeoSiteSyncInboundEvent::STATUS_COMPLETED,
+                        'processed_at' => now(),
+                        'last_error_code' => null,
+                        'last_error_message' => null,
+                        'meta' => array_merge(is_array($event->meta) ? $event->meta : [], [
+                            'batch_id' => (int) $existingBatch->id,
+                            'resumed' => true,
+                        ]),
+                    ])->save();
+
+                    return;
+                }
+            }
+
             $staged = $this->staging->stage($site, $batch);
+            $event->forceFill([
+                'meta' => array_merge(is_array($event->meta) ? $event->meta : [], [
+                    'batch_id' => (int) $staged->id,
+                    'staged_at' => now()->toIso8601String(),
+                ]),
+            ])->save();
+
             $this->reconciler->apply($site, $staged);
             $this->storeRemoteSnapshotOnly($site, $event, $payload);
 
@@ -220,6 +264,9 @@ final class SiteSyncDeltaEventIngestor
                 'processed_at' => now(),
                 'last_error_code' => null,
                 'last_error_message' => null,
+                'meta' => array_merge(is_array($event->meta) ? $event->meta : [], [
+                    'batch_id' => (int) $staged->id,
+                ]),
             ])->save();
         } catch (\Throwable $e) {
             RuntimeLogger::warning('site_sync.inbound_process_failed', [

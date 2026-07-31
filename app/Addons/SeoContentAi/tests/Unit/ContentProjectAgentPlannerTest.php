@@ -159,8 +159,8 @@ final class ContentProjectAgentPlannerTest extends TestCase
     public function test_planner_docs_exist(): void
     {
         $candidates = [
-            dirname(__DIR__, 5).DIRECTORY_SEPARATOR.'docs'.DIRECTORY_SEPARATOR.'CONTENT_PROJECT_AGENT_PLANNER.md',
-            getcwd().DIRECTORY_SEPARATOR.'docs'.DIRECTORY_SEPARATOR.'CONTENT_PROJECT_AGENT_PLANNER.md',
+            dirname(__DIR__, 5).DIRECTORY_SEPARATOR.'docs'.DIRECTORY_SEPARATOR.'contracts'.DIRECTORY_SEPARATOR.'AGENT_AND_MCP_CONTRACTS.md',
+            getcwd().DIRECTORY_SEPARATOR.'docs'.DIRECTORY_SEPARATOR.'contracts'.DIRECTORY_SEPARATOR.'AGENT_AND_MCP_CONTRACTS.md',
         ];
 
         $found = false;
@@ -175,7 +175,7 @@ final class ContentProjectAgentPlannerTest extends TestCase
         }
 
         if (! $found) {
-            self::markTestSkipped('docs/CONTENT_PROJECT_AGENT_PLANNER.md not on host');
+            self::markTestSkipped('docs/contracts/AGENT_AND_MCP_CONTRACTS.md not on host');
         }
     }
 }

@@ -176,7 +176,7 @@ final class WordPressLocalMediaSyncService
     }
 
     /**
-     * @deprecated Ảnh local chỉ xóa khi duyệt bài (ArticleResource::markArticleReviewed). Không gọi sau đồng bộ WP.
+     * @deprecated Ảnh local chỉ xóa khi duyệt bài (ArticleReviewService approve path). Không gọi sau đồng bộ WP.
      *
      * @param  list<int>  $mediaIds
      */

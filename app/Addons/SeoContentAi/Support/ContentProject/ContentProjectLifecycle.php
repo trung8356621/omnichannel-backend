@@ -5,73 +5,34 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Support\ContentProject;
 
 use App\Addons\SeoContentAi\Enums\ContentProjectLifecyclePhase;
-use App\Addons\SeoContentAi\Enums\ContentProjectPublishQueueStatus;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use RuntimeException;
 
 /**
  * Map task/article → business lifecycle phase + transition guard.
+ * Batch D: phase resolution delegates to ContentProjectItemStateResolver.
  */
 final class ContentProjectLifecycle
 {
+    private readonly ContentProjectItemStateResolver $stateResolver;
+
+    public function __construct(?ContentProjectItemStateResolver $resolver = null)
+    {
+        $this->stateResolver = $resolver ?? new ContentProjectItemStateResolver;
+    }
+
     public function resolvePhase(SeoProjectTask $task, ?SeoArticle $article = null): ContentProjectLifecyclePhase
     {
-        $project = $task->relationLoaded('project') ? $task->project : null;
-        if ($project instanceof SeoProject && $project->archived_at !== null) {
-            return ContentProjectLifecyclePhase::Archived;
-        }
+        return $this->stateResolver->resolvePhase($task, $article);
+    }
 
-        if ($task->archived_at !== null || (string) $task->status === SeoProjectTask::STATUS_ARCHIVED) {
-            return ContentProjectLifecyclePhase::Archived;
-        }
-
-        $queueStatus = ContentProjectPublishQueueStatus::tryFrom((string) ($task->publish_queue_status ?? 'none'))
-            ?? ContentProjectPublishQueueStatus::None;
-
-        if ($queueStatus === ContentProjectPublishQueueStatus::Published
-            || $task->publish_published_at !== null
-        ) {
-            return ContentProjectLifecyclePhase::Published;
-        }
-
-        $article ??= $task->relationLoaded('article') ? $task->article : null;
-        if ($article instanceof SeoArticle) {
-            $articleStatus = strtolower((string) ($article->status ?? ''));
-            if (in_array($articleStatus, ['published', 'publish'], true)) {
-                return ContentProjectLifecyclePhase::Published;
-            }
-        }
-
-        if ($queueStatus === ContentProjectPublishQueueStatus::Failed
-            || (string) $task->status === SeoProjectTask::STATUS_FAILED
-        ) {
-            return ContentProjectLifecyclePhase::Failed;
-        }
-
-        if ($queueStatus->isActiveQueue() || $task->scheduled_publish_at !== null) {
-            return ContentProjectLifecyclePhase::WaitingPublish;
-        }
-
-        $taskStatus = (string) $task->status;
-        if ($taskStatus === SeoProjectTask::STATUS_WRITING) {
-            return ContentProjectLifecyclePhase::Generating;
-        }
-
-        if ($taskStatus === SeoProjectTask::STATUS_REVIEWING) {
-            return ContentProjectLifecyclePhase::Review;
-        }
-
-        if ($taskStatus === SeoProjectTask::STATUS_COMPLETED) {
-            $reviewed = $article instanceof SeoArticle && (bool) ($article->is_reviewed ?? false);
-
-            return $reviewed
-                ? ContentProjectLifecyclePhase::Approved
-                : ContentProjectLifecyclePhase::Review;
-        }
-
-        return ContentProjectLifecyclePhase::Draft;
+    /**
+     * @param  array<string, mixed>  $hints
+     */
+    public function resolveState(SeoProjectTask $task, ?SeoArticle $article = null, array $hints = []): ContentProjectItemState
+    {
+        return $this->stateResolver->resolve($task, $article, $hints);
     }
 
     public function assertCanTransition(

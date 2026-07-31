@@ -2583,6 +2583,8 @@ return [
         'run_type_improve' => 'Tối ưu',
         'execution_month_closed' => 'Tháng :month đã kết thúc, không thể thêm mục mới.',
         'execution_month_closed_short' => '(Tháng đã kết thúc — không thêm mới)',
+        'sync_duplicate_input' => 'Danh sách bài/từ khóa bị trùng identity (cùng loại + nội dung nguồn). Xóa hoặc sửa mục trùng trước khi lưu.',
+        'sync_duplicate_input_row' => 'Mục này trùng với mục khác trong form (cùng loại + nội dung nguồn).',
         'notify_new_project_title' => 'Bạn có project nội dung mới',
         'notify_tasks_added_title' => 'Project có bài/từ khóa mới',
         'notify_tasks_added_body' => ':project — thêm :count mục mới.',

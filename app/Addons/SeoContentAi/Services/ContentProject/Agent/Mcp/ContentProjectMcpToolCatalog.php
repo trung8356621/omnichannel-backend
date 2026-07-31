@@ -11,14 +11,13 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Capabilities\Con
 /**
  * MCP tool catalog — built from canonical (core + enabled extension) write
  * caps + hardcoded read schemas.
+ *
+ * MCP is a stricter subset of the agent write surface: sync_items,
+ * stop/resume_execution, and all serp_intelligence / gsc_intelligence
+ * writes stay agent-only (see {@see CanonicalCapabilityRegistry::isMcpWriteExposed()}).
  */
 final class ContentProjectMcpToolCatalog
 {
-    /** @var list<string> */
-    private const EXCLUDED_WRITE = [
-        'content_project.sync_items',
-    ];
-
     public function __construct(
         private readonly CanonicalCapabilityRegistry $registry,
     ) {}
@@ -32,11 +31,7 @@ final class ContentProjectMcpToolCatalog
 
         foreach ($this->registry->all() as $cap) {
             $name = (string) ($cap['name'] ?? '');
-            if ($name === '' || in_array($name, self::EXCLUDED_WRITE, true)) {
-                continue;
-            }
-
-            if (! $this->registry->isAgentWriteExposed($name)) {
+            if ($name === '' || ! $this->registry->isMcpWriteExposed($name)) {
                 continue;
             }
 

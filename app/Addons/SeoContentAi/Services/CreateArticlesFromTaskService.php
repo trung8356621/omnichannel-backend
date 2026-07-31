@@ -157,6 +157,92 @@ final class CreateArticlesFromTaskService
     /**
      * @return array{success: bool, article_id: ?int, message: string, steps: list<array<string, mixed>>}
      */
+    /**
+     * Step-scoped rerun for CommandBus / RunEngine worker.
+     * Outline-only = single outline node; outline+downstream = outline then article;
+     * article = content node with existing outline (no outline regen).
+     *
+     * @return array{success: bool, article_id: ?int, message: string, steps: list<array<string, mixed>>}
+     */
+    public function runRerunFromStepForContext(
+        TaskTestContext $context,
+        int $siteId,
+        \App\Addons\SeoContentAi\Enums\ContentProjectRerunFromStep $fromStep,
+        bool $includeDownstream = false,
+    ): array {
+        $projectType = SeoProjectTask::normalizeType((string) ($context->projectTaskType ?? ''));
+        if ($projectType === SeoProjectTask::TYPE_IMPROVE) {
+            return [
+                'success' => false,
+                'article_id' => $context->article?->id,
+                'steps' => [],
+                'message' => 'Improve items are manual-only — automatic rerun blocked.',
+            ];
+        }
+
+        if ($fromStep === \App\Addons\SeoContentAi\Enums\ContentProjectRerunFromStep::Article) {
+            $taskId = $this->settings->getPublishArticleTaskId();
+            if ($taskId === null) {
+                throw new \InvalidArgumentException(
+                    'Chưa cấu hình quy trình Đăng bài viết. Vào SEO → Cài đặt → Quy trình để chọn task.',
+                );
+            }
+            $task = SeoTask::query()->find($taskId);
+            if (! $task instanceof SeoTask || ! $task->is_active) {
+                throw new \InvalidArgumentException('Quy trình Đăng bài viết không khả dụng.');
+            }
+            $resolvedSiteId = (int) ($context->siteId ?? $siteId);
+            $this->assertSiteAccessible($resolvedSiteId);
+            $keyword = trim((string) ($context->variables['focus_keyword'] ?? $context->variables['post_title'] ?? 'rewrite'));
+            if ($keyword === '') {
+                $keyword = 'rewrite';
+            }
+
+            return $this->runArticleWritingForContext(
+                $context,
+                $task,
+                $resolvedSiteId,
+                $keyword,
+                ArticleWritingExecutionMode::ContentNode,
+                ArticleWritingSourceType::Outline,
+            );
+        }
+
+        if ($includeDownstream) {
+            return $this->runOutlineThenArticleForContext($context, $siteId);
+        }
+
+        // Outline-only: single outline node, no article write.
+        $taskId = $this->settings->getPublishArticleTaskId();
+        if ($taskId === null) {
+            throw new \InvalidArgumentException(
+                'Chưa cấu hình quy trình Đăng bài viết. Vào SEO → Cài đặt → Quy trình để chọn task.',
+            );
+        }
+        $task = SeoTask::query()->find($taskId);
+        if (! $task instanceof SeoTask || ! $task->is_active) {
+            throw new \InvalidArgumentException('Quy trình Đăng bài viết không khả dụng.');
+        }
+
+        $resolvedSiteId = (int) ($context->siteId ?? $siteId);
+        $this->assertSiteAccessible($resolvedSiteId);
+        $outlineNodeId = $this->roleResolver->requireNodeId(
+            $task,
+            WorkflowExecutionRole::ArticleOutlineGenerate,
+        );
+        $outlineStep = $this->workflowRunner->runSingleStep($task, $context, $outlineNodeId);
+        $ok = ($outlineStep['status'] ?? '') !== 'failed';
+
+        return [
+            'success' => $ok,
+            'article_id' => $context->article?->id,
+            'steps' => [$outlineStep],
+            'message' => $ok
+                ? 'Outline regenerated.'
+                : trim((string) ($outlineStep['message'] ?? 'Outline rerun failed.')),
+        ];
+    }
+
     public function runPublishWorkflowForContext(TaskTestContext $context, int $siteId): array
     {
         $projectType = SeoProjectTask::normalizeType((string) ($context->projectTaskType ?? ''));

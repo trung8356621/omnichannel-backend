@@ -6,7 +6,16 @@ namespace App\Addons\SeoContentAi\Enums;
 
 /**
  * Task lifecycle statuses — bao gồm legacy + status mới cho Phase 3+.
- * Model vẫn lưu string; không auto-cast Eloquent sang enum ở Phase 2.
+ *
+ * Model (`SeoProjectTask::$casts`) vẫn lưu `status` dưới dạng string —
+ * cố ý KHÔNG dùng Eloquent enum cast (`'status' => self::class`), vì:
+ * - Raw SQL / dashboard aggregate query so sánh trực tiếp bằng string
+ *   (`SeoProjectTask::STATUS_*`), không qua Eloquent hydrate.
+ * - Filament table/filter options và badge presenter đọc string thô.
+ * - Legacy/free-form values (xem {@see ContentProjectTaskStatusNormalizer})
+ *   phải fail-soft qua tryNormalize() thay vì Eloquent ném lỗi cast khi
+ *   gặp giá trị lạ.
+ * Dùng {@see ContentProjectTaskStatusNormalizer} để chuẩn hoá về enum khi cần.
  */
 enum SeoProjectTaskStatus: string
 {

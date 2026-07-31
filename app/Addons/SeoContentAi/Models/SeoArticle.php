@@ -35,7 +35,6 @@ class SeoArticle extends Model
         'blocks' => 'array',
         'seo_score' => 'decimal:2',
         'skip_seo_score' => 'boolean',
-        'is_reviewed' => 'boolean',
         'reviewed_at' => 'datetime',
         'review_status' => 'string',
         'content_archived_at' => 'datetime',

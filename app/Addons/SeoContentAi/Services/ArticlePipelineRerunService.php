@@ -4,20 +4,22 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Enums\ContentProjectRerunFromStep;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
-use App\Addons\SeoContentAi\Jobs\RerunArticlePipelineJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
-use App\Addons\SeoContentAi\Support\ContentProjectRunSettings;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemStepCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectPublicRef;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Support\RuntimeLogger;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 
 /**
- * Tạo SeoProjectRun mới (1 task) để chạy lại pipeline từ outline|article.
+ * Editor adapter — delegates orchestration to CommandBus step rerun (no direct job).
  */
 final class ArticlePipelineRerunService
 {
@@ -38,8 +40,7 @@ final class ArticlePipelineRerunService
     public const BLOCK_NO_PROJECT = 'Bài viết phải được gắn vào Content Project trước khi chạy lại quy trình.';
 
     public function __construct(
-        private readonly SeoProjectWorkflowRunService $workflowRunService,
-        private readonly SeoProjectRunItemService $runItemService,
+        private readonly ContentProjectCommandBus $commandBus,
         private readonly ArticlePipelineRerunStartStepResolver $startStepResolver,
     ) {}
 
@@ -57,6 +58,7 @@ final class ArticlePipelineRerunService
     public function queue(SeoArticle $article, string $fromStep, ?int $userId = null): array
     {
         $fromStep = $this->normalizeFromStep($fromStep);
+        $step = ContentProjectRerunFromStep::fromMixed($fromStep);
 
         if (! SeoAccessControl::canAccessManagerFeatures()) {
             return [
@@ -108,33 +110,9 @@ final class ArticlePipelineRerunService
             ];
         }
 
-        if ($task->archived_at !== null || (string) $task->status === 'archived') {
-            return [
-                'success' => false,
-                'blocked' => true,
-                'message' => 'Task Content Project đang archive — không chạy lại quy trình.',
-            ];
-        }
-
+        // Pre-check workflow start node still resolvable (editor UX message).
         $resolved = $this->startStepResolver->resolve($task, $fromStep);
-        $this->startStepResolver->logResolution($resolved, [
-            'article_id' => (int) $article->id,
-            'project_id' => (int) $project->id,
-            'task_id' => (int) $task->id,
-            'from_step' => $fromStep,
-            'phase' => 'queue',
-        ]);
-        RuntimeLogger::info('seo.article_rerun.requested', [
-            'article_id' => (int) $article->id,
-            'project_id' => (int) $project->id,
-            'task_id' => (int) $task->id,
-            'from_step' => $fromStep,
-            'semantic_key' => $resolved['semantic_key'],
-            'strategy' => $resolved['strategy'],
-            'resolved_node_id' => $resolved['resolved_node_id'],
-        ]);
-
-        if (! $resolved['ok'] || $resolved['resolved_node_id'] === null) {
+        if (! ($resolved['ok'] ?? false) || ($resolved['resolved_node_id'] ?? null) === null) {
             return [
                 'success' => false,
                 'blocked' => true,
@@ -143,12 +121,8 @@ final class ArticlePipelineRerunService
             ];
         }
 
-        $startNodeId = (string) $resolved['resolved_node_id'];
-        $resolutionStrategy = (string) $resolved['strategy'];
-        $semanticKey = (string) $resolved['semantic_key'];
-
         $lockKey = $this->lockKey((int) $article->id, $fromStep);
-        $lock = Cache::lock($lockKey, 30);
+        $lock = Cache::lock($lockKey, 120);
         if (! $lock->get()) {
             return [
                 'success' => false,
@@ -158,61 +132,7 @@ final class ArticlePipelineRerunService
         }
 
         try {
-            if ($this->findActiveRerun((int) $article->id, $fromStep) instanceof SeoProjectRun) {
-                return [
-                    'success' => false,
-                    'busy' => true,
-                    'message' => 'Đã có lần chạy lại đang chờ hoặc đang chạy cho phạm vi này.',
-                ];
-            }
-
-            $sourceRunId = $this->resolveSourceRunId($article);
-            $baseSettings = $this->baseSettingsFromSource($sourceRunId);
-
-            $run = DB::connection('omi_seo_ai')->transaction(function () use (
-                $project,
-                $task,
-                $article,
-                $fromStep,
-                $sourceRunId,
-                $baseSettings,
-                $startNodeId,
-                $resolutionStrategy,
-                $semanticKey,
-            ): SeoProjectRun {
-                $run = $this->workflowRunService->startRun(
-                    $project,
-                    SeoProjectRun::MODE_FULL,
-                    $baseSettings,
-                );
-
-                $settings = is_array($run->settings) ? $run->settings : [];
-                $run->update([
-                    'settings' => array_merge($settings, [
-                        'run_type' => 'rerun',
-                        'rerun_from_step' => $fromStep,
-                        'semantic_key' => $semanticKey,
-                        'source_run_id' => $sourceRunId,
-                        'source_article_id' => (int) $article->id,
-                        'article_id' => (int) $article->id,
-                        'start_node_id' => $startNodeId,
-                        'resolution_strategy' => $resolutionStrategy,
-                    ]),
-                ]);
-
-                if ((int) ($task->article_id ?? 0) !== (int) $article->id) {
-                    $task->article_id = (int) $article->id;
-                    $task->save();
-                }
-
-                $this->runItemService->prepareOperation($run->fresh() ?? $run, $project, $task->fresh() ?? $task);
-                $this->runItemService->syncMirrorAndCounters($run->fresh() ?? $run, false);
-
-                return $run->fresh() ?? $run;
-            });
-
             $this->writeRerunMeta($article, [
-                'run_id' => (int) $run->id,
                 'project_id' => (int) $project->id,
                 'task_id' => (int) $task->id,
                 'from' => $fromStep,
@@ -224,33 +144,55 @@ final class ArticlePipelineRerunService
 
             @set_time_limit(0);
 
-            // Chạy ngay trong request (không đưa vào queue worker).
-            RerunArticlePipelineJob::dispatchSync(
-                (int) $run->id,
-                (int) $article->id,
-                $fromStep,
-                $userId,
+            // Editor outline = from outline node + downstream; article = content only.
+            $result = $this->commandBus->dispatch(
+                new RerunProjectItemStepCommand(
+                    projectRef: (int) $project->id,
+                    itemRefs: [(int) $task->id],
+                    fromStep: $step,
+                    includeDownstream: $step === ContentProjectRerunFromStep::Outline,
+                    sourceArticleId: (int) $article->id,
+                    mode: SeoProjectRun::MODE_FULL,
+                    syncExecution: true,
+                ),
+                ActorContext::user(
+                    $userId,
+                    (int) ($project->site_id ?? 0) ?: null,
+                ),
             );
 
-            $final = $this->statusPayload($article->fresh() ?? $article);
-            $finalStatus = (string) ($final['status'] ?? self::STATUS_FAILED);
-            $ok = $finalStatus === self::STATUS_COMPLETED;
+            $executionRef = is_string($result->metadata['execution_ref'] ?? null)
+                ? (string) $result->metadata['execution_ref']
+                : '';
+            $runId = $executionRef !== '' ? ContentProjectPublicRef::decodeExecution($executionRef) : 0;
 
-            $projectForUrl = $run->project;
-            if (! $projectForUrl instanceof SeoProject) {
-                $projectForUrl = SeoProject::query()->find((int) $run->project_id);
-            }
+            $ok = $result->success;
+            $this->writeRerunMeta($article, [
+                'run_id' => $runId > 0 ? $runId : null,
+                'project_id' => (int) $project->id,
+                'task_id' => (int) $task->id,
+                'from' => $fromStep,
+                'status' => $ok ? self::STATUS_COMPLETED : self::STATUS_FAILED,
+                'finished_at' => now()->toIso8601String(),
+                'message' => $result->message,
+            ]);
+
+            RuntimeLogger::info('seo.article_rerun.command_bus', [
+                'article_id' => (int) $article->id,
+                'project_id' => (int) $project->id,
+                'task_id' => (int) $task->id,
+                'from_step' => $fromStep,
+                'success' => $ok,
+                'run_id' => $runId,
+            ]);
 
             return [
                 'success' => $ok,
-                'message' => $ok
-                    ? (string) ($final['message'] ?: 'Đã chạy lại quy trình thành công.')
-                    : (string) ($final['message'] ?: 'Chạy lại quy trình thất bại.'),
-                'run_id' => (int) $run->id,
-                'run_url' => $projectForUrl instanceof SeoProject
-                    ? SeoProjectResource::getProjectWorkspaceUrl($projectForUrl)
-                    : null,
-                'status' => $finalStatus !== '' ? $finalStatus : self::STATUS_FAILED,
+                'message' => $result->message,
+                'run_id' => $runId > 0 ? $runId : null,
+                'run_url' => SeoProjectResource::getProjectWorkspaceUrl($project),
+                'status' => $ok ? self::STATUS_COMPLETED : self::STATUS_FAILED,
+                'blocked' => ! $ok,
             ];
         } finally {
             optional($lock)->release();
@@ -313,134 +255,25 @@ final class ArticlePipelineRerunService
         return is_array($decoded) ? $decoded : [];
     }
 
-    public function resolveProjectTask(SeoArticle $article): ?SeoProjectTask
+    private function normalizeFromStep(string $fromStep): string
+    {
+        $normalized = strtolower(trim($fromStep));
+
+        return $normalized === self::FROM_ARTICLE ? self::FROM_ARTICLE : self::FROM_OUTLINE;
+    }
+
+    private function lockKey(int $articleId, string $fromStep): string
+    {
+        return 'seo:article-pipeline-rerun:'.$articleId.':'.$fromStep;
+    }
+
+    private function resolveProjectTask(SeoArticle $article): ?SeoProjectTask
     {
         $task = SeoProjectTask::query()
             ->where('article_id', (int) $article->id)
             ->orderByDesc('id')
             ->first();
 
-        if ($task instanceof SeoProjectTask) {
-            return $task;
-        }
-
-        $article->loadMissing('articleMetas');
-        $raw = $article->articleMetas->firstWhere('meta_key', 'content_project_run')?->meta_value;
-        if (! is_string($raw) || trim($raw) === '') {
-            return null;
-        }
-
-        $decoded = json_decode($raw, true);
-        if (! is_array($decoded)) {
-            return null;
-        }
-
-        $taskId = (int) ($decoded['task_id'] ?? 0);
-        if ($taskId <= 0) {
-            return null;
-        }
-
-        $task = SeoProjectTask::query()->find($taskId);
-        if (! $task instanceof SeoProjectTask) {
-            return null;
-        }
-
-        if ((int) ($task->article_id ?? 0) === 0) {
-            $task->article_id = (int) $article->id;
-            $task->save();
-        }
-
-        return (int) ($task->article_id ?? 0) === (int) $article->id ? $task : null;
-    }
-
-    public function normalizeFromStep(string $fromStep): string
-    {
-        $fromStep = trim(mb_strtolower($fromStep));
-
-        return match ($fromStep) {
-            self::FROM_ARTICLE, 'content' => self::FROM_ARTICLE,
-            default => self::FROM_OUTLINE,
-        };
-    }
-
-    public function lockKey(int $articleId, string $fromStep): string
-    {
-        return 'seo:article-pipeline-rerun:'.$articleId.':'.$this->normalizeFromStep($fromStep);
-    }
-
-    public function findActiveRerun(int $articleId, string $fromStep): ?SeoProjectRun
-    {
-        $fromStep = $this->normalizeFromStep($fromStep);
-
-        return SeoProjectRun::query()
-            ->where('status', SeoProjectRun::STATUS_RUNNING)
-            ->where('settings->run_type', 'rerun')
-            ->where('settings->article_id', $articleId)
-            ->where('settings->rerun_from_step', $fromStep)
-            ->orderByDesc('id')
-            ->first();
-    }
-
-    /**
-     * Đánh dấu các rerun run còn RUNNING (request cũ đứt) thành failed — tránh khóa UI/idempotency.
-     */
-    public function abandonStaleActiveRuns(int $articleId): int
-    {
-        $runs = SeoProjectRun::query()
-            ->where('status', SeoProjectRun::STATUS_RUNNING)
-            ->where('settings->run_type', 'rerun')
-            ->where('settings->article_id', $articleId)
-            ->get();
-
-        $count = 0;
-        foreach ($runs as $run) {
-            if (! $run instanceof SeoProjectRun) {
-                continue;
-            }
-
-            $run->update([
-                'status' => SeoProjectRun::STATUS_FAILED,
-                'error_message' => 'Rerun bị gián đoạn (stale).',
-                'finished_at' => now(),
-            ]);
-            $count++;
-        }
-
-        return $count;
-    }
-
-    private function resolveSourceRunId(SeoArticle $article): ?int
-    {
-        $article->loadMissing('articleMetas');
-        $raw = $article->articleMetas->firstWhere('meta_key', 'content_project_run')?->meta_value;
-        if (! is_string($raw) || trim($raw) === '') {
-            return null;
-        }
-
-        $decoded = json_decode($raw, true);
-        if (! is_array($decoded)) {
-            return null;
-        }
-
-        $runId = (int) ($decoded['run_id'] ?? 0);
-
-        return $runId > 0 ? $runId : null;
-    }
-
-    /**
-     * @return array{generate_post_images: bool, settings_version: int}
-     */
-    private function baseSettingsFromSource(?int $sourceRunId): array
-    {
-        if ($sourceRunId === null || $sourceRunId <= 0) {
-            return ContentProjectRunSettings::defaults()->toArray();
-        }
-
-        $source = SeoProjectRun::query()->find($sourceRunId);
-        if (! $source instanceof SeoProjectRun) {
-            return ContentProjectRunSettings::defaults()->toArray();
-        }
-
-        return ContentProjectRunSettings::fromRun($source)->toArray();
+        return $task instanceof SeoProjectTask ? $task : null;
     }
 }

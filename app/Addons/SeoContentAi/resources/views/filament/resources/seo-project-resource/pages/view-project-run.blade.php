@@ -255,7 +255,8 @@
                                 $itemStatus = (string) ($item['status'] ?? '');
                                 $articleId = (int) ($item['article_id'] ?? 0);
                                 $retryCount = (int) ($item['retry_count'] ?? 0);
-                                $isReviewed = (bool) ($item['article_is_reviewed'] ?? false);
+                                $isApproved = (bool) ($item['article_is_approved'] ?? false);
+                                $reviewStatus = (string) ($item['article_review_status'] ?? '');
                                 $taskExists = (bool) ($item['task_exists'] ?? true);
                                 $canRetry = $this->canRetryRunItem($item);
                                 $runIsTerminal = in_array((string) ($this->projectRun?->status ?? ''), [
@@ -440,10 +441,10 @@
                                         $stepsUrl = $this->itemStepsUrl($item);
                                         $showMarkFixed = $itemStatus === 'failed' && $articleId > 0 && $taskExists
                                             && ! $this->itemIsImproveType($item);
-                                        $showFirstRun = $canRetry && ! $isReviewed && $itemStatus === 'pending'
+                                        $showFirstRun = $canRetry && ! $isApproved && $itemStatus === 'pending'
                                             && ! $this->itemIsImproveType($item);
                                         $hasRowActions = $canArchiveItem || filled($stepsUrl) || $showMarkFixed || $showFirstRun
-                                            || ($canRetry && ! $isReviewed && ! $this->itemIsImproveType($item)
+                                            || ($canRetry && ! $isApproved && ! $this->itemIsImproveType($item)
                                                 && is_array($item['workflow_steps'] ?? null) && ($item['workflow_steps'] ?? []) !== []);
                                     @endphp
 
@@ -531,7 +532,7 @@
 
                                                 @php
                                                     $workflowSteps = is_array($item['workflow_steps'] ?? null) ? $item['workflow_steps'] : [];
-                                                    $showStepRetry = $canRetry && ! $isReviewed && ! $this->itemIsImproveType($item)
+                                                    $showStepRetry = $canRetry && ! $isApproved && ! $this->itemIsImproveType($item)
                                                         && $workflowSteps !== [];
                                                 @endphp
                                                 @if ($showStepRetry)

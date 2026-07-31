@@ -106,6 +106,12 @@ final class PromptHookRegistry
     {
         $indexed = [];
         foreach ($definitions as $definition) {
+            if (isset($indexed[$definition->key])) {
+                throw new PromptHookException(
+                    PromptHookErrorCode::HookDuplicateKey,
+                    "Duplicate prompt hook key [{$definition->key}] — fail closed (no silent overwrite).",
+                );
+            }
             $indexed[$definition->key] = $definition;
         }
 

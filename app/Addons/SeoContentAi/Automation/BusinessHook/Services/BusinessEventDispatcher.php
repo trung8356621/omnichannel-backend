@@ -165,17 +165,25 @@ final class BusinessEventDispatcher
         };
 
         try {
-            if (\App\Support\Automation\AutomationConnection::db()->transactionLevel() > 0) {
-                \App\Support\Automation\AutomationConnection::db()->afterCommit($schedule);
-                // Trong transaction: chưa schedule — coi như queued/pending match sau commit.
+            \App\Addons\SeoContentAi\Support\SourceAwareAfterCommit::run($schedule);
+
+            $openTxn = false;
+            try {
+                $openTxn = \App\Support\Automation\AutomationConnection::db()->transactionLevel() > 0
+                    || \Illuminate\Support\Facades\DB::connection('omi_seo_ai')->transactionLevel() > 0;
+            } catch (\Throwable) {
+                $openTxn = \App\Support\Automation\AutomationConnection::db()->transactionLevel() > 0;
+            }
+
+            if ($openTxn) {
                 return new AutomationEventDispatchResult(
                     outcome: AutomationEventDispatchOutcome::Queued,
                     event: $event,
-                    message: 'Event persisted; rule match scheduled after commit.',
+                    message: 'Event persisted; rule match scheduled after source commit.',
                 );
             }
 
-            $schedule();
+            // schedule already ran synchronously inside SourceAwareAfterCommit when no open txn.
         } catch (\Throwable $e) {
             Log::error('automation.event.schedule_failed', [
                 'event_name' => $eventName,

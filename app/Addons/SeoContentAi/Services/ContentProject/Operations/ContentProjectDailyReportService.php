@@ -79,7 +79,7 @@ final class ContentProjectDailyReportService
             ->table('seo_project_tasks as t')
             ->join('articles as a', 'a.id', '=', 't.article_id')
             ->where('t.status', SeoProjectTask::STATUS_COMPLETED)
-            ->where('a.is_reviewed', 1)
+            ->where('a.review_status', 'approved')
             ->whereBetween('t.updated_at', [$from, $to]);
 
         if (is_array($siteIds) && $siteIds !== []) {

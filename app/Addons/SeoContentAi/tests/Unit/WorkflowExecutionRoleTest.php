@@ -9,7 +9,7 @@ use App\Addons\SeoContentAi\Enums\WorkflowExecutionRole;
 use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Services\ArticleImproveExecutionService;
 use App\Addons\SeoContentAi\Services\ArticleWritingExecutionService;
-use App\Addons\SeoContentAi\Services\ContentProjectBulkRerunService;
+use App\Addons\SeoContentAi\Enums\ContentProjectRerunFromStep;
 use App\Addons\SeoContentAi\Services\PromptOwnership\DefaultImprovePromptInstaller;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowStepCatalogService;
 use App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionRoleRegistry;
@@ -171,13 +171,12 @@ final class WorkflowExecutionRoleTest extends TestCase
         self::assertNull($registry->suggestRoleFromHook('unknown.hook'));
     }
 
-    public function test_bulk_actions_are_three_named_constants(): void
+    public function test_bulk_actions_use_rerun_from_step_enum(): void
     {
-        self::assertSame('regenerate_outline', ContentProjectBulkRerunService::ACTION_OUTLINE);
-        self::assertSame('regenerate_article', ContentProjectBulkRerunService::ACTION_ARTICLE);
+        self::assertSame('outline', ContentProjectRerunFromStep::Outline->value);
         self::assertSame(
-            'regenerate_outline_and_article',
-            ContentProjectBulkRerunService::ACTION_OUTLINE_AND_ARTICLE,
+            ContentProjectRerunFromStep::Outline,
+            ContentProjectRerunFromStep::tryFromMixed('regenerate_outline'),
         );
 
         $js = (string) file_get_contents(

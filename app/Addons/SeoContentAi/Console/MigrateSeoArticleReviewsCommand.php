@@ -148,7 +148,6 @@ final class MigrateSeoArticleReviewsCommand extends Command
         $candidates = SeoArticle::query()
             ->whereIn('id', $articleIds)
             ->where('review_status', ArticleReviewStatus::Draft->value)
-            ->where('is_reviewed', false)
             ->whereNull('content_archived_at')
             ->get(['id']);
 

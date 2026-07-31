@@ -3,8 +3,9 @@
     use App\Addons\SeoContentAi\Services\TeamChatAttachmentService;
     use App\Addons\SeoContentAi\Support\SeoAccessControl;
 
-    $modelsUrl = route('seo.global-ai-chat.models');
-    $chatUrl = route('seo.global-ai-chat.store');
+    // Orphan Global AI Chat API disabled — Agent Workspace owns AI. Keep empty URLs so dead Alpine helpers do not call route().
+    $modelsUrl = '';
+    $chatUrl = '';
     $teamMessagesUrl = route('seo.team-messages.index');
     $teamStoreUrl = route('seo.team-messages.store');
     $storageKey = 'seo_global_ai_chat_'.((int) auth()->id());

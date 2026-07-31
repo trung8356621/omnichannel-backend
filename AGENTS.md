@@ -15,7 +15,7 @@
 - Filament's core admin panel is available under `/admin`.
 - Features that can be isolated must be implemented as addons under `app/Addons/{PascalCaseName}/`.
 - Read `README.md` for the core architecture.
-- When working in SEO Content AI, also read `app/Addons/SeoContentAi/README_ADDON_SEOCONTENTAI.md` and `docs/SUPER_MAP_INDEX.md`.
+- When working in SEO Content AI, also read `docs/README.md` (canonical index). `docs/SUPER_MAP_INDEX.md` and `app/Addons/SeoContentAi/README_ADDON_SEOCONTENTAI.md` are compatibility stubs only.
 
 ## Addon Architecture
 

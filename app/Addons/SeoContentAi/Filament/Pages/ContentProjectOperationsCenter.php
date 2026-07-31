@@ -50,7 +50,7 @@ use Throwable;
  * Path: /seo/{connection_hash}/content-operations (SEO panel; needs omi_seo_ai).
  * Admin alias: /admin/content-operations redirects here.
  *
- * @see docs/CONTENT_PROJECT_OPERATIONS.md
+ * @see docs/modules/OPERATIONS_AND_OBSERVABILITY.md
  */
 final class ContentProjectOperationsCenter extends SeoPanelPage
 {
@@ -436,6 +436,12 @@ final class ContentProjectOperationsCenter extends SeoPanelPage
 
     private function agentContextForSite(int $siteId): AgentExecutionContext
     {
+        $user = auth()->user();
+        $scopes = $user instanceof \App\Models\User
+            ? app(\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceContextService::class)
+                ->scopesForAuthenticatedUser($user)
+            : [];
+
         return AgentExecutionContext::fromArray([
             'actor_ref' => 'agent:user:'.(int) auth()->id(),
             'actor_type' => 'agent',
@@ -444,7 +450,7 @@ final class ContentProjectOperationsCenter extends SeoPanelPage
             'request_ref' => (string) Str::uuid(),
             'resolved_site_id' => $siteId,
             'resolved_actor_user_id' => auth()->id() !== null ? (int) auth()->id() : null,
-            'scopes' => ['content-project:admin'],
+            'scopes' => $scopes,
         ]);
     }
 

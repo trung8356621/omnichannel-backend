@@ -21,7 +21,6 @@ use App\Addons\SeoContentAi\Services\Exceptions\ArticleReviewException;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\SeoIssueProjectTaskAssignmentService;
 use App\Addons\SeoContentAi\Services\SeoNotificationService;
-use App\Addons\SeoContentAi\Services\SeoProjectApprovalService;
 use App\Addons\SeoContentAi\Services\SeoProjectArticleOwnerSyncService;
 use App\Addons\SeoContentAi\Services\SitePolylangService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
@@ -577,15 +576,31 @@ class ArticleResource extends SeoPanelResource
                         ->action(function (Collection $records): void {
                             $approvedCount = 0;
                             $deletedMediaCount = 0;
+                            $user = auth()->user();
+                            if (! $user instanceof User) {
+                                return;
+                            }
+                            $reviewService = app(ArticleReviewService::class);
 
                             foreach ($records as $record) {
                                 if (! $record instanceof SeoArticle) {
                                     continue;
                                 }
 
-                                $deletedMediaCount += static::markArticleReviewed($record);
-
-                                $approvedCount++;
+                                try {
+                                    $result = $reviewService->ensureApproved(
+                                        $record,
+                                        $user,
+                                        source: 'article_list.bulk_approve',
+                                    );
+                                    $deletedMediaCount += (int) ($result['deleted_media_count'] ?? 0);
+                                    $approvedCount++;
+                                } catch (ArticleReviewException $exception) {
+                                    Notification::make()
+                                        ->title($exception->getMessage())
+                                        ->danger()
+                                        ->send();
+                                }
                             }
 
                             Notification::make()
@@ -851,9 +866,33 @@ class ArticleResource extends SeoPanelResource
 
     public static function applyWpSyncQueueUnreviewedScope(Builder $query): Builder
     {
+        return static::applyNotApprovedForPublishScope($query);
+    }
+
+    /**
+     * Articles not approved and not archived (SEO queue / CM visibility).
+     *
+     * @param  Builder<SeoArticle>  $query
+     * @return Builder<SeoArticle>
+     */
+    public static function applyNotApprovedForPublishScope(Builder $query): Builder
+    {
         return $query->where(function (Builder $sub): void {
-            $sub->where('is_reviewed', false)->orWhereNull('is_reviewed');
+            $sub->whereNull('review_status')
+                ->orWhereNotIn('review_status', [
+                    ArticleReviewStatus::Approved->value,
+                    ArticleReviewStatus::Archived->value,
+                ]);
         });
+    }
+
+    /**
+     * @param  Builder<SeoArticle>  $query
+     * @return Builder<SeoArticle>
+     */
+    public static function applyApprovedReviewScope(Builder $query): Builder
+    {
+        return $query->where('review_status', ArticleReviewStatus::Approved->value);
     }
 
     public static function formatWpSyncQueueDateTime(?string $iso): ?string
@@ -1002,8 +1041,7 @@ class ArticleResource extends SeoPanelResource
      */
     public static function buildReviewedArticlesGrouped(): array
     {
-        $query = SeoArticle::query()
-            ->where('is_reviewed', true)
+        $query = static::applyApprovedReviewScope(SeoArticle::query())
             ->whereNotNull('reviewed_at')
             ->whereNotIn('type', ['category', 'product_category'])
             ->where('status', '!=', 'trash')
@@ -1289,7 +1327,7 @@ class ArticleResource extends SeoPanelResource
             && ! SeoAccessControl::isContentManager()
             && ! SeoAccessControl::canAccessManagerFeatures()) {
             $query->where(function (Builder $sub): void {
-                $sub->where('is_reviewed', false)->orWhereNull('is_reviewed');
+                static::applyNotApprovedForPublishScope($sub);
             });
         }
 
@@ -1503,25 +1541,6 @@ class ArticleResource extends SeoPanelResource
         ];
     }
 
-    public static function markArticleReviewed(SeoArticle $article): int
-    {
-        $deletedCount = static::deleteLocalMediaForArticle($article);
-
-        $article->forceFill([
-            'is_reviewed' => true,
-            'reviewed_at' => Carbon::now(),
-        ])->save();
-
-        app(ArticleWpSyncQueueService::class)->clearQueueEntry($article->fresh() ?? $article);
-
-        return $deletedCount;
-    }
-
-    /**
-     * Entry-point duy nhất cho action "Duyệt bài" trên table/list — quyết định action kế tiếp
-     * (submit_review/approve/archive) qua {@see ArticleReviewService::availableActions()} thay vì
-     * phân nhánh role thủ công (content manager vs planner) như trước.
-     */
     public static function runApproveArticleAction(SeoArticle $record): void
     {
         $user = auth()->user();
@@ -1614,8 +1633,8 @@ class ArticleResource extends SeoPanelResource
             return;
         }
 
-        $service = app(SeoProjectApprovalService::class);
-        $alreadySubmitted = $service->contentManagerHasSubmitted($article, $user);
+        $reviewService = app(ArticleReviewService::class);
+        $alreadySubmitted = $reviewService->resolveStatus($article) === ArticleReviewStatus::Approved;
 
         try {
             $result = app(\App\Addons\SeoContentAi\Automation\Contracts\BusinessActionDispatcher::class)->dispatch(
@@ -1676,14 +1695,6 @@ class ArticleResource extends SeoPanelResource
             ]))
             ->success()
             ->send();
-    }
-
-    public static function markArticleUnreviewed(SeoArticle $article): void
-    {
-        $article->forceFill([
-            'is_reviewed' => false,
-            'reviewed_at' => null,
-        ])->save();
     }
 
     /**
@@ -1777,7 +1788,7 @@ class ArticleResource extends SeoPanelResource
         return static::toggleSkipSeoAudit($article);
     }
 
-    private static function deleteLocalMediaForArticle(SeoArticle $article): int
+    public static function deleteLocalMediaForArticle(SeoArticle $article): int
     {
         $mediaRows = SeoMedia::query()
             ->where('article_id', (int) $article->id)
@@ -2170,9 +2181,7 @@ class ArticleResource extends SeoPanelResource
      */
     public static function applySeoAuditCandidateScope(Builder $query): Builder
     {
-        $query->where(function (Builder $sub): void {
-            $sub->where('is_reviewed', false)->orWhereNull('is_reviewed');
-        });
+        static::applyNotApprovedForPublishScope($query);
 
         $query->whereNull('content_archived_at');
 

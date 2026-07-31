@@ -70,7 +70,7 @@ final class ContentProjectGeneratePendingSafetyTest extends TestCase
             'status' => SeoProjectTask::STATUS_COMPLETED,
             'article_id' => 9,
             'article_has_body' => true,
-            'article_is_reviewed' => false,
+            'article_is_approved' => false,
             'lifecycle_phase' => ContentProjectLifecyclePhase::Review->value,
             'successful_execution' => true,
         ]);

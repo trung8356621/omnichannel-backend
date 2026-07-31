@@ -80,6 +80,16 @@ final class AgentWorkspaceContextService
     }
 
     /**
+     * Web-session Agent scopes from RBAC (not Sanctum PAT abilities).
+     *
+     * @return list<string>
+     */
+    public function scopesForAuthenticatedUser(User $user): array
+    {
+        return $this->scopesForUser($user);
+    }
+
+    /**
      * @return list<string>
      */
     private function scopesForUser(User $user): array

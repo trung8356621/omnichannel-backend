@@ -696,6 +696,8 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 \App\Addons\SeoContentAi\Console\AutomationHealthCommand::class,
                 \App\Addons\SeoContentAi\Console\WordpressSyncLeaseWatchdogCommand::class,
                 \App\Addons\SeoContentAi\Console\MigrateSeoArticleReviewsCommand::class,
+                \App\Addons\SeoContentAi\Console\ReportIsReviewedCutoverCommand::class,
+                \App\Addons\SeoContentAi\Console\ReportSeoProjectTaskStatusCommand::class,
                 \App\Addons\SeoContentAi\Console\RepairArchivedArticleActiveTasksCommand::class,
                 \App\Addons\SeoContentAi\Console\AssignWorkflowExecutionRolesCommand::class,
                 \App\Addons\SeoContentAi\Console\WorkflowDoctorCommand::class,
@@ -785,6 +787,10 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                     ->withoutOverlapping(50);
             }
 
+            // Three automation owners — distinct tables, must not claim same occurrence:
+            // 1) automation:dispatch-scheduled → automation_rules (Business Hook)
+            // 2) agent:automations:dispatch-due → seo_agent_automations (Agent Workspace)
+            // 3) seo-content-ai:dispatch-automation-policies → seo_content_project_automation_policies (CP plans)
             $automationScheduleName = 'seo-content-ai:automation-dispatch-scheduled';
             $automationScheduleRegistered = collect($schedule->events())
                 ->contains(static fn ($event): bool => $event->description === $automationScheduleName);

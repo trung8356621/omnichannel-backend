@@ -10,12 +10,13 @@ use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
+use App\Addons\SeoContentAi\Enums\ContentProjectRerunFromStep;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ApproveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\GenerateProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemStepCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier;
-use App\Addons\SeoContentAi\Services\ContentProjectBulkRerunService;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectLifecycle;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Notifications\Notification;
@@ -158,14 +159,14 @@ final class ProjectItemsRelationManager extends RelationManager
                         ->requiresConfirmation()
                         ->action(function ($records) use ($project): void {
                             $ids = $records->map(static fn (SeoProjectTask $t): int => (int) $t->id)->all();
-                            $this->dispatchBulkStep($project, $ids, ContentProjectBulkRerunService::ACTION_OUTLINE);
+                            $this->dispatchBulkStep($project, $ids, ContentProjectRerunFromStep::Outline->value);
                         }),
                     Tables\Actions\BulkAction::make('bulk_regen_article')
                         ->label(__('seo-content-ai::filament.projects.item_action_regen_article'))
                         ->requiresConfirmation()
                         ->action(function ($records) use ($project): void {
                             $ids = $records->map(static fn (SeoProjectTask $t): int => (int) $t->id)->all();
-                            $this->dispatchBulkStep($project, $ids, ContentProjectBulkRerunService::ACTION_ARTICLE);
+                            $this->dispatchBulkStep($project, $ids, ContentProjectRerunFromStep::Article->value);
                         }),
                     Tables\Actions\BulkAction::make('bulk_start_review')
                         ->label(__('seo-content-ai::filament.projects.item_action_start_review'))
@@ -196,7 +197,7 @@ final class ProjectItemsRelationManager extends RelationManager
                         ->action(fn (SeoProjectTask $record) => $this->dispatchBulkStep(
                             $project,
                             [(int) $record->id],
-                            ContentProjectBulkRerunService::ACTION_OUTLINE,
+                            ContentProjectRerunFromStep::Outline->value,
                         )),
                     Tables\Actions\Action::make('regen_article')
                         ->label(__('seo-content-ai::filament.projects.item_action_regen_article'))
@@ -205,7 +206,7 @@ final class ProjectItemsRelationManager extends RelationManager
                         ->action(fn (SeoProjectTask $record) => $this->dispatchBulkStep(
                             $project,
                             [(int) $record->id],
-                            ContentProjectBulkRerunService::ACTION_ARTICLE,
+                            ContentProjectRerunFromStep::Article->value,
                         )),
                     Tables\Actions\Action::make('regen_image')
                         ->label(__('seo-content-ai::filament.projects.item_action_regen_image'))
@@ -317,31 +318,26 @@ final class ProjectItemsRelationManager extends RelationManager
             return;
         }
 
-        $run = SeoProjectRun::query()
-            ->where('project_id', (int) $project->id)
-            ->orderByDesc('id')
-            ->first();
-
-        if (! $run instanceof SeoProjectRun) {
+        $fromStep = ContentProjectRerunFromStep::tryFromMixed($action);
+        if (! $fromStep instanceof ContentProjectRerunFromStep) {
             Notification::make()
-                ->title(__('seo-content-ai::filament.projects.item_regen_needs_execution'))
-                ->warning()
+                ->title('Failed')
+                ->body('Unsupported step action.')
+                ->danger()
                 ->send();
 
             return;
         }
 
-        try {
-            $result = app(ContentProjectBulkRerunService::class)
-                ->execute($run, $project, $filtered, $action, true);
-            Notification::make()
-                ->title($result['success'] ? 'OK' : 'Failed')
-                ->body((string) $result['message'])
-                ->{$result['success'] ? 'success' : 'danger'}()
-                ->send();
-        } catch (\Throwable $e) {
-            Notification::make()->title('Rerun failed')->body($e->getMessage())->danger()->send();
-        }
+        $this->dispatchCommand(
+            new RerunProjectItemStepCommand(
+                (int) $project->id,
+                $filtered,
+                $fromStep,
+                includeDownstream: false,
+            ),
+            $project,
+        );
     }
 
     private function dispatchCommand(object $command, SeoProject $project): void

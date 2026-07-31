@@ -57,7 +57,7 @@ final class SeoAuditScoringIntegrationTest extends TestCase
 
         $this->assertNotContains(SeoScoringRulesRegistry::KEY_H2_MISSING, $keys);
         $this->assertContains(SeoScoringRulesRegistry::KEY_FAQ_MISSING, $keys);
-        $this->assertNotContains(SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD, $keys);
+        $this->assertContains(SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD, $keys);
     }
 
     public function test_filter_label_uses_article_length_target_not_hardcoded_600(): void

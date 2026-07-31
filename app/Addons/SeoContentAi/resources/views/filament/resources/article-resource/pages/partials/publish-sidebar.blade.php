@@ -509,7 +509,7 @@
             @if (! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
                 <div class="text-xs">
                     <span class="text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.article_list.review') }}:</span>
-                    <strong class="{{ $record->is_reviewed ? 'text-emerald-700 dark:text-emerald-300' : 'text-gray-800 dark:text-gray-100' }}">
+                    <strong class="{{ app(\App\Addons\SeoContentAi\Services\ArticleReviewService::class)->isCanonicallyApproved($record) ? 'text-emerald-700 dark:text-emerald-300' : 'text-gray-800 dark:text-gray-100' }}">
                         {{ $this->getReviewStatusLabel() }}
                     </strong>
                     @if ($this->getReviewedAtLabel())

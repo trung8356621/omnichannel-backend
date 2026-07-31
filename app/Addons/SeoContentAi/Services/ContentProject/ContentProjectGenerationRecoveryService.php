@@ -12,7 +12,6 @@ use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectExecutionStatus;
 use App\Support\RuntimeLogger;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 
 /**
  * Recover orphaned Writing/Generating items into Failed (eligible for Run again / Generate pending).
@@ -145,14 +144,11 @@ final class ContentProjectGenerationRecoveryService
                 $this->releaseStaleDispatchIfOwnedBy($item);
             }
 
-            // Orphan writing with no run items — still mark failed.
+            // Orphan writing with no run items — still mark failed (generation, not publish).
             $payload = [
                 'status' => SeoProjectTask::STATUS_FAILED,
             ];
-            if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'last_publish_error')) {
-                // Reuse visible diagnostics column when present (ops "View details" / message).
-                $payload['last_publish_error'] = $reason;
-            }
+            // Do not write last_publish_error — generation failures belong on run_item.error_message.
 
             SeoProjectTask::query()->whereKey($taskId)->update($payload);
             $locked->refresh();

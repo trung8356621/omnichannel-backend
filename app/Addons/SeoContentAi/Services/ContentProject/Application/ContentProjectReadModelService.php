@@ -67,24 +67,32 @@ final class ContentProjectReadModelService
         return SeoProjectTask::query()
             ->where('project_id', (int) $project->getKey())
             ->active()
-            ->with(['article:id,title'])
+            ->with(['article:id,title,status,review_status'])
             ->orderBy('id')
             ->get()
             ->map(function (SeoProjectTask $task) use ($project): ContentProjectItemDto {
                 $articleId = (int) ($task->article_id ?? 0);
+                $article = $task->article;
+                $state = $this->lifecycle->resolveState(
+                    $task,
+                    $article instanceof \App\Addons\SeoContentAi\Models\SeoArticle ? $article : null,
+                );
 
                 return new ContentProjectItemDto(
                     itemRef: ContentProjectPublicRef::item((int) $task->id),
                     projectRef: ContentProjectPublicRef::project((int) $project->getKey()),
                     articleRef: $articleId > 0 ? ContentProjectPublicRef::article($articleId) : null,
-                    lifecycle: $this->lifecycle->resolvePhase($task)->value,
+                    lifecycle: $state->lifecycleState->value,
                     publishQueueStatus: (string) ($task->publish_queue_status ?? 'none'),
                     scheduledPublishAt: $task->scheduled_publish_at?->toIso8601String(),
                     publishRetryCount: (int) ($task->publish_retry_count ?? 0),
                     lastPublishAttemptAt: $task->last_publish_attempt_at?->toIso8601String(),
-                    lastPublishError: $task->last_publish_error !== null ? (string) $task->last_publish_error : null,
+                    lastPublishError: $state->currentErrorSource === \App\Addons\SeoContentAi\Enums\ContentProjectItemErrorSource::Publish
+                        ? $state->currentError
+                        : null,
                     publishPublishedAt: $task->publish_published_at?->toIso8601String(),
                     title: $task->article?->title !== null ? (string) $task->article->title : null,
+                    state: $state->toArray(),
                 );
             })
             ->all();

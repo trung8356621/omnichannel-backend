@@ -2610,6 +2610,8 @@ return [
         'run_type_improve' => 'Improve',
         'execution_month_closed' => 'Month :month has ended; new items cannot be added.',
         'execution_month_closed_short' => '(Month ended — no new items)',
+        'sync_duplicate_input' => 'Task list has duplicate identity (same type + source content). Remove or edit the duplicate rows before saving.',
+        'sync_duplicate_input_row' => 'This row duplicates another row in the form (same type + source content).',
         'notify_new_project_title' => 'You have a new content project',
         'notify_tasks_added_title' => 'Content project has new items',
         'notify_tasks_added_body' => ':project — :count new item(s) added.',

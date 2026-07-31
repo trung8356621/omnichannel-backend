@@ -16,6 +16,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Events\ContentPr
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Events\ContentProjectGenerationRequested;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectBusinessLock;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPreviewToken;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectRerunEligibilityGuard;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectGenerationRecoveryService;
 use App\Addons\SeoContentAi\Services\RunEngine\ContentProjectRunEngine;
@@ -33,6 +34,7 @@ final class RerunProjectItemsHandler extends AbstractPublishingHandler
         private readonly ContentProjectDomainEvents $domainEvents,
         private readonly ContentProjectGenerationRecoveryService $generationRecovery,
         private readonly ContentProjectRunEngine $runEngine,
+        private readonly ContentProjectRerunEligibilityGuard $eligibility,
     ) {
         parent::__construct($tenantGuard, $businessLock, $previewToken);
     }
@@ -76,15 +78,36 @@ final class RerunProjectItemsHandler extends AbstractPublishingHandler
                 }
             }
 
+            // Validate BEFORE startRun / prepareRunQueue / engine.
+            $gate = $this->eligibility->validateFull($project, $itemIds);
+            if (! $gate['ok']) {
+                return ContentProjectActionResult::fail(
+                    ContentProjectActionCodes::VALIDATION_FAILED,
+                    $gate['message'],
+                    $projectId,
+                    metadata: ['rejected' => $gate['rejected']],
+                );
+            }
+            $itemIds = $gate['eligible_ids'];
+
             $settings = [
                 'task_ids' => $itemIds,
                 'rerun' => true,
+                'rerun_scope' => 'full',
                 'use_php_engine' => true,
             ];
 
             $run = $this->businessLock->withLock(
                 $this->businessLock->projectGenerate($projectId),
                 function () use ($project, $projectId, $command, $itemIds, $settings): SeoProjectRun {
+                    foreach ($itemIds as $itemId) {
+                        if ($this->eligibility->hasConflictingActiveExecution($projectId, (int) $itemId)) {
+                            throw new InvalidArgumentException(
+                                'Active conflicting execution — full rerun blocked.',
+                            );
+                        }
+                    }
+
                     $run = $this->workflowRunService->startRun($project, $command->mode, $settings);
                     $limit = $command->mode === SeoProjectRun::MODE_TEST
                         ? SeoProjectWorkflowRunService::TEST_RUN_LIMIT
@@ -121,6 +144,7 @@ final class RerunProjectItemsHandler extends AbstractPublishingHandler
                     metadata: [
                         'execution_ref' => ContentProjectPublicRef::execution((int) $run->getKey()),
                         'rerun' => true,
+                        'engine_started' => false,
                     ],
                 );
             }

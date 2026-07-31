@@ -16,4 +16,5 @@ enum PromptHookErrorCode: string
     case HookArticleForbidden = 'HOOK_ARTICLE_FORBIDDEN';
     case HookArticleNotFound = 'HOOK_ARTICLE_NOT_FOUND';
     case HookManifestInvalid = 'HOOK_MANIFEST_INVALID';
+    case HookDuplicateKey = 'HOOK_DUPLICATE_KEY';
 }

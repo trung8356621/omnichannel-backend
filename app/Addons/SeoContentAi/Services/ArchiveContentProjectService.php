@@ -543,26 +543,14 @@ final class ArchiveContentProjectService
             return true;
         }
 
-        if (! (bool) ($article->is_reviewed ?? false)) {
-            return false;
-        }
-
-        $reviewStatus = ArticleReviewStatus::tryFromString((string) ($article->review_status ?? ''));
-
-        return $reviewStatus === ArticleReviewStatus::Approved
-            || $reviewStatus === ArticleReviewStatus::Archived;
+        return ArticleReviewStatus::tryFromString((string) ($article->review_status ?? ''))
+            === ArticleReviewStatus::Approved;
     }
 
     private function isArticleApproved(SeoArticle $article): bool
     {
-        if ((bool) ($article->is_reviewed ?? false)) {
-            return true;
-        }
-
-        $reviewStatus = ArticleReviewStatus::tryFromString((string) ($article->review_status ?? ''));
-
-        return $reviewStatus === ArticleReviewStatus::Approved
-            || $reviewStatus === ArticleReviewStatus::Archived;
+        return ArticleReviewStatus::tryFromString((string) ($article->review_status ?? ''))
+            === ArticleReviewStatus::Approved;
     }
 
     private function resolveArchiveHeader(SeoProject $project): SeoProjectArchive

@@ -19,7 +19,6 @@ use App\Addons\SeoContentAi\Http\Controllers\ArticlePreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleRevisionController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoPreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleWpEditRedirectController;
-use App\Addons\SeoContentAi\Http\Controllers\GlobalAiChatController;
 use App\Addons\SeoContentAi\Http\Controllers\GoogleSearchConsoleOAuthController;
 use App\Addons\SeoContentAi\Http\Controllers\KeywordReviewController;
 use App\Addons\SeoContentAi\Http\Controllers\PromptHookExecuteController;
@@ -480,14 +479,8 @@ class SeoPanelProvider extends PanelProvider
                     ->name('seo.team-messages.store');
             });
 
-        Route::middleware($seoWebApiMiddleware)
-            ->prefix('api/ai')
-            ->group(function (): void {
-                Route::get('/chat/models', [GlobalAiChatController::class, 'models'])
-                    ->name('seo.global-ai-chat.models');
-                Route::post('/chat', [GlobalAiChatController::class, 'store'])
-                    ->name('seo.global-ai-chat.store');
-            });
+        // Global AI Chat HTTP API retired — Agent Workspace is sole chat/execution surface.
+        // Popup Team + star launcher remain; dead send()/loadModels() must not call removed routes.
 
         Route::middleware($seoWebApiMiddleware)
             ->prefix('seo/oauth/google-search-console')

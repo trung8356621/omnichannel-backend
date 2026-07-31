@@ -150,7 +150,7 @@ final class SeoScoringRulesRegistry
     public static function isRuleFilterable(string $key): bool
     {
         $normalized = trim($key);
-        if ($normalized === '' || $normalized === self::KEY_MISSING_FOCUS_KEYWORD) {
+        if ($normalized === '') {
             return false;
         }
 
@@ -428,8 +428,7 @@ final class SeoScoringRulesRegistry
         return [
             self::KEY_MISSING_FOCUS_KEYWORD => [
                 'category' => 'keyword',
-                // Keyword chính = quyết định người dùng — không filter/issue trên SEO Audit.
-                'filterable' => false,
+                'filterable' => true,
                 'short_label' => __('seo-content-ai::filament.articles_optimal.rule_short.missing_focus_keyword'),
                 'violation_keys' => ['seo.missing_focus_keyword', 'missing_focus_keyword'],
             ],

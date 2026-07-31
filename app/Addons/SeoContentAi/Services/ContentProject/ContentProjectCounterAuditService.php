@@ -38,7 +38,7 @@ final class ContentProjectCounterAuditService
             ->where('project_id', $projectId)
             ->active()
             ->where('status', '!=', SeoProjectTask::STATUS_CANCELLED)
-            ->with(['article:id,title,is_reviewed,status,last_ai_content_at'])
+            ->with(['article:id,title,review_status,status,last_ai_content_at'])
             ->orderBy('id')
             ->get();
 

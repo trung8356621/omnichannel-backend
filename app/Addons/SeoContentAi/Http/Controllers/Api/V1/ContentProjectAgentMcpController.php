@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Http\Controllers\Api\V1;
 
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\AgentExecutionContext;
+use App\Addons\SeoContentAi\Services\ContentProject\Agent\AgentScopeEvaluator;
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentGateway;
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentSessionService;
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\Mcp\ContentProjectMcpServer;
@@ -18,23 +19,12 @@ use InvalidArgumentException;
 
 final class ContentProjectAgentMcpController extends Controller
 {
-    /** @var list<string> */
-    private const SCOPES = [
-        'content-project:read',
-        'content-project:write',
-        'content-project:generate',
-        'content-project:review',
-        'content-project:schedule',
-        'content-project:publish',
-        'content-project:archive',
-        'content-project:admin',
-    ];
-
     public function __construct(
         private readonly ContentProjectMcpServer $mcpServer,
         private readonly ContentProjectMcpToolCatalog $toolCatalog,
         private readonly ContentProjectAgentGateway $gateway,
         private readonly ContentProjectAgentSessionService $sessions,
+        private readonly AgentScopeEvaluator $scopeEvaluator,
     ) {}
 
     public function tools(Request $request): JsonResponse
@@ -176,19 +166,7 @@ final class ContentProjectAgentMcpController extends Controller
      */
     private function resolveScopes(Request $request): array
     {
-        $user = $request->user();
-        if ($user === null) {
-            return [];
-        }
-
-        $scopes = [];
-        foreach (self::SCOPES as $scope) {
-            if ($user->tokenCan($scope)) {
-                $scopes[] = $scope;
-            }
-        }
-
-        return $scopes;
+        return $this->scopeEvaluator->resolveForRequest($request);
     }
 
     private function statusFor(string $code): int

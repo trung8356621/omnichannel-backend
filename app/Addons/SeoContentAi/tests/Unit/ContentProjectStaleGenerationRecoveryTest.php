@@ -162,6 +162,9 @@ final class ContentProjectStaleGenerationRecoveryTest extends TestCase
 
         $generate = (string) file_get_contents((new ReflectionClass(GenerateProjectItemsHandler::class))->getFileName());
         self::assertStringContainsString('generationRecovery->reconcileProject', $generate);
+        self::assertStringContainsString('runEngine->start', $generate);
+        self::assertStringContainsString("'use_php_engine' => true", $generate);
+        self::assertStringContainsString('content_project.generate_started', $generate);
 
         $rerun = (string) file_get_contents((new ReflectionClass(RerunProjectItemsHandler::class))->getFileName());
         self::assertStringContainsString('recoverTaskIfStale', $rerun);

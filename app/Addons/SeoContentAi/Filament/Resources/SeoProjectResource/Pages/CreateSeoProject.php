@@ -112,6 +112,11 @@ class CreateSeoProject extends SeoCreateRecord
         $projectSiteId = $siteId > 0 ? $siteId : null;
         $sanitized = app(SeoProjectTaskSyncService::class)->sanitizeTasksData($tasksData, $projectSiteId);
 
+        $projectStub = new SeoProject;
+        $projectStub->id = 0;
+        $projectStub->site_id = $projectSiteId;
+        app(SeoProjectTaskSyncService::class)->assertNoDuplicateTasksData($projectStub, is_array($tasksData) ? $tasksData : []);
+
         app(SeoProjectTaskSyncService::class)->assertWithinMonthlyLimit($data['month'], $sanitized);
 
         $data['total_tasks'] = count($sanitized);

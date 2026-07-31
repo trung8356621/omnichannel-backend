@@ -13,6 +13,10 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rules\File;
 use Throwable;
 
+/**
+ * @deprecated HTTP routes removed — Agent Workspace is sole chat/execution surface.
+ * Class retained temporarily for reference / possible DI leftovers; do not re-register.
+ */
 final class GlobalAiChatController extends Controller
 {
     public function models(GlobalAiChatService $chat): JsonResponse

@@ -4,8 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers;
 
-use App\Addons\SeoContentAi\Enums\ContentProjectLifecyclePhase;
-use App\Addons\SeoContentAi\Enums\ContentProjectPublishQueueStatus;
+use App\Addons\SeoContentAi\Enums\ContentProjectItemAction;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveProjectItemsCommand;
@@ -16,9 +15,8 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentP
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPreviewToken;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
 use App\Addons\SeoContentAi\Services\SeoProjectArchiveService;
-use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectLifecycle;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemActionGuard;
 use InvalidArgumentException;
-use RuntimeException;
 
 /**
  * Item-level archive (not Archive Project). Keeps WP post; cleans workspace artifacts via archive policy.
@@ -30,7 +28,7 @@ final class ArchiveProjectItemsHandler extends AbstractPublishingHandler
         ContentProjectBusinessLock $businessLock,
         ContentProjectPreviewToken $previewToken,
         private readonly SeoProjectArchiveService $archiveService,
-        private readonly ContentProjectLifecycle $lifecycle,
+        private readonly ContentProjectItemActionGuard $actionGuard = new ContentProjectItemActionGuard,
     ) {
         parent::__construct($tenantGuard, $businessLock, $previewToken);
     }
@@ -145,19 +143,15 @@ final class ArchiveProjectItemsHandler extends AbstractPublishingHandler
         $tasks = SeoProjectTask::query()
             ->where('project_id', $projectId)
             ->whereIn('id', $itemIds)
+            ->with(['article'])
             ->get();
 
         foreach ($tasks as $task) {
-            $phase = $this->lifecycle->resolvePhase($task);
-            if ($phase === ContentProjectLifecyclePhase::Generating) {
-                throw new RuntimeException('Cannot archive item while AI generation is active.');
-            }
-
-            $queue = ContentProjectPublishQueueStatus::tryFrom((string) ($task->publish_queue_status ?? ''))
-                ?? ContentProjectPublishQueueStatus::None;
-            if ($queue === ContentProjectPublishQueueStatus::Processing) {
-                throw new RuntimeException('Cannot archive item while publishing is processing.');
-            }
+            $this->actionGuard->assertCan(
+                ContentProjectItemAction::Archive,
+                $task,
+                $task->relationLoaded('article') ? $task->article : null,
+            );
         }
     }
 }

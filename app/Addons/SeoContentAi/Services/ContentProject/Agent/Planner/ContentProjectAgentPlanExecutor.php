@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Models\ContentProjectAgentPlanStep;
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\AgentCapabilityResult;
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\AgentErrorCodes;
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\AgentExecutionContext;
+use App\Addons\SeoContentAi\Services\ContentProject\Agent\AgentScopeEvaluator;
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\ContentProjectAgentGateway;
 use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectMetricKeys;
 use App\Addons\SeoContentAi\Services\ContentProject\Operations\ContentProjectOpsMetrics;
@@ -49,6 +50,7 @@ final class ContentProjectAgentPlanExecutor
         private readonly ContentProjectAgentApprovalService $approvals,
         private readonly ContentProjectAgentBudgetGuard $budgetGuard,
         private readonly ContentProjectOpsMetrics $metrics,
+        private readonly AgentScopeEvaluator $scopeEvaluator,
     ) {}
 
     public function processNext(string $planRef): void
@@ -443,6 +445,13 @@ final class ContentProjectAgentPlanExecutor
             ? \App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectPublicRef::site((int) $plan->site_id)
             : '';
 
+        $resolved = is_array($plan->resolved_context) ? $plan->resolved_context : [];
+        $scopes = $this->scopeEvaluator->normalizeStoredScopes($resolved['scopes'] ?? []);
+
+        $actorUserId = isset($resolved['resolved_actor_user_id'])
+            ? (int) $resolved['resolved_actor_user_id']
+            : null;
+
         return AgentExecutionContext::fromArray([
             'actor_ref' => (string) ($plan->created_by_ref ?? 'agent:plan_executor'),
             'actor_type' => 'agent',
@@ -451,7 +460,8 @@ final class ContentProjectAgentPlanExecutor
             'request_ref' => 'plan-exec:'.(string) $plan->public_ref,
             'session_ref' => $plan->session_ref,
             'resolved_site_id' => $plan->site_id !== null ? (int) $plan->site_id : null,
-            'scopes' => ['content-project:write', 'content-project:admin'],
+            'resolved_actor_user_id' => $actorUserId !== null && $actorUserId > 0 ? $actorUserId : null,
+            'scopes' => $scopes,
         ]);
     }
 }

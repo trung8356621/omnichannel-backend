@@ -35,6 +35,9 @@ final class ArticleReviewServiceTest extends TestCase
         self::assertTrue($ref->hasMethod('resolveStatus'));
         self::assertTrue($ref->hasMethod('history'));
         self::assertTrue($ref->hasMethod('toApiPayload'));
+        self::assertTrue($ref->hasMethod('ensureApproved'));
+        self::assertTrue($ref->hasMethod('isCanonicallyApproved'));
+        self::assertFalse($ref->hasMethod('isReviewedMirrorFor'));
     }
 
     public function test_transitions_map_matches_the_documented_workflow(): void
@@ -127,37 +130,23 @@ final class ArticleReviewServiceTest extends TestCase
 
         $article = new SeoArticle([
             'review_status' => 'approved',
-            'is_reviewed' => false,
             'content_archived_at' => null,
         ]);
 
         self::assertSame(ArticleReviewStatus::Approved, $service->resolveStatus($article));
     }
 
-    public function test_resolve_status_falls_back_to_archived_when_content_archived_at_is_set(): void
+    public function test_resolve_status_ignores_content_archived_at_for_review_workflow(): void
     {
         $service = $this->makeService();
 
         $article = new SeoArticle([
             'review_status' => null,
-            'is_reviewed' => true,
             'content_archived_at' => Carbon::now(),
         ]);
 
-        self::assertSame(ArticleReviewStatus::Archived, $service->resolveStatus($article));
-    }
-
-    public function test_resolve_status_falls_back_to_approved_when_is_reviewed_is_true(): void
-    {
-        $service = $this->makeService();
-
-        $article = new SeoArticle([
-            'review_status' => null,
-            'is_reviewed' => true,
-            'content_archived_at' => null,
-        ]);
-
-        self::assertSame(ArticleReviewStatus::Approved, $service->resolveStatus($article));
+        // content_archived_at is CP archive — not ArticleReviewStatus::Archived.
+        self::assertSame(ArticleReviewStatus::Draft, $service->resolveStatus($article));
     }
 
     public function test_resolve_status_defaults_to_draft_when_nothing_is_set(): void
@@ -166,11 +155,33 @@ final class ArticleReviewServiceTest extends TestCase
 
         $article = new SeoArticle([
             'review_status' => null,
-            'is_reviewed' => false,
             'content_archived_at' => null,
         ]);
 
         self::assertSame(ArticleReviewStatus::Draft, $service->resolveStatus($article));
+    }
+
+    public function test_is_canonically_approved_only_when_review_status_is_approved(): void
+    {
+        $service = $this->makeService();
+
+        self::assertTrue($service->isCanonicallyApproved(new SeoArticle(['review_status' => 'approved'])));
+        self::assertFalse($service->isCanonicallyApproved(new SeoArticle(['review_status' => 'archived'])));
+        self::assertFalse($service->isCanonicallyApproved(new SeoArticle(['review_status' => 'pending_review'])));
+        self::assertFalse($service->isCanonicallyApproved(new SeoArticle(['review_status' => null])));
+    }
+
+    public function test_archived_is_not_canonically_approved_even_with_legacy_content_archived_at(): void
+    {
+        $service = $this->makeService();
+
+        $article = new SeoArticle([
+            'review_status' => 'archived',
+            'content_archived_at' => Carbon::now(),
+        ]);
+
+        self::assertFalse($service->isCanonicallyApproved($article));
+        self::assertSame(ArticleReviewStatus::Archived, $service->resolveStatus($article));
     }
 
     /**
@@ -225,11 +236,6 @@ final class ArticleReviewServiceTest extends TestCase
         self::assertSame([], $service->availableActions($article, $contentManager));
     }
 
-    /**
-     * ArticleReviewService giờ đòi hỏi SeoProjectTaskLifecycleService (detach task khi archive
-     * — xem `ArticleReviewArchiveDetachesTaskTest`). Test này chỉ chạm resolveStatus/availableActions
-     * (không gọi performAction), nên dependency thật không hit DB thật.
-     */
     private function makeService(): ArticleReviewService
     {
         return new ArticleReviewService(new SeoProjectTaskLifecycleService(new SeoProjectTaskEventRecorder));

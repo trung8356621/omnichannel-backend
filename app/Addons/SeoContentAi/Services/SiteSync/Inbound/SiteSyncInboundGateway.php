@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services\SiteSync\Inbound;
 use App\Addons\SeoContentAi\Models\SiteSync\SeoSiteSyncBatch;
 use App\Addons\SeoContentAi\Services\SiteSync\Contracts\SiteSyncBatchData;
 use App\Addons\SeoContentAi\Services\SiteSync\Contracts\SiteSyncSchema;
+use App\Addons\SeoContentAi\Services\SiteSync\Cutover\SiteSyncCutoverStateService;
 use App\Addons\SeoContentAi\Services\SiteSync\Orchestration\SiteSyncFeatureFlags;
 use App\Addons\SeoContentAi\Services\SiteSync\Reconciliation\SiteSyncBatchReconciler;
 use App\Addons\SeoContentAi\Services\SyncDomainContentService;
@@ -22,6 +23,7 @@ final class SiteSyncInboundGateway
         private readonly SiteSyncStagingWriter $staging,
         private readonly SiteSyncBatchReconciler $reconciler,
         private readonly SiteSyncFeatureFlags $flags,
+        private readonly SiteSyncCutoverStateService $cutover,
         private readonly SyncDomainContentService $legacySync,
     ) {}
 
@@ -60,7 +62,9 @@ final class SiteSyncInboundGateway
     }
 
     /**
-     * TTL-bound compatibility: stage V2 when enabled, always keep legacy import for cutover.
+     * Compat push-content: legacy import owns article body/lifecycle.
+     * Links/keywords/scores enrich only for non-V2-writer shadow sites.
+     * V2 writers must use delta-event / snapshot-callback for those layers (no dual-apply).
      *
      * @param  list<array<string, mixed>>  $items
      * @return array<string, mixed>
@@ -69,7 +73,15 @@ final class SiteSyncInboundGateway
     {
         $legacy = $this->legacySync->importPushedItems($site, $items);
 
-        if (! $this->flags->compatPushEnabled()) {
+        if ($this->cutover->isV2Writer($site) || ! $this->flags->compatPushEnabled()) {
+            if ($this->cutover->isV2Writer($site)) {
+                $legacy['site_sync_v2'] = [
+                    'compat' => true,
+                    'skipped_enrich' => true,
+                    'reason' => 'v2_writer_uses_delta_or_snapshot',
+                ];
+            }
+
             return $legacy;
         }
 

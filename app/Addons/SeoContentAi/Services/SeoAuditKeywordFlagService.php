@@ -84,7 +84,6 @@ final class SeoAuditKeywordFlagService
         return array_values(array_filter(
             array_map(static fn (mixed $key): string => trim((string) $key), $selectedRuleKeys),
             static fn (string $key): bool => $key !== ''
-                && $key !== SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD
                 && SeoScoringRulesRegistry::isRuleFilterable($key),
         ));
     }
@@ -195,12 +194,12 @@ final class SeoAuditKeywordFlagService
 
         $keywordFlags = $this->collectKeywordFlagsForArticle($article);
         $hasKeywordFlags = $keywordFlags['warning_count'] > 0 || $keywordFlags['danger_count'] > 0;
+        $hasFocusKeyword = $this->auditScanService->hasCanonicalFocusKeyword($article);
         $focusKeyword = trim((string) (
             $article->articleMetas
                 ->firstWhere('meta_key', 'seo_focus_keyword')
                 ?->meta_value ?? ''
         ));
-        $hasFocusKeyword = $focusKeyword !== '';
 
         $selectedRuleKeys = $this->excludeNonAuditFilterRules($selectedRuleKeys);
 
@@ -221,6 +220,7 @@ final class SeoAuditKeywordFlagService
         }
 
         $sources = [];
+        // keyword_review chỉ khi không chọn scoring rules (default audit surface).
         if (! $hasScoringSelection && $hasKeywordFlags) {
             $sources[] = 'keyword_review';
         }
@@ -228,22 +228,35 @@ final class SeoAuditKeywordFlagService
             $sources[] = 'seo_rules';
         }
 
-        // Audit UI: không hiện issue "thiếu từ khóa chính".
-        $matchedKeys = array_values(array_filter(
+        $matchedKeys = array_values(array_map(
+            static fn (mixed $key): string => (string) $key,
             $assessment['matched_rule_keys'] ?? [],
-            static fn (mixed $key): bool => (string) $key !== SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD,
         ));
-        $activeViolationsForAudit = array_values(array_filter(
-            $assessment['active_violations'] ?? [],
-            static fn (array $item): bool => (string) ($item['key'] ?? '') !== SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD,
-        ));
+        if (
+            in_array(SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD, $selectedRuleKeys, true)
+            && ! $hasFocusKeyword
+            && ! in_array(SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD, $matchedKeys, true)
+        ) {
+            $matchedKeys[] = SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD;
+        }
+
         $reasonLabels = array_values(array_filter(
             array_map(
                 static fn (array $item): string => (string) ($item['label'] ?? ''),
-                $activeViolationsForAudit,
+                $assessment['active_violations'] ?? [],
             ),
             static fn (string $label): bool => $label !== '',
         ));
+        if (
+            in_array(SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD, $matchedKeys, true)
+            && ! in_array(
+                (string) __('seo-content-ai::filament.articles_optimal.rule_short.missing_focus_keyword'),
+                $reasonLabels,
+                true,
+            )
+        ) {
+            $reasonLabels[] = (string) __('seo-content-ai::filament.articles_optimal.rule_short.missing_focus_keyword');
+        }
 
         return [
             'id' => (int) $article->id,
@@ -337,6 +350,11 @@ final class SeoAuditKeywordFlagService
 
         foreach ($selectedRuleKeys as $ruleKey) {
             if ($ruleKey === SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD) {
+                // Canonical thiếu keyword ≠ keyword_review warning/danger.
+                if (! $this->auditScanService->hasCanonicalFocusKeyword($article)) {
+                    return true;
+                }
+
                 continue;
             }
 

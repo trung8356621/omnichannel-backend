@@ -507,6 +507,29 @@ final class SeoProjectWorkflowRunService
         bool $forceRetry = false,
     ): array
     {
+        $preservePublished = app(\App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectRerunEligibilityGuard::class)
+            ->isPublishedLifecycle($task);
+        $publishedSnapshot = $preservePublished ? [
+            'task_status' => (string) $task->status,
+            'publish_queue_status' => (string) ($task->publish_queue_status ?? 'none'),
+            'publish_published_at' => $task->publish_published_at,
+        ] : null;
+        $revision = null;
+        if ($preservePublished) {
+            $articleId = (int) ($task->article_id ?? 0);
+            $article = $articleId > 0 ? SeoArticle::query()->find($articleId) : null;
+            if ($article instanceof SeoArticle) {
+                $revision = app(SeoArticleRevisionService::class)->captureAfterSave(
+                    $article,
+                    (string) ($article->title ?? ''),
+                    (string) ($article->content ?? ''),
+                    [],
+                    auth()->id() !== null ? (int) auth()->id() : null,
+                    force: true,
+                );
+            }
+        }
+
         $action = $this->runItemService->resolveAction($task);
 
         $claim = $this->runItemService->claimForExecution(
@@ -581,6 +604,11 @@ final class SeoProjectWorkflowRunService
 
         $scope = $this->articleScopeForProject($projectSiteId);
 
+        $runSettings = is_array($run->settings) ? $run->settings : [];
+        $fromStepRaw = $runSettings['rerun_from_step'] ?? null;
+        $fromStep = \App\Addons\SeoContentAi\Enums\ContentProjectRerunFromStep::tryFromMixed($fromStepRaw);
+        $includeDownstream = (bool) ($runSettings['rerun_include_downstream'] ?? false);
+
         try {
             $context = $this->inputResolver->resolveForProjectTask($task, $scope);
 
@@ -591,9 +619,19 @@ final class SeoProjectWorkflowRunService
                 'article_id' => (int) ($task->article_id ?? 0),
                 'run_item_id' => (int) $runItem->id,
                 'attempt' => (int) $runItem->attempt,
+                'rerun_from_step' => $fromStep?->value,
             ]);
 
-            $result = $this->articleRunner->runPublishWorkflowForContext($context, $taskSiteId);
+            if ($fromStep instanceof \App\Addons\SeoContentAi\Enums\ContentProjectRerunFromStep) {
+                $result = $this->articleRunner->runRerunFromStepForContext(
+                    $context,
+                    $taskSiteId,
+                    $fromStep,
+                    $includeDownstream,
+                );
+            } else {
+                $result = $this->articleRunner->runPublishWorkflowForContext($context, $taskSiteId);
+            }
             $steps = is_array($result['steps'] ?? null) ? $result['steps'] : [];
             $stepStats = $this->summarizeStepStats($steps);
             $ranAt = now();
@@ -615,7 +653,11 @@ final class SeoProjectWorkflowRunService
                     if (! $bind['ok']) {
                         $errorCode = ContentProjectErrorCode::tryFrom((string) $bind['error_code'])
                             ?? ContentProjectErrorCode::ArticleRelationConflict;
-                        $this->markTaskFailed($task, (int) ($task->article_id ?? 0) ?: null);
+                        if (! $preservePublished) {
+                            $this->markTaskFailed($task, (int) ($task->article_id ?? 0) ?: null);
+                        } else {
+                            $this->restorePublishedLifecycle($task, $publishedSnapshot, $revision);
+                        }
                         $this->runItemService->markFailed(
                             $runItem,
                             $errorCode,
@@ -644,7 +686,11 @@ final class SeoProjectWorkflowRunService
                     }
                 }
 
-                $this->markTaskCompleted($task, $articleId > 0 ? $articleId : (int) ($task->article_id ?? 0));
+                if ($preservePublished) {
+                    $this->restorePublishedLifecycle($task, $publishedSnapshot, null);
+                } else {
+                    $this->markTaskCompleted($task, $articleId > 0 ? $articleId : (int) ($task->article_id ?? 0));
+                }
 
                 $this->runItemService->markSuccess(
                     $runItem,
@@ -712,7 +758,11 @@ final class SeoProjectWorkflowRunService
                 $task->refresh();
             }
 
-            $this->markTaskFailed($task, $failedArticleId > 0 ? $failedArticleId : null);
+            if ($preservePublished) {
+                $this->restorePublishedLifecycle($task, $publishedSnapshot, $revision);
+            } else {
+                $this->markTaskFailed($task, $failedArticleId > 0 ? $failedArticleId : null);
+            }
             $failedStep = is_array($result['failed_step'] ?? null) ? $result['failed_step'] : null;
             $error = $this->errorFormatter->fromWorkflowFailure((string) $result['message'], $failedStep);
 
@@ -747,7 +797,11 @@ final class SeoProjectWorkflowRunService
             ]);
 
             $keptArticleId = (int) ($task->article_id ?? 0);
-            $this->markTaskFailed($task, $keptArticleId > 0 ? $keptArticleId : null);
+            if ($preservePublished) {
+                $this->restorePublishedLifecycle($task, $publishedSnapshot, $revision);
+            } else {
+                $this->markTaskFailed($task, $keptArticleId > 0 ? $keptArticleId : null);
+            }
             $error = $this->errorFormatter->fromThrowable($exception);
             $this->runItemService->markFailed(
                 $runItem,
@@ -1208,6 +1262,34 @@ final class SeoProjectWorkflowRunService
             SeoProjectTask::STATUS_WRITING,
             $existingArticleId > 0 ? $existingArticleId : null,
         );
+    }
+
+    /**
+     * @param  array{task_status: string, publish_queue_status: string, publish_published_at: mixed}|null  $snapshot
+     */
+    private function restorePublishedLifecycle(
+        SeoProjectTask $task,
+        ?array $snapshot,
+        ?\App\Addons\SeoContentAi\Models\SeoArticleRevision $revision,
+    ): void {
+        if ($revision instanceof \App\Addons\SeoContentAi\Models\SeoArticleRevision) {
+            $articleId = (int) ($task->article_id ?? 0);
+            $article = $articleId > 0 ? SeoArticle::query()->find($articleId) : null;
+            if ($article instanceof SeoArticle) {
+                app(SeoArticleRevisionService::class)->restoreRevisionToArticle($article, $revision);
+            }
+        }
+
+        if ($snapshot === null) {
+            return;
+        }
+
+        SeoProjectTask::query()->whereKey((int) $task->id)->update([
+            'status' => $snapshot['task_status'],
+            'publish_queue_status' => $snapshot['publish_queue_status'],
+            'publish_published_at' => $snapshot['publish_published_at'],
+        ]);
+        $task->refresh();
     }
 
     private function markTaskFailed(SeoProjectTask $task, ?int $articleId = null): void

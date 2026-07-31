@@ -168,7 +168,7 @@ final class ContentProjectOperationsCenterTest extends TestCase
         $pageSource = (string) file_get_contents(
             (new ReflectionClass(ContentProjectOperationsCenter::class))->getFileName(),
         );
-        self::assertStringContainsString('CONTENT_PROJECT_OPERATIONS.md', $pageSource);
+        self::assertStringContainsString('OPERATIONS_AND_OBSERVABILITY.md', $pageSource);
 
         $keysSource = (string) file_get_contents(
             (new ReflectionClass(ContentProjectMetricKeys::class))->getFileName(),
@@ -179,7 +179,7 @@ final class ContentProjectOperationsCenterTest extends TestCase
         $docPath = null;
         $dir = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            $candidate = $dir.DIRECTORY_SEPARATOR.'docs'.DIRECTORY_SEPARATOR.'CONTENT_PROJECT_OPERATIONS.md';
+            $candidate = $dir.DIRECTORY_SEPARATOR.'docs'.DIRECTORY_SEPARATOR.'modules'.DIRECTORY_SEPARATOR.'OPERATIONS_AND_OBSERVABILITY.md';
             if (is_file($candidate)) {
                 $docPath = $candidate;
                 break;
@@ -188,7 +188,7 @@ final class ContentProjectOperationsCenterTest extends TestCase
         }
 
         if ($docPath === null) {
-            self::markTestSkipped('docs/CONTENT_PROJECT_OPERATIONS.md not present on this host');
+            self::markTestSkipped('docs/modules/OPERATIONS_AND_OBSERVABILITY.md not present on this host');
         }
 
         $body = (string) file_get_contents($docPath);

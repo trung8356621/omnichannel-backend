@@ -114,7 +114,11 @@ final class ContentProjectAgentPlanner
                 'current_step_index' => 0,
                 'total_steps' => count($draft->steps),
                 'input_payload' => $constraints,
-                'resolved_context' => ['template_key' => $draft->templateKey],
+                'resolved_context' => [
+                    'template_key' => $draft->templateKey,
+                    'scopes' => array_values($context->scopes),
+                    'resolved_actor_user_id' => $context->resolvedActorUserId,
+                ],
                 'summary' => $draft->estimated,
                 'requires_user_confirmation' => $draft->requiresPlanConfirmation,
                 'confirmation_status' => $draft->requiresPlanConfirmation ? 'pending' : null,

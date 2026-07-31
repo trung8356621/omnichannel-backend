@@ -88,13 +88,13 @@ final class ContentProjectActiveExecutionLifecycleTest extends TestCase
         self::assertSame(ContentProjectArticleRowStatus::CODE_RUNNING, $status->code);
     }
 
-    public function test_resolver_sot_wired_into_rerun_and_bulk(): void
+    public function test_resolver_sot_wired_into_rerun_eligibility(): void
     {
-        $rerun = (string) file_get_contents(
-            dirname(__DIR__, 2).'/Services/ContentProject/ContentProjectStepRerunService.php',
+        $eligibility = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/ContentProject/Application/Support/ContentProjectRerunEligibilityGuard.php',
         );
-        $bulk = (string) file_get_contents(
-            dirname(__DIR__, 2).'/Services/ContentProjectBulkRerunService.php',
+        $handler = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/ContentProject/Application/Handlers/RerunProjectItemStepHandler.php',
         );
         $retry = (string) file_get_contents(
             dirname(__DIR__, 2).'/Services/SeoProjectWorkflowStepRetryService.php',
@@ -103,13 +103,9 @@ final class ContentProjectActiveExecutionLifecycleTest extends TestCase
             dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php',
         );
 
-        self::assertStringContainsString('ContentProjectActiveExecutionResolver', $rerun);
-        self::assertStringContainsString('ContentProjectExecutionFinalizer', $rerun);
-        self::assertStringContainsString('finalizeLeftoverPending', $rerun);
-        self::assertStringContainsString('lockForUpdate', $rerun);
-        self::assertStringContainsString('content_project.rerun_blocked_active', $rerun);
-        self::assertStringContainsString('abandonStaleActiveSteps', $rerun);
-        self::assertStringContainsString('ContentProjectActiveExecutionResolver', $bulk);
+        self::assertStringContainsString('hasConflictingActiveExecution', $eligibility);
+        self::assertStringContainsString('Active conflicting execution', $eligibility);
+        self::assertStringContainsString('eligibility->validateStep', $handler);
         self::assertStringContainsString('ContentProjectActiveExecutionResolver', $retry);
         self::assertStringContainsString('whereNull(\'finished_at\')', $retry);
         self::assertStringContainsString('getProjectWorkspaceUrl', $view);
@@ -159,14 +155,13 @@ final class ContentProjectActiveExecutionLifecycleTest extends TestCase
         self::assertContains('blocked', ContentProjectExecutionStatus::terminalStatuses());
     }
 
-    public function test_phase20_rerun_still_append_only(): void
+    public function test_phase_b_step_rerun_creates_engine_run_not_append_legacy(): void
     {
-        $src = (string) file_get_contents(
-            dirname(__DIR__, 2).'/Services/ContentProject/ContentProjectStepRerunService.php',
+        $handler = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/ContentProject/Application/Handlers/RerunProjectItemStepHandler.php',
         );
-        self::assertStringContainsString("execution_type' => 'rerun'", $src);
-        self::assertStringContainsString('step:rr:', $src);
-        self::assertStringContainsString('executePreparedStepItem', $src);
-        self::assertStringNotContainsString('prepareStepRunItem', $src);
+        self::assertStringContainsString('prepareRunQueue', $handler);
+        self::assertStringContainsString('runEngine->start', $handler);
+        self::assertStringContainsString("'rerun' => true", $handler);
     }
 }

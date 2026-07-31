@@ -149,6 +149,11 @@ final class ContentProjectCapabilityRegistry
                     ContentProjectLifecyclePhase::Approved->value,
                 ],
                 confirmation: false,
+                presentation: [
+                    'internal' => true,
+                    'agent_exposed' => false,
+                    'mcp_exposed' => false,
+                ],
             ),
             $this->cap(
                 'content_project.add_items',
@@ -494,6 +499,10 @@ final class ContentProjectCapabilityRegistry
                 ],
                 phases: null,
                 confirmation: true,
+                presentation: [
+                    'agent_exposed' => true,
+                    'mcp_exposed' => false,
+                ],
             ),
             $this->cap(
                 'content_project.resume_execution',
@@ -509,6 +518,10 @@ final class ContentProjectCapabilityRegistry
                 ],
                 phases: null,
                 confirmation: false,
+                presentation: [
+                    'agent_exposed' => true,
+                    'mcp_exposed' => false,
+                ],
             ),
 
             // Keyword Intelligence — additive, không phase-gate theo ContentProjectLifecyclePhase.
@@ -575,6 +588,12 @@ final class ContentProjectCapabilityRegistry
                 ],
                 phases: null,
                 confirmation: false,
+                presentation: [
+                    'internal' => true,
+                    'agent_exposed' => false,
+                    'mcp_exposed' => false,
+                    'visibility' => 'internal',
+                ],
             ),
             $this->cap(
                 'keyword_intelligence.cancel_analysis',
@@ -590,6 +609,12 @@ final class ContentProjectCapabilityRegistry
                 ],
                 phases: null,
                 confirmation: false,
+                presentation: [
+                    'internal' => true,
+                    'agent_exposed' => false,
+                    'mcp_exposed' => false,
+                    'visibility' => 'internal',
+                ],
             ),
             $this->cap(
                 'keyword_intelligence.approve_keywords',
@@ -622,6 +647,12 @@ final class ContentProjectCapabilityRegistry
                 ],
                 phases: null,
                 confirmation: false,
+                presentation: [
+                    'internal' => true,
+                    'agent_exposed' => false,
+                    'mcp_exposed' => false,
+                    'visibility' => 'internal',
+                ],
             ),
             $this->cap(
                 'keyword_intelligence.update_keyword',
@@ -640,6 +671,12 @@ final class ContentProjectCapabilityRegistry
                 ],
                 phases: null,
                 confirmation: false,
+                presentation: [
+                    'internal' => true,
+                    'agent_exposed' => false,
+                    'mcp_exposed' => false,
+                    'visibility' => 'internal',
+                ],
             ),
             $this->cap(
                 'keyword_intelligence.approve_clusters',
@@ -674,6 +711,12 @@ final class ContentProjectCapabilityRegistry
                 ],
                 phases: null,
                 confirmation: true,
+                presentation: [
+                    'internal' => true,
+                    'agent_exposed' => false,
+                    'mcp_exposed' => false,
+                    'visibility' => 'internal',
+                ],
             ),
             $this->cap(
                 'keyword_intelligence.split_cluster',
@@ -690,6 +733,12 @@ final class ContentProjectCapabilityRegistry
                 ],
                 phases: null,
                 confirmation: true,
+                presentation: [
+                    'internal' => true,
+                    'agent_exposed' => false,
+                    'mcp_exposed' => false,
+                    'visibility' => 'internal',
+                ],
             ),
             $this->cap(
                 'keyword_intelligence.move_keywords',
@@ -706,6 +755,12 @@ final class ContentProjectCapabilityRegistry
                 ],
                 phases: null,
                 confirmation: false,
+                presentation: [
+                    'internal' => true,
+                    'agent_exposed' => false,
+                    'mcp_exposed' => false,
+                    'visibility' => 'internal',
+                ],
             ),
             $this->cap(
                 'keyword_intelligence.review_cannibalization',
@@ -722,6 +777,12 @@ final class ContentProjectCapabilityRegistry
                 ],
                 phases: null,
                 confirmation: false,
+                presentation: [
+                    'internal' => true,
+                    'agent_exposed' => false,
+                    'mcp_exposed' => false,
+                    'visibility' => 'internal',
+                ],
             ),
             $this->cap(
                 'keyword_intelligence.build_topical_map',
@@ -1409,17 +1470,72 @@ final class ContentProjectCapabilityRegistry
         ];
     }
 
+    /**
+     * Capability names never callable via MCP even when agent-exposed —
+     * background/queue-only actions or actions with a dedicated internal
+     * trigger surface (cron, workflow engine, ...).
+     *
+     * @var list<string>
+     */
+    private const MCP_EXCLUDED_NAMES = [
+        'content_project.sync_items',
+        'content_project.stop_execution',
+        'content_project.resume_execution',
+        'content_project.process_scheduled_publish',
+        'content_project.rerun_step',
+    ];
+
+    /**
+     * Whole-namespace write exclusions from MCP (still agent-exposed).
+     *
+     * @var list<string>
+     */
+    private const MCP_EXCLUDED_PREFIXES = [
+        'serp_intelligence.',
+        'gsc_intelligence.',
+    ];
+
+    /**
+     * Agent write surface — freeze rule: caps without a {@see ContentProjectAgentCommandFactory}
+     * match arm must set presentation agent_exposed=false (and usually internal=true).
+     */
     public function isAgentWriteExposed(string $name): bool
     {
-        if ($name === 'content_project.rerun_items') {
-            return true;
-        }
-
-        if ($name === 'content_project.sync_items') {
+        $cap = $this->get($name);
+        if ($cap === null) {
             return false;
         }
 
-        return $this->get($name) !== null;
+        if ((bool) ($cap['internal'] ?? false)) {
+            return false;
+        }
+
+        return (bool) ($cap['agent_exposed'] ?? true);
+    }
+
+    /**
+     * MCP is a stricter subset of the agent-exposed write surface — see
+     * class docblock in {@see \App\Addons\SeoContentAi\Services\ContentProject\Agent\Mcp\ContentProjectMcpToolCatalog}.
+     */
+    public function isMcpWriteExposed(string $name): bool
+    {
+        if (! $this->isAgentWriteExposed($name)) {
+            return false;
+        }
+
+        if (in_array($name, self::MCP_EXCLUDED_NAMES, true)) {
+            return false;
+        }
+
+        foreach (self::MCP_EXCLUDED_PREFIXES as $prefix) {
+            if (str_starts_with($name, $prefix)) {
+                return false;
+            }
+        }
+
+        $cap = $this->get($name);
+
+        return ($cap['mcp_exposed'] ?? null) !== false;
     }
 
     /**
