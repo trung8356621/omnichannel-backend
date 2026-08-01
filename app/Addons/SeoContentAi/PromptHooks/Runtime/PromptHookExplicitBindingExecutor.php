@@ -8,8 +8,10 @@ use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\InvalidInput;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\PromptHookFailure;
+use App\Addons\SeoContentAi\PromptHooks\Support\PromptHookRequireAnyOf;
 use App\Addons\SeoContentAi\Services\ArticleWritingLegacyRewriteAdapter;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemIdentity;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
@@ -90,6 +92,8 @@ final class PromptHookExplicitBindingExecutor
 
         $correlationId = (string) ($contextExtras['correlation_id'] ?? Str::uuid()->toString());
         $input = $this->mapInput($definition->inputSchema->fields, $variables, $previousOutputs);
+        $input = $this->enrichTopicInput($input);
+        PromptHookRequireAnyOf::assertSatisfied($input, $definition->metadata);
         $settings = is_array($prompt->hook_settings) ? $prompt->hook_settings : [];
 
         $context = [
@@ -256,6 +260,32 @@ final class PromptHookExplicitBindingExecutor
     }
 
     /**
+     * Runtime topic for prompts — never invents post_title/keyword from each other.
+     *
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    private function enrichTopicInput(array $input): array
+    {
+        $existing = isset($input['topic']) ? trim((string) $input['topic']) : '';
+        if ($existing !== '') {
+            return $input;
+        }
+
+        $topic = ContentProjectItemIdentity::topic(
+            isset($input['post_title']) ? (string) $input['post_title'] : null,
+            isset($input['keyword']) ? (string) $input['keyword'] : (
+                isset($input['focus_keyword']) ? (string) $input['focus_keyword'] : null
+            ),
+        );
+        if ($topic !== '') {
+            $input['topic'] = $topic;
+        }
+
+        return $input;
+    }
+
+    /**
      * @param  array<string, array<string, mixed>>  $fields
      * @param  array<string, mixed>  $variables
      * @param  array<string, mixed>  $previousOutputs
@@ -268,6 +298,7 @@ final class PromptHookExplicitBindingExecutor
             'keyword' => ['keyword', 'focus_keyword', 'focusKeyword'],
             'focus_keyword' => ['focus_keyword', 'keyword', 'focusKeyword'],
             'post_title' => ['post_title', 'title', 'article_title'],
+            'topic' => ['topic', 'subject'],
             'site_short_description' => ['site_short_description', 'site_description', 'short_description'],
             'site_cta' => ['site_cta', 'cta'],
             'rewrite_instruction' => ['rewrite_instruction', 'rewrite_notes', 'instruction'],

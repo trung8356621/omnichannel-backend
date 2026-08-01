@@ -148,13 +148,21 @@ final class SeoProjectRunItemService
                     'idempotency_key' => $idempotencyKey,
                     'input_snapshot' => $snapshot,
                     'article_id' => $task->article_id !== null ? (int) $task->article_id : $existing->article_id,
+                    'status' => SeoProjectRunItemStatus::Pending->value,
+                    'output_snapshot' => null,
+                    'message' => null,
+                    'error_code' => null,
+                    'error_message' => null,
+                    'started_at' => null,
+                    'finished_at' => null,
                 ]);
                 $existing->save();
+                $this->markTaskQueuedForGeneration($task);
 
                 return $existing->fresh() ?? $existing;
             }
 
-            return SeoProjectRunItem::query()->create([
+            $created = SeoProjectRunItem::query()->create([
                 'run_id' => (int) $run->id,
                 'task_id' => (int) $task->id,
                 'article_id' => $task->article_id !== null ? (int) $task->article_id : null,
@@ -168,7 +176,32 @@ final class SeoProjectRunItemService
                 'error_code' => null,
                 'error_message' => null,
             ]);
+            $this->markTaskQueuedForGeneration($task);
+
+            return $created;
         });
+    }
+
+    /**
+     * Accept generate/rerun immediately: Failed → Pending so Failed-only filter/cards drop the row.
+     * Latest attempt error comes from the new pending run item (cleared), not history.
+     */
+    private function markTaskQueuedForGeneration(SeoProjectTask $task): void
+    {
+        $status = (string) ($task->status ?? '');
+        if (in_array($status, [
+            SeoProjectTask::STATUS_CANCELLED,
+            'cancelled',
+            'archived',
+            SeoProjectTask::STATUS_PENDING,
+        ], true)) {
+            return;
+        }
+
+        $task->update([
+            'status' => SeoProjectTask::STATUS_PENDING,
+        ]);
+        $task->status = SeoProjectTask::STATUS_PENDING;
     }
 
     /**

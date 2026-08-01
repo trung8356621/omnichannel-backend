@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Enums\ArticleWritingSourceType;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemIdentity;
 use App\Addons\SeoContentAi\Support\ProjectTaskOriginVariables;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Models\Site;
@@ -87,11 +88,8 @@ final class TaskTestInputResolver
             $keyword = $legacy;
         }
 
-        if (in_array($type, [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE], true)
-            && $keyword === ''
-            && $title === ''
-        ) {
-            throw new \InvalidArgumentException('Hạng mục dự án cần ít nhất Keyword hoặc Title.');
+        if (in_array($type, [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE], true)) {
+            ContentProjectItemIdentity::assertValid($keyword, $title);
         }
 
         $galleryDescription = SeoProjectTask::isNewArticleType($type)
@@ -167,9 +165,21 @@ final class TaskTestInputResolver
             $variables['title'] = $title;
         } else {
             // Giữ post_title từ bài gốc (rewrite/improve); chỉ bỏ khi create không có title.
+            // Không copy keyword → post_title (AI được quyền đề xuất title).
             if ($context->isNewArticle || ! isset($variables['post_title']) || trim((string) $variables['post_title']) === '') {
                 unset($variables['post_title'], $variables['title']);
             }
+        }
+
+        $resolvedTitle = isset($variables['post_title']) ? trim((string) $variables['post_title']) : '';
+        $topic = ContentProjectItemIdentity::topic(
+            $resolvedTitle !== '' ? $resolvedTitle : $title,
+            $keyword,
+        );
+        if ($topic !== '') {
+            $variables['topic'] = $topic;
+        } else {
+            unset($variables['topic']);
         }
 
         if ($secondaryDescription !== '') {

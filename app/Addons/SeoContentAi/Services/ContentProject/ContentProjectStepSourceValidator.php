@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Enums\WorkflowExecutionRole;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ArticleOutlineResolver;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemIdentity;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectStepDescriptor;
 
 /**
@@ -39,7 +40,7 @@ final class ContentProjectStepSourceValidator
         $role = WorkflowExecutionRole::tryFromMixed($step->executionRole);
         if ($role instanceof WorkflowExecutionRole) {
             return match ($role) {
-                WorkflowExecutionRole::ArticleOutlineGenerate => ['title', 'keyword'],
+                WorkflowExecutionRole::ArticleOutlineGenerate => ['topic_identity'],
                 WorkflowExecutionRole::ArticleContentGenerate => ['outline'],
                 WorkflowExecutionRole::ArticleContentImprove => ['article_body'],
                 WorkflowExecutionRole::ArticleImageGenerate => ['article_body', 'image_settings'],
@@ -47,7 +48,7 @@ final class ContentProjectStepSourceValidator
         }
 
         return match ($step->kind) {
-            'outline' => ['title', 'keyword'],
+            'outline' => ['topic_identity'],
             'content' => ['outline'],
             'improve' => ['article_body'],
             'image', 'typography', 'infographic', 'product_gallery' => ['article_body', 'image_settings'],
@@ -69,6 +70,7 @@ final class ContentProjectStepSourceValidator
             $error = match ($req) {
                 'title' => $this->requireTitle($task, $article),
                 'keyword' => $this->requireKeyword($task, $article),
+                'topic_identity' => $this->requireTopicIdentity($task, $article),
                 'description', 'brief' => null,
                 'outline' => $this->requireOutline($article, $step),
                 'article_body' => $this->requireArticleBody($article, $step),
@@ -111,6 +113,22 @@ final class ContentProjectStepSourceValidator
         if ($keyword === '') {
             // Soft: nhiều task vẫn chạy được không keyword — chỉ warn khi outline.
             return null;
+        }
+
+        return null;
+    }
+
+    private function requireTopicIdentity(SeoProjectTask $task, ?SeoArticle $article): ?string
+    {
+        $title = ContentProjectItemIdentity::normalize(
+            $task->title !== null ? (string) $task->title : ($article?->title !== null ? (string) $article->title : null),
+        );
+        $keyword = ContentProjectItemIdentity::normalize(
+            $task->keyword !== null ? (string) $task->keyword : ($article?->focus_keyword !== null ? (string) $article->focus_keyword : null),
+        );
+
+        if (! ContentProjectItemIdentity::isValid($keyword, $title)) {
+            return ContentProjectItemIdentity::failureMessage();
         }
 
         return null;

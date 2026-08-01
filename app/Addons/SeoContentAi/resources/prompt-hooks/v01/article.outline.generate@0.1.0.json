@@ -28,8 +28,8 @@
   "input_schema": {
     "post_title": {
       "type": "string",
-      "required": true,
-      "nullable": false,
+      "required": false,
+      "nullable": true,
       "max_length": 500,
       "allowed_source": [
         "runtime",
@@ -38,6 +38,16 @@
       ]
     },
     "keyword": {
+      "type": "string",
+      "required": false,
+      "nullable": true,
+      "max_length": 500,
+      "allowed_source": [
+        "runtime",
+        "task"
+      ]
+    },
+    "topic": {
       "type": "string",
       "required": false,
       "nullable": true,
@@ -147,7 +157,9 @@
       "Build a clear outline structure that matches search intent.",
       "Keep headings distinct — avoid overlapping ideas.",
       "Do not write the full article body in this step.",
-      "Include semantic vocabulary / writing guidance in the second section."
+      "Include semantic vocabulary / writing guidance in the second section.",
+      "When post_title is empty but keyword is provided, propose a strong SEO title from the keyword.",
+      "When only post_title is provided, use it as the main topic — do not invent a focus keyword."
     ],
     "output_format": [
       "Structured Markdown with two declared sections:",
@@ -158,8 +170,9 @@
       "Prompt Markdown is the template sent to the model for this Hook."
     ],
     "variables": [
-      { "key": "post_title", "required": true },
+      { "key": "post_title", "required": false },
       { "key": "keyword", "required": false },
+      { "key": "topic", "required": false },
       { "key": "site_description", "required": false },
       { "key": "tone", "required": false },
       { "key": "language", "required": false }
@@ -193,7 +206,10 @@
     "workflow_concern": "split provider output into Task 1, Task 2 and Total output ports",
     "domain_action_concern": "none",
     "ui_concern": "workflow prompt block with multiple output ports",
-    "multi_section_exception": true
+    "multi_section_exception": true,
+    "require_any_of": [
+      ["post_title", "keyword"]
+    ]
   },
 
   "side_effects": []

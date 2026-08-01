@@ -21,6 +21,7 @@ use App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionRoleResolver
 use App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionSnapshotBuilder;
 use App\Addons\SeoContentAi\Support\ArticleWritingExecutionContext;
 use App\Addons\SeoContentAi\Support\ArticleWritingInput;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemIdentity;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\ProjectTaskOriginVariables;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -193,7 +194,10 @@ final class CreateArticlesFromTaskService
             }
             $resolvedSiteId = (int) ($context->siteId ?? $siteId);
             $this->assertSiteAccessible($resolvedSiteId);
-            $keyword = trim((string) ($context->variables['focus_keyword'] ?? $context->variables['post_title'] ?? 'rewrite'));
+            $keyword = ContentProjectItemIdentity::topic(
+                isset($context->variables['post_title']) ? (string) $context->variables['post_title'] : null,
+                isset($context->variables['focus_keyword']) ? (string) $context->variables['focus_keyword'] : null,
+            );
             if ($keyword === '') {
                 $keyword = 'rewrite';
             }
@@ -276,32 +280,33 @@ final class CreateArticlesFromTaskService
         $this->assertSiteAccessible($resolvedSiteId);
         $this->syncDomainLinkListKeywords($resolvedSiteId);
 
-        if ($isContentRewrite) {
-            $keyword = trim((string) ($context->variables['focus_keyword'] ?? ''));
-            if ($keyword === '') {
-                $keyword = trim((string) ($context->variables['post_title'] ?? ''));
-            }
-            if ($keyword === '' && $context->article !== null) {
-                $keyword = trim((string) ($context->article->title ?? ''));
-            }
-        } else {
-            $keyword = trim((string) ($context->variables['focus_keyword'] ?? ''));
-            if ($keyword === '') {
-                $keyword = trim((string) ($context->variables['post_title'] ?? ''));
-            }
-        }
+        $focusKeyword = ContentProjectItemIdentity::normalize(
+            isset($context->variables['focus_keyword']) ? (string) $context->variables['focus_keyword'] : null,
+        );
+        $postTitle = ContentProjectItemIdentity::normalize(
+            isset($context->variables['post_title']) ? (string) $context->variables['post_title'] : null,
+        );
 
-        if ($keyword === '' && ! ($isContentRewrite && $context->article !== null)) {
+        if (! ContentProjectItemIdentity::isValid($focusKeyword, $postTitle)
+            && ! ($isContentRewrite && $context->article !== null)
+        ) {
             return [
                 'success' => false,
                 'article_id' => null,
                 'steps' => [],
                 'message' => $isContentRewrite
                     ? 'Thiếu từ khóa / tiêu đề (hoặc bài viết nguồn).'
-                    : 'Thiếu từ khóa / tiêu đề.',
+                    : ContentProjectItemIdentity::failureMessage(),
             ];
         }
 
+        // Working topic label for draft/logging — not persisted as fake user keyword/title.
+        $keyword = ContentProjectItemIdentity::topic($postTitle, $focusKeyword);
+        if ($keyword === '' && $isContentRewrite && $context->article !== null) {
+            $keyword = ContentProjectItemIdentity::normalize(
+                $context->article->title !== null ? (string) $context->article->title : null,
+            );
+        }
         if ($keyword === '') {
             $keyword = 'rewrite';
         }
@@ -361,7 +366,10 @@ final class CreateArticlesFromTaskService
 
         $resolvedSiteId = (int) ($context->siteId ?? $siteId);
         $this->assertSiteAccessible($resolvedSiteId);
-        $keyword = trim((string) ($context->variables['focus_keyword'] ?? $context->variables['post_title'] ?? 'rewrite'));
+        $keyword = ContentProjectItemIdentity::topic(
+            isset($context->variables['post_title']) ? (string) $context->variables['post_title'] : null,
+            isset($context->variables['focus_keyword']) ? (string) $context->variables['focus_keyword'] : null,
+        );
         if ($keyword === '') {
             $keyword = 'rewrite';
         }
@@ -436,11 +444,13 @@ final class CreateArticlesFromTaskService
     private function extractOutlineArtifactFromStep(array $step): ?string
     {
         $outputs = is_array($step['outputs'] ?? null) ? $step['outputs'] : [];
+        // Prefer marked total / out_main — section ports may be marker-stripped.
         $candidates = [
-            $outputs['task_1_outline'] ?? null,
+            $outputs['total'] ?? null,
             $outputs['out_main'] ?? null,
             $step['output'] ?? null,
             $step['result'] ?? null,
+            $outputs['task_1_outline'] ?? null,
         ];
         foreach ($candidates as $candidate) {
             $raw = trim((string) $candidate);
@@ -645,9 +655,14 @@ final class CreateArticlesFromTaskService
      */
     private function createDraftArticle(int $siteId, string $keyword, array $variables, array $steps): SeoArticle
     {
-        $title = trim((string) ($variables['post_title'] ?? ''));
+        $title = ContentProjectItemIdentity::normalize(
+            isset($variables['post_title']) ? (string) $variables['post_title'] : null,
+        );
         if ($title === '') {
-            $title = $keyword;
+            // Provisional article title from topic (keyword) until AI final title lands.
+            $title = ContentProjectItemIdentity::normalize(
+                isset($variables['topic']) ? (string) $variables['topic'] : $keyword,
+            );
         }
 
         $postType = SeoProjectTask::normalizePostType(
@@ -659,13 +674,16 @@ final class CreateArticlesFromTaskService
             ? ArticleCreateOriginResolver::ORIGIN_SEO_PROJECT_TASK
             : null;
 
-        $focusKeyword = trim((string) ($variables['focus_keyword'] ?? $keyword));
+        // Do not invent focus_keyword from title — title-only items keep keyword empty.
+        $focusKeyword = ContentProjectItemIdentity::normalize(
+            isset($variables['focus_keyword']) ? (string) $variables['focus_keyword'] : null,
+        );
         $correlationId = Str::uuid()->toString();
 
         $input = [
             'site_id' => $siteId,
-            'title' => $title,
-            'keyword' => $keyword,
+            'title' => $title !== '' ? $title : $keyword,
+            'keyword' => $focusKeyword,
             'post_type' => $postType,
             'language' => 'vi',
             'origin_type' => $originType,

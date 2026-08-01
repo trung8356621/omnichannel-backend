@@ -123,12 +123,31 @@ final class MarkdownSectionsOutputParserTest extends TestCase
         $this->parser->parse($this->outlineDefinition(), $raw, 'corr-unknown');
     }
 
-    public function test_text_outside_sections(): void
+    public function test_short_preamble_outside_sections_normalized_away(): void
     {
-        $raw = "preamble\n".$this->validRaw();
+        $raw = "Dưới đây là dàn ý:\n".$this->validRaw();
+        $result = $this->parser->parse($this->outlineDefinition(), $raw, 'corr-outside-short');
+        self::assertArrayHasKey('outline', $result->sections);
+        self::assertStringContainsString('Outline section', $result->ports['task_1_outline']);
+    }
+
+    public function test_bom_and_outer_fence_normalized(): void
+    {
+        $raw = "\xEF\xBB\xBF```markdown\n".$this->validRaw()."\n```";
+        $result = $this->parser->parse($this->outlineDefinition(), $raw, 'corr-bom-fence');
+        self::assertArrayHasKey('vocabulary', $result->sections);
+    }
+
+    public function test_text_between_sections_still_rejected(): void
+    {
+        $outline = $this->pad('# Outline section content');
+        $vocab = $this->pad('- Vocabulary section content');
+        $raw = "[START_TASK_1_OUTLINE]\n{$outline}\n[END_TASK_1_OUTLINE]\n"
+            ."EXTRA MEANINGFUL BODY BETWEEN SECTIONS\n"
+            ."[START_TASK_2_VOCABULARY]\n{$vocab}\n[END_TASK_2_VOCABULARY]";
 
         $this->expectException(TextOutsideDeclaredSections::class);
-        $this->parser->parse($this->outlineDefinition(), $raw, 'corr-outside');
+        $this->parser->parse($this->outlineDefinition(), $raw, 'corr-between');
     }
 
     public function test_markdown_fence_normalization(): void

@@ -26,6 +26,7 @@ use App\Addons\SeoContentAi\Services\SeoProjectTaskMoveService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
 use App\Addons\SeoContentAi\Services\SeoProjectRunConsolidationService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemIdentity;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Models\Site;
@@ -527,11 +528,24 @@ class SeoProjectResource extends SeoPanelResource
                                 ->label(__('seo-content-ai::filament.projects.keyword'))
                                 ->placeholder(__('seo-content-ai::filament.projects.keyword_placeholder'))
                                 ->maxLength(500)
-                                ->required(fn (Get $get): bool => in_array(
-                                    SeoProjectTask::normalizeType($get('type')),
-                                    [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE],
-                                    true,
-                                ) && trim((string) ($get('title') ?? '')) === '')
+                                ->rules([
+                                    fn (Get $get): \Closure => function (string $attribute, mixed $value, \Closure $fail) use ($get): void {
+                                        if (! in_array(
+                                            SeoProjectTask::normalizeType($get('type')),
+                                            [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE],
+                                            true,
+                                        )) {
+                                            return;
+                                        }
+
+                                        if (! ContentProjectItemIdentity::isValid(
+                                            is_string($value) ? $value : (string) ($value ?? ''),
+                                            (string) ($get('title') ?? ''),
+                                        )) {
+                                            $fail(ContentProjectItemIdentity::failureMessage());
+                                        }
+                                    },
+                                ])
                                 ->visible(fn (Get $get): bool => in_array(
                                     SeoProjectTask::normalizeType($get('type')),
                                     [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE],
@@ -542,11 +556,24 @@ class SeoProjectResource extends SeoPanelResource
                                 ->label(__('seo-content-ai::filament.projects.title_field'))
                                 ->placeholder(__('seo-content-ai::filament.projects.title_field_placeholder'))
                                 ->maxLength(500)
-                                ->required(fn (Get $get): bool => in_array(
-                                    SeoProjectTask::normalizeType($get('type')),
-                                    [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE],
-                                    true,
-                                ) && trim((string) ($get('keyword') ?? '')) === '')
+                                ->rules([
+                                    fn (Get $get): \Closure => function (string $attribute, mixed $value, \Closure $fail) use ($get): void {
+                                        if (! in_array(
+                                            SeoProjectTask::normalizeType($get('type')),
+                                            [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE],
+                                            true,
+                                        )) {
+                                            return;
+                                        }
+
+                                        if (! ContentProjectItemIdentity::isValid(
+                                            (string) ($get('keyword') ?? ''),
+                                            is_string($value) ? $value : (string) ($value ?? ''),
+                                        )) {
+                                            $fail(ContentProjectItemIdentity::failureMessage());
+                                        }
+                                    },
+                                ])
                                 ->visible(fn (Get $get): bool => in_array(
                                     SeoProjectTask::normalizeType($get('type')),
                                     [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE],

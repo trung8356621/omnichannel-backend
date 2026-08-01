@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Contracts\Conten
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectBusinessLock;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPreviewToken;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemIdentity;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
@@ -53,6 +54,29 @@ final class AddContentProjectItemsHandler extends AbstractPublishingHandler
                 );
             }
 
+            foreach ($command->items as $row) {
+                if (! is_array($row)) {
+                    continue;
+                }
+                $type = SeoProjectTask::normalizeType($row['type'] ?? SeoProjectTask::TYPE_CREATE);
+                if (! in_array($type, [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE], true)) {
+                    continue;
+                }
+                $keyword = ContentProjectItemIdentity::normalize(
+                    isset($row['keyword']) ? (string) $row['keyword'] : null,
+                );
+                $title = ContentProjectItemIdentity::normalize(
+                    isset($row['title']) ? (string) $row['title'] : (isset($row['post_title']) ? (string) $row['post_title'] : null),
+                );
+                if (! ContentProjectItemIdentity::isValid($keyword, $title)) {
+                    return ContentProjectActionResult::fail(
+                        ContentProjectActionCodes::VALIDATION_FAILED,
+                        ContentProjectItemIdentity::failureMessage(),
+                        $projectId,
+                    );
+                }
+            }
+
             $createdIds = DB::connection('omi_seo_ai')->transaction(function () use ($project, $command): array {
                 $ids = [];
                 foreach ($command->items as $row) {
@@ -60,13 +84,21 @@ final class AddContentProjectItemsHandler extends AbstractPublishingHandler
                         continue;
                     }
 
+                    $type = SeoProjectTask::normalizeType($row['type'] ?? SeoProjectTask::TYPE_CREATE);
+                    $keyword = ContentProjectItemIdentity::normalize(
+                        isset($row['keyword']) ? (string) $row['keyword'] : null,
+                    );
+                    $title = ContentProjectItemIdentity::normalize(
+                        isset($row['title']) ? (string) $row['title'] : (isset($row['post_title']) ? (string) $row['post_title'] : null),
+                    );
+
                     $task = SeoProjectTask::query()->create([
                         'project_id' => (int) $project->getKey(),
                         'site_id' => (int) ($project->site_id ?? 0),
-                        'type' => (string) ($row['type'] ?? SeoProjectTask::TYPE_CREATE),
+                        'type' => $type,
                         'post_type' => (string) ($row['post_type'] ?? SeoProjectTask::POST_TYPE_ARTICLE),
-                        'keyword' => (string) ($row['keyword'] ?? $row['title'] ?? ''),
-                        'title' => (string) ($row['title'] ?? $row['keyword'] ?? ''),
+                        'keyword' => $keyword !== '' ? $keyword : null,
+                        'title' => $title !== '' ? $title : null,
                         'status' => SeoProjectTask::STATUS_PENDING,
                         'article_id' => isset($row['article_id']) ? (int) $row['article_id'] : null,
                         'target_date' => $row['target_date'] ?? now()->toDateString(),

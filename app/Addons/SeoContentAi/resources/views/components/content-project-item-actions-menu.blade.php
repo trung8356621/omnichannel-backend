@@ -26,12 +26,18 @@
         <button
             type="button"
             wire:click="rerunOne({{ $tid }})"
+            wire:target="rerunOne({{ $tid }})"
+            wire:loading.attr="disabled"
             wire:confirm="{{ __('seo-content-ai::filament.projects.ops_run_again_confirm') }}"
             class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-warning-600 ring-1 ring-gray-200 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-warning-400 dark:ring-gray-700 dark:hover:bg-gray-800"
             aria-label="{{ __('seo-content-ai::filament.projects.ops_run_again') }}"
             title="{{ __('seo-content-ai::filament.projects.ops_run_again') }}"
         >
-            <x-filament::icon icon="heroicon-o-arrow-path" class="h-4 w-4" />
+            <x-filament::icon wire:loading.remove wire:target="rerunOne({{ $tid }})" icon="heroicon-o-arrow-path" class="h-4 w-4" />
+            <svg wire:loading wire:target="rerunOne({{ $tid }})" class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+            </svg>
         </button>
     @elseif ($a['generate'])
         <button
@@ -78,11 +84,21 @@
                         role="menuitem"
                         type="button"
                         wire:click="rerunOne({{ $tid }})"
+                        wire:target="rerunOne({{ $tid }})"
+                        wire:loading.attr="disabled"
+                        wire:loading.class="opacity-50 pointer-events-none"
                         wire:confirm="{{ __('seo-content-ai::filament.projects.ops_run_again_confirm') }}"
                         @click="open = false"
                         class="block w-full px-3 py-1.5 text-left text-xs hover:bg-gray-50 focus:bg-gray-50 focus:outline-none dark:hover:bg-gray-800"
                     >
-                        {{ __('seo-content-ai::filament.projects.ops_run_again') }}
+                        <span wire:loading.remove wire:target="rerunOne({{ $tid }})">{{ __('seo-content-ai::filament.projects.ops_run_again') }}</span>
+                        <span wire:loading wire:target="rerunOne({{ $tid }})" class="inline-flex items-center gap-1">
+                            <svg class="h-3 w-3 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                            </svg>
+                            Queued…
+                        </span>
                     </button>
                 @endif
                 @if ($a['regen_outline'])

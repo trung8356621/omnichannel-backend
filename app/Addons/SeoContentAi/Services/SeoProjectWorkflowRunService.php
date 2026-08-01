@@ -49,7 +49,9 @@ final class SeoProjectWorkflowRunService
             throw new \RuntimeException(__('seo-content-ai::filament.projects.archive_blocked_generate'));
         }
 
-        $snapshot = ContentProjectRunSettings::fromArray($settings)->toArray();
+        // Keep task_ids / rerun* — fromArray()->toArray() alone strips them and
+        // prepareRunQueue then expands to all pending project items.
+        $snapshot = ContentProjectRunSettings::snapshotForRun($settings);
         $workflowSnap = $this->capturePublishWorkflowSnapshot();
         if ($workflowSnap !== null) {
             $snapshot['workflow_execution_snapshot'] = $workflowSnap;
@@ -97,14 +99,8 @@ final class SeoProjectWorkflowRunService
 
     public function updateRunSettings(SeoProjectRun $run, array $settings): SeoProjectRun
     {
-        $snapshot = ContentProjectRunSettings::fromUserInput($settings)->toArray();
         $existing = is_array($run->settings) ? $run->settings : [];
-        if (
-            isset($existing['workflow_execution_snapshot'])
-            && ! isset($snapshot['workflow_execution_snapshot'])
-        ) {
-            $snapshot['workflow_execution_snapshot'] = $existing['workflow_execution_snapshot'];
-        }
+        $snapshot = ContentProjectRunSettings::snapshotForRun(array_merge($existing, $settings));
         $run->update(['settings' => $snapshot]);
 
         return $run->fresh() ?? $run;
@@ -137,6 +133,27 @@ final class SeoProjectWorkflowRunService
                 ->orderBy('target_date')
                 ->orderBy('id');
             $tasks = $query->get();
+        } elseif ($explicitIds !== []) {
+            // Explicit generate selection — never expand to other pending items.
+            $preview = app(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier::class)
+                ->preview($project);
+            $allowed = array_flip($preview->runnableTaskIds());
+            $runnableIds = array_values(array_filter(
+                $explicitIds,
+                static fn (int $id): bool => isset($allowed[$id]),
+            ));
+            if ($runnableIds === []) {
+                throw new \InvalidArgumentException(__('seo-content-ai::filament.projects.run_items_empty'));
+            }
+            if ($limit !== null && $limit > 0) {
+                $runnableIds = array_slice($runnableIds, 0, $limit);
+            }
+            $tasks = $project->tasks()
+                ->planned()
+                ->whereIn('id', $runnableIds)
+                ->orderBy('target_date')
+                ->orderBy('id')
+                ->get();
         } else {
             $preview = app(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier::class)
                 ->preview($project);
@@ -152,13 +169,6 @@ final class SeoProjectWorkflowRunService
             }
 
             $runnableIds = $preview->runnableTaskIds();
-            if ($explicitIds !== []) {
-                $allowed = array_flip($runnableIds);
-                $runnableIds = array_values(array_filter(
-                    $explicitIds,
-                    static fn (int $id): bool => isset($allowed[$id]),
-                ));
-            }
 
             if ($runnableIds === []) {
                 throw new \InvalidArgumentException(__('seo-content-ai::filament.projects.run_items_empty'));

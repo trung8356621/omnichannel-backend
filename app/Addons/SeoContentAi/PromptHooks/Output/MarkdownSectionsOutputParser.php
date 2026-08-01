@@ -46,6 +46,16 @@ final class MarkdownSectionsOutputParser
         }
 
         $declaredMarkers = $this->declaredMarkers($sectionsDef);
+        // Normalize before section match: BOM, outer fence, short prologue/epilogue.
+        // Undeclared task markers in prologue still fail (checked on pre-slice text).
+        $raw = $this->normalizeProviderRaw(
+            $raw,
+            $declaredMarkers,
+            $schema->strictUndeclaredMarkers(),
+            $hookKey,
+            $hookVersion,
+            $correlationId,
+        );
         $sections = [];
         $ports = [];
         $consumedSpans = [];
@@ -380,6 +390,85 @@ final class MarkdownSectionsOutputParser
                 );
             }
         }
+    }
+
+    /**
+     * @param  list<string>  $declaredMarkers
+     */
+    private function normalizeProviderRaw(
+        string $raw,
+        array $declaredMarkers,
+        bool $strictUndeclaredMarkers,
+        string $hookKey,
+        string $hookVersion,
+        ?string $correlationId,
+    ): string {
+        // UTF-8 BOM
+        if (str_starts_with($raw, "\xEF\xBB\xBF")) {
+            $raw = substr($raw, 3);
+        }
+        $raw = trim($raw);
+
+        // Entire response wrapped in one markdown code fence.
+        if (preg_match('/^```(?:\w+)?\s*\n(.*)\n```$/s', $raw, $fence) === 1) {
+            $raw = trim((string) $fence[1]);
+        }
+
+        if ($declaredMarkers === []) {
+            return $raw;
+        }
+
+        // Fail closed on undeclared markers before slicing prologue/epilogue.
+        if ($strictUndeclaredMarkers) {
+            $this->assertNoUndeclaredTaskMarkers($raw, $declaredMarkers, $hookKey, $hookVersion, $correlationId);
+        }
+
+        $firstStart = null;
+        $lastEnd = null;
+        foreach ($declaredMarkers as $marker) {
+            if (str_starts_with($marker, '[START_')) {
+                $pos = strpos($raw, $marker);
+                if ($pos !== false && ($firstStart === null || $pos < $firstStart)) {
+                    $firstStart = $pos;
+                }
+            }
+            if (str_starts_with($marker, '[END_')) {
+                $pos = strrpos($raw, $marker);
+                if ($pos !== false) {
+                    $endPos = $pos + strlen($marker);
+                    if ($lastEnd === null || $endPos > $lastEnd) {
+                        $lastEnd = $endPos;
+                    }
+                }
+            }
+        }
+
+        if ($firstStart === null || $lastEnd === null || $lastEnd <= $firstStart) {
+            return $raw;
+        }
+
+        $prologue = substr($raw, 0, $firstStart);
+        $epilogue = substr($raw, $lastEnd);
+        // Only strip short plain-language lead/trail (no nested task markers left).
+        if ($this->isDisposableProse($prologue) && $this->isDisposableProse($epilogue)) {
+            $raw = substr($raw, $firstStart, $lastEnd - $firstStart);
+        }
+
+        return trim($raw);
+    }
+
+    private function isDisposableProse(string $chunk): bool
+    {
+        $trimmed = trim($chunk);
+        if ($trimmed === '') {
+            return true;
+        }
+        // Keep fail-closed when chunk still looks like structured task output.
+        if (preg_match('/\[(?:START|END)_TASK_/i', $trimmed) === 1) {
+            return false;
+        }
+        // Short lead-in/outro only (model chatter). Longer bodies stay for outside-section check.
+        return mb_strlen($trimmed) <= 400;
     }
 
     /**

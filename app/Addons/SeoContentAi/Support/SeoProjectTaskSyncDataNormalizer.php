@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Support;
 
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemIdentity;
 use Illuminate\Validation\ValidationException;
 
 class SeoProjectTaskSyncDataNormalizer
@@ -42,15 +43,12 @@ class SeoProjectTaskSyncDataNormalizer
             }
 
             if (in_array($type, [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE], true)
-                && $keyword === ''
-                && $title === ''
+                && ! ContentProjectItemIdentity::isValid($keyword, $title)
             ) {
-                if ($type === SeoProjectTask::TYPE_CREATE) {
-                    continue;
-                }
-
                 throw ValidationException::withMessages([
-                    'tasks_data' => __('seo-content-ai::filament.projects.keyword_or_title_required'),
+                    'tasks_data.'.$index.'.keyword' => ContentProjectItemIdentity::failureMessage(),
+                    'tasks_data.'.$index.'.title' => ContentProjectItemIdentity::failureMessage(),
+                    'tasks_data' => ContentProjectItemIdentity::failureMessage(),
                 ]);
             }
 

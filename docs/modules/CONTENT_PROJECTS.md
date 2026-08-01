@@ -83,6 +83,8 @@ REST: `/api/v1/content-projects*` → same commands via Application controllers.
 
 Task types: `create` \| `rewrite` \| `improve`. Post types (create): `article`, `product`, `category`, `product_category`. Identity: `UNIQUE(project_id, source_key)`.
 
+**Item identity (create/rewrite):** Project item requires at least one of keyword or post_title. Both may be provided. Canonical validator: `Support/ContentProject/ContentProjectItemIdentity` (`filled(keyword) || filled(post_title)`). Used by Filament form, sync normalizer, Command Bus add/update, MCP/Agent, generation guards. AI outline/article generation may generate or optimize the final title — do not invent a fake keyword/title only to pass validators, and do not persist topic fallback as if the user entered `post_title`.
+
 ## 5. Read path
 
 1. Resolve task (+ article) from DB.
@@ -120,7 +122,11 @@ Scheduler        ──► ProcessScheduledProjectItemPublish (internal) ──�
 | `RerunProjectItemsCommand` | `RerunProjectItemsHandler` | `validateFull()` |
 | `RerunProjectItemStepCommand` | `RerunProjectItemStepHandler` | `validateStep()` |
 
-Require explicit `item_refs`. Stale recovery first. Eligibility **before** any run/queue mutation. Same lock → seed → `RunEngine::start` shape as Generate. Step carries `rerun_from_step` / downstream / optional `source_article_id`.
+Require explicit `item_refs` (fail-closed — empty selection never expands to all pending). Stale recovery first. Eligibility **before** any run/queue mutation. Same lock → seed → `RunEngine::start` shape as Generate. Step carries `rerun_from_step` / downstream / optional `source_article_id`.
+
+**Run settings isolation:** `ContentProjectRunSettings::snapshotForRun()` persists operational keys (`task_ids`, `rerun`, `rerun_*`) on `seo_project_runs.settings`. `prepareRunQueue()` reads those keys — must not fall back to project-wide pending when selection was explicit. On accept, `prepareOperation` marks the task `pending` and clears the latest run-item error so Failed-only filters/cards drop the row immediately.
+
+**Outline → article:** outline parse fail stops writing; full graph marks content steps `skipped` (`Không chạy vì bước Dàn ý thất bại.`). Parser pre-normalizes BOM / outer fence / short prologue before `TEXT_OUTSIDE_DECLARED_SECTIONS`.
 
 ### Review / approve
 

@@ -2292,7 +2292,7 @@ return [
         'title_field_placeholder' => 'e.g. How to choose a 14-inch laptop backpack...',
         'secondary_description' => 'Description (optional)',
         'secondary_description_placeholder' => 'Additional context, search intent, target audience, brand note, writing angle...',
-        'keyword_or_title_required' => 'Each Create/Rewrite item needs at least Keyword or Title.',
+        'keyword_or_title_required' => 'Please enter at least a Keyword or a Title.',
         'improve_instruction' => 'Improve instruction',
         'improve_instruction_placeholder' => 'Describe what should be improved on the article...',
         'description_placeholder' => 'Content hints, angle, audience, CTA...',

@@ -40,7 +40,7 @@ final class ContentProjectPostRunAutomationTest extends TestCase
         );
 
         self::assertStringContainsString("'settings' => \$snapshot", $source);
-        self::assertStringContainsString('ContentProjectRunSettings::fromArray($settings)', $source);
+        self::assertStringContainsString('ContentProjectRunSettings::snapshotForRun', $source);
     }
 
     public function test_post_pipeline_only_for_article_post_type(): void

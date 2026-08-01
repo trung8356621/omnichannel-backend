@@ -75,6 +75,8 @@ Gates: Manager for most settings (`canAccessManagerFeatures`); Prompt CRUD plann
 | Default comment | `DefaultCommentPromptInstaller` + hook `article.comment.generate` |
 | API connections list | `ApiConnectionsListService` + `AiConnectionResource` |
 | SEO provider matrix | `SeoProviderRegistry` + `SeoProviderCapabilityResolver` |
+| Outline input any-of | `article.outline.generate` — `post_title` and `keyword` individually optional; `metadata.require_any_of` enforced by `PromptHookRequireAnyOf` / ExplicitBinding. Project item requires at least one of keyword or post_title. Both may be provided. AI outline/article generation may generate or optimize the final title. |
+| Outline output normalize | `MarkdownSectionsOutputParser::normalizeProviderRaw` — strip BOM, unwrap outer fence, drop short prologue/epilogue; still reject between-section prose, duplicates, missing markers, undeclared task markers. Downstream writing skipped (not failed) when outline fails. |
 
 ## 4. Data ownership
 

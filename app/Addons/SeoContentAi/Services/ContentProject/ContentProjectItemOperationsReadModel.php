@@ -188,12 +188,23 @@ final class ContentProjectItemOperationsReadModel
 
         $primary = $title !== '' ? $title : ($keyword !== '' ? $keyword : '#'.$tid);
 
+        $execStatusEarly = strtolower((string) ($exec['status'] ?? ''));
+        $latestAttemptQueued = in_array($execStatusEarly, ['pending', 'processing'], true);
+
         $message = $state->currentError ?? '';
+        if ($latestAttemptQueued) {
+            // New attempt accepted — hide stale failed message on the row.
+            $message = '';
+        }
         if ($message === '' && $state->currentErrorSource->value === 'publish' && $task->last_publish_error !== null) {
             $message = (string) $task->last_publish_error;
         }
 
         $genStatus = (string) ($task->status ?? 'pending');
+        if ($latestAttemptQueued && $genStatus === SeoProjectTask::STATUS_FAILED) {
+            // Prefer latest run-item attempt over sticky task.failed until worker claims.
+            $genStatus = SeoProjectTask::STATUS_PENDING;
+        }
         $queueStatus = (string) ($task->publish_queue_status ?? 'none');
         if ($queueStatus === '') {
             $queueStatus = 'none';
@@ -203,6 +214,10 @@ final class ContentProjectItemOperationsReadModel
         $isGenuineRunning = (string) ($task->status ?? '') === SeoProjectTask::STATUS_WRITING
             && ! $isStaleGeneration
             && (bool) ($staleEval['has_fresh_active_execution'] ?? false);
+        if ($execStatusEarly === 'processing' && ! $isStaleGeneration) {
+            $isGenuineRunning = true;
+            $genStatus = SeoProjectTask::STATUS_WRITING;
+        }
         $hasResumableCheckpoint = ! $isGenuineRunning
             && ! $isStaleGeneration
             && $exec !== null
@@ -349,9 +364,17 @@ final class ContentProjectItemOperationsReadModel
             }
 
             if ($failedOnly) {
-                $genFail = (string) $row['generation_status'] === SeoProjectTask::STATUS_FAILED;
-                $queueFail = (string) $row['queue_status'] === 'failed';
-                if (! $genFail && ! $queueFail) {
+                // Latest attempt only — queued/running after rerun must leave Failed-only.
+                if (! empty($row['is_genuinely_running'])) {
+                    return false;
+                }
+                $execStatus = strtolower((string) ($row['execution_status'] ?? ''));
+                if (in_array($execStatus, ['pending', 'processing'], true)) {
+                    return false;
+                }
+                $genFail = (string) $row['generation_status'] === SeoProjectTask::STATUS_FAILED
+                    || ! empty($row['is_generation_stale']);
+                if (! $genFail) {
                     return false;
                 }
             }

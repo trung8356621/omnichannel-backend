@@ -210,6 +210,190 @@ final class OutlineHookVerticalSliceTest extends TestCase
         self::assertStringContainsString('[START_TASK_1_OUTLINE]', $result['ports']['total'] ?? '');
     }
 
+    public function test_explicit_binding_accepts_keyword_only_without_invalid_input(): void
+    {
+        Log::shouldReceive('info')->zeroOrMoreTimes();
+        Log::shouldReceive('warning')->zeroOrMoreTimes();
+        Config::set('seo-content-ai.prompt_hooks.experimental_allowed', true);
+        Config::set('seo-content-ai.prompt_hooks.experimental_allowlist', ['article.outline.generate']);
+
+        $raw = $this->validTwoSectionOutput();
+        $provider = new FakePromptProviderAdapter(['text' => $raw]);
+        $loader = new PromptHookDefinitionLoader(
+            PromptHookDefinitionLoader::defaultV01Directory(),
+            PromptHookDefinitionLoader::defaultPhase1Directory(),
+        );
+        $loader->clearCache();
+        $registry = new PromptHookRuntimeRegistry($loader);
+        $engine = new PromptHookRuntimeEngine(
+            $registry,
+            new PromptHookEnvelopeValidator,
+            new PromptHookRuntimeLocaleResolver,
+            new PromptHookRuntimeSettingsResolver,
+            new PromptHookDeterministicTemplateRenderer,
+            new PromptProviderCapabilityResolver,
+            $provider,
+            new PromptHookRuntimeOutputPipeline,
+            new InMemoryPromptHookBudgetGuard(new InMemoryPromptBudgetStore, 100, 1_000_000),
+            new PromptHookAuditRecorder,
+            new PromptHookMigrationFlags,
+            new PromptHookShadowParityRecorder,
+        );
+        $runner = $this->createMock(PromptRunnerService::class);
+        $runner->expects(self::once())
+            ->method('compilePrompt')
+            ->willReturn('LEGACY COMPILED OUTLINE PROMPT');
+        $executor = new PromptHookExplicitBindingExecutor(
+            $engine,
+            $registry,
+            new PromptHookMigrationFlags,
+            $runner,
+            new \App\Addons\SeoContentAi\Services\ArticleWritingLegacyRewriteAdapter(
+                new \App\Addons\SeoContentAi\Services\ArticleWritingInputFormatter,
+            ),
+        );
+
+        $prompt = new SeoPrompt;
+        $prompt->forceFill([
+            'id' => 43,
+            'hook_key' => 'article.outline.generate',
+            'hook_version' => '0.1.0',
+            'hook_settings' => [],
+            'markdown_content' => 'outline body',
+        ]);
+
+        $result = $executor->execute($prompt, [
+            'keyword' => 'nghệ thuật Typography',
+            'language' => 'vi',
+        ], [
+            'site_id' => 1,
+            'locale' => 'vi',
+        ]);
+
+        self::assertCount(1, $provider->calls);
+        self::assertSame($raw, $result['output']);
+    }
+
+    public function test_explicit_binding_accepts_title_only_without_invalid_input(): void
+    {
+        Log::shouldReceive('info')->zeroOrMoreTimes();
+        Log::shouldReceive('warning')->zeroOrMoreTimes();
+        Config::set('seo-content-ai.prompt_hooks.experimental_allowed', true);
+        Config::set('seo-content-ai.prompt_hooks.experimental_allowlist', ['article.outline.generate']);
+
+        $raw = $this->validTwoSectionOutput();
+        $provider = new FakePromptProviderAdapter(['text' => $raw]);
+        $loader = new PromptHookDefinitionLoader(
+            PromptHookDefinitionLoader::defaultV01Directory(),
+            PromptHookDefinitionLoader::defaultPhase1Directory(),
+        );
+        $loader->clearCache();
+        $registry = new PromptHookRuntimeRegistry($loader);
+        $engine = new PromptHookRuntimeEngine(
+            $registry,
+            new PromptHookEnvelopeValidator,
+            new PromptHookRuntimeLocaleResolver,
+            new PromptHookRuntimeSettingsResolver,
+            new PromptHookDeterministicTemplateRenderer,
+            new PromptProviderCapabilityResolver,
+            $provider,
+            new PromptHookRuntimeOutputPipeline,
+            new InMemoryPromptHookBudgetGuard(new InMemoryPromptBudgetStore, 100, 1_000_000),
+            new PromptHookAuditRecorder,
+            new PromptHookMigrationFlags,
+            new PromptHookShadowParityRecorder,
+        );
+        $runner = $this->createMock(PromptRunnerService::class);
+        $runner->expects(self::once())
+            ->method('compilePrompt')
+            ->willReturn('LEGACY COMPILED OUTLINE PROMPT');
+        $executor = new PromptHookExplicitBindingExecutor(
+            $engine,
+            $registry,
+            new PromptHookMigrationFlags,
+            $runner,
+            new \App\Addons\SeoContentAi\Services\ArticleWritingLegacyRewriteAdapter(
+                new \App\Addons\SeoContentAi\Services\ArticleWritingInputFormatter,
+            ),
+        );
+
+        $prompt = new SeoPrompt;
+        $prompt->forceFill([
+            'id' => 44,
+            'hook_key' => 'article.outline.generate',
+            'hook_version' => '0.1.0',
+            'hook_settings' => [],
+            'markdown_content' => 'outline body',
+        ]);
+
+        $result = $executor->execute($prompt, [
+            'post_title' => 'Cách chọn balo laptop',
+            'language' => 'vi',
+        ], [
+            'site_id' => 1,
+            'locale' => 'vi',
+        ]);
+
+        self::assertCount(1, $provider->calls);
+        self::assertSame($raw, $result['output']);
+    }
+
+    public function test_explicit_binding_rejects_when_both_post_title_and_keyword_missing(): void
+    {
+        Log::shouldReceive('info')->zeroOrMoreTimes();
+        Log::shouldReceive('warning')->zeroOrMoreTimes();
+        Config::set('seo-content-ai.prompt_hooks.experimental_allowed', true);
+        Config::set('seo-content-ai.prompt_hooks.experimental_allowlist', ['article.outline.generate']);
+
+        $provider = new FakePromptProviderAdapter(['text' => 'x']);
+        $loader = new PromptHookDefinitionLoader(
+            PromptHookDefinitionLoader::defaultV01Directory(),
+            PromptHookDefinitionLoader::defaultPhase1Directory(),
+        );
+        $loader->clearCache();
+        $registry = new PromptHookRuntimeRegistry($loader);
+        $engine = new PromptHookRuntimeEngine(
+            $registry,
+            new PromptHookEnvelopeValidator,
+            new PromptHookRuntimeLocaleResolver,
+            new PromptHookRuntimeSettingsResolver,
+            new PromptHookDeterministicTemplateRenderer,
+            new PromptProviderCapabilityResolver,
+            $provider,
+            new PromptHookRuntimeOutputPipeline,
+            new InMemoryPromptHookBudgetGuard(new InMemoryPromptBudgetStore, 100, 1_000_000),
+            new PromptHookAuditRecorder,
+            new PromptHookMigrationFlags,
+            new PromptHookShadowParityRecorder,
+        );
+        $executor = new PromptHookExplicitBindingExecutor(
+            $engine,
+            $registry,
+            new PromptHookMigrationFlags,
+            $this->createMock(PromptRunnerService::class),
+            new \App\Addons\SeoContentAi\Services\ArticleWritingLegacyRewriteAdapter(
+                new \App\Addons\SeoContentAi\Services\ArticleWritingInputFormatter,
+            ),
+        );
+        $prompt = new SeoPrompt;
+        $prompt->forceFill([
+            'id' => 45,
+            'hook_key' => 'article.outline.generate',
+            'hook_version' => '0.1.0',
+            'hook_settings' => [],
+            'markdown_content' => 'outline body',
+        ]);
+
+        $this->expectException(InvalidInput::class);
+        $this->expectExceptionMessage('Missing required hook input [post_title|keyword].');
+        $executor->execute($prompt, [
+            'language' => 'vi',
+        ], [
+            'site_id' => 1,
+            'locale' => 'vi',
+        ]);
+    }
+
     public function test_eloquent_input_rejected(): void
     {
         Log::shouldReceive('info')->zeroOrMoreTimes();

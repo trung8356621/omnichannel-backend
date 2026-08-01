@@ -16,6 +16,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Contracts\Conten
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectBusinessLock;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPreviewToken;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemIdentity;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectTaskStatusNormalizer;
 use InvalidArgumentException;
 use RuntimeException;
@@ -70,6 +71,42 @@ final class UpdateContentProjectItemHandler extends AbstractPublishingHandler
                     $projectId,
                     affectedItemIds: [$itemId],
                 );
+            }
+
+            if (array_key_exists('keyword', $allowed) || array_key_exists('title', $allowed)) {
+                $nextKeyword = array_key_exists('keyword', $allowed)
+                    ? ContentProjectItemIdentity::normalize(
+                        $allowed['keyword'] !== null ? (string) $allowed['keyword'] : null,
+                    )
+                    : ContentProjectItemIdentity::normalize(
+                        $task->keyword !== null ? (string) $task->keyword : null,
+                    );
+                $nextTitle = array_key_exists('title', $allowed)
+                    ? ContentProjectItemIdentity::normalize(
+                        $allowed['title'] !== null ? (string) $allowed['title'] : null,
+                    )
+                    : ContentProjectItemIdentity::normalize(
+                        $task->title !== null ? (string) $task->title : null,
+                    );
+
+                $itemType = SeoProjectTask::normalizeType($task->type);
+                if (in_array($itemType, [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE], true)
+                    && ! ContentProjectItemIdentity::isValid($nextKeyword, $nextTitle)
+                ) {
+                    return ContentProjectActionResult::fail(
+                        ContentProjectActionCodes::VALIDATION_FAILED,
+                        ContentProjectItemIdentity::failureMessage(),
+                        $projectId,
+                        affectedItemIds: [$itemId],
+                    );
+                }
+
+                if (array_key_exists('keyword', $allowed)) {
+                    $allowed['keyword'] = $nextKeyword !== '' ? $nextKeyword : null;
+                }
+                if (array_key_exists('title', $allowed)) {
+                    $allowed['title'] = $nextTitle !== '' ? $nextTitle : null;
+                }
             }
 
             if (array_key_exists('status', $allowed)) {

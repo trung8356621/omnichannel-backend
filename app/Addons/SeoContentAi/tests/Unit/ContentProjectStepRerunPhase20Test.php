@@ -31,7 +31,7 @@ final class ContentProjectStepRerunPhase20Test extends TestCase
             (new ReflectionClass(ContentProjectRerunEligibilityGuard::class))->getFileName(),
         );
         self::assertStringContainsString('Article-only rerun requires a usable outline', $src);
-        self::assertStringContainsString('Outline rerun requires title or keyword', $src);
+        self::assertStringContainsString('ContentProjectItemIdentity', $src);
         self::assertStringContainsString('Improve items are manual-only', $src);
     }
 

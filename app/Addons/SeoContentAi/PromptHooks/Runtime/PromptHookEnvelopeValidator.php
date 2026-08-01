@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\PromptHooks\Runtime;
 
 use App\Addons\SeoContentAi\PromptHooks\Canonical\PromptHookDefinition;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\InvalidInput;
+use App\Addons\SeoContentAi\PromptHooks\Support\PromptHookRequireAnyOf;
 
 final class PromptHookEnvelopeValidator
 {
@@ -89,6 +90,7 @@ final class PromptHookEnvelopeValidator
         }
 
         $previous = $this->previousOutputsGuard->enforce($definition, $envelope->previousOutputs);
+        PromptHookRequireAnyOf::assertSatisfied($input, $definition->metadata);
 
         return [
             'context' => $context,

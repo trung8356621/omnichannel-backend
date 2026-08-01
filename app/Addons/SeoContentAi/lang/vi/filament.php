@@ -2265,7 +2265,7 @@ return [
         'title_field_placeholder' => 'VD: Cách chọn balo laptop 14 inch...',
         'secondary_description' => 'Description (optional)',
         'secondary_description_placeholder' => 'Additional context, search intent, target audience, brand note, writing angle...',
-        'keyword_or_title_required' => 'Mỗi hạng mục Create/Rewrite cần ít nhất Keyword hoặc Title.',
+        'keyword_or_title_required' => 'Vui lòng nhập ít nhất Từ khóa hoặc Tiêu đề.',
         'improve_instruction' => 'Improve instruction',
         'improve_instruction_placeholder' => 'Mô tả cần cải thiện gì trên bài viết...',
         'description_placeholder' => 'Gợi ý nội dung, góc bài, đối tượng đọc, CTA...',

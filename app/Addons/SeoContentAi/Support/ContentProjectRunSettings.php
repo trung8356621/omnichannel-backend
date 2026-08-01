@@ -71,6 +71,23 @@ final class ContentProjectRunSettings
     }
 
     /**
+     * Operational selection keys that must survive startRun snapshot.
+     * Without these, prepareRunQueue falls back to all pending project items.
+     *
+     * @var list<string>
+     */
+    public const OPERATIONAL_KEYS = [
+        'task_ids',
+        'rerun',
+        'rerun_scope',
+        'rerun_from_step',
+        'rerun_include_downstream',
+        'rerun_sync',
+        'technical_confirm_full_rerun',
+        'source_article_id',
+    ];
+
+    /**
      * @return array{generate_post_images: bool, settings_version: int, use_php_engine?: bool, php_engine?: array<string, mixed>}
      */
     public function toArray(): array
@@ -98,5 +115,32 @@ final class ContentProjectRunSettings
         }
 
         return $out;
+    }
+
+    /**
+     * Engine flags + operational selection for persist on SeoProjectRun.settings.
+     *
+     * @param  array<string, mixed>|null  $raw
+     * @return array<string, mixed>
+     */
+    public static function snapshotForRun(?array $raw): array
+    {
+        $snapshot = self::fromArray($raw)->toArray();
+        if ($raw === null || $raw === []) {
+            return $snapshot;
+        }
+
+        foreach (self::OPERATIONAL_KEYS as $key) {
+            if (! array_key_exists($key, $raw)) {
+                continue;
+            }
+            $snapshot[$key] = $raw[$key];
+        }
+
+        if (isset($raw['workflow_execution_snapshot']) && is_array($raw['workflow_execution_snapshot'])) {
+            $snapshot['workflow_execution_snapshot'] = $raw['workflow_execution_snapshot'];
+        }
+
+        return $snapshot;
     }
 }

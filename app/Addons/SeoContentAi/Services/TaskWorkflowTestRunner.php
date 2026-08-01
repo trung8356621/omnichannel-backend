@@ -64,10 +64,28 @@ final class TaskWorkflowTestRunner
         $ordered = $this->orderedNodesForTask($task);
         $state = $this->initialState($context);
         $steps = [];
+        $outlineFailed = false;
 
         foreach ($ordered as $node) {
+            if ($outlineFailed && $this->shouldSkipAfterOutlineFailure($node)) {
+                $steps[] = [
+                    'node_id' => (string) ($node['id'] ?? ''),
+                    'type' => (string) ($node['type'] ?? ''),
+                    'title' => (string) ($node['title'] ?? 'Bước'),
+                    'status' => 'skipped',
+                    'message' => 'Không chạy vì bước Dàn ý thất bại.',
+                    'skip_reason' => 'outline_failed',
+                ];
+
+                continue;
+            }
+
             try {
-                $steps[] = $this->executeNode($node, $context, $state, $edges);
+                $step = $this->executeNode($node, $context, $state, $edges);
+                $steps[] = $step;
+                if (($step['status'] ?? '') === 'failed' && $this->isOutlineRoleNode($node)) {
+                    $outlineFailed = true;
+                }
             } catch (\Throwable $exception) {
                 // Một node lỗi không được làm mất toàn bộ các bước đã chạy → ghi nhận bước «failed».
                 $steps[] = [
@@ -77,6 +95,9 @@ final class TaskWorkflowTestRunner
                     'status' => 'failed',
                     'message' => $exception->getMessage(),
                 ];
+                if ($this->isOutlineRoleNode($node)) {
+                    $outlineFailed = true;
+                }
             }
         }
 
@@ -1772,6 +1793,58 @@ final class TaskWorkflowTestRunner
         }
 
         return $stored;
+    }
+
+    /**
+     * @param  array<string, mixed>  $node
+     */
+    private function isOutlineRoleNode(array $node): bool
+    {
+        $role = WorkflowExecutionRole::tryFromMixed($node['data']['execution_role'] ?? null);
+        if ($role === WorkflowExecutionRole::ArticleOutlineGenerate) {
+            return true;
+        }
+
+        $title = mb_strtolower(trim((string) ($node['title'] ?? $node['data']['label'] ?? '')));
+        if ($title !== '' && (str_contains($title, 'dàn ý') || str_contains($title, 'outline'))) {
+            return true;
+        }
+
+        $hookKey = trim((string) ($node['data']['hook_key'] ?? ''));
+
+        return $hookKey === ArticleGenerationInputResolver::OUTLINE_HOOK_KEY;
+    }
+
+    /**
+     * Downstream writing steps must not run (or fail with missing-outline) after outline fail.
+     *
+     * @param  array<string, mixed>  $node
+     */
+    private function shouldSkipAfterOutlineFailure(array $node): bool
+    {
+        $role = WorkflowExecutionRole::tryFromMixed($node['data']['execution_role'] ?? null);
+        if ($role === WorkflowExecutionRole::ArticleContentGenerate
+            || $role === WorkflowExecutionRole::ArticleContentImprove
+        ) {
+            return true;
+        }
+
+        $title = mb_strtolower(trim((string) ($node['title'] ?? $node['data']['label'] ?? '')));
+        if ($title !== '' && (
+            str_contains($title, 'viết bài')
+            || str_contains($title, 'write')
+            || str_contains($title, 'theo dàn ý')
+        )) {
+            return true;
+        }
+
+        $hookKey = trim((string) ($node['data']['hook_key'] ?? ''));
+
+        return in_array($hookKey, [
+            'article.content.generate',
+            'article.content.rewrite',
+            'article.content.improve',
+        ], true);
     }
 
     /**

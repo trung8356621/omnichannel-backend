@@ -17,6 +17,7 @@ use App\Addons\SeoContentAi\Services\ArticleOutlineResolver;
 use App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionRoleResolver;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectExecutionStatus;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemActionGuard;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemIdentity;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectLifecycle;
 
 /**
@@ -162,11 +163,12 @@ final class ContentProjectRerunEligibilityGuard
             return null;
         }
 
-        // Outline
-        $title = trim((string) ($task->title ?? ''));
-        $keyword = trim((string) ($task->keyword ?? ''));
-        if ($title === '' && $keyword === '') {
-            return 'Outline rerun requires title or keyword.';
+        // Outline — keyword-only or title-only both eligible (fresh payload on retry).
+        if (! ContentProjectItemIdentity::isValid(
+            $task->keyword !== null ? (string) $task->keyword : null,
+            $task->title !== null ? (string) $task->title : null,
+        )) {
+            return ContentProjectItemIdentity::failureMessage();
         }
 
         if ($includeDownstream) {
