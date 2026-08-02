@@ -88,5 +88,7 @@ final class ContentProjectItemIdentityEntryPointsTest extends TestCase
         $src = (string) file_get_contents($path);
         self::assertStringContainsString('PromptHookRequireAnyOf::assertSatisfied', $src);
         self::assertStringContainsString('enrichTopicInput', $src);
+        self::assertStringContainsString("array_key_exists('topic', \$fields)", $src);
+        self::assertStringContainsString("unset(\$input['topic'])", $src);
     }
 }

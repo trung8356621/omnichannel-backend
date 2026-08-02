@@ -106,13 +106,22 @@ final class ContentProjectRerunUnifyTest extends TestCase
         $edit = $this->source(EditArticle::class);
         self::assertStringContainsString('queueArticlePipelineRerun', $edit);
         self::assertStringContainsString('ArticlePipelineRerunService', $edit);
+        self::assertStringContainsString('ArticleAiHistoryApplicationService', $edit);
+
+        $actionsBlade = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/filament/resources/article-resource/pages/partials/article-editor-page-actions.blade.php',
+        );
+        self::assertStringNotContainsString('data-seo-pipeline-rerun', $actionsBlade);
     }
 
     public function test_mcp_agent_full_rerun_still_uses_items_command(): void
     {
         $factory = $this->source(ContentProjectAgentCommandFactory::class);
+        // Full rerun capability must stay on RerunProjectItemsCommand (not step).
         self::assertStringContainsString("'content_project.rerun' => new RerunProjectItemsCommand", $factory);
-        self::assertStringNotContainsString('RerunProjectItemStepCommand', $factory);
+        // Step rerun is a separate capability — allowed in factory, not on full-rerun path.
+        self::assertStringContainsString("'content_project.rerun_step' => new RerunProjectItemStepCommand", $factory);
+        self::assertStringNotContainsString("'content_project.rerun' => new RerunProjectItemStepCommand", $factory);
     }
 
     public function test_worker_routes_step_and_preserves_published(): void

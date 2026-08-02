@@ -1,0 +1,129 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Tests\Unit;
+
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ReturnToContentProjectCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SendToPublishingQueueCommand;
+use App\Addons\SeoContentAi\Support\PublishingQueue\PublishingQueueHandoffEligibility;
+use App\Addons\SeoContentAi\Support\PublishingQueue\PublishingQueueStateClassifier;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * Content Project ↔ Publishing Queue module boundary.
+ */
+final class ContentProjectPublishingQueueBoundaryContractTest extends TestCase
+{
+    public function test_migration_adds_publishing_queued_at(): void
+    {
+        $path = dirname(__DIR__, 2).'/database/migrations/2026_08_02_100000_add_publishing_queue_handoff_to_seo_project_tasks.php';
+        self::assertFileExists($path);
+        $src = (string) file_get_contents($path);
+        self::assertStringContainsString('publishing_queued_at', $src);
+        self::assertStringContainsString('publishing_queued_by', $src);
+        self::assertStringContainsString("publish_queue_status = 'none'", $src);
+    }
+
+    public function test_schedule_future_sets_execution_none(): void
+    {
+        $src = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/ContentProject/ContentProjectPublishingQueueService.php',
+        );
+        self::assertStringContainsString('Plan schedule time', $src);
+        self::assertStringContainsString('ContentProjectPublishQueueStatus::None->value', $src);
+        self::assertStringContainsString('acceptHandoff', $src);
+        self::assertStringContainsString('returnToContentProject', $src);
+    }
+
+    public function test_handoff_commands_registered(): void
+    {
+        self::assertSame('content_project.send_to_publishing_queue', (new SendToPublishingQueueCommand(1, [1]))->name());
+        self::assertSame('content_project.return_to_content_project', (new ReturnToContentProjectCommand(1, [1]))->name());
+
+        $handler = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/ContentProject/Application/Handlers/SendToPublishingQueueHandler.php',
+        );
+        self::assertStringContainsString('canManageContentProjectWorkflow', $handler);
+        self::assertStringContainsString('wordpress_called', $handler);
+
+        $registrar = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/ContentProject/Application/ContentProjectCommandBusRegistrar.php',
+        );
+        self::assertStringContainsString('SendToPublishingQueueCommand::class', $registrar);
+        self::assertStringContainsString('ReturnToContentProjectCommand::class', $registrar);
+    }
+
+    public function test_auto_schedule_has_project_month_and_quick(): void
+    {
+        $src = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/ContentProject/ContentProjectAutoScheduleService.php',
+        );
+        self::assertStringContainsString("'project_month'", $src);
+        self::assertStringContainsString("'quick'", $src);
+        self::assertStringContainsString('Quick Mode', $src);
+        self::assertStringNotContainsString('Dev Mode', $src);
+    }
+
+    public function test_cp_ops_ui_removed_scheduled_published_cards(): void
+    {
+        $view = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/filament/resources/seo-project-resource/pages/view-seo-project-operations.blade.php',
+        );
+        self::assertStringNotContainsString("'card' => 'scheduled'", $view);
+        self::assertStringNotContainsString("'card' => 'published'", $view);
+        self::assertStringNotContainsString('<th class="cp-ops-col-sched"', $view);
+        self::assertStringNotContainsString('>Schedule</th>', $view);
+        self::assertStringContainsString('sendToPublishingQueueOne', (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/components/content-project-item-actions-menu.blade.php',
+        ));
+    }
+
+    public function test_publishing_queue_page_redirects_to_hub(): void
+    {
+        $page = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource/Pages/ContentProjectPublishingQueue.php',
+        );
+        self::assertStringNotContainsString("lifecycle' => 'waiting_publish,published'", $page);
+        self::assertStringContainsString('redirect', $page);
+        self::assertStringContainsString('getPublishingQueueUrl', $page);
+        self::assertStringContainsString('canManageContentProjectWorkflow', $page);
+
+        self::assertTrue(class_exists(\App\Addons\SeoContentAi\Filament\Pages\PublishingQueueHub::class));
+        $hub = (string) file_get_contents(
+            (new \ReflectionClass(\App\Addons\SeoContentAi\Filament\Pages\PublishingQueueHub::class))->getFileName(),
+        );
+        self::assertStringContainsString("slug = 'publishing-queue'", $hub);
+        self::assertStringContainsString('canManageContentProjectWorkflow', $hub);
+    }
+
+    public function test_classifier_and_eligibility(): void
+    {
+        $unscheduled = PublishingQueueStateClassifier::classify([
+            'publishing_queued_at' => '2026-08-01T00:00:00+00:00',
+            'queue_status' => 'none',
+        ]);
+        self::assertSame('unscheduled', $unscheduled['state']);
+
+        self::assertTrue(PublishingQueueHandoffEligibility::canSend([
+            'article_id' => 9,
+            'generation_status' => 'completed',
+            'execution_status' => 'success',
+            'generation_completed_at' => '2026-08-01T10:00:00+00:00',
+        ]));
+        self::assertFalse(PublishingQueueHandoffEligibility::canSend([
+            'article_id' => 9,
+            'publishing_queued_at' => '2026-08-01T00:00:00+00:00',
+            'generation_status' => 'completed',
+            'execution_status' => 'success',
+            'generation_completed_at' => '2026-08-01T10:00:00+00:00',
+        ]));
+    }
+
+    public function test_lang_keys_exist(): void
+    {
+        $en = (string) file_get_contents(dirname(__DIR__, 2).'/lang/en/filament.php');
+        self::assertStringContainsString("'send_to_publishing_queue'", $en);
+        self::assertStringContainsString('Send to Publishing Queue', $en);
+    }
+}

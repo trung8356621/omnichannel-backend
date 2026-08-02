@@ -129,8 +129,10 @@ final class ContentProjectEditorLocalSaveTest extends TestCase
         self::assertStringContainsString('hash_equals', $method);
     }
 
-    public function test_published_item_with_dirty_local_shows_publish_now(): void
+    public function test_published_item_with_dirty_local_never_shows_publish_now_in_cp(): void
     {
+        // Publish Now moved to Publishing Queue module — CP presenter always keeps
+        // it false (dirty-published items are still owned by PQ, not CP ops UI).
         $clean = ContentProjectItemActionsPresenter::forRow([
             'lifecycle' => 'published',
             'queue_status' => 'published',
@@ -155,7 +157,7 @@ final class ContentProjectEditorLocalSaveTest extends TestCase
             'is_improve' => false,
             'is_scheduled' => false,
         ]);
-        self::assertTrue($dirty['publish_now']);
+        self::assertFalse($dirty['publish_now']);
     }
 
     public function test_publish_now_allows_published_to_waiting_for_wp_update(): void

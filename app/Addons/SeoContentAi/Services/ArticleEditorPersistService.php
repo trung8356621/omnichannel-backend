@@ -191,6 +191,17 @@ final class ArticleEditorPersistService
             return;
         }
 
+        // Workflow AI persist runs while task is writing — never mirror schedule/unschedule
+        // through ContentProjectItemActionGuard (Schedule blocked: «Generation is running»).
+        $taskStatus = strtolower(trim((string) ($task->status ?? '')));
+        if (in_array($taskStatus, [
+            SeoProjectTask::STATUS_WRITING,
+            SeoProjectTask::STATUS_PENDING,
+            SeoProjectTask::STATUS_PROCESSING,
+        ], true)) {
+            return;
+        }
+
         $project = SeoProject::query()->find((int) $task->project_id);
         if (! $project instanceof SeoProject) {
             return;
@@ -199,15 +210,19 @@ final class ArticleEditorPersistService
         $taskId = (int) $task->id;
 
         // Schedule mirror qua Publishing Queue service (không stamp model ad-hoc).
-        if ($status === 'scheduled' && $publishAt !== null) {
-            $at = $publishAt instanceof Carbon ? $publishAt : Carbon::parse((string) $publishAt);
-            $this->publishingQueue->schedule($project, [$taskId], $at);
+        try {
+            if ($status === 'scheduled' && $publishAt !== null) {
+                $at = $publishAt instanceof Carbon ? $publishAt : Carbon::parse((string) $publishAt);
+                $this->publishingQueue->schedule($project, [$taskId], $at);
 
-            return;
-        }
+                return;
+            }
 
-        if ($task->scheduled_publish_at !== null && $status !== 'scheduled') {
-            $this->publishingQueue->unschedule($project, [$taskId]);
+            if ($task->scheduled_publish_at !== null && $status !== 'scheduled') {
+                $this->publishingQueue->unschedule($project, [$taskId]);
+            }
+        } catch (\RuntimeException) {
+            // Fail-soft: content persist must not fail because schedule eligibility rejects.
         }
     }
 }

@@ -39,6 +39,13 @@ final class ArticleContentPersistLockWaitTest extends TestCase
         self::assertStringContainsString('postImages->syncFromHtml', $side);
         self::assertStringContainsString('revisions->captureAfterSave', $side);
         self::assertStringContainsString('keywordLinks->reconcileForArticle', $side);
+
+        $scheduleSync = $this->methodSource(
+            new ReflectionMethod(ArticleEditorPersistService::class, 'syncContentProjectScheduledPublish'),
+        );
+        self::assertStringContainsString('STATUS_WRITING', $scheduleSync);
+        self::assertStringContainsString('STATUS_PROCESSING', $scheduleSync);
+        self::assertStringContainsString('catch (\\RuntimeException)', $scheduleSync);
     }
 
     public function test_update_action_retries_lock_wait_outside_side_effects(): void

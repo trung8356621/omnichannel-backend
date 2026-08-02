@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services\ContentProject\Application;
 
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AddContentProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AcknowledgeProjectItemGenerationErrorCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ApproveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AutoScheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CancelProjectItemPublishingCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\DebugOverrideProjectItemLifecycleCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CreateContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\GenerateProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\MoveProjectItemScheduleCommand;
@@ -17,9 +19,12 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\Process
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\PublishProjectItemsNowCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RestoreContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ResumeProjectExecutionCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ResumeProjectItemFromFailedStepCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RetryProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemStepCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SendToPublishingQueueCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ReturnToContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ScheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SkipProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
@@ -29,12 +34,14 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\Unsched
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UpdateContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UpdateContentProjectItemCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\AddContentProjectItemsHandler;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\AcknowledgeProjectItemGenerationErrorHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ApproveProjectItemsHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ArchiveContentProjectHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ArchiveProjectItemsHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\AutoScheduleProjectItemsHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\CancelProjectItemPublishingHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\CreateContentProjectHandler;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\DebugOverrideProjectItemLifecycleHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\GenerateProjectItemsHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\MoveProjectItemScheduleHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ProcessScheduledProjectItemPublishHandler;
@@ -44,7 +51,10 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ResumeP
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\RetryProjectItemPublishingHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\RerunProjectItemsHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\RerunProjectItemStepHandler;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ResumeProjectItemFromFailedStepHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ScheduleProjectItemsHandler;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\SendToPublishingQueueHandler;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ReturnToContentProjectHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\SkipProjectItemPublishingHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\StartReviewHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\StopProjectExecutionHandler;
@@ -133,10 +143,14 @@ final class ContentProjectCommandBusRegistrar
             GenerateProjectItemsCommand::class => GenerateProjectItemsHandler::class,
             RerunProjectItemsCommand::class => RerunProjectItemsHandler::class,
             RerunProjectItemStepCommand::class => RerunProjectItemStepHandler::class,
+            ResumeProjectItemFromFailedStepCommand::class => ResumeProjectItemFromFailedStepHandler::class,
+            AcknowledgeProjectItemGenerationErrorCommand::class => AcknowledgeProjectItemGenerationErrorHandler::class,
             StartReviewCommand::class => StartReviewHandler::class,
             ApproveProjectItemsCommand::class => ApproveProjectItemsHandler::class,
             ScheduleProjectItemsCommand::class => ScheduleProjectItemsHandler::class,
             AutoScheduleProjectItemsCommand::class => AutoScheduleProjectItemsHandler::class,
+            SendToPublishingQueueCommand::class => SendToPublishingQueueHandler::class,
+            ReturnToContentProjectCommand::class => ReturnToContentProjectHandler::class,
             UnscheduleProjectItemsCommand::class => UnscheduleProjectItemsHandler::class,
             MoveProjectItemScheduleCommand::class => MoveProjectItemScheduleHandler::class,
             PublishProjectItemsNowCommand::class => PublishProjectItemsNowHandler::class,
@@ -146,6 +160,7 @@ final class ContentProjectCommandBusRegistrar
             RetryProjectItemPublishingCommand::class => RetryProjectItemPublishingHandler::class,
             SkipProjectItemPublishingCommand::class => SkipProjectItemPublishingHandler::class,
             CancelProjectItemPublishingCommand::class => CancelProjectItemPublishingHandler::class,
+            DebugOverrideProjectItemLifecycleCommand::class => DebugOverrideProjectItemLifecycleHandler::class,
             ArchiveContentProjectCommand::class => ArchiveContentProjectHandler::class,
             ArchiveProjectItemsCommand::class => ArchiveProjectItemsHandler::class,
             RestoreContentProjectCommand::class => RestoreContentProjectHandler::class,

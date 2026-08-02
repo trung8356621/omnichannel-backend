@@ -262,6 +262,8 @@ final class ArticlePromptRunHistoryService
                                 $step['source_run_id'] = $item['source_run_id'] ?? null;
                                 $step['source_run_item_id'] = $item['source_run_item_id'] ?? null;
                                 $step['run_item_created_at'] = $item['created_at'] ?? null;
+                                $step['run_item_id'] = $step['run_item_id'] ?? ($item['run_item_id'] ?? null);
+                                $step['attempt'] = $step['attempt'] ?? ($item['attempt'] ?? null);
 
                                 $normalized = $this->normalizePromptItem(
                                     $step,
@@ -595,7 +597,22 @@ final class ArticlePromptRunHistoryService
             'outline_marker_found' => $debug['outline_marker_found'] ?? null,
             'writing_instructions_marker_found' => $debug['writing_instructions_marker_found'] ?? null,
             'artifact_version' => $debug['artifact_version'] ?? null,
+            // Article AI History application layer — Article AI History reads these
+            // to build stable artifact refs and fail-closed classification.
+            'artifact_type' => $this->trimmedOrNull($step['artifact_type'] ?? null),
+            'outline_markdown' => $this->trimmedOrNull($step['outline_markdown'] ?? null),
+            'persists_as_outline' => (bool) ($step['persists_as_outline'] ?? false),
+            'run_item_id' => isset($step['run_item_id']) && $step['run_item_id'] !== null ? (int) $step['run_item_id'] : null,
+            'step_index' => $index,
+            'attempt' => isset($step['attempt']) && $step['attempt'] !== null ? (int) $step['attempt'] : null,
         ];
+    }
+
+    private function trimmedOrNull(mixed $value): ?string
+    {
+        $trimmed = trim((string) $value);
+
+        return $trimmed !== '' ? $trimmed : null;
     }
 
     /**

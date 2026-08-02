@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
+use App\Addons\SeoContentAi\Filament\Pages\PublishingQueueHub;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
@@ -1249,13 +1250,13 @@ class SeoProjectResource extends SeoPanelResource
         ];
     }
 
+    /**
+     * Independent Publishing Queue hub (top-level page) scoped to a project.
+     * The nested `content-projects/{id}/publishing-queue` route redirects here (compat).
+     */
     public static function getPublishingQueueUrl(SeoProject $project): string
     {
-        // Compatibility: Publishing Queue is a filtered view of project items.
-        return static::getUrl('view', [
-            'record' => $project,
-            'lifecycle' => 'waiting_publish,published',
-        ]);
+        return PublishingQueueHub::getUrl(['projectId' => (int) $project->getKey()]);
     }
 
     /**
@@ -1406,7 +1407,7 @@ class SeoProjectResource extends SeoPanelResource
     public static function makeGeneratePendingItemsAction(SeoProject $project): \Filament\Actions\Action
     {
         return \Filament\Actions\Action::make('generate_pending_items')
-            ->label(__('seo-content-ai::filament.projects.generate_pending_items'))
+            ->label(__('seo-content-ai::filament.projects.generate_working_items'))
             ->icon('heroicon-o-play')
             ->color('success')
             ->visible(fn (): bool => SeoAccessControl::canAccessContentProjectRun($project))

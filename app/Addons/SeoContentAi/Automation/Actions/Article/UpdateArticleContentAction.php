@@ -16,8 +16,10 @@ use App\Addons\SeoContentAi\Automation\Support\ArticleContentConflictGuard;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleEditorPersistService;
 use App\Addons\SeoContentAi\Services\ArticleLastSavedTimestampService;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectContentManagerHandoffService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Models\User;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
@@ -30,6 +32,7 @@ final class UpdateArticleContentAction implements BusinessAction
         private readonly ArticleEditorPersistService $persistService,
         private readonly ArticleContentConflictGuard $conflictGuard,
         private readonly ArticleLastSavedTimestampService $lastSavedTimestamps,
+        private readonly ContentProjectContentManagerHandoffService $contentManagerHandoff,
     ) {}
 
     public static function definition(): ActionDefinition
@@ -138,6 +141,19 @@ final class UpdateArticleContentAction implements BusinessAction
             $fresh = $fresh->fresh() ?? $fresh;
         }
 
+        $handoff = ['handed_off' => false, 'skipped' => true];
+        if ($fresh instanceof SeoArticle) {
+            $actor = auth()->user();
+            $handoff = $this->contentManagerHandoff->maybeHandoffAfterCanonicalSave(
+                $fresh,
+                $actor instanceof User ? $actor : null,
+                $context->origin,
+            );
+            if (! empty($handoff['handed_off'])) {
+                $fresh = $fresh->fresh() ?? $fresh;
+            }
+        }
+
         return ActionResult::success(
             output: [
                 'article_id' => $articleId,
@@ -145,6 +161,7 @@ final class UpdateArticleContentAction implements BusinessAction
                 'message' => (string) ($result['message'] ?? ''),
                 'content_hash' => $this->conflictGuard->contentHash((string) ($fresh?->body ?? $content)),
                 'updated_at' => $fresh?->updated_at?->toIso8601String(),
+                'content_project_handoff' => $handoff,
             ],
             events: [
                 ActionSupport::articleEvent('article.content_updated', $context, $articleId, [

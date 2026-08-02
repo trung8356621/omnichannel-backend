@@ -70,7 +70,9 @@ export default function SeoScorePanel({
     const messages = Object.keys(seoRuleMessages).length > 0 ? seoRuleMessages : (analysis?.messages ?? {});
 
     const score = scoreFromViolations(violations, rules);
-    const failedItems = buildFailedViolationItems(violations, rules, messages);
+    const metrics = analysis?.metrics ?? {};
+    const locale = String(document?.documentElement?.lang ?? 'vi').startsWith('en') ? 'en' : 'vi';
+    const failedItems = buildFailedViolationItems(violations, rules, messages, metrics, locale);
     const passedItems = buildPassedRuleItems(violations, rules, messages);
     const quality = scoreQualityLabel(score);
     const isLoading = loading || analyzing;
@@ -133,9 +135,19 @@ export default function SeoScorePanel({
             {failedItems.length > 0 ? (
                 <ul className="seo-assistant-score__issues">
                     {failedItems.map((item) => (
-                        <li key={item.key} className="seo-assistant-score__issue">
+                        <li
+                            key={item.key}
+                            className="seo-assistant-score__issue"
+                            title={item.detail || item.label}
+                            data-seo-violation-key={item.key}
+                        >
                             <AlertCircle size={14} className="seo-assistant-score__issue-icon" aria-hidden />
-                            <span className="seo-assistant-score__issue-label">{item.label}</span>
+                            <span className="seo-assistant-score__issue-label">
+                                {item.summary || item.label}
+                                {item.detail && item.detail !== item.summary ? (
+                                    <span className="seo-assistant-score__issue-detail">{item.detail}</span>
+                                ) : null}
+                            </span>
                             <span className="seo-assistant-score__issue-deduction">(-{item.deduction})</span>
                             <ViolationActionButton
                                 item={item}

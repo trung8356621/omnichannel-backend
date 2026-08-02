@@ -16,6 +16,7 @@ use App\Addons\SeoContentAi\Services\PromptLoaiSanPhamOptionsService;
 use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
 use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
+use App\Addons\SeoContentAi\Services\WordPressMediaCapabilityResolver;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
@@ -238,13 +239,19 @@ final class ArticleEditorLazyPayloadController extends Controller
     {
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
+        $article->loadMissing('site');
+        $capability = app(WordPressMediaCapabilityResolver::class)->forSite($article->site);
+
         return response()->json([
             'success' => true,
             'data' => [
                 'articleId' => (int) $article->id,
                 'siteId' => (int) $article->site_id,
                 'endpoint' => route('seo.articles.media-picker', ['article' => $article->id]),
-                'wordPressLinked' => (int) ($article->wp_post_id ?? 0) > 0,
+                // BC alias — site-level WP media library, NOT article wp_post_id.
+                'wordPressLinked' => $capability['available'],
+                'wordpress_media_available' => $capability['available'],
+                'wordpress_media_unavailable_reason' => $capability['reason'],
             ],
         ]);
     }

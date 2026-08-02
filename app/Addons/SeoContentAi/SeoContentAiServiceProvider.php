@@ -81,6 +81,12 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
         $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookRuntimeEngine::class);
         $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookCallerBridge::class);
         $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookEditorCatalog::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Contracts\PromptOutputContractCatalog::class, function (): \App\Addons\SeoContentAi\PromptHooks\Contracts\PromptOutputContractCatalog {
+            return new \App\Addons\SeoContentAi\PromptHooks\Contracts\PromptOutputContractCatalog(
+                \App\Addons\SeoContentAi\PromptHooks\Contracts\PromptOutputContractCatalog::defaultDirectory(),
+            );
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Contracts\PromptOutputContractResolver::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryPromptHookRuntime::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryPromptsDoctorService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookUiFailureMapper::class);

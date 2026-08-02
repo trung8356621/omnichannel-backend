@@ -76,6 +76,10 @@ class SeoProjectTask extends Model
         'publish_published_at' => 'datetime',
         'connected_at' => 'datetime',
         'completed_at' => 'datetime',
+        'content_manager_reviewed_at' => 'datetime',
+        'content_manager_reviewed_by' => 'integer',
+        'publishing_queued_at' => 'datetime',
+        'publishing_queued_by' => 'integer',
         'archived_at' => 'datetime',
         'deleted_at' => 'datetime',
     ];
@@ -89,6 +93,48 @@ class SeoProjectTask extends Model
     public function scopeActive(Builder $query): Builder
     {
         return $query->whereNull('archived_at');
+    }
+
+    /**
+     * Content Project working set — not handed to Publishing Queue.
+     *
+     * @param  Builder<SeoProjectTask>  $query
+     * @return Builder<SeoProjectTask>
+     */
+    public function scopeInContentProjectWorkingSet(Builder $query): Builder
+    {
+        $query = $query->active();
+        try {
+            if (\Illuminate\Support\Facades\Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publishing_queued_at')) {
+                $query->whereNull('publishing_queued_at');
+            }
+        } catch (\Throwable) {
+            // Schema unavailable — keep active set.
+        }
+
+        return $query;
+    }
+
+    /**
+     * Publishing Queue module ownership.
+     *
+     * @param  Builder<SeoProjectTask>  $query
+     * @return Builder<SeoProjectTask>
+     */
+    public function scopeInPublishingQueue(Builder $query): Builder
+    {
+        $query = $query->active();
+        try {
+            if (\Illuminate\Support\Facades\Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publishing_queued_at')) {
+                $query->whereNotNull('publishing_queued_at');
+            } else {
+                $query->whereRaw('0 = 1');
+            }
+        } catch (\Throwable) {
+            $query->whereRaw('0 = 1');
+        }
+
+        return $query;
     }
 
     /**

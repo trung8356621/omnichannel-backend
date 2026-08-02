@@ -904,7 +904,23 @@
                 return Number(picker.siteId || 0);
             },
             pickerWordPressLinked() {
-                return Boolean(window.__SEO_ARTICLE_MEDIA_PICKER__?.wordPressLinked);
+                const picker = window.__SEO_ARTICLE_MEDIA_PICKER__ || {};
+                if (typeof picker.wordpress_media_available === 'boolean') {
+                    return picker.wordpress_media_available;
+                }
+
+                return Boolean(picker.wordPressLinked);
+            },
+            pickerWordPressUnavailableReason() {
+                const picker = window.__SEO_ARTICLE_MEDIA_PICKER__ || {};
+                const reason = String(picker.wordpress_media_unavailable_reason || '').trim();
+                if (reason !== '') {
+                    return reason;
+                }
+
+                return this.pickerWordPressLinked()
+                    ? ''
+                    : 'Thư viện WordPress không khả dụng (thiếu connection/credential).';
             },
             async fetchPickerImages({ resetPage = false, skipCache = false } = {}) {
                 if (this.pickerTab === 'article') {
@@ -1577,6 +1593,8 @@
         x-on:article-wordpress-sync-lock.window="lockPageForHeavyAction($event.detail?.action ?? 'sync')"
         x-on:article-wordpress-sync-unlock.window="unlockPageAfterHeavyActionFailure()"
         x-on:seo-open-article-media-picker.window="openArticleMediaModal('editor-block', $event.detail?.blockId ?? null)"
+        x-on:seo-open-featured-media-picker.window="openArticleMediaModal('featured')"
+        x-on:seo-open-gallery-media-picker.window="openArticleMediaModal('gallery')"
         x-on:seo-article-editor-notify.window="
             const payload = $event.detail && typeof $event.detail === 'object' ? $event.detail : {};
             if (typeof window.__seoShowArticleEditorToast === 'function') {
@@ -1877,6 +1895,48 @@
                     window.__SEO_ARTICLE_EDITOR_PERF_DEBUG__ = @js((bool) config('seo-content-ai.article_editor_perf_debug', false));
                 </script>
 
+                @if ($this->hasAiHistoryPendingBanner())
+                    @php($aiBannerTarget = (string) ($this->aiHistoryPendingBanner['target'] ?? ''))
+                    @php($aiBannerRun = $this->aiHistoryPendingBanner['run_id'] ?? '-')
+                    @php($aiBannerAttempt = $this->aiHistoryPendingBanner['attempt'] ?? '-')
+                    @php($aiHistoryUrl = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('prompts', ['record' => $record]))
+                    <div class="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-50">
+                        <p class="font-medium">
+                            @if ($aiBannerTarget === 'outline')
+                                {{ __('seo-content-ai::filament.article_ai_history.banner_outline', ['run' => $aiBannerRun, 'attempt' => $aiBannerAttempt]) }}
+                            @else
+                                {{ __('seo-content-ai::filament.article_ai_history.banner_content', ['run' => $aiBannerRun, 'attempt' => $aiBannerAttempt]) }}
+                            @endif
+                        </p>
+                        <div class="mt-2 flex flex-wrap gap-2">
+                            <button
+                                type="button"
+                                class="fi-btn fi-btn-color-gray fi-btn-size-sm rounded-lg px-3 py-1.5 text-xs"
+                                wire:click="undoAiHistoryPendingApply"
+                                wire:loading.attr="disabled"
+                                wire:target="undoAiHistoryPendingApply"
+                            >
+                                {{ __('seo-content-ai::filament.article_ai_history.banner_undo') }}
+                            </button>
+                            <a
+                                href="{{ $aiHistoryUrl }}"
+                                target="_blank"
+                                rel="noopener"
+                                class="fi-btn fi-btn-color-gray fi-btn-size-sm rounded-lg px-3 py-1.5 text-xs"
+                            >
+                                {{ __('seo-content-ai::filament.article_ai_history.banner_view_source') }}
+                            </a>
+                            <button
+                                type="button"
+                                class="fi-btn fi-btn-color-primary fi-btn-size-sm rounded-lg px-3 py-1.5 text-xs"
+                                x-on:click="document.querySelector('[data-seo-page-action=save]')?.click()"
+                            >
+                                {{ __('seo-content-ai::filament.article_ai_history.banner_save') }}
+                            </button>
+                        </div>
+                    </div>
+                @endif
+
                 <div wire:ignore id="seo-article-editor-root" class="w-full seo-article-editor-compact min-w-0"></div>
 
                 <button
@@ -1972,15 +2032,33 @@
                                                 type="button"
                                                 class="seo-assistant-dock__tab"
                                                 role="tab"
-                                                x-bind:class="{ 'is-active': panelFilterActive && activePanel === chip.id }"
+                                                x-bind:class="{
+                                                    'is-active': panelFilterActive && activePanel === chip.id,
+                                                    'is-status-error': chipStatus(chip.id) === 'error',
+                                                    'is-status-warning': chipStatus(chip.id) === 'warning',
+                                                    'is-status-success': chipStatus(chip.id) === 'success',
+                                                }"
                                                 x-bind:aria-selected="panelFilterActive && activePanel === chip.id ? 'true' : 'false'"
+                                                x-bind:title="chipReasonsTooltip(chip.id) || chip.fullLabel"
+                                                x-bind:aria-label="(chipReasonsTooltip(chip.id) ? (chip.label + ': ' + chipReasonsTooltip(chip.id)) : chip.fullLabel)"
                                                 x-on:click="selectChip(chip.id)"
                                             >
-                                                <span x-text="chip.label"></span>
+                                                <span
+                                                    class="seo-assistant-dock__tab-dot"
+                                                    x-show="chipStatus(chip.id) === 'error' || chipStatus(chip.id) === 'warning'"
+                                                    aria-hidden="true"
+                                                ></span>
+                                                <span class="seo-assistant-dock__tab-label" x-text="chip.label"></span>
                                                 <span
                                                     class="seo-assistant-dock__tab-badge"
-                                                    x-show="chipBadge(chip.id)"
+                                                    x-show="chipBadge(chip.id) !== null && chipBadge(chip.id) !== ''"
                                                     x-text="chipBadge(chip.id)"
+                                                ></span>
+                                                <span
+                                                    class="seo-assistant-dock__tab-issue"
+                                                    x-show="chipIssueCount(chip.id)"
+                                                    x-text="chipIssueCount(chip.id)"
+                                                    aria-hidden="true"
                                                 ></span>
                                             </button>
                                         </template>
@@ -2297,7 +2375,7 @@
                         x-bind:class="{ 'is-active': pickerTab === 'original' }"
                         x-on:click="switchPickerTab('original')"
                         x-bind:disabled="!pickerWordPressLinked()"
-                        x-bind:title="pickerWordPressLinked() ? 'Thư viện WordPress' : 'Đồng bộ bài viết với WordPress để sử dụng thư viện này'"
+                        x-bind:title="pickerWordPressLinked() ? 'Thư viện media WordPress (site-level)' : pickerWordPressUnavailableReason()"
                     >
                         Gốc (WP)
                     </button>
@@ -2661,114 +2739,6 @@
             </template>
         </div>
     </div>
-
-    @if (\App\Addons\SeoContentAi\Support\SeoAccessControl::canAccessManagerFeatures())
-        <div
-            class="seo-pipeline-rerun"
-            x-data="{
-                open: false,
-                from: 'outline',
-                submitting: false,
-                openModal() { if (this.submitting) { return; } this.open = true; },
-                closeModal() { this.open = false; },
-                async submit() {
-                    if (this.submitting) { return; }
-                    this.submitting = true;
-                    try {
-                        await $wire.queueArticlePipelineRerun(this.from);
-                    } finally {
-                        this.submitting = false;
-                        this.open = false;
-                    }
-                },
-            }"
-            x-on:open-article-pipeline-rerun-modal.window="openModal()"
-            x-on:close-article-pipeline-rerun-modal.window="closeModal()"
-            x-on:keydown.escape.window="if (open) closeModal()"
-        >
-            <div
-                x-show="$wire.pipelineRerunStatus"
-                x-cloak
-                class="seo-pipeline-rerun-status"
-                style="margin: 0.5rem 0;"
-            >
-                <span>
-                    {{ __('seo-content-ai::filament.article_pipeline_rerun.status_label') }}:
-                    <strong
-                        x-text="{
-                            queued: @js(__('seo-content-ai::filament.article_pipeline_rerun.status_queued')),
-                            running: @js(__('seo-content-ai::filament.article_pipeline_rerun.status_running')),
-                            completed: @js(__('seo-content-ai::filament.article_pipeline_rerun.status_completed')),
-                            failed: @js(__('seo-content-ai::filament.article_pipeline_rerun.status_failed')),
-                        }[$wire.pipelineRerunStatus] || ($wire.pipelineRerunStatus || '')"
-                    ></strong>
-                </span>
-                <template x-if="$wire.pipelineRerunUrl">
-                    <a x-bind:href="$wire.pipelineRerunUrl" target="_blank" rel="noopener noreferrer">
-                        {{ __('seo-content-ai::filament.article_pipeline_rerun.view_run') }}
-                    </a>
-                </template>
-            </div>
-
-            <div
-                x-show="open"
-                x-cloak
-                class="seo-pipeline-rerun__backdrop"
-                x-on:click.self="closeModal()"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="seo-pipeline-rerun-title"
-            >
-                <div class="seo-pipeline-rerun__panel">
-                    <h3 id="seo-pipeline-rerun-title" class="seo-pipeline-rerun__title">
-                        {{ __('seo-content-ai::filament.article_pipeline_rerun.modal_title') }}
-                    </h3>
-                    <p class="seo-pipeline-rerun__desc">
-                        {{ __('seo-content-ai::filament.article_pipeline_rerun.modal_intro') }}
-                    </p>
-                    <div class="seo-pipeline-rerun__options" role="radiogroup">
-                        <label class="seo-pipeline-rerun__option">
-                            <input type="radio" name="pipeline-rerun-from" value="outline" x-model="from" />
-                            <span>
-                                <span class="seo-pipeline-rerun__option-title">{{ __('seo-content-ai::filament.article_pipeline_rerun.from_outline_title') }}</span>
-                                <span class="seo-pipeline-rerun__option-desc">{{ __('seo-content-ai::filament.article_pipeline_rerun.from_outline_desc') }}</span>
-                            </span>
-                        </label>
-                        <label class="seo-pipeline-rerun__option">
-                            <input type="radio" name="pipeline-rerun-from" value="article" x-model="from" />
-                            <span>
-                                <span class="seo-pipeline-rerun__option-title">{{ __('seo-content-ai::filament.article_pipeline_rerun.from_article_title') }}</span>
-                                <span class="seo-pipeline-rerun__option-desc">{{ __('seo-content-ai::filament.article_pipeline_rerun.from_article_desc') }}</span>
-                            </span>
-                        </label>
-                    </div>
-                    <p class="seo-pipeline-rerun__warn">
-                        {{ __('seo-content-ai::filament.article_pipeline_rerun.warning') }}
-                    </p>
-                    <div class="seo-pipeline-rerun__actions">
-                        <button type="button" class="fi-btn fi-btn-size-md fi-color-gray" x-on:click="closeModal()" x-bind:disabled="submitting">
-                            {{ __('seo-content-ai::filament.article_pipeline_rerun.cancel') }}
-                        </button>
-                        <button
-                            type="button"
-                            class="fi-btn fi-btn-size-md fi-color-primary"
-                            x-on:click="submit()"
-                            wire:loading.attr="disabled"
-                            wire:target="queueArticlePipelineRerun"
-                            x-bind:disabled="submitting"
-                        >
-                            <span x-show="!submitting">
-                                {{ __('seo-content-ai::filament.article_pipeline_rerun.queue') }}
-                            </span>
-                            <span x-show="submitting" x-cloak>
-                                {{ __('seo-content-ai::filament.article_pipeline_rerun.queueing') }}
-                            </span>
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    @endif
 
     @push('scripts')
         @viteReactRefresh

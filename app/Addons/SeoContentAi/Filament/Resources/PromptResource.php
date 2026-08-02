@@ -183,7 +183,8 @@ class PromptResource extends SeoPanelResource
                                             ->dehydrated(true)
                                             ->live(onBlur: true)
                                             ->columnSpanFull()
-                                            ->minHeight('420px')
+                                            ->minHeight('280px')
+                                            ->maxHeight('600px')
                                             ->extraAttributes([
                                                 'class' => 'seo-prompt-markdown-editor',
                                             ])
@@ -203,38 +204,21 @@ class PromptResource extends SeoPanelResource
                                                 ."# Task: Main image\nCapture product image...\n\n"
                                                 ."# Sub-task: Side shot\n..."
                                             ),
-                                        Forms\Components\Placeholder::make('prompt_editor_height_css')
-                                            ->label('')
-                                            ->content(new \Illuminate\Support\HtmlString(
-                                                '<style>'
-                                                .'.seo-prompt-markdown-editor .ProseMirror,'
-                                                .'.seo-prompt-markdown-editor .fi-fo-markdown-editor,'
-                                                .'.seo-prompt-markdown-editor .cm-editor,'
-                                                .'.seo-prompt-markdown-editor textarea{'
-                                                .'min-height:420px!important;max-height:480px!important;overflow-y:auto!important;'
-                                                .'}'
-                                                .'</style>'
-                                            ))
-                                            ->visible(fn (Get $get): bool => blank($get('hook_key'))
-                                                || PromptHookFormSchema::usesLegacyPromptTemplate(
-                                                    (string) ($get('hook_key') ?? ''),
-                                                    (string) ($get('hook_version') ?? ''),
-                                                )),
                                     ]),
 
-                                Forms\Components\Section::make(__('seo-content-ai::filament.prompt.composed_preview_title'))
-                                    ->description(__('seo-content-ai::filament.prompt.composed_preview_description'))
+                                Forms\Components\Section::make(__('seo-content-ai::filament.prompt.runtime_rules_title'))
+                                    ->description(__('seo-content-ai::filament.prompt.runtime_rules_description'))
                                     ->schema([
+                                        Forms\Components\Placeholder::make('composed_prompt_preview')
+                                            ->label('')
+                                            ->extraAttributes(['class' => 'seo-prompt-runtime-rules-panel'])
+                                            ->content(fn (Get $get): \Illuminate\Support\HtmlString => PromptHookFormSchema::composedPreviewHtml($get)),
                                         Forms\Components\Toggle::make('composed_preview_expanded')
                                             ->label(__('seo-content-ai::filament.prompt.composed_preview_expand'))
                                             ->helperText(__('seo-content-ai::filament.prompt.composed_preview_expand_help'))
                                             ->default(false)
                                             ->live()
                                             ->dehydrated(false),
-                                        Forms\Components\Placeholder::make('composed_prompt_preview')
-                                            ->label('')
-                                            ->extraAttributes(['class' => 'seo-prompt-composed-preview'])
-                                            ->content(fn (Get $get): \Illuminate\Support\HtmlString => PromptHookFormSchema::composedPreviewHtml($get)),
                                     ])
                                     ->visible(fn (Get $get): bool => filled($get('hook_key'))
                                         || filled(trim((string) ($get('markdown_content') ?? '')))),

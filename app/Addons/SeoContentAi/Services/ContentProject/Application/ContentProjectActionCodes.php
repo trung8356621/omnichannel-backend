@@ -35,6 +35,16 @@ final class ContentProjectActionCodes
 
     public const ITEMS_PUBLISH_CANCELLED = 'items.publish_cancelled';
 
+    public const ITEMS_SENT_TO_PUBLISHING_QUEUE = 'items.sent_to_publishing_queue';
+
+    public const ITEMS_RETURNED_TO_CONTENT_PROJECT = 'items.returned_to_content_project';
+
+    /** Soft-clear stale generation Failed overlay without re-running AI. */
+    public const ITEMS_GENERATION_ERROR_ACKNOWLEDGED = 'items.generation_error_acknowledged';
+
+    /** Feature-flagged debug/recovery — not WordPress publish. */
+    public const ITEMS_DEBUG_LIFECYCLE_OVERRIDDEN = 'items.debug_lifecycle_overridden';
+
     public const PROJECT_ARCHIVED = 'project.archived';
 
     public const ITEMS_ARCHIVED = 'items.archived';

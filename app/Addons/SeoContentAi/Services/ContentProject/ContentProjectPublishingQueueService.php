@@ -28,6 +28,9 @@ final class ContentProjectPublishingQueueService
     ) {}
 
     /**
+     * Plan schedule time. Future at ⇒ execution not started (status none).
+     * Past/now at ⇒ waiting for runner. Does not call WordPress.
+     *
      * @param  list<int>  $taskIds
      * @return int affected
      */
@@ -40,12 +43,61 @@ final class ContentProjectPublishingQueueService
         }
 
         $this->assertTasksCan($project, $ids, ContentProjectItemAction::Schedule);
+        $this->ensureInPublishingQueue($project, $ids);
+
+        $executionStatus = $at->lte(now())
+            ? ContentProjectPublishQueueStatus::Waiting->value
+            : ContentProjectPublishQueueStatus::None->value;
 
         return $this->batchUpdate($project, $ids, [
             'scheduled_publish_at' => $at,
-            'publish_queue_status' => ContentProjectPublishQueueStatus::Waiting->value,
+            'publish_queue_status' => $executionStatus,
             'last_publish_error' => null,
         ]);
+    }
+
+    /**
+     * Module handoff from Content Project — Unscheduled. No WP. No auto schedule.
+     *
+     * @param  list<int>  $taskIds
+     */
+    public function acceptHandoff(SeoProject $project, array $taskIds, ?int $actorUserId): int
+    {
+        $this->assertProjectActive($project);
+        $ids = $this->normalizeIds($taskIds);
+        if ($ids === []) {
+            return 0;
+        }
+
+        return $this->batchUpdate($project, $ids, [
+            'publishing_queued_at' => now(),
+            'publishing_queued_by' => $actorUserId,
+            'scheduled_publish_at' => null,
+            'publish_queue_status' => ContentProjectPublishQueueStatus::None->value,
+            'last_publish_error' => null,
+        ], onlyStatuses: null, onlyWherePublishingQueued: false);
+    }
+
+    /**
+     * Return to Content Project working set before Published.
+     *
+     * @param  list<int>  $taskIds
+     */
+    public function returnToContentProject(SeoProject $project, array $taskIds): int
+    {
+        $this->assertProjectActive($project);
+        $ids = $this->normalizeIds($taskIds);
+        if ($ids === []) {
+            return 0;
+        }
+
+        return $this->batchUpdate($project, $ids, [
+            'publishing_queued_at' => null,
+            'publishing_queued_by' => null,
+            'scheduled_publish_at' => null,
+            'publish_queue_status' => ContentProjectPublishQueueStatus::None->value,
+            'last_publish_error' => null,
+        ], onlyStatuses: null, onlyWherePublishingQueued: true);
     }
 
     /**
@@ -314,6 +366,7 @@ final class ContentProjectPublishingQueueService
         array $ids,
         array $attributes,
         ?array $onlyStatuses = null,
+        ?bool $onlyWherePublishingQueued = null,
     ): int {
         if (! Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_queue_status')) {
             // Fallback: chỉ stamp schedule.
@@ -338,7 +391,39 @@ final class ContentProjectPublishingQueueService
             });
         }
 
+        if ($onlyWherePublishingQueued === true
+            && Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publishing_queued_at')
+        ) {
+            $query->whereNotNull('publishing_queued_at');
+        }
+        if ($onlyWherePublishingQueued === false
+            && Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publishing_queued_at')
+        ) {
+            $query->whereNull('publishing_queued_at');
+        }
+
         return (int) $query->update($attributes);
+    }
+
+    /**
+     * Compat: stamp handoff if legacy schedule/publish rows lack publishing_queued_at.
+     *
+     * @param  list<int>  $ids
+     */
+    private function ensureInPublishingQueue(SeoProject $project, array $ids): void
+    {
+        if (! Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publishing_queued_at')) {
+            return;
+        }
+
+        SeoProjectTask::query()
+            ->where('project_id', (int) $project->getKey())
+            ->whereIn('id', $ids)
+            ->whereNull('publishing_queued_at')
+            ->whereNull('archived_at')
+            ->update([
+                'publishing_queued_at' => now(),
+            ]);
     }
 
     /**

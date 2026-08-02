@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Copy, Link2, Loader2, OctagonAlert, Phone, RotateCcw, Trash2, TriangleAlert } from 'lucide-react';
+import { ChevronDown, ChevronRight, Copy, Link2, Loader2, OctagonAlert, Phone, RotateCcw, Settings2, Trash2, TriangleAlert } from 'lucide-react';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { t } from '../utils/i18n';
 import ArticleAssistantWidget from './ArticleAssistantWidget';
@@ -8,7 +8,6 @@ import {
     ctaDisplayLabel,
     formatCtaHref,
     isCtaItemInsertable,
-    isCtaPlainTextType,
 } from '../utils/ctaLinkFormat';
 import {
     buildVisibleInternalSuggestions,
@@ -32,6 +31,14 @@ import {
     normalizeLinksPayload,
     readCoreArticleIdentity,
 } from '../utils/articleEditorPayloadAdapters';
+import { filterUsableCtaContacts } from '../utils/ctaContactUsability';
+import { getEditorInsertionContext } from '../utils/editorInsertionContext';
+import {
+    CtaContactInsertList,
+    CtaQuickTemplateSettingsPopover,
+    dispatchCtaInsert,
+    useCtaQuickTemplates,
+} from './CtaContactInsertList';
 
 /**
  * Links panel base payload (extracted + domain lists) — no keyword suggestion scan.
@@ -61,7 +68,20 @@ async function fetchEditorLinksBase(articleId, signal) {
         throw new Error(String(data?.message ?? 'links_base_failed'));
     }
 
-    return normalizeLinksPayload(data);
+    const normalized = normalizeLinksPayload(data);
+    const src =
+        data && typeof data === 'object' && data.data && typeof data.data === 'object'
+            ? data.data
+            : data;
+    const ctaQuickTemplates =
+        src?.cta_quick_templates && typeof src.cta_quick_templates === 'object'
+            ? src.cta_quick_templates
+            : null;
+
+    return {
+        ...normalized,
+        ctaQuickTemplates,
+    };
 }
 
 /**
@@ -710,6 +730,7 @@ export default function ArticleLinksSidebar({
     initialDomainLinkList = [],
     initialDomainLinkCatalog = [],
     initialDomainCtaList = [],
+    initialCtaQuickTemplates = null,
 }) {
     const articleMetaRef = useRef(readArticleMetaIds(articleIdProp, siteIdProp));
     const [reviewPopover, setReviewPopover] = useState(null);
@@ -808,6 +829,10 @@ export default function ArticleLinksSidebar({
                     return;
                 }
 
+                if (payload.ctaQuickTemplates) {
+                    setServerCtaTemplates(payload.ctaQuickTemplates);
+                }
+
                 window.dispatchEvent(
                     new CustomEvent('seo-editor-links-updated', {
                         detail: {
@@ -820,6 +845,7 @@ export default function ArticleLinksSidebar({
                             domain_link_list: payload.domainLinkList,
                             domain_link_list_catalog: payload.domainLinkListCatalog,
                             domain_cta_list: payload.domainCtaList,
+                            cta_quick_templates: payload.ctaQuickTemplates,
                         },
                     }),
                 );
@@ -925,6 +951,11 @@ export default function ArticleLinksSidebar({
     const [domainCtas, setDomainCtas] = useState(initialDomainCtaList);
     const [domainLinkActiveKey, setDomainLinkActiveKey] = useState('');
     const [ctaActiveKey, setCtaActiveKey] = useState('');
+    const [ctaSettingsOpen, setCtaSettingsOpen] = useState(false);
+    const [serverCtaTemplates, setServerCtaTemplates] = useState(initialCtaQuickTemplates);
+    const effectiveSiteId = Number(siteIdProp ?? articleMetaRef.current.siteId ?? 0);
+    const [templatesByType, setTemplatesByType] = useCtaQuickTemplates(effectiveSiteId, serverCtaTemplates);
+    const usableDomainCtas = useMemo(() => filterUsableCtaContacts(domainCtas), [domainCtas]);
     const [domainHiddenRowKeys, setDomainHiddenRowKeys] = useState(() => new Set());
 
     const { debounced: debouncedPersistExcluded } = useDebouncedCallback(() => {
@@ -1115,12 +1146,10 @@ export default function ArticleLinksSidebar({
                     );
                 }
                 if (Array.isArray(detail.domain_cta_list)) {
-                    setDomainCtas(
-                        detail.domain_cta_list.map((item) => ({
-                            ...item,
-                            can_insert: true,
-                        })),
-                    );
+                    setDomainCtas(detail.domain_cta_list);
+                }
+                if (detail.cta_quick_templates && typeof detail.cta_quick_templates === 'object') {
+                    setServerCtaTemplates(detail.cta_quick_templates);
                 }
 
                 if (detail.source === 'links-suggestions') {
@@ -1301,12 +1330,13 @@ export default function ArticleLinksSidebar({
             }
 
             if (Array.isArray(event.detail?.domain_cta_list)) {
-                setDomainCtas(
-                    event.detail.domain_cta_list.map((item) => ({
-                        ...item,
-                        can_insert: true,
-                    })),
-                );
+                setDomainCtas(event.detail.domain_cta_list);
+            }
+            if (
+                event.detail?.cta_quick_templates
+                && typeof event.detail.cta_quick_templates === 'object'
+            ) {
+                setServerCtaTemplates(event.detail.cta_quick_templates);
             }
         };
 
@@ -1335,12 +1365,10 @@ export default function ArticleLinksSidebar({
                 );
             }
             if (Array.isArray(detail.domain_cta_list)) {
-                setDomainCtas(
-                    detail.domain_cta_list.map((item) => ({
-                        ...item,
-                        can_insert: true,
-                    })),
-                );
+                setDomainCtas(detail.domain_cta_list);
+            }
+            if (detail.cta_quick_templates && typeof detail.cta_quick_templates === 'object') {
+                setServerCtaTemplates(detail.cta_quick_templates);
             }
         };
 
@@ -1648,53 +1676,19 @@ export default function ArticleLinksSidebar({
             return;
         }
 
+        const ctx = getEditorInsertionContext();
         window.dispatchEvent(
             new CustomEvent('seo-editor-insert-suggested-link', {
                 detail: {
                     text,
                     href,
                     keyword_id: item.keyword_id ?? null,
-                },
-            }),
-        );
-    };
-
-    const insertCta = (item) => {
-        const type = String(item?.type ?? '').toLowerCase();
-        if (!type) {
-            return;
-        }
-
-        if (item?.is_blank === true) {
-            const token = `[${type}]`;
-            window.dispatchEvent(
-                new CustomEvent('seo-editor-insert-cta-link', {
-                    detail: {
-                        text: token,
-                        href: '',
-                        type,
-                        is_placeholder: true,
-                        html: `<span class="seo-cta-blank-placeholder" data-cta-type="${type}">${token}</span>`,
+                    insert_mode: 'caret',
+                    target: {
+                        sectionId: ctx.activeSectionId,
+                        blockId: ctx.activeBlockId,
+                        selectionBookmark: ctx.selection,
                     },
-                }),
-            );
-
-            return;
-        }
-
-        const text = ctaDisplayLabel(item);
-        const plainText = isCtaPlainTextType(type) || item?.plain_text === true;
-        const href = plainText ? '' : String(item?.href ?? formatCtaHref(type, item?.value)).trim();
-        if (!text || (!href && !plainText)) {
-            return;
-        }
-
-        window.dispatchEvent(
-            new CustomEvent('seo-editor-insert-cta-link', {
-                detail: {
-                    text,
-                    href,
-                    type,
                 },
             }),
         );
@@ -1706,15 +1700,16 @@ export default function ArticleLinksSidebar({
     const showCtaSection = showAllLinkSections || linkSectionFilter === 'cta';
 
     useEffect(() => {
+        // Links item/issue counts owned by assistantWidgetHealth (valid HTTP links).
+        // CTA chip still uses contact count from this sidebar.
         window.dispatchEvent(
             new CustomEvent('seo-assistant-navigator-badges', {
                 detail: {
-                    links: linkCountBadge > 0 ? linkCountBadge : null,
-                    cta: domainCtas.length > 0 ? domainCtas.length : null,
+                    cta: usableDomainCtas.length > 0 ? usableDomainCtas.length : null,
                 },
             }),
         );
-    }, [linkCountBadge, domainCtas.length]);
+    }, [usableDomainCtas.length]);
 
     return (
         <ArticleAssistantWidget
@@ -1868,20 +1863,43 @@ export default function ArticleLinksSidebar({
 
                 {showCtaSection ? (
                 <LinkAssistantSection
-                    title={`${t('cta_widget_title')} (${domainCtas.length})`}
-                    count={domainCtas.length}
+                    title={`${t('cta_widget_title')} (${usableDomainCtas.length})`}
+                    count={usableDomainCtas.length}
                     collapsed={ctaCollapsed}
                     onToggle={() => setCtaCollapsed((value) => !value)}
                     sectionKey="cta"
                 >
-                    <p className="wp-article-links-hint">{t('cta_widget_hint')}</p>
-                    <DomainInsertableList
+                    <div className="wp-postbox-header-actions wp-article-links-cta-section-head">
+                        <p className="wp-article-links-hint">{t('cta_widget_hint')}</p>
+                        <div className="wp-article-links-cta-quick-wrap">
+                            <button
+                                type="button"
+                                className="wp-article-links-insert-btn"
+                                aria-label={t('cta_widget_settings_title')}
+                                title={t('cta_widget_settings_title')}
+                                onClick={() => setCtaSettingsOpen(true)}
+                            >
+                                <Settings2 size={14} aria-hidden />
+                            </button>
+                            <CtaQuickTemplateSettingsPopover
+                                siteId={effectiveSiteId}
+                                open={ctaSettingsOpen}
+                                onClose={() => setCtaSettingsOpen(false)}
+                                settings={templatesByType}
+                                onSave={setTemplatesByType}
+                            />
+                        </div>
+                    </div>
+                    <CtaContactInsertList
                         items={domainCtas}
-                        variant="cta"
                         activeKey={ctaActiveKey}
+                        templatesByType={templatesByType}
                         emptyText={t('cta_widget_empty')}
                         onKeywordClick={(item, _index, itemKey) => scrollToDomainItem(item, itemKey, 'cta')}
-                        onInsert={insertCta}
+                        onInsertValue={(item) => dispatchCtaInsert(item, 'value', null, templatesByType)}
+                        onInsertQuickCta={(item, _itemKey, templateOverride) =>
+                            dispatchCtaInsert(item, 'sentence', templateOverride, templatesByType)
+                        }
                     />
                 </LinkAssistantSection>
                 ) : null}

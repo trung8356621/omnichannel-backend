@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Support\CtaQuickTemplates;
 use App\Models\WpOption;
 
 final class SeoDomainCtaGlobalSettingsService
@@ -17,8 +18,14 @@ final class SeoDomainCtaGlobalSettingsService
 
     public const KEY_GLOBAL_CTA = 'global_cta';
 
+    public const KEY_CTA_QUICK_TEMPLATES = 'cta_quick_templates';
+
     /**
-     * @return array{default_cta_intro: string, global_cta: list<array{type: string, value: string}>}
+     * @return array{
+     *     default_cta_intro: string,
+     *     global_cta: list<array{type: string, value: string}>,
+     *     cta_quick_templates: array<string, array{default_index: int, templates: list<string>}>
+     * }
      */
     public function getSettings(): array
     {
@@ -33,14 +40,51 @@ final class SeoDomainCtaGlobalSettingsService
 
         $intro = trim((string) ($data[self::KEY_DEFAULT_CTA_INTRO] ?? ''));
 
-        return [
+        $settings = [
             self::KEY_DEFAULT_CTA_INTRO => $intro !== ''
                 ? $intro
                 : SiteDomainPromptContextService::DEFAULT_CTA_INTRO,
             self::KEY_GLOBAL_CTA => $this->normalizeGlobalCtaRows(
                 is_array($data[self::KEY_GLOBAL_CTA] ?? null) ? $data[self::KEY_GLOBAL_CTA] : [],
             ),
+            self::KEY_CTA_QUICK_TEMPLATES => CtaQuickTemplates::normalize(
+                is_array($data[self::KEY_CTA_QUICK_TEMPLATES] ?? null)
+                    ? $data[self::KEY_CTA_QUICK_TEMPLATES]
+                    : [],
+            ),
         ];
+
+        $this->inMemorySettings = $settings;
+
+        return $settings;
+    }
+
+    /**
+     * @return array<string, array{default_index: int, templates: list<string>}>
+     */
+    public function getCtaQuickTemplates(): array
+    {
+        return $this->getSettings()[self::KEY_CTA_QUICK_TEMPLATES];
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, array{default_index: int, templates: list<string>}>
+     */
+    public function saveCtaQuickTemplates(array $payload): array
+    {
+        $normalized = CtaQuickTemplates::normalize($payload);
+        $current = $this->getSettings();
+
+        WpOption::set(self::OPTION_KEY, [
+            self::KEY_DEFAULT_CTA_INTRO => $current[self::KEY_DEFAULT_CTA_INTRO],
+            self::KEY_GLOBAL_CTA => $current[self::KEY_GLOBAL_CTA],
+            self::KEY_CTA_QUICK_TEMPLATES => $normalized,
+        ]);
+
+        $this->inMemorySettings = null;
+
+        return $normalized;
     }
 
     public function getDefaultCtaIntro(): string
@@ -81,13 +125,18 @@ final class SeoDomainCtaGlobalSettingsService
         WpOption::set(self::OPTION_KEY, [
             self::KEY_DEFAULT_CTA_INTRO => $current[self::KEY_DEFAULT_CTA_INTRO],
             self::KEY_GLOBAL_CTA => $this->normalizeGlobalCtaRows($rows),
+            self::KEY_CTA_QUICK_TEMPLATES => $current[self::KEY_CTA_QUICK_TEMPLATES],
         ]);
 
         $this->inMemorySettings = null;
     }
 
     /**
-     * @param  array{default_cta_intro?: string, global_cta?: list<array{type?: string, value?: string}>}  $payload
+     * @param  array{
+     *     default_cta_intro?: string,
+     *     global_cta?: list<array{type?: string, value?: string}>,
+     *     cta_quick_templates?: array<string, mixed>
+     * }  $payload
      */
     public function saveSettings(array $payload): void
     {
@@ -103,6 +152,13 @@ final class SeoDomainCtaGlobalSettingsService
                     is_array($payload[self::KEY_GLOBAL_CTA] ?? null) ? $payload[self::KEY_GLOBAL_CTA] : [],
                 )
                 : $current[self::KEY_GLOBAL_CTA],
+            self::KEY_CTA_QUICK_TEMPLATES => array_key_exists(self::KEY_CTA_QUICK_TEMPLATES, $payload)
+                ? CtaQuickTemplates::normalize(
+                    is_array($payload[self::KEY_CTA_QUICK_TEMPLATES] ?? null)
+                        ? $payload[self::KEY_CTA_QUICK_TEMPLATES]
+                        : [],
+                )
+                : $current[self::KEY_CTA_QUICK_TEMPLATES],
         ]);
 
         $this->inMemorySettings = null;
@@ -142,13 +198,18 @@ final class SeoDomainCtaGlobalSettingsService
     }
 
     /**
-     * @return array{default_cta_intro: string, global_cta: list<array{type: string, value: string}>}
+     * @return array{
+     *     default_cta_intro: string,
+     *     global_cta: list<array{type: string, value: string}>,
+     *     cta_quick_templates: array<string, array{default_index: int, templates: list<string>}>
+     * }
      */
     private function defaultSettings(): array
     {
         return [
             self::KEY_DEFAULT_CTA_INTRO => SiteDomainPromptContextService::DEFAULT_CTA_INTRO,
             self::KEY_GLOBAL_CTA => [],
+            self::KEY_CTA_QUICK_TEMPLATES => CtaQuickTemplates::normalize([]),
         ];
     }
 }

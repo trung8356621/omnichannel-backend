@@ -11,8 +11,15 @@ use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectFailedOpsDefinition;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectFailureTypeMapper;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectInReviewReportingDefinition;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectLifecycle;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectOpsStateClassifier;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectRecentlyCompletedDefinition;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectScheduledDefinition;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectStatusBadgePresenter;
+use App\Addons\SeoContentAi\Support\PublishingQueue\PublishingQueueHandoffEligibility;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use Carbon\Carbon;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -26,10 +33,10 @@ final class ContentProjectItemOperationsReadModel
 {
     public function __construct(
         private readonly ContentProjectLifecycle $lifecycle,
-        private readonly ContentProjectDashboardStatsService $stats,
         private readonly ArticleWordPressSyncFlagService $syncFlags,
         private readonly ContentProjectExecutionStalenessPolicy $staleness,
         private readonly ContentProjectGenerationRecoveryService $generationRecovery,
+        private readonly ContentProjectGenerationReadStateStore $generationReadStates,
     ) {}
 
     /**
@@ -44,6 +51,7 @@ final class ContentProjectItemOperationsReadModel
      *     page?: int,
      *     per_page?: int,
      *     reconcile_stale?: bool,
+     *     viewer_user_id?: int,
      * }  $filters
      * @return array{
      *     project_id: int,
@@ -66,17 +74,24 @@ final class ContentProjectItemOperationsReadModel
             }
         }
 
-        $baseStats = $this->stats->forProject($project);
+        $viewerUserId = max(0, (int) ($filters['viewer_user_id'] ?? 0));
 
         $tasks = SeoProjectTask::query()
             ->where('project_id', $projectId)
             ->planned()
-            ->with(['article'])
+            ->inContentProjectWorkingSet()
+            ->with([
+                'article.articleMetas' => static fn ($q) => $q->where('meta_key', 'wp_featured_image_url'),
+            ])
             ->orderBy('id')
             ->get();
 
-        $latestByTask = $this->latestRunItemsByTaskIds(
-            $tasks->map(static fn (SeoProjectTask $t): int => (int) $t->id)->all(),
+        $taskIds = $tasks->map(static fn (SeoProjectTask $t): int => (int) $t->id)->all();
+        $latestByTask = $this->latestRunItemsByTaskIds($taskIds);
+        $viewedByTask = $this->generationReadStates->viewedCompletedAtByItemIds(
+            $viewerUserId,
+            $projectId,
+            $taskIds,
         );
 
         $latestRun = SeoProjectRun::query()
@@ -91,27 +106,39 @@ final class ContentProjectItemOperationsReadModel
                 continue;
             }
             $index++;
-            $rows[] = $this->mapRow($task, $index, $latestByTask[(int) $task->id] ?? null);
+            $tid = (int) $task->id;
+            $viewed = $viewedByTask[$tid] ?? null;
+            $rows[] = $this->mapRow(
+                $task,
+                $index,
+                $latestByTask[$tid] ?? null,
+                $viewed?->toIso8601String(),
+            );
         }
 
-        $generated = 0;
-        $pending = 0;
-        $running = 0;
-        $failed = 0;
-        foreach ($rows as $row) {
-            $gs = (string) $row['generation_status'];
-            if (! empty($row['is_genuinely_running'])) {
-                $running++;
-            } elseif ($gs === SeoProjectTask::STATUS_FAILED || ! empty($row['is_generation_stale'])) {
-                $failed++;
-            } elseif ($row['can_generate'] === true) {
-                $pending++;
-            } else {
-                $generated++;
-            }
-        }
+        $stats = ContentProjectOpsStateClassifier::countSummary($rows);
+
+        // Badge SoT (B): project total INCLUDES items handed to Publishing Queue.
+        // Working set (Normal) stays scoped to $rows (publishing_queued_at IS NULL).
+        $workingSetCount = count($rows);
+        $publishingQueueCount = SeoProjectTask::query()
+            ->where('project_id', $projectId)
+            ->planned()
+            ->inPublishingQueue()
+            ->count();
+        $stats['working_set'] = $workingSetCount;
+        $stats['publishing_queue'] = $publishingQueueCount;
+        $stats['normal'] = $workingSetCount;
+        $stats['total_items'] = $workingSetCount + $publishingQueueCount;
 
         $filtered = $this->applyFilters(collect($rows), $filters);
+        $generationFilter = trim((string) ($filters['generation'] ?? ''));
+        if ($generationFilter === ContentProjectRecentlyCompletedDefinition::FILTER) {
+            $filtered = collect(
+                ContentProjectRecentlyCompletedDefinition::sortNewestFirst($filtered->values()->all()),
+            );
+        }
+
         $perPage = max(10, min(100, (int) ($filters['per_page'] ?? 30)));
         $page = max(1, (int) ($filters['page'] ?? LengthAwarePaginator::resolveCurrentPage()));
         $total = $filtered->count();
@@ -130,17 +157,7 @@ final class ContentProjectItemOperationsReadModel
 
         return [
             'project_id' => $projectId,
-            'stats' => [
-                'total_items' => count($rows),
-                'generated' => $generated,
-                'pending' => $pending,
-                'running' => $running,
-                'failed' => $failed,
-                'waiting_review' => (int) ($baseStats['waiting_review'] ?? 0),
-                'approved' => (int) ($baseStats['approved'] ?? 0),
-                'waiting_publish' => (int) ($baseStats['waiting_publish'] ?? 0),
-                'published' => (int) ($baseStats['published'] ?? 0),
-            ],
+            'stats' => $stats,
             'last_execution_at' => $latestRun?->finished_at?->format('d/m/Y H:i')
                 ?? $latestRun?->started_at?->format('d/m/Y H:i'),
             'last_execution_status' => $latestRun !== null ? (string) $latestRun->status : null,
@@ -150,10 +167,107 @@ final class ContentProjectItemOperationsReadModel
     }
 
     /**
+     * Lightweight ops summary for lazy refresh (no table rows).
+     *
+     * @return array{
+     *     pending: int,
+     *     needs_review: int,
+     *     failed: int,
+     *     review: int,
+     *     approved: int,
+     *     scheduled: int,
+     *     published: int,
+     *     running: int,
+     * }
+     */
+    public function summaryForProject(SeoProject $project, int $viewerUserId): array
+    {
+        $payload = $this->forProject($project, [
+            'viewer_user_id' => $viewerUserId,
+            'reconcile_stale' => false,
+            'per_page' => 1,
+            'page' => 1,
+        ]);
+
+        return self::normalizeSummaryStats($payload['stats'] ?? []);
+    }
+
+    /**
+     * @param  array<string, mixed>  $stats
+     * @return array{
+     *     total_items: int,
+     *     working_set: int,
+     *     publishing_queue: int,
+     *     normal: int,
+     *     draft: int,
+     *     pending: int,
+     *     needs_review: int,
+     *     failed: int,
+     *     review: int,
+     *     approved: int,
+     *     scheduled: int,
+     *     published: int,
+     *     running: int,
+     * }
+     */
+    public static function normalizeSummaryStats(array $stats): array
+    {
+        $needsReview = (int) ($stats['recently_completed'] ?? $stats['needs_review'] ?? $stats['ai_inbox'] ?? 0);
+        $workingSet = (int) ($stats['working_set'] ?? $stats['normal'] ?? $stats['total_items'] ?? 0);
+
+        return [
+            // Project-wide badge SoT — includes items handed to Publishing Queue.
+            'total_items' => (int) ($stats['total_items'] ?? 0),
+            // Content Project working set (publishing_queued_at IS NULL) — Normal card.
+            'working_set' => $workingSet,
+            'publishing_queue' => (int) ($stats['publishing_queue'] ?? 0),
+            'normal' => (int) ($stats['normal'] ?? $workingSet),
+            'draft' => (int) ($stats['draft'] ?? 0),
+            'pending' => (int) ($stats['pending'] ?? 0),
+            'needs_review' => $needsReview,
+            'failed' => (int) ($stats['failed'] ?? 0),
+            'review' => (int) ($stats['waiting_review'] ?? $stats['review'] ?? 0),
+            'approved' => (int) ($stats['approved'] ?? 0),
+            'scheduled' => (int) ($stats['waiting_publish'] ?? $stats['scheduled'] ?? 0),
+            'published' => (int) ($stats['published'] ?? 0),
+            'running' => (int) ($stats['running'] ?? $stats['pending'] ?? 0),
+        ];
+    }
+
+    /**
+     * Unread successful completions for mark-all — same definition as summary card.
+     *
+     * @return array<int, \Carbon\CarbonInterface> project_item_id => generation_completed_at
+     */
+    public function unreadSuccessfulCompletions(SeoProject $project, int $viewerUserId): array
+    {
+        $payload = $this->forProject($project, [
+            'viewer_user_id' => $viewerUserId,
+            'generation' => ContentProjectRecentlyCompletedDefinition::FILTER,
+            'reconcile_stale' => false,
+            'per_page' => 10000,
+            'page' => 1,
+        ]);
+
+        $map = [];
+        foreach ($payload['rows'] as $row) {
+            $tid = (int) ($row['task_id'] ?? 0);
+            $completed = ContentProjectRecentlyCompletedDefinition::parseTimestamp(
+                $row['generation_completed_at'] ?? null,
+            );
+            if ($tid > 0 && $completed !== null && ! empty($row['is_recently_completed'])) {
+                $map[$tid] = $completed;
+            }
+        }
+
+        return $map;
+    }
+
+    /**
      * @param  array<string, mixed>|null  $exec
      * @return array<string, mixed>
      */
-    private function mapRow(SeoProjectTask $task, int $index, ?array $exec): array
+    private function mapRow(SeoProjectTask $task, int $index, ?array $exec, ?string $viewedGenerationCompletedAt = null): array
     {
         $tid = (int) $task->id;
         $article = $task->article;
@@ -188,6 +302,14 @@ final class ContentProjectItemOperationsReadModel
 
         $primary = $title !== '' ? $title : ($keyword !== '' ? $keyword : '#'.$tid);
 
+        $thumbnailUrl = null;
+        if ($article instanceof SeoArticle && $article->relationLoaded('articleMetas')) {
+            $thumbnailUrl = trim((string) (
+                $article->articleMetas->firstWhere('meta_key', 'wp_featured_image_url')?->meta_value ?? ''
+            ));
+            $thumbnailUrl = $thumbnailUrl !== '' ? $thumbnailUrl : null;
+        }
+
         $execStatusEarly = strtolower((string) ($exec['status'] ?? ''));
         $latestAttemptQueued = in_array($execStatusEarly, ['pending', 'processing'], true);
 
@@ -200,10 +322,18 @@ final class ContentProjectItemOperationsReadModel
             $message = (string) $task->last_publish_error;
         }
 
+        // Latest run-item attempt is SoT for Generation — independent from article lifecycle.
         $genStatus = (string) ($task->status ?? 'pending');
-        if ($latestAttemptQueued && $genStatus === SeoProjectTask::STATUS_FAILED) {
+        if (in_array($execStatusEarly, ['failed', 'error', 'cancelled', 'stopped', 'timeout'], true)) {
+            $genStatus = SeoProjectTask::STATUS_FAILED;
+        } elseif ($latestAttemptQueued && $genStatus === SeoProjectTask::STATUS_FAILED) {
             // Prefer latest run-item attempt over sticky task.failed until worker claims.
             $genStatus = SeoProjectTask::STATUS_PENDING;
+        } elseif (in_array($execStatusEarly, ['success', 'completed'], true)
+            && in_array($genStatus, [SeoProjectTask::STATUS_COMPLETED, SeoProjectTask::STATUS_REVIEWING, 'completed', 'reviewing'], true)
+        ) {
+            // keep completed only when latest attempt also succeeded
+            $genStatus = SeoProjectTask::STATUS_COMPLETED;
         }
         $queueStatus = (string) ($task->publish_queue_status ?? 'none');
         if ($queueStatus === '') {
@@ -227,13 +357,56 @@ final class ContentProjectItemOperationsReadModel
         $displayGenStatus = $isStaleGeneration ? SeoProjectTask::STATUS_FAILED : $genStatus;
         $displayPhase = $phase;
 
-        $genBadge = ContentProjectStatusBadgePresenter::generation($displayGenStatus, $exec['status'] ?? null);
-        $lifeBadge = ContentProjectStatusBadgePresenter::lifecycle($displayPhase->value);
         $queueBadge = ContentProjectStatusBadgePresenter::queue($queueStatus);
 
         if ($isStaleGeneration && ($message === '' || $message === null)) {
             $message = ContentProjectGenerationRecoveryService::RECOVERY_MESSAGE;
         }
+
+        $generationCompletedAt = null;
+        $execStatusForInbox = strtolower((string) ($exec['status'] ?? ''));
+        if (in_array($execStatusForInbox, ['success', 'completed'], true)
+            && ! empty($exec['finished_at_iso'])
+        ) {
+            $generationCompletedAt = (string) $exec['finished_at_iso'];
+        }
+
+        $rowBase = [
+            'generation_status' => $displayGenStatus,
+            'execution_status' => $exec['status'] ?? null,
+            'is_genuinely_running' => $isGenuineRunning,
+            'generation_completed_at' => $generationCompletedAt,
+            'viewed_generation_completed_at' => $viewedGenerationCompletedAt,
+            'review_status' => $article instanceof SeoArticle
+                ? strtolower(trim((string) ($article->review_status ?? '')))
+                : '',
+            'content_manager_reviewed_at' => $task->content_manager_reviewed_at?->toIso8601String(),
+            'is_content_manager_reviewed' => $task->content_manager_reviewed_at !== null,
+            'lifecycle' => $displayPhase->value,
+            'is_scheduled' => $task->scheduled_publish_at !== null,
+            'scheduled_raw' => $task->scheduled_publish_at?->toIso8601String(),
+            'queue_status' => $queueStatus,
+            'publish_published_at' => $task->publish_published_at?->toIso8601String(),
+            'has_published_revision' => $state->hasPublishedRevision,
+            'is_generation_stale' => $isStaleGeneration,
+            'can_generate' => in_array(ContentProjectItemAction::Generate, $state->availableActions, true),
+            'message' => is_string($message) ? $message : '',
+            'current_error_source' => $state->currentErrorSource->value,
+            // Rows here always come from scopeInContentProjectWorkingSet() — kept explicit
+            // for eligibility computation and to stay a stable contract for consumers.
+            'article_id' => $articleId,
+            'publishing_queued_at' => $task->publishing_queued_at?->toIso8601String(),
+            'in_publishing_queue' => $task->publishing_queued_at !== null,
+        ];
+        $classified = ContentProjectOpsStateClassifier::classify($rowBase);
+        $genBadge = match ($classified['generation_key']) {
+            'running' => ContentProjectStatusBadgePresenter::generation('writing', 'running'),
+            'failed' => ContentProjectStatusBadgePresenter::generation('failed', 'failed'),
+            'generated' => ContentProjectStatusBadgePresenter::generation('completed', 'success'),
+            default => ContentProjectStatusBadgePresenter::generation('pending', null),
+        };
+        $workflowBadge = ContentProjectStatusBadgePresenter::workflow($classified['workflow_key']);
+        $reportingBadge = ContentProjectStatusBadgePresenter::reporting($classified['reporting_key']);
 
         return [
             'index' => $index,
@@ -245,6 +418,8 @@ final class ContentProjectItemOperationsReadModel
                 default => 'new',
             },
             'primary_label' => $primary,
+            'thumbnail_url' => $thumbnailUrl,
+            'has_featured_image' => $thumbnailUrl !== null,
             'keyword' => $keyword !== '' ? $keyword : '—',
             'title' => $title !== '' ? $title : '—',
             'article_id' => $articleId > 0 ? $articleId : null,
@@ -256,6 +431,12 @@ final class ContentProjectItemOperationsReadModel
             'execution_status' => $exec['status'] ?? null,
             'current_step' => $exec['action'] ?? null,
             'lifecycle' => $displayPhase->value,
+            'workflow_key' => $classified['workflow_key'],
+            'generation_key' => $classified['generation_key'],
+            'summary_bucket' => $classified['summary_bucket'],
+            'reporting_key' => $classified['reporting_key'],
+            'failure_type' => $classified['failure_type'],
+            'review_status' => $rowBase['review_status'],
             'queue_status' => $queueStatus,
             'item_state' => $state->toArray(),
             'current_error_source' => $state->currentErrorSource->value,
@@ -266,12 +447,22 @@ final class ContentProjectItemOperationsReadModel
             'scheduled_at' => $task->scheduled_publish_at?->format('d/m/Y H:i'),
             'scheduled_raw' => $task->scheduled_publish_at?->toIso8601String(),
             'is_scheduled' => $task->scheduled_publish_at !== null,
+            'publish_published_at' => $rowBase['publish_published_at'],
             'message' => $message !== '' ? $message : null,
             'last_activity' => $lastActivityCarbon?->diffForHumans() ?? '—',
             'last_activity_full' => $lastActivityCarbon?->format('d/m/Y H:i:s'),
             'last_run_at' => $exec['finished_at'] ?? $exec['started_at'] ?? null,
-            // Batch E: derive solely from ActionGuard availableActions — single source of truth.
-            'can_generate' => in_array(ContentProjectItemAction::Generate, $state->availableActions, true),
+            'generation_completed_at' => $generationCompletedAt,
+            'viewed_generation_completed_at' => $viewedGenerationCompletedAt,
+            'content_manager_reviewed_at' => $rowBase['content_manager_reviewed_at'],
+            'content_manager_reviewed_by' => $task->content_manager_reviewed_by !== null
+                ? (int) $task->content_manager_reviewed_by
+                : null,
+            'is_content_manager_reviewed' => (bool) ($rowBase['is_content_manager_reviewed'] ?? false),
+            'is_recently_completed' => $classified['is_needs_review'],
+            'is_in_review_reporting' => $classified['is_in_review_reporting'],
+            'show_reporting_chip' => $classified['show_reporting_chip'],
+            'can_generate' => (bool) $rowBase['can_generate'],
             'can_regen' => $articleId > 0
                 && $type !== SeoProjectTask::TYPE_IMPROVE
                 && in_array(ContentProjectItemAction::Rerun, $state->availableActions, true),
@@ -282,10 +473,14 @@ final class ContentProjectItemOperationsReadModel
             'has_resumable_checkpoint' => $hasResumableCheckpoint,
             'is_improve' => $type === SeoProjectTask::TYPE_IMPROVE,
             'generation_badge' => $genBadge,
-            'lifecycle_badge' => $lifeBadge,
+            'lifecycle_badge' => $workflowBadge,
+            'workflow_badge' => $workflowBadge,
+            'reporting_badge' => $reportingBadge,
             'queue_badge' => $queueBadge,
             'has_unpublished_changes' => $article instanceof SeoArticle
                 && $this->syncFlags->hasUnpublishedChanges($article),
+            'in_publishing_queue' => $rowBase['in_publishing_queue'],
+            'can_send_to_publishing_queue' => PublishingQueueHandoffEligibility::canSend($rowBase),
         ];
     }
 
@@ -300,6 +495,9 @@ final class ContentProjectItemOperationsReadModel
         $type = trim((string) ($filters['type'] ?? ''));
         $generation = trim((string) ($filters['generation'] ?? ''));
         $lifecycle = trim((string) ($filters['lifecycle'] ?? ''));
+        $reporting = trim((string) ($filters['reporting'] ?? ''));
+        $workflow = trim((string) ($filters['workflow'] ?? ''));
+        $failureType = strtolower(trim((string) ($filters['failure_type'] ?? '')));
         $queue = trim((string) ($filters['queue'] ?? ''));
         $scheduled = trim((string) ($filters['scheduled'] ?? ''));
         $failedOnly = (bool) ($filters['failed_only'] ?? false);
@@ -309,6 +507,9 @@ final class ContentProjectItemOperationsReadModel
             $type,
             $generation,
             $lifecycle,
+            $reporting,
+            $workflow,
+            $failureType,
             $queue,
             $scheduled,
             $failedOnly
@@ -331,52 +532,103 @@ final class ContentProjectItemOperationsReadModel
                 return false;
             }
 
+            if ($workflow !== '' && $workflow !== 'all'
+                && ! ContentProjectOpsStateClassifier::matchesSummaryFilter($row, $workflow)
+            ) {
+                return false;
+            }
+
             if ($generation !== '') {
-                $gs = (string) $row['generation_status'];
-                $ok = match ($generation) {
-                    'pending' => $gs === SeoProjectTask::STATUS_PENDING || ($row['can_generate'] ?? false) === true,
-                    'running' => $gs === SeoProjectTask::STATUS_WRITING,
-                    'success' => in_array($gs, [SeoProjectTask::STATUS_COMPLETED, SeoProjectTask::STATUS_REVIEWING], true),
-                    'failed' => $gs === SeoProjectTask::STATUS_FAILED,
-                    default => $gs === $generation,
-                };
-                if (! $ok) {
-                    return false;
+                if (in_array($generation, [
+                    ContentProjectRecentlyCompletedDefinition::FILTER,
+                    ContentProjectInReviewReportingDefinition::FILTER,
+                    'needs_review',
+                    'in_review',
+                    'draft',
+                ], true)) {
+                    if (! ContentProjectOpsStateClassifier::matchesSummaryFilter($row, $generation)) {
+                        return false;
+                    }
+                } else {
+                    $classifiedGen = (string) ($row['generation_key'] ?? '');
+                    $ok = match ($generation) {
+                        'pending' => $classifiedGen === 'pending',
+                        'running' => $classifiedGen === 'running',
+                        'success', 'generated' => $classifiedGen === 'generated',
+                        'failed' => $classifiedGen === 'failed',
+                        default => (string) ($row['generation_status'] ?? '') === $generation,
+                    };
+                    if (! $ok) {
+                        return false;
+                    }
                 }
             }
 
             if ($lifecycle !== '') {
                 $wanted = array_filter(array_map('trim', explode(',', $lifecycle)));
-                if ($wanted !== [] && ! in_array((string) $row['lifecycle'], $wanted, true)) {
+                if ($wanted === []) {
+                    return true;
+                }
+                $matched = false;
+                foreach ($wanted as $w) {
+                    if (in_array($w, [
+                        'draft',
+                        'pending',
+                        'approved',
+                        'waiting_publish',
+                        'scheduled',
+                        'published',
+                        'failed',
+                    ], true)) {
+                        $filterKey = $w === 'scheduled' ? 'waiting_publish' : $w;
+                        if (ContentProjectOpsStateClassifier::matchesSummaryFilter($row, $filterKey)) {
+                            $matched = true;
+                            break;
+                        }
+                        continue;
+                    }
+                    $workflowKey = (string) ($row['workflow_key'] ?? '');
+                    $life = (string) ($row['lifecycle'] ?? '');
+                    if ($w === $workflowKey || $w === $life || ($w === 'draft' && $workflowKey === 'draft')) {
+                        $matched = true;
+                        break;
+                    }
+                }
+                if (! $matched) {
                     return false;
                 }
+            }
+
+            if ($reporting !== ''
+                && ! ContentProjectOpsStateClassifier::matchesSummaryFilter($row, $reporting)
+            ) {
+                return false;
             }
 
             if ($queue !== '' && (string) $row['queue_status'] !== $queue) {
                 return false;
             }
 
-            if ($scheduled === 'yes' && ! ($row['is_scheduled'] ?? false)) {
+            if ($scheduled === 'yes' && ! ContentProjectScheduledDefinition::matches($row)) {
                 return false;
             }
-            if ($scheduled === 'no' && ($row['is_scheduled'] ?? false)) {
+            if ($scheduled === 'no' && ContentProjectScheduledDefinition::matches($row)) {
                 return false;
             }
 
-            if ($failedOnly) {
-                // Latest attempt only — queued/running after rerun must leave Failed-only.
-                if (! empty($row['is_genuinely_running'])) {
-                    return false;
-                }
-                $execStatus = strtolower((string) ($row['execution_status'] ?? ''));
-                if (in_array($execStatus, ['pending', 'processing'], true)) {
-                    return false;
-                }
-                $genFail = (string) $row['generation_status'] === SeoProjectTask::STATUS_FAILED
-                    || ! empty($row['is_generation_stale']);
-                if (! $genFail) {
-                    return false;
-                }
+            if ($failedOnly && ! ContentProjectFailedOpsDefinition::matches($row)) {
+                return false;
+            }
+
+            if ($failureType !== ''
+                && ContentProjectFailedOpsDefinition::matches($row)
+                && ContentProjectFailureTypeMapper::resolve($row) !== $failureType
+            ) {
+                return false;
+            }
+
+            if ($failureType !== '' && ! ContentProjectFailedOpsDefinition::matches($row)) {
+                return false;
             }
 
             return true;
@@ -451,6 +703,7 @@ final class ContentProjectItemOperationsReadModel
                 'message' => null,
                 'started_at' => $item->started_at?->format('d/m/Y H:i'),
                 'finished_at' => $item->finished_at?->format('d/m/Y H:i'),
+                'finished_at_iso' => $item->finished_at?->toIso8601String(),
             ];
         }
 

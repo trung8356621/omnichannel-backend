@@ -4,6 +4,7 @@ import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
 import { computeLinkBubblePosition } from '../utils/linkEditorAnchor';
 import { applyLinkToSelection } from '../utils/inlineLinkNormalizer';
+import { removeLinkKeepText } from '../utils/editorLinkCommands';
 import { t } from '../utils/i18n';
 
 const ARTICLE_SEARCH_DEBOUNCE_MS = 450;
@@ -245,7 +246,9 @@ export default function LinkEditBubble({ editor, anchorRect, containerRef, onClo
         const chain = editor.chain().focus();
         if (trimmed === '') {
             if (editor.isActive('link')) {
-                chain.extendMarkRange('link').unsetLink().run();
+                if (!removeLinkKeepText(editor)) {
+                    chain.extendMarkRange('link').unsetMark('link').run();
+                }
             }
         } else {
             applyLinkToSelection(editor, trimmed);
@@ -256,12 +259,14 @@ export default function LinkEditBubble({ editor, anchorRect, containerRef, onClo
 
     const removeLink = () => {
         restoreEditorSelection();
-        const { empty } = editor.state.selection;
-        const chain = editor.chain().focus();
-        if (empty) {
-            chain.extendMarkRange('link').unsetLink().run();
-        } else {
-            chain.unsetLink().run();
+        if (!removeLinkKeepText(editor)) {
+            const { empty } = editor.state.selection;
+            const chain = editor.chain().focus();
+            if (empty) {
+                chain.extendMarkRange('link').unsetMark('link').run();
+            } else {
+                chain.unsetMark('link').run();
+            }
         }
         onClose();
     };

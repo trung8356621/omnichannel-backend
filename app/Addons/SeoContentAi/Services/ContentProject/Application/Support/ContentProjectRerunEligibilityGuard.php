@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\ArticleGenerationInputResolver;
 use App\Addons\SeoContentAi\Services\ArticleOutlineResolver;
 use App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionRoleResolver;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectExecutionStatus;
@@ -29,6 +30,7 @@ final class ContentProjectRerunEligibilityGuard
         private readonly ContentProjectLifecycle $lifecycle,
         private readonly ArticleOutlineResolver $outlineResolver,
         private readonly WorkflowExecutionRoleResolver $roleResolver,
+        private readonly ArticleGenerationInputResolver $generationInput,
         private readonly ContentProjectItemActionGuard $actionGuard = new ContentProjectItemActionGuard,
     ) {}
 
@@ -156,6 +158,14 @@ final class ContentProjectRerunEligibilityGuard
             }
 
             $outline = trim((string) $this->outlineResolver->resolveMarkdown($article));
+            if ($outline === '') {
+                try {
+                    $resolved = $this->generationInput->resolveForArticle($article);
+                    $outline = trim((string) ($resolved->rawArtifact ?? ''));
+                } catch (\Throwable) {
+                    $outline = '';
+                }
+            }
             if ($outline === '') {
                 return 'Article-only rerun requires a usable outline.';
             }

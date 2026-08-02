@@ -92,7 +92,9 @@ final class PromptHookExplicitBindingExecutor
 
         $correlationId = (string) ($contextExtras['correlation_id'] ?? Str::uuid()->toString());
         $input = $this->mapInput($definition->inputSchema->fields, $variables, $previousOutputs);
-        $input = $this->enrichTopicInput($input);
+        // Only inject topic when the hook schema declares it (e.g. outline) —
+        // never leak into comment/content hooks → Unknown input key [topic].
+        $input = $this->enrichTopicInput($input, $definition->inputSchema->fields);
         PromptHookRequireAnyOf::assertSatisfied($input, $definition->metadata);
         $settings = is_array($prompt->hook_settings) ? $prompt->hook_settings : [];
 
@@ -110,7 +112,8 @@ final class PromptHookExplicitBindingExecutor
         }
 
         if (($definition->template['source'] ?? '') === 'legacy_prompt_content') {
-            $compileVars = array_merge($variables, $input);
+            // Schema-whitelist only — never merge full shared workflow payload (topic leak).
+            $compileVars = $input;
             $context['legacy_compiled_prompt'] = $this->promptRunner->compilePrompt($prompt, $compileVars);
         }
 
@@ -260,13 +263,20 @@ final class PromptHookExplicitBindingExecutor
     }
 
     /**
-     * Runtime topic for prompts — never invents post_title/keyword from each other.
+     * Runtime topic for prompts that declare it — never invents post_title/keyword from each other.
      *
      * @param  array<string, mixed>  $input
+     * @param  array<string, array<string, mixed>>  $fields
      * @return array<string, mixed>
      */
-    private function enrichTopicInput(array $input): array
+    private function enrichTopicInput(array $input, array $fields): array
     {
+        if (! array_key_exists('topic', $fields)) {
+            unset($input['topic']);
+
+            return $input;
+        }
+
         $existing = isset($input['topic']) ? trim((string) $input['topic']) : '';
         if ($existing !== '') {
             return $input;

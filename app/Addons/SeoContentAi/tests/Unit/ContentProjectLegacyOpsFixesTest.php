@@ -210,16 +210,25 @@ final class ContentProjectLegacyOpsFixesTest extends TestCase
 
     public function test_ops_table_has_no_nested_vertical_scroll(): void
     {
+        // Table scroll/overflow CSS lives in the shared ops-styles component; the
+        // checkbox binding lives in the shared items-list component.
         $blade = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/views/filament/resources/seo-project-resource/pages/view-seo-project-operations.blade.php',
         );
+        $styles = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/components/content-project-ops-styles.blade.php',
+        );
+        $itemsList = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/components/content-project-items-list.blade.php',
+        );
 
-        self::assertStringContainsString('overflow-x: auto', $blade);
-        self::assertStringContainsString('overflow-y: visible', $blade);
-        self::assertStringContainsString('max-height: none', $blade);
-        self::assertStringNotContainsString('max-height: 70vh', $blade);
-        self::assertStringContainsString('wire:model.live="selectedTaskIds"', $blade);
+        self::assertStringContainsString('overflow-x: auto', $styles);
+        self::assertStringContainsString('overflow-y: visible', $styles);
+        self::assertStringContainsString('max-height: none', $styles);
+        self::assertStringNotContainsString('max-height: 70vh', $styles);
+        self::assertStringContainsString('wire:model.live="selectedTaskIds"', $itemsList);
         self::assertStringNotContainsString('wire:click="toggleSelect', $blade);
+        self::assertStringNotContainsString('wire:click="toggleSelect', $itemsList);
     }
 
     public function test_actions_menu_restores_archive_item(): void

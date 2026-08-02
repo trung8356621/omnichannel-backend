@@ -1163,13 +1163,14 @@ class SeoAnalyzerService
         $score = 0;
         $msg = '';
 
-        if ($wordsPerImage >= 250 && $wordsPerImage <= 450) {
+        // Aligned with TARGET_WORDS_PER_IMAGE = 200 (ideal ~150–300 từ/ảnh).
+        if ($wordsPerImage >= 150 && $wordsPerImage <= 300) {
             $score = 15;
             $msg = "Tuyệt vời: Mật độ ảnh lý tưởng ({$wordsPerImage} từ/ảnh)";
-        } elseif ($wordsPerImage > 450 && $wordsPerImage <= 800) {
+        } elseif ($wordsPerImage > 300 && $wordsPerImage <= 500) {
             $score = 10;
             $msg = "Khá ổn: Bài viết hơi dài, nên chèn thêm ảnh ({$wordsPerImage} từ/ảnh)";
-        } elseif ($wordsPerImage < 250 && $wordsPerImage >= 100) {
+        } elseif ($wordsPerImage < 150 && $wordsPerImage >= 80) {
             $score = 8;
             $msg = "Mật độ ảnh hơi dày ({$wordsPerImage} từ/ảnh)";
         } else {

@@ -95,6 +95,7 @@ Confirm: browser sends `execution_ref` + plaintext `confirmation_token`; server 
 - Skill / slash / CLI catalog entries gated for agent exposure + context (`AgentCliCapabilityGate`).
 - MCP tool subset from `ContentProjectMcpToolCatalog` (`isMcpWriteExposed`) + read schemas.
 - Core write surface examples: create/update/add_items/generate/rerun/start_review/approve/schedule*/publish*/archive*/restore + plan tools (see contracts).
+- CP/Publishing Queue split: `content_project.send_to_publishing_queue` (CP handoff, no WordPress) and `content_project.return_to_content_project` (PQ → CP) are separate capabilities from `schedule*`/`publish*` (PQ-only, act on `publishing_queued_at` items).
 - Public refs only (`cpj_`, `cpi_`, `cps_`, …) — never raw numeric project/item IDs in Agent I/O.
 
 ## 8. Internal-only capabilities

@@ -49,11 +49,10 @@ final class ContentProjectDashboardStatsService
         }
 
         $notArchived = "t.archived_at IS NULL AND t.status != 'archived'";
+        // Published = WP publisher success only (align StateResolver / PublishedDefinition).
         $isPublished = $hasPublishPublishedAt
-            ? "(t.publish_published_at IS NOT NULL OR ".($hasQueueStatus ? "t.publish_queue_status = 'published' OR " : '')."LOWER(COALESCE(a.status,'')) IN ('published','publish'))"
-            : ($hasQueueStatus
-                ? "(t.publish_queue_status = 'published' OR LOWER(COALESCE(a.status,'')) IN ('published','publish'))"
-                : "LOWER(COALESCE(a.status,'')) IN ('published','publish')");
+            ? '(t.publish_published_at IS NOT NULL'.($hasQueueStatus ? " OR t.publish_queue_status = 'published'" : '').')'
+            : ($hasQueueStatus ? "t.publish_queue_status = 'published'" : '0=1');
 
         // Exclusive precedence mirrors ContentProjectItemDashboardBucketMapper::fromRawRow().
         $queueWaiting = $hasQueueStatus
@@ -72,11 +71,17 @@ final class ContentProjectDashboardStatsService
                 AND t.status = 'failed'
                 THEN 1 ELSE 0 END)";
 
+        // In Review = reporting stamp (content_manager_reviewed_at) or legacy handoff residue.
+        // Not lifecycle. Not a Schedule gate.
+        $cmReviewed = Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'content_manager_reviewed_at')
+            ? 't.content_manager_reviewed_at IS NOT NULL'
+            : '0=1';
         $waitingReviewExpr = "SUM(CASE WHEN {$notArchived} AND NOT {$isPublished}
             AND NOT (".($hasQueueStatus ? "t.publish_queue_status IN ('waiting','processing','retrying') OR " : '')."t.scheduled_publish_at IS NOT NULL)
             AND t.status != 'failed'
             AND ".($hasQueueStatus ? "COALESCE(t.publish_queue_status,'none') != 'failed' AND " : '')."
-            (t.status = 'reviewing' OR (t.status = 'completed' AND COALESCE(a.review_status,'') != 'approved'))
+            COALESCE(a.review_status,'') != 'approved'
+            AND ({$cmReviewed} OR t.status = 'reviewing' OR a.review_status = 'pending_review')
             THEN 1 ELSE 0 END)";
 
         $row = DB::connection('omi_seo_ai')->selectOne("
@@ -91,7 +96,7 @@ final class ContentProjectDashboardStatsService
                     THEN 1 ELSE 0 END) AS ai_running,
                 {$waitingReviewExpr} AS waiting_review,
                 SUM(CASE WHEN {$notArchived} AND NOT {$isPublished}
-                    AND t.status = 'completed' AND a.review_status = 'approved'
+                    AND t.status IN ('completed', 'reviewing') AND a.review_status = 'approved'
                     AND t.scheduled_publish_at IS NULL
                     AND ".($hasQueueStatus ? "COALESCE(t.publish_queue_status,'none') IN ('none','cancelled','skipped')" : '1=1')."
                     THEN 1 ELSE 0 END) AS approved,

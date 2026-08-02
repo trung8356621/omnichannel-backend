@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { removeLinkKeepText } from '../utils/editorLinkCommands';
 import {
     Bold,
     Italic,
@@ -242,7 +243,12 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                         <Link2 size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
-                        onClick={() => editor.chain().focus().unsetLink().run()}
+                        onClick={() => {
+                            // Mark-only unlink — never deleteSelection / remove node text.
+                            if (!removeLinkKeepText(editor)) {
+                                editor.chain().focus().extendMarkRange('link').unsetMark('link').run();
+                            }
+                        }}
                         disabled={!editor.isActive('link')}
                         title={t('toolbar_unlink')}
                     >

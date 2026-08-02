@@ -4,17 +4,31 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Support\CtaContactUsability;
 use App\Addons\SeoContentAi\Support\CtaLinkFormatter;
+use App\Addons\SeoContentAi\Support\CtaQuickTemplates;
 use App\Models\Site;
 
 final class DomainCtaEditorService
 {
     public function __construct(
         private readonly SiteDomainPromptContextService $promptContext,
+        private readonly SeoDomainCtaGlobalSettingsService $globalSettings,
     ) {}
 
     /**
-     * @return list<array{type: string, value: string, label: string, href: string, can_insert: bool, is_blank?: bool}>
+     * Usable contact rows only — unresolved placeholders / blanks are omitted from UI lists.
+     *
+     * @return list<array{
+     *     type: string,
+     *     value: string,
+     *     label: string,
+     *     href: string,
+     *     plain_text: bool,
+     *     can_insert: bool,
+     *     usable: bool,
+     *     is_blank: bool
+     * }>
      */
     public function forSite(Site|int|null $site): array
     {
@@ -36,34 +50,56 @@ final class DomainCtaEditorService
                 continue;
             }
 
-            if ($value === '') {
-                $items[] = [
-                    'type' => $type,
-                    'value' => '',
-                    'label' => "[{$type}]",
-                    'href' => '',
-                    'plain_text' => true,
-                    'can_insert' => true,
-                    'is_blank' => true,
-                ];
-
+            if ($value === '' || CtaContactUsability::isUnresolvedPlaceholder($value)) {
                 continue;
             }
 
             $plainText = CtaLinkFormatter::isPlainTextType($type);
             $href = $plainText ? '' : CtaLinkFormatter::format($type, $value);
 
-            $items[] = [
+            $item = [
                 'type' => $type,
                 'value' => $value,
                 'label' => $value,
                 'href' => $href,
                 'plain_text' => $plainText,
                 'can_insert' => true,
+                'usable' => true,
                 'is_blank' => false,
             ];
+
+            if (! CtaContactUsability::isUsable($item)) {
+                continue;
+            }
+
+            $items[] = $item;
         }
 
         return $items;
+    }
+
+    /**
+     * @return array<string, array{default_index: int, templates: list<string>}>
+     */
+    public function quickTemplates(): array
+    {
+        return $this->globalSettings->getCtaQuickTemplates();
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, array{default_index: int, templates: list<string>}>
+     */
+    public function saveQuickTemplates(array $payload): array
+    {
+        return $this->globalSettings->saveCtaQuickTemplates($payload);
+    }
+
+    /**
+     * @param  array{type?: string, value?: string, label?: string}  $item
+     */
+    public function resolveQuickTemplate(string $template, array $item): string
+    {
+        return CtaQuickTemplates::resolve($template, $item);
     }
 }

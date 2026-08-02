@@ -16,6 +16,7 @@ import { TableHeader } from '@tiptap/extension-table-header';
 import Paragraph from '@tiptap/extension-paragraph';
 import { SEO_EDITOR_LINK_CLASS } from './articleEditorTransientMarkup';
 import { SEO_LINK_DEFAULT_ATTRS } from './inlineLinkNormalizer';
+import { exitLinkAtBoundary, handleLinkBoundaryKeydown, removeLinkKeepText } from './editorLinkCommands';
 
 /** Giữ class / data attribute trên paragraph (vd. placeholder FAQ). */
 const PreservedParagraph = Paragraph.extend({
@@ -42,6 +43,17 @@ const PreservedParagraph = Paragraph.extend({
                     }
 
                     return { 'data-omi-faq': attributes['data-omi-faq'] };
+                },
+            },
+            'data-cta-type': {
+                default: null,
+                parseHTML: (element) => element.getAttribute('data-cta-type'),
+                renderHTML: (attributes) => {
+                    if (!attributes['data-cta-type']) {
+                        return {};
+                    }
+
+                    return { 'data-cta-type': attributes['data-cta-type'] };
                 },
             },
         };
@@ -95,6 +107,20 @@ const SeoEditorLink = Link.extend({
     priority: 1000,
 
     spanning: true,
+
+    // Caret at end of link must not keep expanding the mark (sticky link).
+    inclusive: false,
+
+    addKeyboardShortcuts() {
+        return {
+            'Mod-Shift-k': () => removeLinkKeepText(this.editor),
+            ArrowRight: () => handleLinkBoundaryKeydown(this.editor, { key: 'ArrowRight', preventDefault() {} }),
+            ' ': () => {
+                exitLinkAtBoundary(this.editor);
+                return false;
+            },
+        };
+    },
 
     addAttributes() {
         const defaults = {

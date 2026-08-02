@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Enums\SeoLinkMapType;
 use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
 use App\Addons\SeoContentAi\Support\SeoLinkMapLinkTypeClassifier;
+use App\Addons\SeoContentAi\Support\SeoReasonPresentation;
 use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
 use DOMDocument;
 use DOMElement;
@@ -109,12 +110,16 @@ final class SeoScoringEngine
         $result = $this->calculateTextToImageMetrics($html);
         $violations = [];
 
+        $missing = max(0, (int) ($result['missing_image_count'] ?? 0));
+        $validCount = max(0, (int) ($result['current_image_count'] ?? 0));
+        $wordCount = max(0, (int) ($result['current_word_count'] ?? 0));
+
         $ratioKey = match (true) {
-            $result['base_score'] >= 15 => null,
-            $result['base_score'] >= 10 => SeoScoringRulesRegistry::KEY_IMAGE_RATIO_SUBOPTIMAL,
-            $result['base_score'] >= 8 => SeoScoringRulesRegistry::KEY_IMAGE_RATIO_LOW,
-            $result['base_score'] >= 3 => SeoScoringRulesRegistry::KEY_IMAGE_RATIO_POOR,
-            default => SeoScoringRulesRegistry::KEY_IMAGE_RATIO_MISSING,
+            $wordCount >= 10 && $validCount === 0 => SeoScoringRulesRegistry::KEY_IMAGE_RATIO_MISSING,
+            $missing >= 3 => SeoScoringRulesRegistry::KEY_IMAGE_RATIO_POOR,
+            $missing >= 2 => SeoScoringRulesRegistry::KEY_IMAGE_RATIO_LOW,
+            $missing === 1 => SeoScoringRulesRegistry::KEY_IMAGE_RATIO_SUBOPTIMAL,
+            default => null,
         };
 
         if ($ratioKey !== null) {
@@ -129,49 +134,29 @@ final class SeoScoringEngine
     }
 
     /**
-     * @return array{base_score: int, missing_alt: int}
+     * @return array{
+     *   base_score: int,
+     *   missing_alt: int,
+     *   current_image_count: int,
+     *   recommended_image_count: int,
+     *   missing_image_count: int,
+     *   current_word_count: int,
+     *   target_words_per_image: int
+     * }
      */
     private function calculateTextToImageMetrics(string $htmlContent): array
     {
-        if (trim($htmlContent) === '') {
-            return ['base_score' => 0, 'missing_alt' => 0];
-        }
+        $metrics = SeoReasonPresentation::imageRatioMetrics($htmlContent);
 
-        $dom = new DOMDocument;
-        libxml_use_internal_errors(true);
-        $dom->loadHTML(
-            mb_convert_encoding($htmlContent, 'HTML-ENTITIES', 'UTF-8'),
-            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD,
-        );
-        libxml_clear_errors();
-
-        $images = $dom->getElementsByTagName('img');
-        $imageCount = $images->length;
-
-        $textContent = strip_tags($htmlContent);
-        $textContent = preg_replace('/\s+/u', ' ', trim($textContent)) ?? '';
-        $wordCount = $textContent === '' ? 0 : count(array_filter(explode(' ', $textContent)));
-
-        $missingAlt = 0;
-        foreach ($images as $img) {
-            if (trim((string) $img->getAttribute('alt')) === '') {
-                $missingAlt++;
-            }
-        }
-
-        if ($wordCount < 10 || $imageCount === 0) {
-            return ['base_score' => 0, 'missing_alt' => $missingAlt];
-        }
-
-        $wordsPerImage = (int) round($wordCount / $imageCount);
-        $baseScore = match (true) {
-            $wordsPerImage >= 250 && $wordsPerImage <= 450 => 15,
-            $wordsPerImage > 450 && $wordsPerImage <= 800 => 10,
-            $wordsPerImage < 250 && $wordsPerImage >= 100 => 8,
-            default => 3,
-        };
-
-        return ['base_score' => $baseScore, 'missing_alt' => $missingAlt];
+        return [
+            'base_score' => (int) $metrics['base_score'],
+            'missing_alt' => (int) $metrics['missing_alt'],
+            'current_image_count' => (int) $metrics['current_image_count'],
+            'recommended_image_count' => (int) $metrics['recommended_image_count'],
+            'missing_image_count' => (int) $metrics['missing_image_count'],
+            'current_word_count' => (int) $metrics['current_word_count'],
+            'target_words_per_image' => (int) $metrics['target_words_per_image'],
+        ];
     }
 
     /**

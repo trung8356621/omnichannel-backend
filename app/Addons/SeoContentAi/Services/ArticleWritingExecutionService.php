@@ -335,7 +335,18 @@ class ArticleWritingExecutionService
             return $this->fail($writing, $owner, 'Không tìm thấy content node trong Publish workflow.');
         }
 
-        // Không chạy outline lại — seed outline artifact vào prior state.
+        // Không chạy outline lại — seed từ writing input / context vars / meta / PromptResult.
+        if ($writing->input !== '') {
+            $vars = is_array($taskContext->variables) ? $taskContext->variables : [];
+            if (trim((string) ($vars['article_writing_raw_input'] ?? '')) === '') {
+                $vars['article_writing_raw_input'] = $writing->input;
+            }
+            if (trim((string) ($vars['input'] ?? '')) === '') {
+                $vars['input'] = $writing->input;
+            }
+            $taskContext = $taskContext->withVariables($vars);
+        }
+
         $steps = $this->workflowRunner->runFromNodeId(
             $task,
             $taskContext,
@@ -466,7 +477,7 @@ class ArticleWritingExecutionService
         ArticleWritingExecutionContext $context,
     ): ArticleWritingExecutionResult {
         $failed = collect($steps)->contains(
-            static fn (array $step): bool => ($step['status'] ?? '') === 'failed',
+            static fn (array $step): bool => in_array((string) ($step['status'] ?? ''), ['failed', 'blocked'], true),
         );
         $articleId = $taskContext->article instanceof SeoArticle
             ? (int) $taskContext->article->getKey()

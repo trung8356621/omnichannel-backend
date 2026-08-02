@@ -64,10 +64,10 @@ final class SeoScoringRulesRegistry
             ['key' => self::KEY_MISSING_FOCUS_KEYWORD, 'deduction' => 100, 'locale_key' => 'seo_rules.missing_focus_keyword'],
             ['key' => self::KEY_H2_MISSING, 'deduction' => 20, 'locale_key' => 'seo_rules.h2_missing'],
             ['key' => self::KEY_CONTENT_LENGTH_LOW, 'deduction' => 15, 'locale_key' => 'seo_rules.content_length_low'],
-            ['key' => self::KEY_IMAGE_RATIO_MISSING, 'deduction' => 15, 'locale_key' => 'seo_rules.image_ratio_missing'],
-            ['key' => self::KEY_IMAGE_RATIO_POOR, 'deduction' => 12, 'locale_key' => 'seo_rules.image_ratio_poor'],
-            ['key' => self::KEY_IMAGE_RATIO_LOW, 'deduction' => 7, 'locale_key' => 'seo_rules.image_ratio_low'],
-            ['key' => self::KEY_IMAGE_RATIO_SUBOPTIMAL, 'deduction' => 5, 'locale_key' => 'seo_rules.image_ratio_suboptimal'],
+            ['key' => self::KEY_IMAGE_RATIO_MISSING, 'deduction' => 12, 'locale_key' => 'seo_rules.image_ratio_missing'],
+            ['key' => self::KEY_IMAGE_RATIO_POOR, 'deduction' => 7, 'locale_key' => 'seo_rules.image_ratio_poor'],
+            ['key' => self::KEY_IMAGE_RATIO_LOW, 'deduction' => 4, 'locale_key' => 'seo_rules.image_ratio_low'],
+            ['key' => self::KEY_IMAGE_RATIO_SUBOPTIMAL, 'deduction' => 2, 'locale_key' => 'seo_rules.image_ratio_suboptimal'],
             ['key' => self::KEY_IMAGE_ALT_MISSING, 'deduction' => 5, 'locale_key' => 'seo_rules.image_alt_missing'],
             ['key' => self::KEY_WIKI_TRUST_MISSING, 'deduction' => 15, 'locale_key' => 'seo_rules.wiki_trust_missing'],
             ['key' => self::KEY_FAQ_MISSING, 'deduction' => 10, 'locale_key' => 'seo_rules.faq_missing'],
@@ -113,6 +113,22 @@ final class SeoScoringRulesRegistry
                 ? substr($rule['locale_key'], 10)
                 : $rule['locale_key'];
             $lines[$rule['locale_key']] = (string) __("seo_rules.{$langKey}");
+
+            foreach (["{$langKey}_label", "{$langKey}_detail"] as $extraKey) {
+                $translated = __("seo_rules.{$extraKey}");
+                if (is_string($translated) && $translated !== "seo_rules.{$extraKey}") {
+                    $lines['seo_rules.'.$extraKey] = $translated;
+                }
+            }
+        }
+
+        $allSeoRules = trans('seo_rules');
+        if (is_array($allSeoRules)) {
+            foreach ($allSeoRules as $langKey => $value) {
+                if (is_string($value) && $value !== '') {
+                    $lines['seo_rules.'.$langKey] = $value;
+                }
+            }
         }
 
         foreach (array_keys((array) trans('seo')) as $legacyKey) {

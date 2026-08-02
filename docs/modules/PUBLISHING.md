@@ -2,25 +2,54 @@
 
 > Status: Canonical  
 > Owner: SeoContentAi  
-> Last verified: 2026-08-01  
+> Last verified: 2026-08-02  
 > Supersedes: `docs/archive/content-projects/CONTENT_PROJECT_PUBLISHING_DELIVERY.md`, publish sections of `CONTENT_PROJECT_CANONICAL_ARCHITECTURE.md` / `CONTENT_PROJECT_COMMAND_BUS_CUTOVER.md`, publish routes in `docs/MAP_SEO_PROJECTS.md`
 
 ## 1. Purpose
 
-Deliver approved Content Project items (and legacy non-project scheduled articles) to the target platform — today primarily WordPress — with **at-least-once delivery** and **idempotent publish**.
+**Publishing Queue** owns schedule distribution and WordPress publication.
 
-SaaS owns schedule time (`seo_project_tasks.scheduled_publish_at`). WordPress must **not** receive a future “WP-native schedule” from the Content Project path.
+**Content Project** owns content production only (Draft / Pending / Needs Review / In Review / Failed generation). CP does **not** show Scheduled/Published as active workflow cards.
+
+Handoff: `content_project.send_to_publishing_queue` stamps `seo_project_tasks.publishing_queued_at` (+ `publishing_queued_by`) → Unscheduled. No WordPress. No auto schedule. Return via `content_project.return_to_content_project` before Published (not archive).
 
 ## 2. Canonical routes
 
 | Surface | Path / entry |
 |---------|----------------|
-| Filament ops | `ViewSeoProject` filters `lifecycle=waiting_publish,published` |
-| Compat URL | `/seo/{hash}/content-projects/{id}/publishing-queue` → redirect to filtered view |
-| Article editor (active CP) | Publish Now → `PublishProjectItemsNowCommand` |
-| Sync WP (active CP) | `ContentProjectWorkspaceSaveService` only — **not** a publish command |
-| Cron | `seo:publish-scheduled-articles` (schedule name `seo-content-ai:publish-scheduled-articles`) |
-| Agent/MCP | `content_project.schedule|auto_schedule|unschedule|move_schedule|publish_now|retry_publish|skip_publish|cancel_publish` |
+| Filament Publishing Queue | Hub `/publishing-queue` (`PublishingQueueHub`, shared CP ops UI components); nested `/content-projects/{id}/publishing-queue` redirects to hub |
+| Content Project ops | production working set only (`publishing_queued_at` IS NULL) |
+| Cron | `seo:publish-scheduled-articles` |
+| Agent/MCP | `send_to_publishing_queue`, `schedule`, `auto_schedule` (modes `project_month` / `quick`), `unschedule`, `publish_now`, `retry_publish`, `return_to_content_project` |
+
+## 3. Publishing Queue states
+
+| State | Meaning |
+|-------|---------|
+| Unscheduled | Handed off; no `scheduled_publish_at` |
+| Scheduled | Future `scheduled_publish_at`; execution `publish_queue_status=none` (not waiting) |
+| Publishing | Due / `processing` / legacy waiting-retrying |
+| Published | WP publisher success (`publish_published_at` / queue published) — never `articles.status` alone |
+| Failed | Queue failed; retry/reschedule/cancel |
+
+`ContentProjectPublishingQueueService::schedule`: future at → execution **none**; past/now → **waiting** for runner.
+
+## 4. Auto / Quick Mode
+
+Both live **only** on Publishing Queue (`ContentProjectAutoScheduleService`):
+
+- **Auto (`project_month`)**: remaining days of source project month; no past; increase articles/day if needed.
+- **Quick Mode (`quick`)**: days + start time; even distribution + minimum interval; deadline recovery — **not** Dev/Test/Debug.
+
+## 5. Main components
+
+| Role | Class |
+|------|--------|
+| Queue mutate API | `ContentProjectPublishingQueueService` (`acceptHandoff`, `schedule`, `returnToContentProject`, …) |
+| Due dispatcher | `ContentProjectPublishingQueueRunner::dispatchDue()` |
+| Auto / Quick | `ContentProjectAutoScheduleService` |
+| Read model | `ContentProjectPublishingQueueReadModel` + `PublishingQueueStateClassifier` |
+| Handoff eligibility | `PublishingQueueHandoffEligibility` |
 
 Operations center may show queue health; it does not own a second dispatcher.
 
@@ -170,7 +199,7 @@ Publishing-specific:
 ## 13. Compatibility paths
 
 - Legacy scheduled **articles** (not on CP queue) still flow through the same artisan command’s legacy branch.
-- Publishing-queue Filament page URL retained as redirect.
+- Publishing Queue Filament page (`ContentProjectPublishingQueue`) is a real Livewire page (summary cards + filters + table + Auto/Quick Mode) — no longer a redirect shell to CP ops.
 - Extension `PublisherRegistry` (SDK array drivers) wraps the same WP publisher for Extension SDK consumers — Application path uses `ContentPublisherRegistry`.
 
 ## 14. Forbidden paths

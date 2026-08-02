@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\Publish
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RetryProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ScheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SkipProjectItemPublishingCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SendToPublishingQueueCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UnscheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResult;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResultNotifier;
@@ -134,6 +135,22 @@ trait InteractsWithContentProjectPublishingActions
         ), 'cancel');
     }
 
+    public function sendToPublishingQueueOne(int $taskId): void
+    {
+        $this->dispatchPublishingCommand(new SendToPublishingQueueCommand(
+            (int) $this->requireProject()->getKey(),
+            [$taskId],
+        ), 'send_to_publishing_queue');
+    }
+
+    public function bulkSendToPublishingQueue(): void
+    {
+        $this->dispatchPublishingCommand(new SendToPublishingQueueCommand(
+            (int) $this->requireProject()->getKey(),
+            $this->selectedItemIds(),
+        ), 'send_to_publishing_queue');
+    }
+
     public function scheduleOne(int $taskId): void
     {
         $this->dispatchPublishingCommand(new ScheduleProjectItemsCommand(
@@ -177,8 +194,7 @@ trait InteractsWithContentProjectPublishingActions
 
     private function dispatchPublishingCommand(object $command, string $op): void
     {
-        abort_if(SeoAccessControl::isContentManager(), 403);
-        abort_unless(SeoAccessControl::canMutateContentProjects(), 403);
+        abort_unless(SeoAccessControl::canManageContentProjectWorkflow(), 403);
 
         $embedded = property_exists($command, 'itemRefs') && is_array($command->itemRefs)
             ? array_values(array_filter(array_map(
@@ -210,10 +226,15 @@ trait InteractsWithContentProjectPublishingActions
                 ),
             );
 
-            app(ContentProjectActionResultNotifier::class)->send($result);
+            if (! ($result->success && $op === 'send_to_publishing_queue')) {
+                app(ContentProjectActionResultNotifier::class)->send($result);
+            }
 
             if ($result->success) {
                 $this->clearSelection();
+                if (method_exists($this, 'afterPublishingCommandSuccess')) {
+                    $this->afterPublishingCommandSuccess($op, $embedded, $result);
+                }
             }
         } catch (Throwable $e) {
             RuntimeLogger::report($e, [

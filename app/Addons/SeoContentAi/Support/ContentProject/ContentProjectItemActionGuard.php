@@ -17,7 +17,9 @@ use RuntimeException;
 
 /**
  * Shared eligibility for read-model available_actions + command assertCan (Batch D verify).
- * Schedule/PublishNow: block Archived / Generating / Draft / Failed.
+ * Schedule/PublishNow: Review (Needs Review / In Review reporting) or Approved / WaitingPublish.
+ * Block Archived / Generating / Draft / Failed / busy. Reporting states are not hard gates
+ * against each other — Approved is optional marker, not required before Schedule.
  * Archive blocked while generation or publish-queue busy (matches ArchiveProjectItemsHandler).
  */
 final class ContentProjectItemActionGuard
@@ -174,12 +176,12 @@ final class ContentProjectItemActionGuard
             return false;
         }
 
-        return ! in_array($lifecycle, [
-            ContentProjectLifecyclePhase::Archived,
-            ContentProjectLifecyclePhase::Generating,
-            ContentProjectLifecyclePhase::Draft,
-            // Gen-failed / publish-failed never-published: Retry/Generate/Rerun — not Schedule.
-            ContentProjectLifecyclePhase::Failed,
+        // Schedule / Publish Now from Review (Needs Review or In Review reporting) or Approved.
+        // Needs Review / In Review / Approved are NOT hard gates against each other.
+        return in_array($lifecycle, [
+            ContentProjectLifecyclePhase::Review,
+            ContentProjectLifecyclePhase::Approved,
+            ContentProjectLifecyclePhase::WaitingPublish,
         ], true);
     }
 }

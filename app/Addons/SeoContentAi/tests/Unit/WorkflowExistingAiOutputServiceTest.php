@@ -50,6 +50,38 @@ final class WorkflowExistingAiOutputServiceTest extends TestCase
         self::assertSame('<p>Nội dung đã có</p>', $reuse['output']);
     }
 
+    public function test_it_does_not_reuse_content_when_body_has_outline_markers(): void
+    {
+        $article = (new SeoArticle)->forceFill([
+            'body' => '<p>[START_TASK_1_OUTLINE]</p><h2>1. Giới thiệu</h2>',
+        ]);
+        $prompt = (new SeoPrompt)->forceFill(['name' => 'Anything']);
+
+        $reuse = (new WorkflowExistingAiOutputService)->resolve([
+            'data' => [
+                'execution_role' => WorkflowExecutionRole::ArticleContentGenerate->value,
+                'mergeOutlineToSave' => true,
+            ],
+        ], $prompt, $article);
+
+        self::assertNull($reuse);
+    }
+
+    public function test_allow_reuse_false_always_null(): void
+    {
+        $article = (new SeoArticle)->forceFill(['body' => '<p>Nội dung đã có</p>']);
+        $prompt = (new SeoPrompt)->forceFill(['name' => 'Anything']);
+
+        $reuse = (new WorkflowExistingAiOutputService)->resolve(
+            ['data' => ['execution_role' => WorkflowExecutionRole::ArticleContentGenerate->value]],
+            $prompt,
+            $article,
+            allowReuse: false,
+        );
+
+        self::assertNull($reuse);
+    }
+
     public function test_prompt_name_alone_does_not_detect_outline(): void
     {
         $prompt = (new SeoPrompt)->forceFill(['name' => 'Dàn ý bài viết outline']);

@@ -20,6 +20,15 @@ final class OutlineDownstreamSkipOnFailureTest extends TestCase
         self::assertStringContainsString('outline_failed', $src);
     }
 
+    public function test_workflow_runner_blocks_persist_after_content_fail(): void
+    {
+        $src = $this->source(TaskWorkflowTestRunner::class);
+        self::assertStringContainsString('shouldBlockAfterContentFailure', $src);
+        self::assertStringContainsString('content_artifact_missing', $src);
+        self::assertStringContainsString('article_content artifact hợp lệ', $src);
+        self::assertStringContainsString("'status' => 'blocked'", $src);
+    }
+
     public function test_outline_then_article_blocks_on_outline_fail(): void
     {
         $src = $this->source(CreateArticlesFromTaskService::class);

@@ -42,6 +42,8 @@ use App\Addons\SeoContentAi\Services\ArticleKeywordLinkReconcileService;
 use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;
 use App\Addons\SeoContentAi\Services\ArticlePendingInternalLinkService;
 use App\Addons\SeoContentAi\Services\ArticlePipelineRerunService;
+use App\Addons\SeoContentAi\Services\ArticleAiHistory\ArticleAiHistoryApplicationService;
+use App\Addons\SeoContentAi\Services\ArticleAiHistory\ArticleAiHistoryPendingDraftStore;
 use App\Addons\SeoContentAi\Services\ArticleWritingExecutionService;
 use App\Addons\SeoContentAi\Services\ArticlePolylangSyncService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
@@ -217,6 +219,15 @@ class EditArticle extends SeoEditRecord
     public ?string $pipelineRerunUrl = null;
 
     public ?string $pipelineRerunMessage = null;
+
+    /** @var array<string, mixed>|null Pending manual AI-history apply banner. */
+    public ?array $aiHistoryPendingBanner = null;
+
+    public function hasAiHistoryPendingBanner(): bool
+    {
+        return is_array($this->aiHistoryPendingBanner)
+            && trim((string) ($this->aiHistoryPendingBanner['target'] ?? '')) !== '';
+    }
 
     public function mount(int|string $record): void
     {
@@ -865,6 +876,52 @@ class EditArticle extends SeoEditRecord
         $this->hydrateSeoMetaState();
         $this->loadArticleCategoryIdsFromMeta();
         $this->syncPublishDatePartsFromRecord();
+        $this->refreshAiHistoryPendingBanner();
+    }
+
+    private function refreshAiHistoryPendingBanner(): void
+    {
+        $pending = app(ArticleAiHistoryPendingDraftStore::class)->get($this->record);
+        if ($pending === null) {
+            $this->aiHistoryPendingBanner = null;
+
+            return;
+        }
+
+        $this->aiHistoryPendingBanner = [
+            'target' => (string) ($pending['target'] ?? ''),
+            'run_id' => $pending['run_id'] ?? null,
+            'attempt' => $pending['attempt'] ?? null,
+            'artifact_ref' => (string) ($pending['artifact_ref'] ?? ''),
+            'payload' => (string) ($pending['payload'] ?? ''),
+            'apply_mode' => (string) ($pending['apply_mode'] ?? 'manual_debug_apply'),
+        ];
+    }
+
+    public function undoAiHistoryPendingApply(): void
+    {
+        $result = app(ArticleAiHistoryApplicationService::class)->undoPending(
+            $this->record,
+            (int) (auth()->id() ?? 0),
+        );
+        $this->refreshAiHistoryPendingBanner();
+
+        if ($result->success) {
+            Notification::make()
+                ->title('Đã hoàn tác')
+                ->body($result->message)
+                ->success()
+                ->send();
+            $this->js('window.setTimeout(() => window.location.reload(), 120)');
+
+            return;
+        }
+
+        Notification::make()
+            ->title('Không hoàn tác được')
+            ->body($result->message)
+            ->danger()
+            ->send();
     }
 
     private function restoreArticleBodyFromWordPressCacheIfMissing(): void
@@ -3061,6 +3118,12 @@ class EditArticle extends SeoEditRecord
 
             $this->captureArticleRevisionAfterSave($html);
 
+            app(ArticleAiHistoryApplicationService::class)->commitPendingOnSave(
+                $this->record,
+                (int) (auth()->id() ?? 0),
+            );
+            $this->refreshAiHistoryPendingBanner();
+
             if (is_array($seoAnalysis) && array_key_exists('violations', $seoAnalysis)) {
                 $seoResult = app(SeoAnalyzerService::class)->persistClientAnalysis(
                     $this->record->fresh(),
@@ -3630,6 +3693,7 @@ class EditArticle extends SeoEditRecord
         $metaMap = ArticleMetaMap::for($this->record);
         $conflictGuard = app(ArticleContentConflictGuard::class);
         $projectRunRevision = (string) $metaMap->get('content_project_run', '');
+        $aiHistoryPending = $this->resolveAiHistoryPendingBootstrap();
         $bodyHash = $conflictGuard->contentHash($this->bootstrapEditorHtml);
         $contentRevisionSource = $projectRunRevision."\0".$bodyHash;
         $articleId = (int) $this->record->id;
@@ -3683,11 +3747,45 @@ class EditArticle extends SeoEditRecord
             ],
             'faqCount' => (int) $this->record->faqs()->count(),
             'settings' => $this->getEditorCoreSettingsPayload(),
+            'aiHistoryPendingApply' => $aiHistoryPending,
         ];
 
         app(ArticleEditorPerfDebug::class)->recordBootstrapSize('core', $payload);
 
         return $payload;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function resolveAiHistoryPendingBootstrap(): ?array
+    {
+        $pending = app(ArticleAiHistoryPendingDraftStore::class)->get($this->record);
+        if ($pending === null) {
+            return null;
+        }
+
+        $target = trim((string) ($pending['target'] ?? ''));
+        $payload = (string) ($pending['payload'] ?? '');
+
+        // Content apply: bootstrap editor with pending HTML so draft session picks it up.
+        if ($target === 'content' && trim($payload) !== '') {
+            $this->bootstrapEditorHtml = app(ArticleCtaPlaceholderService::class)
+                ->highlightBlankPlaceholdersInHtml(
+                    $payload,
+                    (int) ($this->record->site_id ?? 0) > 0 ? (int) $this->record->site_id : null,
+                );
+        }
+
+        return [
+            'target' => $target,
+            'payload' => $payload,
+            'run_id' => $pending['run_id'] ?? null,
+            'attempt' => $pending['attempt'] ?? null,
+            'artifact_ref' => (string) ($pending['artifact_ref'] ?? ''),
+            'apply_mode' => (string) ($pending['apply_mode'] ?? 'manual_debug_apply'),
+            'prompts_url' => ArticleResource::getUrl('prompts', ['record' => $this->record]),
+        ];
     }
 
     private function resolveArticleAuthorName(): string
@@ -3990,10 +4088,13 @@ class EditArticle extends SeoEditRecord
     /**
      * Minimal media picker config for initial page — no focus-keyword DB resolve.
      *
-     * @return array{articleId: int, siteId: int, articleDomain: string, endpoint: string, wordPressLinked: bool, defaultSearchKeyword: string, cacheScope: string}
+     * @return array{articleId: int, siteId: int, articleDomain: string, endpoint: string, wordPressLinked: bool, wordpress_media_available: bool, wordpress_media_unavailable_reason: string|null, defaultSearchKeyword: string, cacheScope: string}
      */
     public function getArticleMediaPickerMinimalPayload(): array
     {
+        $capability = app(\App\Addons\SeoContentAi\Services\WordPressMediaCapabilityResolver::class)
+            ->forSite($this->record->site);
+
         $payload = [
             'articleId' => (int) $this->record->id,
             'siteId' => (int) $this->record->site_id,
@@ -4002,7 +4103,10 @@ class EditArticle extends SeoEditRecord
             ),
             'cacheScope' => 'u:'.(int) (auth()->id() ?? 0),
             'endpoint' => route('seo.articles.media-picker', ['article' => $this->record->id]),
-            'wordPressLinked' => (int) ($this->record->wp_post_id ?? 0) > 0,
+            // BC: wordPressLinked = site-level WP media browse capability (not wp_post_id).
+            'wordPressLinked' => $capability['available'],
+            'wordpress_media_available' => $capability['available'],
+            'wordpress_media_unavailable_reason' => $capability['reason'],
             'defaultSearchKeyword' => trim($this->focusKeyword),
         ];
 

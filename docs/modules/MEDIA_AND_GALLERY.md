@@ -67,6 +67,8 @@ Middleware: Authenticate + role checks + `SetDynamicSeoDatabase` / connection co
 | Article slug fix | `SeoMediaArticleSlugFixService` |
 | URL rewrite | `SeoMediaUrlReplacementService` |
 | WP sync media | `WordPressLocalMediaSyncService` |
+| WP media browse capability | `WordPressMediaCapabilityResolver` (site-level; used by article media picker) |
+| Article media picker | `ArticleMediaPickerController` + `ArticleEditorLazyPayloadController::mediaPickerConfig` |
 | AI generate job | `Jobs/GenerateMediaJob` |
 | Image routing | `ImageRoutingStrategy` / `ImageCapabilityResolver` / `GeminiModelVersionPolicy` |
 | Frontend | `seoMediaApi.js`, `watermarkApi.js`, `media-image-editor-page.jsx`, `watermark-editor-page.jsx`, Media Library Alpine |
@@ -94,6 +96,15 @@ UI / editor → seoMediaApi / workspace-picker
 ```
 
 Library and picker list local media for site/article scope. Broken image UI: static placeholder, no retry loop (`brokenImageGuard`).
+
+### Article Media Picker — WordPress tab (site-level)
+
+- Route: `GET /api/seo/articles/{article}/editor/media-picker-config` + `GET .../media-picker?tab=original`.
+- Capability: `WordPressMediaCapabilityResolver` → `wordpress_media_available` / `wordpress_media_unavailable_reason`.
+- **Site-level**: require domain + `seo_read_token` + WP permalink base. **Not** gated on `article.wp_post_id`, sync status, or publish.
+- BC field `wordPressLinked` mirrors `wordpress_media_available` (no longer means “article linked to WP post”).
+- Browse/select WP media does **not** enqueue article sync or publish.
+- UI tab “Gốc (WP)” disabled reason must come from capability reason (connection/credential), never “bài chưa đồng bộ” when library is still reachable.
 
 ## 6. Write path
 
@@ -193,11 +204,14 @@ Resize from library/workflow may run inline via `SeoMediaResizeService`. Flatten
 
 Prefer unit tests around pipeline validation, Imagick pixel compat, WP prepare upload fallback, and article slug fix map contract.
 
+Also: `ArticleEditorContextPreservationContractTest` asserts WP media tab is site-level (no `wp_post_id` gate).
+
 Manual verification:
 
 ```text
 $PHP_BIN vendor/bin/phpunit --filter=SeoMedia
 $PHP_BIN vendor/bin/phpunit --filter=SeoImage
+$PHP_BIN vendor/bin/phpunit --filter=ArticleEditorContextPreservationContractTest
 ```
 
 ## 16. Related documents

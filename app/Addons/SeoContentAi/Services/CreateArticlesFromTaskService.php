@@ -45,6 +45,7 @@ final class CreateArticlesFromTaskService
         private readonly ArticleImproveExecutionService $articleImprove,
         private readonly WorkflowExecutionRoleResolver $roleResolver,
         private readonly ArticleGenerationInputResolver $outlineResolver,
+        private readonly ArticleOutlineResolver $articleOutlinePersist,
         private readonly WorkflowExecutionSnapshotBuilder $workflowSnapshotBuilder,
     ) {}
 
@@ -202,6 +203,9 @@ final class CreateArticlesFromTaskService
                 $keyword = 'rewrite';
             }
 
+            // Explicit step rerun must call AI — never short-circuit on existing body.
+            $context = $this->withForcedAiRegenerate($context, $fromStep->value);
+
             return $this->runArticleWritingForContext(
                 $context,
                 $task,
@@ -213,7 +217,10 @@ final class CreateArticlesFromTaskService
         }
 
         if ($includeDownstream) {
-            return $this->runOutlineThenArticleForContext($context, $siteId);
+            return $this->runOutlineThenArticleForContext(
+                $this->withForcedAiRegenerate($context, $fromStep->value),
+                $siteId,
+            );
         }
 
         // Outline-only: single outline node, no article write.
@@ -234,6 +241,7 @@ final class CreateArticlesFromTaskService
             $task,
             WorkflowExecutionRole::ArticleOutlineGenerate,
         );
+        $context = $this->withForcedAiRegenerate($context, $fromStep->value);
         $outlineStep = $this->workflowRunner->runSingleStep($task, $context, $outlineNodeId);
         $ok = ($outlineStep['status'] ?? '') !== 'failed';
 
@@ -407,12 +415,30 @@ final class CreateArticlesFromTaskService
             ];
         }
 
+        // Persist canonical outline meta BEFORE content node — ContentNode seed must not depend on PromptResult alone.
+        $articleForOutline = $context->article;
+        if ($articleForOutline instanceof SeoArticle) {
+            $persisted = $this->articleOutlinePersist->persist($articleForOutline, $artifact);
+            if (! ($persisted['ok'] ?? false)) {
+                return [
+                    'success' => false,
+                    'article_id' => $articleForOutline->id,
+                    'steps' => $steps,
+                    'message' => 'Outline xong nhưng không lưu được seo_article_outline: '
+                        .trim((string) ($persisted['message'] ?? '')),
+                    'article_blocked' => true,
+                ];
+            }
+            $context = $context->withArticle($articleForOutline->fresh() ?? $articleForOutline);
+        }
+
         $artifactHash = hash('sha256', $artifact);
         $variables = array_merge($context->variables, [
             'article_writing_source_type' => ArticleWritingSourceType::Outline->value,
             'source_type' => ArticleWritingSourceType::Outline->value,
             'article_writing_raw_input' => $artifact,
             'input' => $artifact,
+            'direct_publish_outline_markdown' => $artifact,
             'outline_artifact_hash' => $artifactHash,
             'article_source_artifact_hash' => $artifactHash,
             'outline_source_run_item_id' => $outlineStep['run_item_id'] ?? null,
@@ -923,6 +949,17 @@ final class CreateArticlesFromTaskService
             (int) $article->site_id,
             trim($phrase),
         );
+    }
+
+    /**
+     * Explicit step rerun must never short-circuit on existing body/outline.
+     */
+    private function withForcedAiRegenerate(TaskTestContext $context, string $fromStep): TaskTestContext
+    {
+        return $context->withVariables(array_merge($context->variables, [
+            'force_ai_regenerate' => '1',
+            'rerun_from_step' => $fromStep,
+        ]));
     }
 
     private function assertSiteAccessible(int $siteId): void

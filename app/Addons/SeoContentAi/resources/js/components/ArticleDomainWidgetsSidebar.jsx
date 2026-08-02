@@ -1,11 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Link2, Phone } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, ChevronRight, Link2, Settings2 } from 'lucide-react';
 import { t } from '../utils/i18n';
+import { filterUsableCtaContacts } from '../utils/ctaContactUsability';
+import { getEditorInsertionContext } from '../utils/editorInsertionContext';
 import {
     ctaDisplayLabel,
     formatCtaHref,
-    isCtaItemInsertable,
-    isCtaPlainTextType,
 } from '../utils/ctaLinkFormat';
 import {
     filterDomainLinksInArticleContent,
@@ -13,6 +13,12 @@ import {
     normalizeHrefForCompare,
     normalizeLinkLabel,
 } from '../utils/articleLinkSuggestionFilter';
+import {
+    CtaContactInsertList,
+    CtaQuickTemplateSettingsPopover,
+    dispatchCtaInsert,
+    useCtaQuickTemplates,
+} from './CtaContactInsertList';
 
 /**
  * @typedef {{ text?: string, href?: string, target_url?: string, article_count?: number, can_insert?: boolean, keyword_id?: number|null }} DomainLinkItem
@@ -21,7 +27,6 @@ import {
 
 function InsertableList({
     items,
-    variant,
     activeKey,
     hiddenRowKeys,
     onKeywordClick,
@@ -35,69 +40,36 @@ function InsertableList({
     return (
         <ul className="wp-article-links-keywords">
             {items.map((item, index) => {
-                const label =
-                    variant === 'cta'
-                        ? ctaDisplayLabel(item)
-                        : String(item?.text ?? '').trim();
-                const href =
-                    variant === 'cta'
-                        ? String(item?.href ?? formatCtaHref(item?.type, item?.value)).trim()
-                        : String(item?.href ?? item?.target_url ?? '').trim();
+                const label = String(item?.text ?? '').trim();
+                const href = String(item?.href ?? item?.target_url ?? '').trim();
                 const count = Number(item?.article_count ?? 0);
-                const countSuffix =
-                    variant === 'domain-link' && Number.isFinite(count) && count > 0
-                        ? ` (${count})`
-                        : '';
-                const itemKey = `${variant}-${label}-${index}`;
+                const countSuffix = Number.isFinite(count) && count > 0 ? ` (${count})` : '';
+                const itemKey = `domain-link-${label}-${index}`;
                 const isActive = activeKey === itemKey;
-                const insertable =
-                    variant === 'cta'
-                        ? isCtaItemInsertable(item)
-                        : item?.can_insert !== false && label !== '' && href !== '';
-                const isCtaBlank = variant === 'cta' && item?.is_blank === true;
-
+                const insertable = item?.can_insert !== false && label !== '' && href !== '';
                 const isRowHiding = hiddenRowKeys?.has(itemKey) === true;
 
                 return (
                     <li
                         key={itemKey}
-                        className={`wp-article-links-keyword-row${isCtaBlank ? ' is-cta-blank' : ''}${isRowHiding ? ' is-row-hiding' : ''}`}
+                        className={`wp-article-links-keyword-row${isRowHiding ? ' is-row-hiding' : ''}`}
                         aria-hidden={isRowHiding}
                     >
                         <button
                             type="button"
                             className={`wp-article-links-keyword${isActive ? ' is-active' : ''} is-suggestion`}
-                            title={
-                                variant === 'cta'
-                                    ? t('cta_widget_find', { label, type: item?.type ?? '' })
-                                    : t('domain_link_widget_find', { label, count })
-                            }
+                            title={t('domain_link_widget_find', { label, count })}
                             onMouseDown={(e) => e.preventDefault()}
                             onClick={() => onKeywordClick(item, index, itemKey)}
                         >
-                            {variant === 'cta' ? (
-                                <span className="wp-article-domain-cta-label">
-                                    <span className="wp-article-domain-cta-type">{item?.type ?? 'cta'}</span>
-                                    {label}
-                                </span>
-                            ) : (
-                                `${label}${countSuffix}`
-                            )}
+                            {`${label}${countSuffix}`}
                         </button>
                         {onInsert ? (
                             <button
                                 type="button"
                                 className="wp-article-links-insert-btn"
-                                aria-label={
-                                    variant === 'cta'
-                                        ? t('cta_widget_insert_for', { label })
-                                        : t('domain_link_widget_insert_for', { label })
-                                }
-                                title={
-                                    variant === 'cta'
-                                        ? t('cta_widget_insert_for', { label })
-                                        : t('domain_link_widget_insert_for', { label })
-                                }
+                                aria-label={t('domain_link_widget_insert_for', { label })}
+                                title={t('domain_link_widget_insert_for', { label })}
                                 disabled={!insertable}
                                 onMouseDown={(e) => e.preventDefault()}
                                 onClick={(e) => {
@@ -107,11 +79,7 @@ function InsertableList({
                                     }
                                 }}
                             >
-                                {variant === 'cta' ? (
-                                    <Phone size={14} aria-hidden />
-                                ) : (
-                                    <Link2 size={14} aria-hidden />
-                                )}
+                                <Link2 size={14} aria-hidden />
                             </button>
                         ) : null}
                     </li>
@@ -121,7 +89,7 @@ function InsertableList({
     );
 }
 
-function WidgetBox({ title, subtitle, collapsed, onToggle, children }) {
+function WidgetBox({ title, subtitle, collapsed, onToggle, headerExtra = null, children }) {
     return (
         <div className="wp-postbox wp-article-links-box">
             <div className="wp-postbox-header">
@@ -129,15 +97,18 @@ function WidgetBox({ title, subtitle, collapsed, onToggle, children }) {
                     {title}
                     {subtitle ? <span className="wp-article-links-counts">{subtitle}</span> : null}
                 </h2>
-                <button
-                    type="button"
-                    className="wp-postbox-toggle"
-                    aria-expanded={!collapsed}
-                    title={collapsed ? t('links_expand') : t('links_collapse')}
-                    onClick={onToggle}
-                >
-                    {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-                </button>
+                <div className="wp-postbox-header-actions">
+                    {headerExtra}
+                    <button
+                        type="button"
+                        className="wp-postbox-toggle"
+                        aria-expanded={!collapsed}
+                        title={collapsed ? t('links_expand') : t('links_collapse')}
+                        onClick={onToggle}
+                    >
+                        {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+                    </button>
+                </div>
             </div>
             {!collapsed ? <div className="wp-postbox-inside">{children}</div> : null}
         </div>
@@ -154,12 +125,20 @@ const applyDomainLinkFilters = (allLinks, articlePlainText, internalLinks, exter
 };
 
 /**
- * @param {{ initialDomainLinkList?: DomainLinkItem[], initialDomainLinkCatalog?: DomainLinkItem[], initialDomainCtaList?: DomainCtaItem[] }} props
+ * @param {{
+ *   siteId?: number|null,
+ *   initialDomainLinkList?: DomainLinkItem[],
+ *   initialDomainLinkCatalog?: DomainLinkItem[],
+ *   initialDomainCtaList?: DomainCtaItem[],
+ *   initialCtaQuickTemplates?: unknown,
+ * }} props
  */
 export default function ArticleDomainWidgetsSidebar({
+    siteId = null,
     initialDomainLinkList = [],
     initialDomainLinkCatalog = [],
     initialDomainCtaList = [],
+    initialCtaQuickTemplates = null,
 }) {
     const allDomainLinksRef = useRef(
         initialDomainLinkCatalog.length > 0 ? initialDomainLinkCatalog : initialDomainLinkList,
@@ -175,7 +154,11 @@ export default function ArticleDomainWidgetsSidebar({
     const [ctaActiveKey, setCtaActiveKey] = useState('');
     const [linksCollapsed, setLinksCollapsed] = useState(false);
     const [ctaCollapsed, setCtaCollapsed] = useState(false);
+    const [ctaSettingsOpen, setCtaSettingsOpen] = useState(false);
     const [hiddenRowKeys, setHiddenRowKeys] = useState(() => new Set());
+    const [serverCtaTemplates, setServerCtaTemplates] = useState(initialCtaQuickTemplates);
+    const [templatesByType, setTemplatesByType] = useCtaQuickTemplates(siteId, serverCtaTemplates);
+    const usableDomainCtas = useMemo(() => filterUsableCtaContacts(domainCtas), [domainCtas]);
 
     const hideRow = (itemKey) => {
         if (!itemKey) {
@@ -240,12 +223,10 @@ export default function ArticleDomainWidgetsSidebar({
                 );
             }
             if (Array.isArray(detail.domain_cta_list)) {
-                setDomainCtas(
-                    detail.domain_cta_list.map((item) => ({
-                        ...item,
-                        can_insert: true,
-                    })),
-                );
+                setDomainCtas(detail.domain_cta_list);
+            }
+            if (detail.cta_quick_templates && typeof detail.cta_quick_templates === 'object') {
+                setServerCtaTemplates(detail.cta_quick_templates);
             }
         };
 
@@ -322,47 +303,12 @@ export default function ArticleDomainWidgetsSidebar({
                     text,
                     href,
                     keyword_id: item.keyword_id ?? null,
-                },
-            }),
-        );
-    };
-
-    const insertCta = (item) => {
-        const type = String(item?.type ?? '').toLowerCase();
-        if (!type) {
-            return;
-        }
-
-        if (item?.is_blank === true) {
-            const token = `[${type}]`;
-            window.dispatchEvent(
-                new CustomEvent('seo-editor-insert-cta-link', {
-                    detail: {
-                        text: token,
-                        href: '',
-                        type,
-                        is_placeholder: true,
-                        html: `<span class="seo-cta-blank-placeholder" data-cta-type="${type}">${token}</span>`,
+                    insert_mode: 'caret',
+                    target: {
+                        sectionId: getEditorInsertionContext().activeSectionId,
+                        blockId: getEditorInsertionContext().activeBlockId,
+                        selectionBookmark: getEditorInsertionContext().selection,
                     },
-                }),
-            );
-
-            return;
-        }
-
-        const text = ctaDisplayLabel(item);
-        const plainText = isCtaPlainTextType(type) || item?.plain_text === true;
-        const href = plainText ? '' : String(item?.href ?? formatCtaHref(type, item?.value)).trim();
-        if (!text || (!href && !plainText)) {
-            return;
-        }
-
-        window.dispatchEvent(
-            new CustomEvent('seo-editor-insert-cta-link', {
-                detail: {
-                    text,
-                    href,
-                    type,
                 },
             }),
         );
@@ -379,7 +325,6 @@ export default function ArticleDomainWidgetsSidebar({
                 <p className="wp-article-links-hint">{t('domain_link_widget_hint')}</p>
                 <InsertableList
                     items={domainLinks}
-                    variant="domain-link"
                     activeKey={domainLinkActiveKey}
                     hiddenRowKeys={hiddenRowKeys}
                     emptyText={
@@ -394,18 +339,41 @@ export default function ArticleDomainWidgetsSidebar({
 
             <WidgetBox
                 title={t('cta_widget_title')}
-                subtitle={` (${domainCtas.length})`}
+                subtitle={` (${usableDomainCtas.length})`}
                 collapsed={ctaCollapsed}
                 onToggle={() => setCtaCollapsed((v) => !v)}
+                headerExtra={(
+                    <div className="wp-article-links-cta-quick-wrap">
+                        <button
+                            type="button"
+                            className="wp-article-links-insert-btn"
+                            aria-label={t('cta_widget_settings_title')}
+                            title={t('cta_widget_settings_title')}
+                            onClick={() => setCtaSettingsOpen(true)}
+                        >
+                            <Settings2 size={14} aria-hidden />
+                        </button>
+                        <CtaQuickTemplateSettingsPopover
+                            siteId={siteId}
+                            open={ctaSettingsOpen}
+                            onClose={() => setCtaSettingsOpen(false)}
+                            settings={templatesByType}
+                            onSave={setTemplatesByType}
+                        />
+                    </div>
+                )}
             >
                 <p className="wp-article-links-hint">{t('cta_widget_hint')}</p>
-                <InsertableList
+                <CtaContactInsertList
                     items={domainCtas}
-                    variant="cta"
                     activeKey={ctaActiveKey}
+                    templatesByType={templatesByType}
                     emptyText={t('cta_widget_empty')}
                     onKeywordClick={(item, _index, itemKey) => scrollToItem(item, itemKey, 'cta')}
-                    onInsert={insertCta}
+                    onInsertValue={(item) => dispatchCtaInsert(item, 'value', null, templatesByType)}
+                    onInsertQuickCta={(item, _itemKey, templateOverride) =>
+                        dispatchCtaInsert(item, 'sentence', templateOverride, templatesByType)
+                    }
                 />
             </WidgetBox>
         </>

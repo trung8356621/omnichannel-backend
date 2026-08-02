@@ -99,6 +99,7 @@ export function createSeoAssistantNavigator(initial = {}) {
         // Exclusive accordion from first paint — never stack every assistant panel.
         panelFilterActive: true,
         badges: {},
+        widgetHealth: {},
         editorPostType: initialPostType,
         supportsProductGalleryUi: initialSupportsGallery,
 
@@ -134,6 +135,11 @@ export function createSeoAssistantNavigator(initial = {}) {
                 });
             };
 
+            this._onHealthUpdate = (event) => {
+                const detail = event?.detail ?? {};
+                this.widgetHealth = { ...this.widgetHealth, ...detail };
+            };
+
             this._onSwitchPanel = (event) => {
                 const panelId = event?.detail?.panel ?? event?.detail?.widgetId;
                 if (panelId) {
@@ -156,6 +162,7 @@ export function createSeoAssistantNavigator(initial = {}) {
             };
 
             window.addEventListener('seo-assistant-navigator-badges', this._onBadgeUpdate);
+            window.addEventListener('seo-assistant-widget-health', this._onHealthUpdate);
             window.addEventListener('seo-assistant-switch-panel', this._onSwitchPanel);
             window.addEventListener('seo-sidebar-open-publish-tab', this._onOpenPublishing);
             window.addEventListener('seo-publish-post-type-changed', this._onPostTypeChanged);
@@ -176,6 +183,10 @@ export function createSeoAssistantNavigator(initial = {}) {
         destroyWorkspace() {
             if (this._onBadgeUpdate) {
                 window.removeEventListener('seo-assistant-navigator-badges', this._onBadgeUpdate);
+            }
+
+            if (this._onHealthUpdate) {
+                window.removeEventListener('seo-assistant-widget-health', this._onHealthUpdate);
             }
 
             if (this._onSwitchPanel) {
@@ -356,8 +367,11 @@ export function createSeoAssistantNavigator(initial = {}) {
         },
 
         selectChip(panelId) {
-            // Exclusive accordion toggle: same chip closes all panels.
-            if (this.panelFilterActive && this.activePanel === panelId) {
+            const hasIssues = Number(this.chipIssueCount(panelId) ?? 0) > 0
+                || ['error', 'warning'].includes(this.chipStatus(panelId));
+
+            // Same chip + healthy: toggle close. Same chip + issues: re-focus fix target.
+            if (this.panelFilterActive && this.activePanel === panelId && !hasIssues) {
                 this.activePanel = '';
                 this.panelFilterActive = true;
                 window.dispatchEvent(
@@ -377,6 +391,10 @@ export function createSeoAssistantNavigator(initial = {}) {
                     detail: { panel: panelId },
                 }),
             );
+
+            if (hasIssues) {
+                this.$nextTick(() => this.focusChipReason(panelId));
+            }
         },
 
         onSearchInput() {
@@ -441,7 +459,64 @@ export function createSeoAssistantNavigator(initial = {}) {
             }
         },
 
+        chipHealth(chipId) {
+            return this.widgetHealth?.[chipId] ?? null;
+        },
+
+        chipStatus(chipId) {
+            return this.chipHealth(chipId)?.status ?? 'neutral';
+        },
+
+        chipIssueCount(chipId) {
+            const health = this.chipHealth(chipId);
+            const count = Number(health?.issue_count ?? 0);
+            return count > 0 ? count : null;
+        },
+
+        chipReasonsTooltip(chipId) {
+            const health = this.chipHealth(chipId);
+            const reasons = health?.reasons;
+            const parts = [];
+            if (chipId === 'images') {
+                const valid = Number(health?.item_count ?? 0);
+                const recommended = Number(health?.recommended_count ?? 0);
+                const missing = Number(health?.missing_recommended_count ?? 0);
+                if (valid >= 0) {
+                    parts.push(`Có ${valid} ảnh nội dung hợp lệ`);
+                }
+                if (recommended > 0) {
+                    parts.push(`Đề xuất khoảng ${recommended} ảnh`);
+                }
+                if (missing > 0) {
+                    parts.push(`Thiếu khoảng ${missing} ảnh`);
+                }
+            }
+            if (Array.isArray(reasons)) {
+                reasons.forEach((reason) => {
+                    if (reason?.severity === 'info' || reason?.code === 'image_recommendation') {
+                        return;
+                    }
+                    if (reason?.message) {
+                        parts.push(reason.message);
+                    }
+                });
+            }
+
+            return parts.join(' · ');
+        },
+
         chipBadge(chipId) {
+            const health = this.chipHealth(chipId);
+            if (health && Number(health.item_count) >= 0 && ['images', 'links', 'featured', 'gallery', 'cta'].includes(chipId)) {
+                const count = Number(health.item_count);
+                if (count > 0) {
+                    return count;
+                }
+                if (chipId === 'links' && health.status === 'error') {
+                    return 0;
+                }
+            }
+
             const value = this.badges[chipId];
             if (value === null || value === undefined || value === '') {
                 return chipId === 'reviews' ? 0 : null;
@@ -453,6 +528,21 @@ export function createSeoAssistantNavigator(initial = {}) {
             }
 
             return value;
+        },
+
+        focusChipReason(chipId) {
+            const health = this.chipHealth(chipId);
+            const reason = Array.isArray(health?.reasons) ? health.reasons[0] : null;
+            window.dispatchEvent(
+                new CustomEvent('seo-assistant-focus-reason', {
+                    detail: {
+                        panel: chipId,
+                        reason: reason ?? null,
+                        target_id: reason?.target_id ?? null,
+                        code: reason?.code ?? null,
+                    },
+                }),
+            );
         },
 
         refreshBadgesFromDom() {

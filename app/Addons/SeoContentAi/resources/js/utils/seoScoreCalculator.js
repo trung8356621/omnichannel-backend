@@ -1,3 +1,5 @@
+import { presentSeoReason, safeSeoReasonFallback } from './seoReasonMetrics';
+
 const BASE_SCORE = 100;
 
 const LEGACY_VIOLATION_KEY_MAP = {
@@ -123,32 +125,40 @@ export function scoreFromViolations(violations = [], rules = []) {
     return Math.max(0, Math.min(BASE_SCORE, BASE_SCORE - deduction));
 }
 
-export function resolveRuleMessage(key, rules = [], messages = {}) {
-    const normalized = normalizeViolationKey(key) ?? String(key);
-    const map = rulesMap(rules);
-    const rule = map.get(String(normalized));
-    const localeKey = String(rule?.locale_key ?? `seo_rules.${normalized}`);
-
-    if (messages?.[localeKey]) {
-        return String(messages[localeKey]);
+function metricsForViolationKey(key, metrics = {}) {
+    const normalized = String(key ?? '').replace(/^seo_rules\./, '');
+    if (normalized === 'content_length_low') {
+        return metrics?.content_length ?? metrics?.contentLength ?? {};
+    }
+    if (
+        normalized === 'image_ratio_low'
+        || normalized === 'image_ratio_poor'
+        || normalized === 'image_ratio_missing'
+        || normalized === 'image_ratio_suboptimal'
+    ) {
+        return metrics?.image_ratio ?? metrics?.imageRatio ?? {};
     }
 
-    if (messages?.[`seo.${normalized}`]) {
-        return String(messages[`seo.${normalized}`]);
-    }
-
-    if (messages?.[key]) {
-        return String(messages[key]);
-    }
-
-    if (String(key).startsWith('seo.')) {
-        return String(messages?.[key] ?? key);
-    }
-
-    return String(messages?.[localeKey] ?? normalized);
+    return {};
 }
 
-export function formatViolationLine(key, rules = [], messages = {}) {
+export function resolveRuleMessage(key, rules = [], messages = {}, metrics = {}, locale = 'vi') {
+    const normalized = normalizeViolationKey(key) ?? String(key);
+    const presented = presentSeoReason(normalized, {
+        messages,
+        metrics: metricsForViolationKey(normalized, metrics),
+        locale,
+    });
+
+    // Never leak snake_case technical keys into UI.
+    if (/^[a-z0-9]+(?:_[a-z0-9]+)+$/i.test(presented.summary)) {
+        return safeSeoReasonFallback(normalized, locale);
+    }
+
+    return presented.summary;
+}
+
+export function formatViolationLine(key, rules = [], messages = {}, metrics = {}, locale = 'vi') {
     const normalized = normalizeViolationKey(key);
     if (normalized === null || !isRuleEnabled(normalized, rules)) {
         return null;
@@ -159,18 +169,18 @@ export function formatViolationLine(key, rules = [], messages = {}) {
         return null;
     }
 
-    const message = resolveRuleMessage(normalized, rules, messages);
+    const message = resolveRuleMessage(normalized, rules, messages, metrics, locale);
 
     return `-${deduction}đ: ${message}`;
 }
 
-export function buildViolationLines(violations = [], rules = [], messages = {}) {
+export function buildViolationLines(violations = [], rules = [], messages = {}, metrics = {}, locale = 'vi') {
     return sanitizeViolations(violations, rules)
-        .map((key) => formatViolationLine(key, rules, messages))
+        .map((key) => formatViolationLine(key, rules, messages, metrics, locale))
         .filter((line) => line !== null);
 }
 
-export function buildFailedViolationItems(violations = [], rules = [], messages = {}) {
+export function buildFailedViolationItems(violations = [], rules = [], messages = {}, metrics = {}, locale = 'vi') {
     return sanitizeViolations(violations, rules)
         .map((key) => {
             if (!isRuleEnabled(key, rules)) {
@@ -182,9 +192,18 @@ export function buildFailedViolationItems(violations = [], rules = [], messages 
                 return null;
             }
 
+            const presented = presentSeoReason(key, {
+                messages,
+                metrics: metricsForViolationKey(key, metrics),
+                locale,
+            });
+
             return {
                 key,
-                label: resolveRuleMessage(key, rules, messages),
+                label: presented.summary,
+                summary: presented.summary,
+                detail: presented.detail,
+                metrics: presented.metrics,
                 deduction,
             };
         })

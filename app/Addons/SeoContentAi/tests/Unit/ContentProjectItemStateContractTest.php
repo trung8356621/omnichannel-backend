@@ -308,9 +308,10 @@ final class ContentProjectItemStateContractTest extends TestCase
                 'hints' => ['run_item_error' => 'rerun boom', 'latest_attempt_source' => 'generation'],
             ],
             [
-                'lifecycle' => ContentProjectLifecyclePhase::Published,
+                // articles.status=published is NOT WP publish success — generation failed wins.
+                'lifecycle' => ContentProjectLifecyclePhase::Failed,
                 'error_source' => ContentProjectItemErrorSource::Generation,
-                'bucket' => ContentProjectItemDashboardBucket::Published,
+                'bucket' => ContentProjectItemDashboardBucket::Failed,
             ],
         ];
         yield 'scheduled_plus_queue_cancelled' => [

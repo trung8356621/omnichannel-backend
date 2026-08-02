@@ -138,6 +138,12 @@ return [
         'cancel_debug' => (bool) env('SEO_CONTENT_PROJECT_CANCEL_DEBUG', false),
 
         /**
+         * Dev/recovery: Planner/Manager may override Approved ↔ Scheduled ↔ Published
+         * without calling WordPress. Default OFF — never enable on production casually.
+         */
+        'debug_lifecycle_override' => (bool) env('CONTENT_PROJECT_DEBUG_LIFECYCLE_OVERRIDE', false),
+
+        /**
          * Phase 1 ContentProjectRunEngine — PHP owns article orchestration.
          * false = legacy JS for-loop (rollback). true = queue article jobs (global).
          * Prefer per-run/project opt-in via settings / project allowlist (Phase 1.5).

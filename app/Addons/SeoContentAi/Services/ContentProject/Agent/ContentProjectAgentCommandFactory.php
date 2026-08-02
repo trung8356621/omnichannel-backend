@@ -17,8 +17,14 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\Publish
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RestoreContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ResumeProjectExecutionCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RetryProjectItemPublishingCommand;
+use App\Addons\SeoContentAi\Enums\ContentProjectRerunFromStep;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemStepCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ResumeProjectItemFromFailedStepCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AcknowledgeProjectItemGenerationErrorCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ReturnToContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ScheduleProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SendToPublishingQueueCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SkipProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StopProjectExecutionCommand;
@@ -93,6 +99,24 @@ final class ContentProjectAgentCommandFactory
                 $this->itemRefs($input),
                 (string) ($input['mode'] ?? 'full'),
             ),
+            'content_project.resume_failed_step' => new ResumeProjectItemFromFailedStepCommand(
+                $this->projectRef($input),
+                $this->itemRefs($input),
+                (string) ($input['mode'] ?? 'full'),
+            ),
+            'content_project.acknowledge_generation_error' => new AcknowledgeProjectItemGenerationErrorCommand(
+                $this->projectRef($input),
+                $this->itemRefs($input),
+                isset($input['note']) ? (string) $input['note'] : null,
+            ),
+            'content_project.rerun_step' => new RerunProjectItemStepCommand(
+                $this->projectRef($input),
+                $this->itemRefs($input),
+                ContentProjectRerunFromStep::fromMixed($input['rerun_from_step'] ?? $input['from_step'] ?? null),
+                (bool) ($input['include_downstream'] ?? false),
+                isset($input['source_article_id']) ? (int) $input['source_article_id'] : null,
+                (string) ($input['mode'] ?? 'full'),
+            ),
             'content_project.start_review' => new StartReviewCommand(
                 $this->projectRef($input),
                 $this->itemRefs($input),
@@ -141,6 +165,16 @@ final class ContentProjectAgentCommandFactory
                 $this->itemRefs($input),
                 (bool) ($input['dry_run'] ?? false),
                 isset($input['confirmation_token']) ? (string) $input['confirmation_token'] : null,
+            ),
+            'content_project.send_to_publishing_queue' => new SendToPublishingQueueCommand(
+                $this->projectRef($input),
+                $this->itemRefs($input),
+                (bool) ($input['dry_run'] ?? false),
+            ),
+            'content_project.return_to_content_project' => new ReturnToContentProjectCommand(
+                $this->projectRef($input),
+                $this->itemRefs($input),
+                (bool) ($input['dry_run'] ?? false),
             ),
             'content_project.archive' => new ArchiveContentProjectCommand(
                 $this->projectRef($input),

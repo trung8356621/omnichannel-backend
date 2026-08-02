@@ -12,6 +12,11 @@ import {
     scoreFromViolations,
 } from './seoScoreCalculator';
 import { resolveFeaturedSnippetTableScore } from './seoContentBonus';
+import {
+    TARGET_WORDS_PER_IMAGE,
+    computeContentLengthMetrics,
+    computeImageRatioMetrics,
+} from './seoReasonMetrics';
 import { DEFAULT_WIKI_TRUST_DOMAINS, isWikiTrustUrl, normalizeDomainHost, resolveLinkHost } from './wikiTrustDomains';
 
 const RULE_KEYS = {
@@ -88,12 +93,21 @@ function countWords(html) {
 }
 
 function countWordsForImageRatio(html) {
-    const text = String(html ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    // Eligible prose only — never ALT/caption/filename/slug/hidden media chrome.
+    const withoutMediaChrome = String(html ?? '')
+        .replace(/<figcaption\b[^>]*>[\s\S]*?<\/figcaption>/giu, ' ')
+        .replace(/<figure\b[^>]*>[\s\S]*?<\/figure>/giu, ' ')
+        .replace(/<img\b[^>]*>/giu, ' ')
+        .replace(/\s(?:alt|title|aria-label|data-filename|data-slug)\s*=\s*(["'])[\s\S]*?\1/giu, ' ');
+    const text = withoutMediaChrome.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     if (text === '') {
         return 0;
     }
 
-    return text.split(/\s+/u).filter(Boolean).length;
+    // Same tokenizer as body word count (Unicode letters) — avoid whitespace split drift.
+    const matches = text.match(/[\p{L}][\p{L}\p{N}\-]*/gu);
+
+    return matches ? matches.length : 0;
 }
 
 function sliceFirstWords(html, wordLimit) {
@@ -227,40 +241,45 @@ export function extractLinks(content, domain) {
     return result;
 }
 
-function calculateTextToImageMetrics(htmlContent) {
+function queryValidContentImages(htmlContent) {
     if (typeof document === 'undefined') {
-        return { baseScore: 0, missingAlt: 0 };
+        const matches = String(htmlContent ?? '').match(/<img\b[^>]*>/gi) ?? [];
+        return matches
+            .map((tag) => {
+                const srcMatch = tag.match(/\bsrc\s*=\s*(["'])([^"']*)\1/i);
+                const altMatch = tag.match(/\balt\s*=\s*(["'])([^"']*)\1/i);
+                return {
+                    getAttribute: (name) => {
+                        if (name === 'src') {
+                            return srcMatch?.[2] ?? '';
+                        }
+                        if (name === 'alt') {
+                            return altMatch?.[2] ?? '';
+                        }
+                        return '';
+                    },
+                };
+            })
+            .filter((img) => {
+                const src = String(img.getAttribute('src') ?? '').trim();
+                return src !== '' && !/placeholder/i.test(src);
+            });
     }
 
     const container = document.createElement('div');
     container.innerHTML = String(htmlContent ?? '');
-    const images = Array.from(container.querySelectorAll('img'));
-    const imageCount = images.length;
-    const wordCount = countWordsForImageRatio(htmlContent);
 
-    let missingAlt = 0;
-    images.forEach((img) => {
-        if (String(img.getAttribute('alt') ?? '').trim() === '') {
-            missingAlt += 1;
-        }
+    return Array.from(container.querySelectorAll('img')).filter((img) => {
+        const src = String(img.getAttribute('src') ?? '').trim();
+        return src !== '' && !/placeholder/i.test(src);
     });
+}
 
-    if (wordCount < 10 || imageCount === 0) {
-        return { baseScore: 0, missingAlt };
-    }
-
-    const wordsPerImage = Math.round(wordCount / imageCount);
-    let baseScore = 3;
-
-    if (wordsPerImage >= 250 && wordsPerImage <= 450) {
-        baseScore = 15;
-    } else if (wordsPerImage > 450 && wordsPerImage <= 800) {
-        baseScore = 10;
-    } else if (wordsPerImage < 250 && wordsPerImage >= 100) {
-        baseScore = 8;
-    }
-
-    return { baseScore, missingAlt };
+function calculateTextToImageMetrics(htmlContent) {
+    return computeImageRatioMetrics(htmlContent, {
+        countWordsForImageRatio,
+        queryImages: queryValidContentImages,
+    });
 }
 
 function hasWikiTrustExternalLink(extractedLinks, wikiTrustDomains) {
@@ -410,19 +429,22 @@ function resolveFeaturedSnippetViolation(html, thresholds = {}) {
 }
 
 function resolveImageRatioViolations(html) {
-    const { baseScore, missingAlt } = calculateTextToImageMetrics(html);
+    const metrics = calculateTextToImageMetrics(html);
+    const missingAlt = metrics.missingAlt;
+    const missing = Math.max(0, Number(metrics.missing_image_count) || 0);
+    const validCount = Math.max(0, Number(metrics.valid_image_count) || 0);
+    const wordCount = Math.max(0, Number(metrics.current_word_count) || 0);
     const violations = [];
 
-    if (baseScore >= 15) {
-        // no ratio violation
-    } else if (baseScore >= 10) {
-        violations.push(RULE_KEYS.imageRatioSuboptimal);
-    } else if (baseScore >= 8) {
-        violations.push(RULE_KEYS.imageRatioLow);
-    } else if (baseScore >= 3) {
-        violations.push(RULE_KEYS.imageRatioPoor);
-    } else {
+    // Soft optimization warnings from missing vs recommended (target 200 từ/ảnh).
+    if (wordCount >= 10 && validCount === 0) {
         violations.push(RULE_KEYS.imageRatioMissing);
+    } else if (missing >= 3) {
+        violations.push(RULE_KEYS.imageRatioPoor);
+    } else if (missing >= 2) {
+        violations.push(RULE_KEYS.imageRatioLow);
+    } else if (missing === 1) {
+        violations.push(RULE_KEYS.imageRatioSuboptimal);
     }
 
     if (missingAlt > 0) {
@@ -507,9 +529,19 @@ function computeViolations({
         violations.push(snippetViolation);
     }
 
+    const wordCount = countWords(content);
+    const lengthTarget = Math.max(1, Number(articleLengthTarget) || 2000);
+    const imageMetrics = calculateTextToImageMetrics(content);
+    const contentLengthMetrics = computeContentLengthMetrics(wordCount, lengthTarget);
+
     return {
         violations: sanitizeViolationList(violations, seoScoringRules),
         extracted_links: extractedLinks,
+        metrics: {
+            image_ratio: imageMetrics,
+            content_length: contentLengthMetrics,
+            target_words_per_image: TARGET_WORDS_PER_IMAGE,
+        },
     };
 }
 
@@ -531,6 +563,10 @@ export function computeSeoAnalysis({
     const keyword = normalizeFocusKeyword(focusKeyword);
     const content = String(html ?? '');
 
+    const lengthTarget = resolveArticleLengthTarget(postType, articleLengthSettings);
+    const imageMetrics = calculateTextToImageMetrics(content);
+    const contentLengthMetrics = computeContentLengthMetrics(countWords(content), lengthTarget);
+
     if (keyword === '') {
         const extractedLinks = extractLinks(content, siteDomain);
         const violations = isRuleEnabled(RULE_KEYS.missingFocusKeyword, seoScoringRules)
@@ -541,10 +577,18 @@ export function computeSeoAnalysis({
             violations,
             score: scoreFromViolations(violations, seoScoringRules),
             seo_score: scoreFromViolations(violations, seoScoringRules),
-            errors: buildViolationLines(violations, seoScoringRules, scoringMessages),
+            errors: buildViolationLines(violations, seoScoringRules, scoringMessages, {
+                content_length: contentLengthMetrics,
+                image_ratio: imageMetrics,
+            }),
             good: [],
             warnings: [],
             extracted_links: extractedLinks,
+            metrics: {
+                image_ratio: imageMetrics,
+                content_length: contentLengthMetrics,
+                target_words_per_image: TARGET_WORDS_PER_IMAGE,
+            },
         };
     }
 
@@ -557,14 +601,19 @@ export function computeSeoAnalysis({
         siteDomain,
         faqs,
         wikiTrustDomains,
-        articleLengthTarget: resolveArticleLengthTarget(postType, articleLengthSettings),
+        articleLengthTarget: lengthTarget,
         featuredSnippetThresholds,
         seoScoringRules,
     });
 
     const violations = result.violations;
     const score = scoreFromViolations(violations, seoScoringRules);
-    const errors = buildViolationLines(violations, seoScoringRules, scoringMessages);
+    const metrics = result.metrics ?? {
+        image_ratio: imageMetrics,
+        content_length: contentLengthMetrics,
+        target_words_per_image: TARGET_WORDS_PER_IMAGE,
+    };
+    const errors = buildViolationLines(violations, seoScoringRules, scoringMessages, metrics);
 
     return {
         violations,
@@ -574,6 +623,7 @@ export function computeSeoAnalysis({
         good: violations.length === 0 ? [resolveScoringMessage('seo_rules.all_passed', scoringMessages)] : [],
         warnings: [],
         extracted_links: result.extracted_links,
+        metrics,
     };
 }
 
@@ -585,6 +635,7 @@ export function buildSeoAnalysisPayload(analysis) {
     return {
         violations: Array.isArray(analysis.violations) ? analysis.violations : [],
         extracted_links: analysis.extracted_links ?? { internal: [], external: [] },
+        metrics: analysis.metrics ?? null,
     };
 }
 

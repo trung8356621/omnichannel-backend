@@ -665,7 +665,7 @@
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z" />
                 </svg>
-                <span>Prompts</span>
+                <span>{{ __('seo-content-ai::filament.article_ai_history.menu') }}</span>
             </a>
 
             @if ($inContentProject && filled($contentProjectUrl))
@@ -717,23 +717,6 @@
                         <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>
                         Đang viết lại…
                     </span>
-                </button>
-                <button
-                    type="button"
-                    class="seo-editor-menu-item"
-                    role="menuitem"
-                    data-seo-pipeline-rerun="1"
-                    data-seo-page-action="pipeline-rerun"
-                    title="{{ __('seo-content-ai::filament.article_pipeline_rerun.menu') }}"
-                    aria-label="{{ __('seo-content-ai::filament.article_pipeline_rerun.menu') }}"
-                    wire:loading.attr="disabled"
-                    wire:target="queueArticlePipelineRerun"
-                    x-on:click="moreOpen = false; window.dispatchEvent(new CustomEvent('open-article-pipeline-rerun-modal'))"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182" />
-                    </svg>
-                    <span>{{ __('seo-content-ai::filament.article_pipeline_rerun.menu') }}</span>
                 </button>
             @endif
 

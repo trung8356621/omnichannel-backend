@@ -13,7 +13,7 @@ import {
     isArticleMediaPickerCacheableTab,
 } from './utils/articleMediaPickerCache';
 import { clearArticleLocalState } from './utils/articleLocalState';
-import { loadFaqDraft } from './utils/articleEditorStorage';
+import { loadFaqDraft, saveOutline, clearDraft } from './utils/articleEditorStorage';
 import { registerFilamentHeaderActionsPersistence } from './utils/articleEditorHeaderActions';
 import { installArticleEditorStickyHeaderBridge } from './utils/articleEditorStickyHeader';
 import { normalizeArticleSlug } from './utils/articleSlugUtils';
@@ -611,6 +611,7 @@ function readArticleEditorBootstrap() {
     let initialLoaiSanPham = '';
     let initialGalleryDescription = '';
     let lazyEndpoints = {};
+    let aiHistoryPendingApply = null;
 
     // Phase 2 primary: single core bootstrap.
     try {
@@ -629,6 +630,9 @@ function readArticleEditorBootstrap() {
             supportsProductGallery = Boolean(core?.supportsProductGallery ?? core?.supports_product_gallery);
             isCanaryProduct = Boolean(core?.isCanaryProduct ?? core?.is_canary_product);
             initialHtml = typeof core?.content === 'string' ? core.content : '';
+            if (core?.aiHistoryPendingApply && typeof core.aiHistoryPendingApply === 'object') {
+                aiHistoryPendingApply = core.aiHistoryPendingApply;
+            }
             if (core?.settings && typeof core.settings === 'object') {
                 editorSettings = { ...editorSettings, ...core.settings };
             }
@@ -780,6 +784,7 @@ function readArticleEditorBootstrap() {
         initialLoaiSanPham,
         initialGalleryDescription,
         lazyEndpoints,
+        aiHistoryPendingApply,
     };
 }
 
@@ -841,7 +846,20 @@ function mountArticleEditorPage() {
         initialLoaiSanPham,
         initialGalleryDescription,
         lazyEndpoints,
+        aiHistoryPendingApply,
     } = bootstrap;
+
+    // Manual AI History apply: nạp outline/content vào draft session, không gọi AI.
+    if (articleId && aiHistoryPendingApply && typeof aiHistoryPendingApply === 'object') {
+        const pendingTarget = String(aiHistoryPendingApply.target ?? '').trim();
+        const pendingPayload = String(aiHistoryPendingApply.payload ?? '');
+        if (pendingTarget === 'outline' && pendingPayload !== '') {
+            saveOutline(articleId, pendingPayload);
+        }
+        if (pendingTarget === 'content' && pendingPayload !== '') {
+            clearDraft(articleId, connectionHash, { siteId: Number(siteId ?? 0) || 0 });
+        }
+    }
 
     window.__SEO_EDITOR_CONFLICT__ = {
         expected_updated_at: expectedUpdatedAt || null,

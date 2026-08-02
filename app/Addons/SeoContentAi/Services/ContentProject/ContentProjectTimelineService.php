@@ -24,11 +24,18 @@ final class ContentProjectTimelineService
         $tasks = SeoProjectTask::query()
             ->where('project_id', (int) $project->getKey())
             ->with(['article:id,status,review_status,reviewed_at,published_at'])
-            ->get(['id', 'status', 'completed_at', 'scheduled_publish_at', 'publish_queue_status', 'publish_published_at', 'archived_at', 'article_id']);
+            ->get();
 
         $aiFinishedAt = $tasks
-            ->filter(static fn (SeoProjectTask $t): bool => (string) $t->status === SeoProjectTask::STATUS_COMPLETED && $t->completed_at !== null)
+            ->filter(static fn (SeoProjectTask $t): bool => in_array((string) $t->status, [
+                SeoProjectTask::STATUS_COMPLETED,
+                SeoProjectTask::STATUS_REVIEWING,
+            ], true) && $t->completed_at !== null)
             ->max('completed_at');
+
+        $cmReviewedAt = $tasks
+            ->filter(static fn (SeoProjectTask $t): bool => $t->content_manager_reviewed_at !== null)
+            ->max('content_manager_reviewed_at');
 
         $reviewCompletedAt = $tasks
             ->map(static function (SeoProjectTask $t) {
@@ -82,6 +89,12 @@ final class ContentProjectTimelineService
                 'label' => __('seo-content-ai::filament.projects.timeline_ai_finished'),
                 'at' => $this->iso($aiFinishedAt),
                 'done' => $aiFinishedAt !== null,
+            ],
+            [
+                'key' => 'content_manager_reviewed',
+                'label' => __('seo-content-ai::filament.projects.timeline_content_manager_reviewed'),
+                'at' => $this->iso($cmReviewedAt),
+                'done' => $cmReviewedAt !== null,
             ],
             [
                 'key' => 'review_completed',

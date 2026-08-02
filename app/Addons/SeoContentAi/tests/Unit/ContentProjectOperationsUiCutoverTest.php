@@ -29,27 +29,44 @@ final class ContentProjectOperationsUiCutoverTest extends TestCase
         self::assertStringContainsString('getSubheading', $src);
         self::assertStringContainsString('ActionGroup::make', $src);
         self::assertStringNotContainsString('extends EditSeoProject', $src);
-        self::assertStringNotContainsString("Action::make('publishing_queue')", $src);
+        // Header shortcut to independent Publishing Queue hub (not nested lifecycle tab).
+        self::assertStringContainsString("Action::make('publishing_queue')", $src);
+        self::assertStringContainsString('getPublishingQueueUrl', $src);
     }
 
     public function test_operations_blade_kpi_grid_and_toolbar(): void
     {
+        // Content Project ops now composes shared components (content-project-summary-cards,
+        // -filter-toolbar, -bulk-selection-toolbar, -items-list, -ops-styles) instead of
+        // inlining the KPI grid / table / mobile list / `.cp-ops-*` CSS directly.
         $blade = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/views/filament/resources/seo-project-resource/pages/view-seo-project-operations.blade.php',
         );
+        $itemsList = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/components/content-project-items-list.blade.php',
+        );
+        $styles = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/components/content-project-ops-styles.blade.php',
+        );
 
-        self::assertStringContainsString('cp-ops-kpi-grid', $blade);
-        self::assertStringContainsString('content-project-summary-card', $blade);
+        self::assertStringContainsString('content-project-ops-styles', $blade);
+        self::assertStringContainsString('content-project-summary-cards', $blade);
         self::assertStringContainsString('content-project-filter-toolbar', $blade);
         self::assertStringContainsString('content-project-bulk-selection-toolbar', $blade);
-        self::assertStringContainsString('content-project-status-badge', $blade);
-        self::assertStringContainsString('content-project-item-actions-menu', $blade);
-        self::assertStringContainsString('content-project-item-meta', $blade);
+        self::assertStringContainsString('content-project-items-list', $blade);
+        self::assertStringContainsString('variant="content_project"', $blade);
         self::assertStringContainsString('applySummaryFilter', $blade);
-        self::assertStringContainsString('cp-ops-table', $blade);
-        self::assertStringContainsString('cp-ops-toolbar', $blade);
-        self::assertStringContainsString('cp-ops-mobile-list', $blade);
-        self::assertStringContainsString('No items match filters', $blade);
+
+        self::assertStringContainsString('content-project-status-badge', $itemsList);
+        self::assertStringContainsString('content-project-item-actions-menu', $itemsList);
+        self::assertStringContainsString('content-project-item-meta', $itemsList);
+        self::assertStringContainsString('cp-ops-table', $itemsList);
+        self::assertStringContainsString('cp-ops-mobile-list', $itemsList);
+        self::assertStringContainsString('No items match filters', $itemsList);
+
+        self::assertStringContainsString('cp-ops-kpi-grid', $styles);
+        self::assertStringContainsString('cp-ops-toolbar', $styles);
+
         self::assertStringNotContainsString('run_item_run_at', $blade);
         self::assertStringNotContainsString('seo-run-items-wrap', $blade);
         self::assertStringNotContainsString('<h2 class="truncate text-lg', $blade);
@@ -60,13 +77,15 @@ final class ContentProjectOperationsUiCutoverTest extends TestCase
         $blade = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/views/components/content-project-bulk-selection-toolbar.blade.php',
         );
-        self::assertStringContainsString('selectedCount > 0', $blade);
+        self::assertStringContainsString('(int) $selectedCount > 0', $blade);
         self::assertStringContainsString('Bulk selection actions', $blade);
         self::assertStringContainsString('Content', $blade);
         self::assertStringContainsString('Review', $blade);
         self::assertStringContainsString('Publishing', $blade);
         self::assertStringContainsString('Lifecycle', $blade);
         self::assertStringContainsString('archiveSelected', $blade);
+        self::assertStringContainsString('content_project', $blade);
+        self::assertStringContainsString('publishing_queue', $blade);
     }
 
     public function test_actions_menu_groups_and_gates(): void
@@ -75,13 +94,14 @@ final class ContentProjectOperationsUiCutoverTest extends TestCase
             dirname(__DIR__, 2).'/resources/views/components/content-project-item-actions-menu.blade.php',
         );
         self::assertStringContainsString('ContentProjectItemActionsPresenter', $blade);
-        self::assertStringContainsString('max-h-72', $blade);
+        self::assertStringContainsString('cp-ops-menu', $blade);
         self::assertStringContainsString('>Content</p>', $blade);
         self::assertStringContainsString('>Review</p>', $blade);
-        self::assertStringContainsString('>Publishing</p>', $blade);
+        self::assertStringContainsString('>Publishing Queue</p>', $blade);
         self::assertStringContainsString('>Lifecycle</p>', $blade);
         self::assertStringContainsString('>Other</p>', $blade);
         self::assertStringContainsString('archiveOne', $blade);
+        self::assertStringContainsString('sendToPublishingQueueOne', $blade);
 
         $reviewOnly = ContentProjectItemActionsPresenter::forRow([
             'lifecycle' => 'review',
@@ -101,6 +121,7 @@ final class ContentProjectOperationsUiCutoverTest extends TestCase
             'lifecycle' => 'draft',
             'queue_status' => 'none',
             'generation_badge' => ['key' => 'pending'],
+            'generation_status' => 'pending',
             'can_generate' => true,
             'can_regen' => false,
             'article_edit_url' => null,
@@ -109,6 +130,7 @@ final class ContentProjectOperationsUiCutoverTest extends TestCase
         self::assertTrue($pending['generate']);
         self::assertFalse($pending['approve']);
         self::assertFalse($pending['publish_now']);
+        self::assertFalse($pending['schedule']);
     }
 
     public function test_status_badge_semantic_colors(): void
@@ -146,26 +168,35 @@ final class ContentProjectOperationsUiCutoverTest extends TestCase
         self::assertStringContainsString('TYPE_IMPROVE', $src);
     }
 
-    public function test_publishing_queue_route_redirects_not_404(): void
+    public function test_publishing_queue_route_redirects_to_independent_hub(): void
     {
         $pages = SeoProjectResource::getPages();
         self::assertArrayHasKey('publishing-queue', $pages);
 
+        // Nested resource route is a compat redirect (D3); canonical UI moved to the hub (D1/D2).
         $src = (string) file_get_contents(
             (new ReflectionClass(ContentProjectPublishingQueue::class))->getFileName(),
         );
         self::assertStringContainsString('redirect', $src);
-        self::assertStringContainsString('waiting_publish,published', $src);
-        self::assertStringContainsString('redirect-placeholder', $src);
+        self::assertStringNotContainsString('waiting_publish,published', $src);
+        self::assertStringContainsString('canManageContentProjectWorkflow', $src);
 
         $prop = new ReflectionProperty(ContentProjectPublishingQueue::class, 'record');
         $typeName = (string) $prop->getType();
         self::assertTrue(in_array($typeName, ['int|string', 'string|int'], true));
 
+        self::assertTrue(class_exists(\App\Addons\SeoContentAi\Filament\Pages\PublishingQueueHub::class));
+        $hubSrc = (string) file_get_contents(
+            (new ReflectionClass(\App\Addons\SeoContentAi\Filament\Pages\PublishingQueueHub::class))->getFileName(),
+        );
+        self::assertStringContainsString("slug = 'publishing-queue'", $hubSrc);
+        self::assertStringContainsString('canManageContentProjectWorkflow', $hubSrc);
+
         $resourceSrc = (string) file_get_contents(
             (new ReflectionClass(SeoProjectResource::class))->getFileName(),
         );
-        self::assertStringContainsString("lifecycle' => 'waiting_publish,published'", $resourceSrc);
+        self::assertStringContainsString('PublishingQueueHub::getUrl', $resourceSrc);
+        self::assertStringNotContainsString("lifecycle' => 'waiting_publish,published'", $resourceSrc);
     }
 
     public function test_run_history_remains_redirect_only(): void

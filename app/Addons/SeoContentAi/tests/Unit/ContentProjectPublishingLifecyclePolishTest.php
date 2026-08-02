@@ -62,11 +62,27 @@ final class ContentProjectPublishingLifecyclePolishTest extends TestCase
         self::assertTrue(class_exists(ContentProjectPublishingQueue::class));
         self::assertTrue(method_exists(SeoProjectResource::class, 'getPublishingQueueUrl'));
 
+        // Nested resource route is now a compat redirect to the independent hub (D3).
         $src = (string) file_get_contents(
             (new ReflectionClass(ContentProjectPublishingQueue::class))->getFileName(),
         );
         self::assertStringContainsString('redirect', $src);
-        self::assertStringContainsString('waiting_publish,published', $src);
+        self::assertStringContainsString('canManageContentProjectWorkflow', $src);
+
+        self::assertTrue(class_exists(\App\Addons\SeoContentAi\Filament\Pages\PublishingQueueHub::class));
+        $hubSrc = (string) file_get_contents(
+            (new ReflectionClass(\App\Addons\SeoContentAi\Filament\Pages\PublishingQueueHub::class))->getFileName(),
+        );
+        self::assertStringContainsString('canManageContentProjectWorkflow', $hubSrc);
+        $hubBlade = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/filament/pages/publishing-queue-hub.blade.php',
+        );
+        self::assertStringContainsString('content-project-bulk-selection-toolbar', $hubBlade);
+        self::assertStringContainsString('variant="publishing_queue"', $hubBlade);
+        // bulkPublishNow is wired inside the shared bulk-selection-toolbar's publishing_queue variant.
+        self::assertStringContainsString('bulkPublishNow', (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/components/content-project-bulk-selection-toolbar.blade.php',
+        ));
     }
 
     public function test_archive_service_exposes_gate_and_confirm_flag(): void

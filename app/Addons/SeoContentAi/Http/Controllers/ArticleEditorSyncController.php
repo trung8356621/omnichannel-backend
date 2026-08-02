@@ -91,6 +91,9 @@ final class ArticleEditorSyncController extends Controller
         $this->bundleApply->apply($savedArticle, $bundle, $context);
 
         $message = (string) ($result->output['message'] ?? 'Article saved');
+        $handoff = is_array($result->output['content_project_handoff'] ?? null)
+            ? $result->output['content_project_handoff']
+            : null;
 
         return response()->json([
             'success' => true,
@@ -101,6 +104,7 @@ final class ArticleEditorSyncController extends Controller
                 $context,
                 $seoAnalysis,
             ),
+            'content_project_handoff' => $handoff,
             'notification' => [
                 'title' => 'Article saved',
                 'body' => $message,

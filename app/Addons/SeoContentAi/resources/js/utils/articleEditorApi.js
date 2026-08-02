@@ -656,6 +656,38 @@ export function finishArticleSaveFromApi(result, context = {}) {
         resetEditArticleHeavyActionBusyOnWire();
     }
     window.dispatchEvent(new CustomEvent('article-editor-save-finished'));
+    const handoff = result?.content_project_handoff && typeof result.content_project_handoff === 'object'
+        ? result.content_project_handoff
+        : null;
+    emitProjectItemUpdated({
+        article_id: articleId || null,
+        project_id: Number(
+            handoff?.project_id
+            ?? context.projectId
+            ?? window.__SEO_ARTICLE_PROJECT_ID__
+            ?? 0,
+        ) || 0,
+        content_project_handoff: handoff,
+        counter_action: handoff?.handed_off ? 'content_manager_handoff' : null,
+        task_id: handoff?.task_id ?? null,
+    });
+}
+
+/**
+ * Dirty flag for Content Project Needs Review / lazy refresh (no websocket).
+ * @param {Record<string, unknown>} [detail]
+ */
+export function emitProjectItemUpdated(detail = {}) {
+    const projectId = Number(detail.project_id ?? detail.projectId ?? window.__SEO_ARTICLE_PROJECT_ID__ ?? 0) || 0;
+    try {
+        sessionStorage.setItem('cp-ops-dirty-global', '1');
+        if (projectId > 0) {
+            sessionStorage.setItem(`cp-ops-dirty-${projectId}`, '1');
+        }
+    } catch {
+        // ignore
+    }
+    window.dispatchEvent(new CustomEvent('project-item-updated', { detail: { ...detail, project_id: projectId } }));
 }
 
 /**
@@ -861,6 +893,11 @@ export function finishArticleSyncFromApi(result, articleId, siteId) {
         window.__seoArticleHeavyActionOverlay?.hide?.();
 
         window.dispatchEvent(new CustomEvent('article-project-local-save-succeeded', { detail: result }));
+        emitProjectItemUpdated({
+            article_id: articleId || null,
+            project_id: Number(data.project_id ?? window.__SEO_ARTICLE_PROJECT_ID__ ?? 0) || 0,
+            save_mode: 'project_local_save',
+        });
         closeEditorAfterProjectLocalSave(
             typeof data.project_url === 'string' ? data.project_url : null,
         );

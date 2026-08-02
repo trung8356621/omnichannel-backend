@@ -52,6 +52,31 @@ Route binding: edit/view **does not** 404 when global domain ≠ `article.site_i
 | HTTP logging | `App\Support\RuntimeLogger` |
 | Slug fix | `SeoMediaArticleSlugFixService` + `SeoMediaUrlReplacementService` |
 | Sticky header bridge | `articleEditorStickyHeader.js` |
+| AI History (manual recovery) | `ViewArticlePrompts` + `Services/ArticleAiHistory/*` — preview/apply/delete typed artifacts into editor draft |
+| Insertion context (transient) | `resources/js/utils/editorInsertionContext.js` — `activeSectionId` / `activeBlockId` / selection bookmark; used by CTA, link, media assistants |
+| CTA / Contact sidebar | `CtaContactInsertList.jsx` + `DomainCtaEditorService` — usable contacts only; insert value / quick CTA sentence (deterministic templates, no AI) |
+| Quick CTA templates | `Support/CtaQuickTemplates` + `SeoDomainCtaGlobalSettingsService::cta_quick_templates` (+ localStorage editor override) |
+| Assistant widget health | `resources/js/utils/assistantWidgetHealth.js` + `Support/AssistantWidgetHealthRules` — dock status `error\|warning\|success\|neutral`, reasons, click-to-fix |
+| SEO reason metrics | `resources/js/utils/seoReasonMetrics.js` + `Support/SeoReasonPresentation` — `image_ratio_*` / `content_length_low` with current/recommended/missing; locale `lang/{vi,en}/seo_rules.php` |
+| CTA block insert | `insertCtaBlockInEditor` → `<p class="article-cta">` + label/value; `unsetAllMarks` / lift blockquote |
+| CTA freeze bookmark | `freezeEditorInsertionContext` on CTA `pointerdown` + `seo-assistant-freeze-insertion-context`; insert uses frozen caret |
+| Content image census | `contentImageCounter.js` — body image-blocks + inline `<img>`; featured/gallery excluded |
+| Orphan quote fix | `orphanQuoteNormalizer.js` — move quote chars outside `</p>` back into editable paragraph |
+| Link unlink / boundary | `editorLinkCommands.js` (`removeLinkKeepText`, `exitLinkAtBoundary`); Link mark `inclusive: false` |
+
+### Editor UX invariants (context preservation)
+
+- Section React keys = stable `section-${headingBlockId}` / `section-intro`; block keys = `block.id`.
+- Expanded/collapsed state is keyed by stable section id; **not** reset when article content / image blocks mutate.
+- Opening/closing Media Picker or mutating an image block must **not** collapse other sections or jump viewport to FAQ/end.
+- `focusImageBlock` expands the target section only (no `collapseSectionsExcept`); outline/link jumps may still isolate a section intentionally.
+- Sidebar CTA/link insert uses saved `EditorInsertionContext` bookmark **before** sidebar steals focus — never silent fallback to first section / first TipTap instance when active context exists.
+- Insertion priority: saved bookmark → end of active block → end of active section → empty-editor fallback. Never append end of article while active context exists.
+- Assistant dock chips show health status (label color + issue badge + tooltip reasons); click error opens panel and focuses fix target without collapsing unrelated sections.
+- Widget health refreshes after keyword/link/image/featured/gallery mutations (no full page reload).
+- SEO score reasons never render raw snake_case keys; `image_ratio_low` / `content_length_low` expose concrete missing counts from checker metrics.
+- CTA / Contact UI shows only **usable** contacts (no unresolved `[email_1]` placeholders); header count matches usable rows.
+- Quick CTA = template resolve only (no AI run / prompt / usage log).
 
 ## 4. Data ownership
 
@@ -87,6 +112,8 @@ Policy: max **one** heavy sidebar module mounted; switch unmounts (no CSS-hide t
 JS collect HTML → editor-html-collected → Livewire persistArticleLocal
   → ArticleEditorPersistService::writeArticleRow (short TX)
   → runAfterPersistSideEffects (images / revision / keyword after commit)
+    · `syncContentProjectScheduledPublish` **skipped** while task `writing|pending|processing`
+      (AI persist must not assert Schedule while lifecycle=generating)
   → dispatch AnalyzeArticleSeoJob (force) when content scoring inputs change
 ```
 
@@ -164,6 +191,12 @@ No second scheduler for editor autosave — client debounce + Livewire/REST.
 - Score job unique per article; domain queue missing/retry failed.
 - AI media: retry-generation / delete-ai-job endpoints.
 - Slug fix: never invent second rename pipeline; recovery only if file already renamed.
+- **Editor does not own full workflow rerun.** Menu «Chạy lại quy trình» (from-outline / from-article modal) removed. Retry/resume stays on Content Project.
+- After editor save, emit `project-item-updated` + `sessionStorage` dirty flag so Content Project ops page can **lazy-refresh** summary (no websocket/poll). Opening a generated article from project **Needs Review** (presentation filter) marks that generation viewed — not a lifecycle change.
+- **Content Manager canonical Save** (`POST .../save`, origin `article_editor`): after successful `article.content.update`, `ContentProjectContentManagerHandoffService` stamps reporting In Review (`content_manager_reviewed_at` / `content_manager_reviewed_by`) **once** — **no** lifecycle / `SubmitReview` / task `reviewing`. Autosave/local draft does not. Planner/Manager Save does not stamp. Response may include `content_project_handoff`.
+- Content Manager ops UI is edit-only (Draft / Needs Review / In Review + Total badge); no Generate/Queue/Retry/Approve/Schedule/Publish. Planner **Send to Publishing Queue** handoff — Sync/Save ≠ Publish.
+- **Save/Sync ≠ Published:** editor `articles.status=published` must not drive Content Project lifecycle Published. Only real WordPress publish success (`publish_published_at` / queue published) bumps Published.
+- **Lịch sử AI** (`/{article}/prompts`): manual preview / apply typed artifacts (`article_outline` | `article_content`) into editor draft/session. Apply does **not** auto-save, publish, sync WP, or change generation/run status. Outline and content are independent targets. Pending draft in `article_meta.seo_ai_history_pending_draft`; provenance committed on article save via `ArticleAiHistoryApplyService::commitPendingOnSave`.
 
 ## 13. Compatibility paths
 
@@ -182,9 +215,12 @@ No second scheduler for editor autosave — client debounce + Livewire/REST.
 5. DOM-only slug rewrite without TipTap document + post-rename save.
 6. Second rename pipeline outside `SeoMediaArticleSlugFixService` / WP rename + URL replacement.
 7. Treat editor Sync WP as Content Project Publish / schedule stamp.
-8. Reintroduce `is_reviewed` column as SoT.
-9. Livewire round-trip solely to open media/help/modals (Alpine first).
-10. Mount multiple heavy React modules concurrently.
+8. Treat editor Save / Sync as lifecycle Published (Save≠Publish).
+9. Reintroduce `is_reviewed` column as SoT.
+10. Livewire round-trip solely to open media/help/modals (Alpine first).
+11. Mount multiple heavy React modules concurrently.
+12. Reintroduce Editor «Chạy lại quy trình» full-pipeline modal; use Content Project retry + AI History apply instead.
+13. Apply outline artifact into article body, or content artifact into outline editor.
 
 ## 15. Tests and invariants
 
@@ -194,12 +230,23 @@ No second scheduler for editor autosave — client debounce + Livewire/REST.
 | `ArticleReviewServiceTest` / cutover | `review_status` SoT |
 | Scoring unit / audit integration | Deduction registry; audit reads cache |
 | Editor performance audits | Bootstrap size budgets (docs/audits) |
+| `ArticleEditorContextPreservationContractTest` | Media/image UX không reset expanded sections; CTA dùng insertion bookmark; WP media site-level |
+| `CtaContactUsabilityAndQuickTemplatesTest` | Filter placeholder; resolve/validate quick CTA templates |
+| `SeoReasonPresentationAndAssistantHealthTest` | image/content metrics; locale keys; links min 5; focus keyword health |
+| `ArticleEditorRichText3eContractTest` | CTA paragraph; unlink keep text; quote CSS; images badge; featured snapshot; stable recommendation |
 
 Manual verification (remote):
 
 ```text
 $PHP_BIN vendor/bin/phpunit --filter=RuntimeLoggerWebAppChannelTest
 $PHP_BIN vendor/bin/phpunit --filter=ArticleReviewServiceTest
+$PHP_BIN vendor/bin/phpunit --filter=ArticleEditorContextPreservationContractTest
+$PHP_BIN vendor/bin/phpunit --filter=CtaContactUsabilityAndQuickTemplatesTest
+$PHP_BIN vendor/bin/phpunit --filter=SeoReasonPresentationAndAssistantHealthTest
+$PHP_BIN vendor/bin/phpunit --filter=ArticleEditorRichText3eContractTest
+$PHP_BIN vendor/bin/phpunit --filter=ArticleEditorCtaMediaQuoteFixContractTest
+
+npm run build
 ```
 
 ## 16. Related documents

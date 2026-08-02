@@ -10,8 +10,10 @@ use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Resources\Pages\Page;
 
 /**
- * Compatibility redirect — Publishing Queue gộp vào ViewSeoProject.
- * Canonical: /content-projects/{id}?lifecycle=waiting_publish,published
+ * Legacy nested Publishing Queue route — compatibility redirect only.
+ * Canonical UI lives on the independent hub: App\Addons\SeoContentAi\Filament\Pages\PublishingQueueHub.
+ *
+ * @see \App\Addons\SeoContentAi\Filament\Pages\PublishingQueueHub
  */
 final class ContentProjectPublishingQueue extends Page
 {
@@ -21,25 +23,16 @@ final class ContentProjectPublishingQueue extends Page
 
     protected static bool $shouldRegisterNavigation = false;
 
-    /**
-     * Scalar route key — tránh Livewire Eloquent binding 404 trên omi_seo_ai.
-     */
     public int|string $record = 0;
 
     public function mount(int|string $record): void
     {
         $this->record = $record;
-
         $project = SeoProjectResource::getRecordRouteBindingEloquentQuery()->find($record);
         abort_unless($project instanceof SeoProject, 404);
         abort_unless(SeoAccessControl::canAccessSite((int) ($project->site_id ?? 0)), 403);
+        abort_unless(SeoAccessControl::canManageContentProjectWorkflow(), 403);
 
-        $this->redirect(
-            SeoProjectResource::getUrl('view', [
-                'record' => $project,
-                'lifecycle' => 'waiting_publish,published',
-            ]),
-            navigate: true,
-        );
+        $this->redirect(SeoProjectResource::getPublishingQueueUrl($project), navigate: false);
     }
 }

@@ -230,11 +230,16 @@ final class ContentProjectGeneratePendingSafetyTest extends TestCase
         $viewRun = (string) file_get_contents(
             dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource/Pages/ViewSeoProjectRun.php',
         );
+        $itemsList = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/components/content-project-items-list.blade.php',
+        );
 
         self::assertStringContainsString('view-seo-project-operations', $opsView);
         self::assertStringContainsString('ContentProjectItemOperationsReadModel', $opsView);
         self::assertStringContainsString('applySummaryFilter', $opsBlade);
-        self::assertStringContainsString('generation_badge', $opsBlade);
+        self::assertStringContainsString('content-project-items-list', $opsBlade);
+        // generation_badge rendering lives in the shared items-list component now.
+        self::assertStringContainsString('generation_badge', $itemsList);
         self::assertSame([], \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource::getRelations());
         self::assertStringContainsString('redirect', strtolower($viewRun));
         self::assertStringContainsString('allowsDevTestGenerateUi', $resource);

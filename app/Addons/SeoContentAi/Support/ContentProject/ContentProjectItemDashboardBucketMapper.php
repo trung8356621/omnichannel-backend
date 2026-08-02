@@ -88,10 +88,8 @@ final class ContentProjectItemDashboardBucketMapper
         }
 
         $queue = (string) ($row['publish_queue_status'] ?? 'none');
-        $articleStatus = strtolower((string) ($row['article_status'] ?? ''));
-        $published = ($row['publish_published_at'] ?? null) !== null && ($row['publish_published_at'] ?? '') !== ''
-            || $queue === 'published'
-            || in_array($articleStatus, ['published', 'publish'], true);
+        $published = (($row['publish_published_at'] ?? null) !== null && ($row['publish_published_at'] ?? '') !== '')
+            || $queue === 'published';
 
         if ($published) {
             return ContentProjectItemDashboardBucket::Published;

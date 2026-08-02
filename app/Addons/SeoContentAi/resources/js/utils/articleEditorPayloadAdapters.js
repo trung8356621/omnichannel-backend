@@ -235,6 +235,12 @@ export function normalizeLinksPayload(payload) {
             ? src.domain_link_list_catalog
             : [],
         domainCtaList: Array.isArray(src.domain_cta_list) ? src.domain_cta_list : [],
+        ctaQuickTemplates:
+            src.cta_quick_templates && typeof src.cta_quick_templates === 'object'
+                ? src.cta_quick_templates
+                : src.ctaQuickTemplates && typeof src.ctaQuickTemplates === 'object'
+                  ? src.ctaQuickTemplates
+                  : null,
         suggestedInternalLinks: Array.isArray(src.suggested_internal_links)
             ? src.suggested_internal_links
             : [],

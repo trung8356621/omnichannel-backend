@@ -40,14 +40,20 @@ final class WorkflowExistingAiOutputService
 
         if ($type === self::TYPE_CONTENT) {
             $body = trim((string) ($article->body ?? ''));
+            if ($body === '') {
+                return null;
+            }
 
-            return $body !== ''
-                ? [
-                    'type' => self::TYPE_CONTENT,
-                    'output' => $body,
-                    'message' => 'Bỏ qua AI: bài viết đã có nội dung.',
-                ]
-                : null;
+            // Contaminated body (outline markers) must never short-circuit as article_content.
+            if ($this->looksLikeOutlineMarkerPayload($body)) {
+                return null;
+            }
+
+            return [
+                'type' => self::TYPE_CONTENT,
+                'output' => $body,
+                'message' => 'Bỏ qua AI: bài viết đã có nội dung.',
+            ];
         }
 
         if (! $article->relationLoaded('articleMetas')) {
@@ -102,5 +108,16 @@ final class WorkflowExistingAiOutputService
         }
 
         return null;
+    }
+
+    private function looksLikeOutlineMarkerPayload(string $payload): bool
+    {
+        $payload = trim($payload);
+        if ($payload === '') {
+            return false;
+        }
+
+        return (bool) preg_match('/\[START_TASK_\d+_OUTLINE\]/i', $payload)
+            || (bool) preg_match('/\[END_TASK_\d+_OUTLINE\]/i', $payload);
     }
 }

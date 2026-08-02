@@ -409,13 +409,15 @@ final class ContentProjectItemStateResolver
         return null;
     }
 
+    /**
+     * Editor article.status=published is local draft field — NOT WordPress publish success.
+     * Lifecycle Published must come from task publish_published_at / queue published only.
+     */
     private function articleLooksPublished(?SeoArticle $article): bool
     {
-        if (! $article instanceof SeoArticle) {
-            return false;
-        }
+        unset($article);
 
-        return in_array(strtolower((string) ($article->status ?? '')), ['published', 'publish'], true);
+        return false;
     }
 
     /**

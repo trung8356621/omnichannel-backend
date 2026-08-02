@@ -71,12 +71,19 @@ Gates: Manager for most settings (`canAccessManagerFeatures`); Prompt CRUD plann
 | Image gen | `MediaGenerationService`, `ImageRoutingStrategy` |
 | Image output mode | `ImageOutputModePromptInjector` |
 | PromptResult attach | `PromptResultAttachService` / action `prompt_result.attach` |
+| Typed workflow artifacts | `WorkflowArtifactType` + `WorkflowTypedArtifact` + `ArtifactReusePolicy` — PromptResult is audit only; domain write consumes declared typed deps |
 | Usage / delete safety | `PromptUsageLocator`, `PromptDeleteGuard` |
+| Prompt Editor — Runtime Rules UI | `PromptRuntimeRulesPresenter` — readonly panel from Hook definition + `PromptOutputContractCatalog` (no compose, no user markdown). Bound via `SeoContentAiServiceProvider` (`PromptOutputContractCatalog` / `PromptOutputContractResolver` singletons). |
+| Prompt Editor — preview toggle | `PromptCompositionSummaryPresenter` — default Runtime Rules; `Show Effective Prompt (Debug)` ON → full compose via `PromptHookCompositionPreviewService`. |
+| Prompt Editor form | `PromptResource` — MarkdownEditor `minHeight(280px)` + `maxHeight(600px)` (EasyMDE single scrollbar); section title Runtime Rules (Built-in). |
 | Default comment | `DefaultCommentPromptInstaller` + hook `article.comment.generate` |
 | API connections list | `ApiConnectionsListService` + `AiConnectionResource` |
 | SEO provider matrix | `SeoProviderRegistry` + `SeoProviderCapabilityResolver` |
 | Outline input any-of | `article.outline.generate` — `post_title` and `keyword` individually optional; `metadata.require_any_of` enforced by `PromptHookRequireAnyOf` / ExplicitBinding. Project item requires at least one of keyword or post_title. Both may be provided. AI outline/article generation may generate or optimize the final title. |
 | Outline output normalize | `MarkdownSectionsOutputParser::normalizeProviderRaw` — strip BOM, unwrap outer fence, drop short prologue/epilogue; still reject between-section prose, duplicates, missing markers, undeclared task markers. Downstream writing skipped (not failed) when outline fails. |
+| Topic input (schema-gated) | `PromptHookExplicitBindingExecutor::enrichTopicInput` + `mapInput` whitelist — injects runtime `topic` only when **current** hook `input_schema` declares `topic`. Legacy compile uses schema-whitelisted `$input` only (no shared-payload merge). Must not leak into `article.content.generate` / comment / FAQ → `Unknown input key [topic]`. |
+| Outline fail → write skip | `TaskWorkflowTestRunner::run` marks content/write steps `skipped` with “Không chạy vì bước Dàn ý thất bại.” — not Failed missing-outline. |
+| Content fail → persist block | Persist action `blocked` when no valid `article_content` artifact — never fallback to outline / latest PromptResult. |
 
 ## 4. Data ownership
 
@@ -126,10 +133,22 @@ Prompt Hook execute
   → prompt_result.attach (domain) — not Hook Engine
 
 Task / Content Project workflow
-  → TaskWorkflowTestRunner prompt nodes → PromptRunnerService
-  → action nodes → local domain (PromptTestPublishService / Actions)
+  → TaskWorkflowTestRunner prompt nodes → PromptRunnerService / ExplicitBinding
+  → each successful prompt registers typed artifact (article_outline | article_content | …)
+  → action nodes consume only declared typed dependencies (PromptTestPublishService)
   → WP outbound only via wordpress.* / Publishing module
 ```
+
+**Artifact ownership (canonical):**
+
+1. `PromptResult` row = audit — **not** automatically a domain artifact.
+2. Every workflow prompt success has `artifact_type` + producer node identity.
+3. Domain action consumes only declared typed dependencies (`article_content` for body write).
+4. `article_outline` can **never** satisfy `article_content`.
+5. Hook inputs are schema-whitelisted per current hook (`mapInput` allowed keys only).
+6. No shared-payload leakage (e.g. `topic`) across hooks.
+7. Failed prompt → its domain write action is blocked; no previous-node / latest-result fallback.
+8. **Manual AI History** (`ArticleAiHistoryApplicationService`): users may list/preview/apply/delete PromptResult + typed artifact history per article. Only valid typed (or fail-closed legacy-classified) `article_outline` / `article_content` may apply — via domain/editor draft services, **never** Hook Engine. Legacy classification is fail-closed (`ArticleAiHistoryLegacyClassifier`). Deleting history tombstones audit rows and unlinks PromptResult; does **not** delete article body/outline, project task/run, or editor revisions. Shared PromptResult hard-clear only when orphaned.
 
 **Modes (migration bridge):** `legacy` (default) | `shadow` (legacy SoT, no double AI) | `hook` (engine + provider once). Rollback any → `legacy`. Jump `legacy` → `hook` **forbidden** (must shadow first).
 

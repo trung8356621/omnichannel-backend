@@ -24,13 +24,26 @@ final class ArticlePipelineRerunServiceTest extends TestCase
         self::assertFileDoesNotExist(dirname(__DIR__, 2).'/Jobs/RerunArticlePipelineJob.php');
     }
 
-    public function test_edit_article_still_calls_adapter_queue(): void
+    public function test_edit_article_keeps_adapter_but_ui_removed_pipeline_rerun_menu(): void
     {
         $editPhp = (string) file_get_contents(
             dirname(__DIR__, 2).'/Filament/Resources/ArticleResource/Pages/EditArticle.php',
         );
         self::assertStringContainsString('queueArticlePipelineRerun', $editPhp);
         self::assertStringContainsString('ArticlePipelineRerunService', $editPhp);
+        self::assertStringContainsString('ArticleAiHistoryApplicationService', $editPhp);
+
+        $actionsBlade = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/filament/resources/article-resource/pages/partials/article-editor-page-actions.blade.php',
+        );
+        self::assertStringNotContainsString('data-seo-pipeline-rerun', $actionsBlade);
+        self::assertStringContainsString('article_ai_history.menu', $actionsBlade);
+
+        $editBlade = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/filament/resources/article-resource/pages/edit-article.blade.php',
+        );
+        self::assertStringNotContainsString('open-article-pipeline-rerun-modal', $editBlade);
+        self::assertStringContainsString('aiHistoryPendingBanner', $editBlade);
     }
 
     public function test_constants_and_block_message_stable(): void

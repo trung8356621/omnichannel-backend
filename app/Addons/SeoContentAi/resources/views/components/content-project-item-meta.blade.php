@@ -17,7 +17,13 @@
 <div {{ $attributes->class(['min-w-0']) }}>
     <div class="line-clamp-2 text-sm font-semibold leading-snug text-gray-950 dark:text-white">
         @if ($url)
-            <a href="{{ $url }}" class="hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 rounded">{{ $primary }}</a>
+            <a
+                href="{{ $url }}"
+                @click.prevent="typeof openNeedsReviewArticle === 'function'
+                    ? openNeedsReviewArticle({{ $tid }}, {{ ! empty($row['is_recently_completed']) ? 'true' : 'false' }}, {{ \Illuminate\Support\Js::from($url) }})
+                    : (window.location.href = {{ \Illuminate\Support\Js::from($url) }})"
+                class="hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 rounded"
+            >{{ $primary }}</a>
         @else
             {{ $primary }}
         @endif
@@ -30,9 +36,32 @@
     @if ($showKeyword)
         <div class="mt-0.5 line-clamp-1 text-[11px] text-gray-400 dark:text-gray-500">{{ $keyword }}</div>
     @endif
+    @if (! empty($row['project_name']))
+        <div class="mt-0.5 line-clamp-1 text-[11px] text-gray-400 dark:text-gray-500">
+            @if (! empty($row['project_url']))
+                <a href="{{ $row['project_url'] }}" class="hover:underline">{{ $row['project_name'] }}</a>
+            @else
+                {{ $row['project_name'] }}
+            @endif
+        </div>
+    @endif
     @if (! empty($message))
         <div class="mt-1 line-clamp-1 text-[11px] font-medium text-danger-600 dark:text-danger-400" title="{{ $message }}">
             {{ $message }}
+        </div>
+    @endif
+    @if (! empty($row['show_reporting_chip']) && ! empty($row['reporting_badge']))
+        @php $rb = $row['reporting_badge']; @endphp
+        <div class="mt-1">
+            <span
+                class="{{ $rb['classes'] ?? '' }}"
+                title="{{ ($rb['key'] ?? '') === 'needs_review'
+                    ? __('seo-content-ai::filament.projects.reporting_needs_review_tooltip')
+                    : __('seo-content-ai::filament.projects.reporting_in_review_tooltip') }}"
+                aria-label="{{ ($rb['key'] ?? '') === 'needs_review'
+                    ? __('seo-content-ai::filament.projects.reporting_needs_review_tooltip')
+                    : __('seo-content-ai::filament.projects.reporting_in_review_tooltip') }}"
+            >{{ $rb['label'] ?? '' }}</span>
         </div>
     @endif
     @if (! empty($row['has_unpublished_changes']))

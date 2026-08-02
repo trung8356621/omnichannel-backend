@@ -37,10 +37,10 @@ final class ContentProjectBusinessAuditor
                 'item_ref' => $itemId !== null ? ContentProjectPublicRef::item($itemId) : null,
                 'result' => $result->success ? 'success' : 'failed',
                 'result_code' => $result->code,
-                'metadata' => json_encode([
+                'metadata' => json_encode(array_merge([
                     'affected_count' => count($result->affectedItemIds),
                     'correlation_id' => $actor->correlationId,
-                ], JSON_UNESCAPED_UNICODE),
+                ], is_array($result->metadata) ? $result->metadata : []), JSON_UNESCAPED_UNICODE),
                 'occurred_at' => now(),
                 'created_at' => now(),
                 'updated_at' => now(),

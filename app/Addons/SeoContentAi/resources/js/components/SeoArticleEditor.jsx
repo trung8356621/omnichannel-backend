@@ -23,14 +23,31 @@ import {
 import { scanExistingLinksCompat } from '../utils/existingLinkScanner';
 import FeaturedSnippetPromptModal from './FeaturedSnippetPromptModal';
 import {
-    wrapFirstPlainTextWithLink,
     wrapPlainTextWithLinkInBlocks,
     replaceFirstPlainTextWithLink,
     replaceFirstPlainTextWithText,
 } from '../utils/articleLinkInsert';
 import { findPlainTextRangeInRoot } from '../utils/articlePlainTextRange';
-import { insertCtaInEditor, insertLinkInEditor } from '../utils/editorSelectionUtils';
+import {
+    insertContactValueAtBookmark,
+    insertCtaInlineAtBookmark,
+    insertLinkInEditor,
+} from '../utils/editorSelectionUtils';
 import { isCtaPlainTextType } from '../utils/ctaLinkFormat';
+import {
+    captureEditorInsertionContext,
+    getEditorInsertionContext,
+    clearFrozenEditorInsertionContext,
+    getFrozenEditorInsertionContext,
+    getInsertionContextForCommand,
+    isAssistantFocusStealTarget,
+    resolveEditorForInsertion,
+    scrollElementIntoViewIfNeeded,
+    syncAndFreezeInsertionContext,
+    syncInsertionContextFromLiveEditors,
+} from '../utils/editorInsertionContext';
+import { collectContentImagesFromArticle } from '../utils/contentImageCounter';
+import { normalizeOrphanQuoteCharacters } from '../utils/orphanQuoteNormalizer';
 import { SEO_EDITOR_LINK_CLASS } from '../utils/articleEditorTransientMarkup';
 import {
     filterSuggestedInternalLinks,
@@ -53,6 +70,15 @@ import {
     computeSeoAnalysis,
 } from '../utils/seoAnalyzer';
 import { sanitizeViolations, scoreFromViolations, buildFailedViolationItems } from '../utils/seoScoreCalculator';
+import {
+    buildFeaturedWidgetHealth,
+    buildGalleryWidgetHealth,
+    buildImagesWidgetHealth,
+    buildLinksWidgetHealth,
+    buildSeoWidgetHealth,
+    dispatchAssistantWidgetHealth,
+} from '../utils/assistantWidgetHealth';
+import { loadFeaturedImage } from '../utils/articleFeaturedImageStorage';
 import {
     dispatchActiveModule,
     isAbortError,
@@ -1503,6 +1529,7 @@ function isSameTiptapBlockContent(sourceHtml, currentHtml, nextHtml) {
 
 function ActiveBlockEditor({
     block,
+    sectionId = null,
     displayContent,
     suppressBlockUpdate,
     onUpdate,
@@ -1521,7 +1548,7 @@ function ActiveBlockEditor({
     const sourceHtml = displayContent ?? block.content;
     const isHydratingRef = useRef(false);
     const initialEditorHtml = useMemo(
-        () => ensureTiptapHeadingCursorParagraph(sourceHtml) || '<p></p>',
+        () => normalizeOrphanQuoteCharacters(ensureTiptapHeadingCursorParagraph(sourceHtml) || '<p></p>'),
         [block.id],
     );
     const { minHeight, setMinHeight, persistHeight, minH, maxH } = useBlockEditorHeight(block.id);
@@ -1548,9 +1575,34 @@ function ActiveBlockEditor({
         content: initialEditorHtml,
         onUpdate: ({ editor: ed }) => {
             pushHtml(ed.getHTML());
+            captureEditorInsertionContext({
+                sectionId,
+                blockId: block.id,
+                editor: ed,
+            });
+        },
+        onSelectionUpdate: ({ editor: ed }) => {
+            captureEditorInsertionContext({
+                sectionId,
+                blockId: block.id,
+                editor: ed,
+            });
+        },
+        onBlur: ({ editor: ed }) => {
+            // Capture BEFORE sidebar/assistant steals focus so caret survives.
+            captureEditorInsertionContext({
+                sectionId,
+                blockId: block.id,
+                editor: ed,
+            });
         },
         onFocus: ({ editor: ed }) => {
             setGlobalEditor(ed);
+            captureEditorInsertionContext({
+                sectionId,
+                blockId: block.id,
+                editor: ed,
+            });
         },
         editorProps: {
             attributes: {
@@ -1570,7 +1622,9 @@ function ActiveBlockEditor({
     useEffect(() => {
         if (!editor) return;
 
-        const nextHtml = ensureTiptapHeadingCursorParagraph(sourceHtml) || '<p></p>';
+        const nextHtml = normalizeOrphanQuoteCharacters(
+            ensureTiptapHeadingCursorParagraph(sourceHtml) || '<p></p>',
+        );
         // Khi user đang gõ, parent state đổi theo từng key stroke. Nếu hydrate lại
         // bằng setContent dù HTML tương đương, Tiptap sẽ reset selection/caret về cuối đoạn.
         if (isSameTiptapBlockContent(sourceHtml, editor.getHTML(), nextHtml)) {
@@ -1958,6 +2012,7 @@ function OutlineLockedHeadingBlock({ block, isSectionHeading = false, onActivate
 
 function BlockEditor({
     block,
+    sectionId = null,
     isActive,
     isHiddenInMerge,
     canShiftMerge,
@@ -2129,6 +2184,7 @@ function BlockEditor({
         <ActiveBlockEditor
             key={`${block.id}-${suppressBlockUpdate ? 'merge' : 'edit'}`}
             block={block}
+            sectionId={sectionId}
             displayContent={displayContent}
             suppressBlockUpdate={suppressBlockUpdate}
             onUpdate={onUpdate}
@@ -2704,6 +2760,8 @@ export default function SeoArticleEditor({
     const hasHydratedSeoFromServerRef = useRef(false);
     const [focusKeyword, setFocusKeyword] = useState(initialSeo?.focus_keyword ?? null);
     const [analysis, setAnalysis] = useState(initialSeo?.analysis ?? null);
+    const [mediaHealthTick, setMediaHealthTick] = useState(0);
+    const [featuredHealthSnapshot, setFeaturedHealthSnapshot] = useState(() => loadFeaturedImage(articleId));
 
     useEffect(() => {
         const onSeoSummary = (event) => {
@@ -3099,61 +3157,12 @@ export default function SeoArticleEditor({
         () => editorSections.reduce((sum, section) => sum + (sectionStats.get(section.id)?.wordCount ?? 0), 0),
         [editorSections, sectionStats],
     );
-    const imageTabCount = useMemo(() => {
-        const normalizedRows = [
-            ...collectImagesFromBlocks(blocks),
-            ...(Array.isArray(supplementalImages) ? supplementalImages : []).map((row) => ({
-                wpAttachmentId: Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0) || null,
-                seoMediaId: Number(row?.seoMediaId ?? row?.seo_media_id ?? 0) || null,
-                src: String(row?.src || '').trim(),
-                wpSrc: String(row?.wpSrc || row?.wp_url || '').trim(),
-                localSrc: String(row?.localSrc || row?.local_src || '').trim(),
-            })),
-        ];
-
-        const merged = [];
-        normalizedRows.forEach((row) => {
-            const primarySrc = String(row?.src || row?.wpSrc || row?.localSrc || '').trim();
-            const srcKey = normalizeImageSrcKey(primarySrc);
-            const wpId = Number(row?.wpAttachmentId ?? 0);
-            const seoId = Number(row?.seoMediaId ?? 0);
-
-            const existingIndex = merged.findIndex((existing) => {
-                const existingWpId = Number(existing?.wpAttachmentId ?? 0);
-                if (wpId > 0 && existingWpId > 0 && existingWpId === wpId) {
-                    return true;
-                }
-
-                const existingSeoId = Number(existing?.seoMediaId ?? 0);
-                if (seoId > 0 && existingSeoId > 0 && existingSeoId === seoId) {
-                    return true;
-                }
-
-                if (srcKey) {
-                    const existingSrcKey = normalizeImageSrcKey(
-                        String(existing?.src || existing?.wpSrc || existing?.localSrc || ''),
-                    );
-                    if (existingSrcKey && existingSrcKey === srcKey) {
-                        return true;
-                    }
-                }
-
-                return false;
-            });
-
-            if (existingIndex === -1) {
-                merged.push({
-                    wpAttachmentId: wpId || null,
-                    seoMediaId: seoId || null,
-                    src: String(row?.src || '').trim(),
-                    wpSrc: String(row?.wpSrc || '').trim(),
-                    localSrc: String(row?.localSrc || '').trim(),
-                });
-            }
-        });
-
-        return merged.length;
-    }, [blocks, supplementalImages]);
+    // Content body images only (image blocks + inline <img>). Never featured/gallery/supplemental library.
+    const contentImageCensus = useMemo(
+        () => collectContentImagesFromArticle(blocks),
+        [blocks],
+    );
+    const imageTabCount = contentImageCensus.valid_content_image_count;
 
     const tempMergeRef = useRef(tempMerge);
     tempMergeRef.current = tempMerge;
@@ -3203,26 +3212,125 @@ export default function SeoArticleEditor({
         return scoreFromViolations(violations, seoScoringRules);
     }, [analysis, seoScoringRules]);
 
-    const seoFailedCount = useMemo(() => {
+    const seoFailedItems = useMemo(() => {
         const violations = sanitizeViolations(
             Array.isArray(analysis?.violations) ? analysis.violations : [],
             seoScoringRules,
         );
 
-        return buildFailedViolationItems(violations, seoScoringRules, scoringMessages).length;
+        return buildFailedViolationItems(
+            violations,
+            seoScoringRules,
+            scoringMessages,
+            analysis?.metrics ?? {},
+        );
     }, [analysis, seoScoringRules, scoringMessages]);
 
+    const seoFailedCount = seoFailedItems.length;
+
     useEffect(() => {
+        const locale = String(document?.documentElement?.lang ?? 'vi').startsWith('en') ? 'en' : 'vi';
+        const contentImages = collectContentImagesFromArticle(blocks);
+        const imageRows = contentImages.rows;
+        const keyword = String(focusKeyword ?? '').trim();
+        const imageRatioMetrics = {
+            ...(analysis?.metrics?.image_ratio ?? {}),
+            // Widget + SEO presentation use the same body-image census.
+            current_image_count: contentImages.valid_content_image_count,
+            valid_image_count: contentImages.valid_content_image_count,
+            recommended_image_count: Number(analysis?.metrics?.image_ratio?.recommended_image_count) || 0,
+            missing_image_count: Math.max(
+                0,
+                (Number(analysis?.metrics?.image_ratio?.recommended_image_count) || 0)
+                - contentImages.valid_content_image_count,
+            ),
+        };
+        const health = {
+            seo: buildSeoWidgetHealth({
+                focusKeyword: keyword,
+                violations: analysis?.violations ?? [],
+                failedItems: seoFailedItems,
+                locale,
+            }),
+            images: buildImagesWidgetHealth({
+                rows: imageRows,
+                keyword,
+                imageRatioMetrics,
+                locale,
+                messages: scoringMessages,
+            }),
+            links: buildLinksWidgetHealth({
+                extractedLinks: analysis?.extracted_links ?? extractedLinks,
+                locale,
+            }),
+            featured: buildFeaturedWidgetHealth({
+                articleId,
+                featuredImage: featuredHealthSnapshot ?? loadFeaturedImage(articleId),
+                keyword,
+                locale,
+            }),
+            gallery: buildGalleryWidgetHealth({
+                required: Boolean(supportsProductGallery || isProductPost),
+                items: productGalleryItems,
+                keyword,
+                locale,
+            }),
+        };
+
+        dispatchAssistantWidgetHealth(health);
+
         window.dispatchEvent(
             new CustomEvent('seo-assistant-navigator-badges', {
                 detail: {
-                    seo: seoFailedCount > 0 ? seoFailedCount : null,
-                    images: imageTabCount > 0 ? imageTabCount : null,
                     reviews: showReviewsTab && isProductPost ? virtualReviews.length : null,
                 },
             }),
         );
-    }, [seoFailedCount, imageTabCount, virtualReviews.length, showReviewsTab, isProductPost]);
+    }, [
+        analysis,
+        blocks,
+        supplementalImages,
+        focusKeyword,
+        seoFailedItems,
+        scoringMessages,
+        extractedLinks,
+        articleId,
+        supportsProductGallery,
+        isProductPost,
+        productGalleryItems,
+        showReviewsTab,
+        virtualReviews.length,
+        imageTabCount,
+        mediaHealthTick,
+        featuredHealthSnapshot,
+    ]);
+
+    useEffect(() => {
+        const onFeaturedUpdated = (event) => {
+            const detailItem = event?.detail?.item ?? null;
+            const next = detailItem && typeof detailItem === 'object'
+                ? detailItem
+                : loadFeaturedImage(articleId);
+            setFeaturedHealthSnapshot(next);
+            setMediaHealthTick((tick) => tick + 1);
+        };
+        const onHealthRefresh = () => {
+            setFeaturedHealthSnapshot(loadFeaturedImage(articleId));
+            setMediaHealthTick((tick) => tick + 1);
+        };
+        const onFeaturedCleared = () => {
+            setFeaturedHealthSnapshot(null);
+            setMediaHealthTick((tick) => tick + 1);
+        };
+        window.addEventListener('seo-featured-image-updated', onFeaturedUpdated);
+        window.addEventListener('seo-featured-image-cleared', onFeaturedCleared);
+        window.addEventListener('seo-assistant-widget-health-refresh', onHealthRefresh);
+        return () => {
+            window.removeEventListener('seo-featured-image-updated', onFeaturedUpdated);
+            window.removeEventListener('seo-featured-image-cleared', onFeaturedCleared);
+            window.removeEventListener('seo-assistant-widget-health-refresh', onHealthRefresh);
+        };
+    }, [articleId]);
 
     const applySeoAnalysisResult = useCallback((result) => {
         if (!result || typeof result !== 'object') {
@@ -3857,21 +3965,11 @@ export default function SeoArticleEditor({
     }, []);
 
     const resolveActiveEditor = useCallback(() => {
-        const activeId = activeBlockIdRef.current;
-        if (globalEditorRef.current && !globalEditorRef.current.isDestroyed) {
-            return globalEditorRef.current;
-        }
-
-        if (!activeId) {
-            return null;
-        }
-
-        const blockEditor = blockEditorsRef.current.get(activeId);
-        if (blockEditor && !blockEditor.isDestroyed) {
-            return blockEditor;
-        }
-
-        return null;
+        return resolveEditorForInsertion({
+            blockEditors: blockEditorsRef.current,
+            activeBlockId: activeBlockIdRef.current,
+            globalEditor: globalEditorRef.current,
+        });
     }, []);
 
     const commitActiveBlock = useCallback(() => {
@@ -4976,6 +5074,7 @@ export default function SeoArticleEditor({
                     );
                 }
 
+                window.dispatchEvent(new CustomEvent('seo-assistant-widget-health-refresh'));
                 notifyEditor(
                     t('editor_quick_fix_slug_all_done_title'),
                     String(
@@ -5420,8 +5519,13 @@ export default function SeoArticleEditor({
             }
 
             const targetSectionId = sectionByBlockId.get(blockId);
+            // Expand target only — do NOT collapse other sections (media/image UX).
             if (targetSectionId) {
-                collapseSectionsExcept(targetSectionId);
+                setCollapsedSectionIds((prev) =>
+                    prev[targetSectionId]
+                        ? { ...prev, [targetSectionId]: false }
+                        : prev,
+                );
             }
 
             clearTempMerge();
@@ -5439,13 +5543,18 @@ export default function SeoArticleEditor({
                 setActiveBlockId(blockId);
             }
 
+            captureEditorInsertionContext({
+                sectionId: targetSectionId,
+                blockId,
+            });
+
             const jump = () => {
                 const slot = document.querySelector(`[data-seo-block-id="${blockId}"]`);
                 if (!slot) {
                     return;
                 }
 
-                slot.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                scrollElementIntoViewIfNeeded(slot, { behavior: 'smooth', block: 'nearest' });
                 slot.classList.add(SEO_EDITOR_LINK_MARK_CLASS, SEO_EDITOR_LINK_SCROLL_LEGACY_CLASS);
                 window.setTimeout(
                     () =>
@@ -5456,7 +5565,7 @@ export default function SeoArticleEditor({
 
             window.setTimeout(jump, needsSwitch || targetSectionId ? 90 : 0);
         },
-        [clearTempMerge, collapseSectionsExcept, commitActiveBlock, sectionByBlockId],
+        [clearTempMerge, commitActiveBlock, sectionByBlockId],
     );
 
     const quickGenerateImageForSection = useCallback(
@@ -5739,6 +5848,70 @@ export default function SeoArticleEditor({
                 return;
             }
 
+            const insertMode = String(detail?.insert_mode ?? detail?.insertMode ?? 'wrap').toLowerCase();
+            if (insertMode === 'caret') {
+                syncInsertionContextFromLiveEditors({
+                    blockEditors: blockEditorsRef.current,
+                    activeBlockId: activeBlockIdRef.current,
+                    sectionByBlockId,
+                });
+                const insertionCtx = getEditorInsertionContext();
+                const preferredBlockId = String(
+                    detail?.target?.blockId
+                    ?? insertionCtx.activeBlockId
+                    ?? activeBlockIdRef.current
+                    ?? '',
+                ).trim();
+                if (preferredBlockId) {
+                    const sectionId = sectionByBlockId.get(preferredBlockId);
+                    if (sectionId) {
+                        setCollapsedSectionIds((prev) =>
+                            prev[sectionId] ? { ...prev, [sectionId]: false } : prev,
+                        );
+                    }
+                }
+                const bookmark = detail?.target?.selectionBookmark ?? insertionCtx.selection;
+                const tryCaretInsert = () => {
+                    const editor = resolveEditorForInsertion({
+                        blockEditors: blockEditorsRef.current,
+                        activeBlockId: preferredBlockId,
+                        globalEditor: globalEditorRef.current,
+                    });
+                    return insertLinkInEditor(editor, text, href, bookmark);
+                };
+                const afterCaretInsert = () => {
+                    if (preferredBlockId) {
+                        scrollElementIntoViewIfNeeded(
+                            document.querySelector(`[data-seo-block-id="${preferredBlockId}"]`),
+                            { behavior: 'smooth', block: 'nearest' },
+                        );
+                    }
+                    commitActiveBlock();
+                    requestAnalyze();
+                    window.dispatchEvent(
+                        new CustomEvent('seo-editor-suggested-link-inserted', {
+                            detail: { text, href, blockId: preferredBlockId },
+                        }),
+                    );
+                };
+                if (tryCaretInsert()) {
+                    afterCaretInsert();
+                    return;
+                }
+                // Section may still be mounting TipTap after expand — one frame retry.
+                requestAnimationFrame(() => {
+                    syncInsertionContextFromLiveEditors({
+                        blockEditors: blockEditorsRef.current,
+                        activeBlockId: preferredBlockId || activeBlockIdRef.current,
+                        sectionByBlockId,
+                    });
+                    if (tryCaretInsert()) {
+                        afterCaretInsert();
+                    }
+                });
+                return;
+            }
+
             const notifyInserted = (blockId, nextHtml) => {
                 const currentBlocks = blocksRef.current;
                 const nextBlocks = currentBlocks.map((item) =>
@@ -5859,6 +6032,8 @@ export default function SeoArticleEditor({
             articleId,
             commitActiveBlock,
             persistEditorContentImmediately,
+            requestAnalyze,
+            sectionByBlockId,
             selectPlainTextInBlock,
         ],
     );
@@ -5959,25 +6134,108 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            const editor = resolveActiveEditor();
-            if (insertCtaInEditor(editor, text, href, type)) {
+            // Do NOT re-sync from live editors after sidebar stole focus — that overwrites frozen caret.
+            const frozen = getFrozenEditorInsertionContext();
+            if (!frozen?.selection) {
+                syncInsertionContextFromLiveEditors({
+                    blockEditors: blockEditorsRef.current,
+                    activeBlockId: activeBlockIdRef.current,
+                    sectionByBlockId,
+                });
+            }
+
+            const insertionCtx = getInsertionContextForCommand();
+            const preferredBlockId = String(
+                detail?.target?.blockId
+                ?? insertionCtx.activeBlockId
+                ?? activeBlockIdRef.current
+                ?? '',
+            ).trim();
+
+            if (preferredBlockId) {
+                const sectionId = sectionByBlockId.get(preferredBlockId);
+                if (sectionId) {
+                    setCollapsedSectionIds((prev) =>
+                        prev[sectionId] ? { ...prev, [sectionId]: false } : prev,
+                    );
+                }
+                if (activeBlockIdRef.current !== preferredBlockId) {
+                    activeBlockIdRef.current = preferredBlockId;
+                    setActiveBlockId(preferredBlockId);
+                }
+            }
+
+            const bookmark = detail?.target?.selectionBookmark
+                ?? insertionCtx.selection
+                ?? frozen?.selection
+                ?? null;
+            // Insert vs CTA = same inline flow; only template/content differs.
+            const isCtaSentence = detail?.is_sentence === true
+                || detail?.is_cta_sentence === true
+                || Boolean(String(detail?.sentence ?? '').trim());
+            const tryCtaInsert = () => {
+                const editor = resolveEditorForInsertion({
+                    blockEditors: blockEditorsRef.current,
+                    activeBlockId: preferredBlockId,
+                    globalEditor: globalEditorRef.current,
+                });
+                if (isCtaSentence) {
+                    return insertCtaInlineAtBookmark(editor, {
+                        label: text,
+                        href,
+                        type,
+                        sentence: String(detail?.sentence ?? detail?.text ?? '').trim(),
+                        valueLabel: String(detail?.value_label ?? '').trim() || undefined,
+                        bookmark,
+                    });
+                }
+                return insertContactValueAtBookmark(editor, text, href, type, bookmark);
+            };
+            const afterCtaInsert = () => {
+                clearFrozenEditorInsertionContext();
+                if (preferredBlockId) {
+                    const sectionId = sectionByBlockId.get(preferredBlockId);
+                    if (sectionId) {
+                        setCollapsedSectionIds((prev) =>
+                            prev[sectionId] ? { ...prev, [sectionId]: false } : prev,
+                        );
+                    }
+                    const slot = document.querySelector(`[data-seo-block-id="${preferredBlockId}"]`);
+                    scrollElementIntoViewIfNeeded(slot, { behavior: 'smooth', block: 'nearest' });
+                }
                 commitActiveBlock();
                 requestAnalyze();
                 window.dispatchEvent(
+                    new CustomEvent('seo-editor-cta-link-inserted', {
+                        detail: {
+                            text,
+                            href,
+                            type,
+                            blockId: preferredBlockId,
+                            mode: isCtaSentence ? 'cta_sentence' : 'contact_value',
+                        },
+                    }),
+                );
+                window.dispatchEvent(
                     new CustomEvent('seo-article-editor-notify', {
                         detail: {
-                            title: t('editor_cta_link_inserted'),
+                            title: isCtaSentence
+                                ? t('editor_cta_block_inserted')
+                                : t('editor_contact_value_inserted'),
                             body: `«${text}»`,
                             status: 'success',
                         },
                     }),
                 );
+            };
 
+            if (tryCtaInsert()) {
+                afterCtaInsert();
                 return;
             }
 
             const selectedText = intraSelectionRef.current.text;
-            const activeId = activeBlockIdRef.current;
+            const activeId = preferredBlockId || activeBlockIdRef.current;
             if (selectedText) {
                 const activeBlock = blocksRef.current.find(
                     (block) => block.id === activeId && block.type !== 'image',
@@ -5992,12 +6250,15 @@ export default function SeoArticleEditor({
                               href,
                           );
                     if (replaceResult.replaced) {
+                        clearFrozenEditorInsertionContext();
                         updateBlockContent(activeBlock.id, replaceResult.html);
                         requestAnalyze();
                         window.dispatchEvent(
                             new CustomEvent('seo-article-editor-notify', {
                                 detail: {
-                                    title: t('editor_cta_link_inserted'),
+                                    title: isCtaSentence
+                                        ? t('editor_cta_block_inserted')
+                                        : t('editor_contact_value_inserted'),
                                     body: `«${text}»`,
                                     status: 'success',
                                 },
@@ -6012,37 +6273,10 @@ export default function SeoArticleEditor({
             commitActiveBlock();
 
             const currentBlocks = blocksRef.current;
-
-            if (!plainText) {
-                for (const block of currentBlocks) {
-                    if (block.type === 'image' || !block.content) {
-                        continue;
-                    }
-
-                    const { html, replaced } = wrapFirstPlainTextWithLink(block.content, text, href);
-                    if (!replaced) {
-                        continue;
-                    }
-
-                    updateBlockContent(block.id, html);
-                    requestAnalyze();
-                    window.dispatchEvent(
-                        new CustomEvent('seo-article-editor-notify', {
-                            detail: {
-                                title: t('editor_cta_link_inserted'),
-                                body: `«${text}»`,
-                                status: 'success',
-                            },
-                        }),
-                    );
-
-                    return;
-                }
-            }
-
-            const targetBlock =
-                currentBlocks.find((block) => block.id === activeId && block.type !== 'image') ??
-                currentBlocks.find((block) => block.type !== 'image' && block.content);
+            // Fallback only to active block end — never silently insert into first section.
+            const targetBlock = currentBlocks.find(
+                (block) => block.id === activeId && block.type !== 'image',
+            );
 
             if (!targetBlock) {
                 window.dispatchEvent(
@@ -6060,28 +6294,42 @@ export default function SeoArticleEditor({
             const placeholderHtml =
                 detail?.is_placeholder === true ? String(detail?.html ?? '').trim() : '';
             const safeText = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const insertion =
-                placeholderHtml !== ''
-                    ? placeholderHtml
-                    : plainText
-                      ? safeText
-                      : `<a href="${href.replace(/"/g, '&quot;')}" class="${SEO_EDITOR_LINK_CLASS}">${safeText}</a>`;
+            const valueLink = plainText
+                ? safeText
+                : `<a href="${href.replace(/"/g, '&quot;')}" class="${SEO_EDITOR_LINK_CLASS}">${safeText}</a>`;
+            // Fallback also stays inline — never wrap in article-cta / new paragraph block.
+            const insertion = placeholderHtml !== '' ? placeholderHtml : valueLink;
             const base = String(targetBlock.content ?? '').trim();
             const nextHtml = base !== '' ? `${base} ${insertion}` : `<p>${insertion}</p>`;
 
+            clearFrozenEditorInsertionContext();
             updateBlockContent(targetBlock.id, nextHtml);
             requestAnalyze();
             window.dispatchEvent(
+                new CustomEvent('seo-editor-cta-link-inserted', {
+                    detail: {
+                        text,
+                        href,
+                        type,
+                        blockId: targetBlock.id,
+                        mode: isCtaSentence ? 'cta_sentence' : 'contact_value',
+                        fallback: true,
+                    },
+                }),
+            );
+            window.dispatchEvent(
                 new CustomEvent('seo-article-editor-notify', {
                     detail: {
-                        title: t('editor_cta_link_inserted'),
+                        title: isCtaSentence
+                            ? t('editor_cta_block_inserted')
+                            : t('editor_contact_value_inserted'),
                         body: `«${text}»`,
                         status: 'success',
                     },
                 }),
             );
         },
-        [commitActiveBlock, updateBlockContent, requestAnalyze, resolveActiveEditor],
+        [commitActiveBlock, updateBlockContent, requestAnalyze, sectionByBlockId],
     );
 
     useEffect(() => {
@@ -6171,6 +6419,53 @@ export default function SeoArticleEditor({
             insertCtaLinkIntoContent(event.detail ?? {});
         };
 
+        const onFocusAssistantReason = (event) => {
+            const detail = event?.detail ?? {};
+            const code = String(detail.code ?? detail.reason?.code ?? '').trim();
+            const targetId = String(detail.target_id ?? detail.reason?.target_id ?? '').trim();
+            const panel = String(detail.panel ?? '').trim();
+
+            if (code === 'focus_keyword_missing' || targetId === 'focus-keyword') {
+                window.dispatchEvent(new CustomEvent('seo-assistant-switch-panel', { detail: { panel: 'seo' } }));
+                requestAnimationFrame(() => {
+                    const input = document.getElementById('seo-google-preview-focus-keyword');
+                    if (input instanceof HTMLElement) {
+                        input.focus();
+                        scrollElementIntoViewIfNeeded(input, { behavior: 'smooth', block: 'nearest' });
+                    }
+                });
+                return;
+            }
+
+            if (code === 'featured_missing' || code === 'featured_slug_not_fixed' || panel === 'featured') {
+                window.dispatchEvent(new CustomEvent('seo-assistant-switch-panel', { detail: { panel: 'featured' } }));
+                window.dispatchEvent(new CustomEvent('seo-open-featured-media-picker'));
+                return;
+            }
+
+            if (code === 'gallery_missing' || code.startsWith('gallery_') || panel === 'gallery') {
+                window.dispatchEvent(new CustomEvent('seo-assistant-switch-panel', { detail: { panel: 'gallery' } }));
+                return;
+            }
+
+            if (
+                code === 'image_slug_not_fixed'
+                || code === 'image_ratio_low'
+                || code === 'image_reference_invalid'
+                || panel === 'images'
+            ) {
+                window.dispatchEvent(new CustomEvent('seo-assistant-switch-panel', { detail: { panel: 'images' } }));
+                if (targetId) {
+                    focusImageBlock(targetId);
+                }
+                return;
+            }
+
+            if (code === 'links_below_minimum' || panel === 'links' || panel === 'cta') {
+                window.dispatchEvent(new CustomEvent('seo-assistant-switch-panel', { detail: { panel: panel || 'links' } }));
+            }
+        };
+
         const onRemoveInternalLink = (event) => {
             removeInternalLinkFromContent(event.detail ?? {});
         };
@@ -6193,6 +6488,7 @@ export default function SeoArticleEditor({
         window.addEventListener('seo-editor-scroll-to-link', onScrollToLink);
         window.addEventListener('seo-editor-insert-suggested-link', onInsertSuggestedLink);
         window.addEventListener('seo-editor-insert-cta-link', onInsertCtaLink);
+        window.addEventListener('seo-assistant-focus-reason', onFocusAssistantReason);
         window.addEventListener('seo-editor-remove-internal-link', onRemoveInternalLink);
         window.addEventListener('seo-editor-scroll-to-featured-snippet-table', onScrollToFeaturedSnippetTable);
         window.addEventListener('seo-editor-document-html-request', onDocumentHtmlRequest);
@@ -6201,11 +6497,12 @@ export default function SeoArticleEditor({
             window.removeEventListener('seo-editor-scroll-to-link', onScrollToLink);
             window.removeEventListener('seo-editor-insert-suggested-link', onInsertSuggestedLink);
             window.removeEventListener('seo-editor-insert-cta-link', onInsertCtaLink);
+            window.removeEventListener('seo-assistant-focus-reason', onFocusAssistantReason);
             window.removeEventListener('seo-editor-remove-internal-link', onRemoveInternalLink);
             window.removeEventListener('seo-editor-scroll-to-featured-snippet-table', onScrollToFeaturedSnippetTable);
             window.removeEventListener('seo-editor-document-html-request', onDocumentHtmlRequest);
         };
-    }, [scrollToExtractedLink, insertSuggestedLinkIntoContent, insertCtaLinkIntoContent, removeInternalLinkFromContent, scrollToFeaturedSnippetTable, getExportHtml, articleId]);
+    }, [scrollToExtractedLink, insertSuggestedLinkIntoContent, insertCtaLinkIntoContent, removeInternalLinkFromContent, scrollToFeaturedSnippetTable, getExportHtml, articleId, focusImageBlock]);
 
     const clearMediaPolling = useCallback((mediaId) => {
         const timer = mediaPollTimersRef.current.get(mediaId);
@@ -6587,6 +6884,10 @@ export default function SeoArticleEditor({
             if (sectionId && collapsedSectionIds[sectionId]) {
                 setCollapsedSectionIds((prev) => ({ ...prev, [sectionId]: false }));
             }
+            captureEditorInsertionContext({
+                sectionId: sectionId ?? null,
+                blockId: id,
+            });
             if (tempMergeRef.current) {
                 clearTempMerge();
                 setGlobalEditor(null);
@@ -8353,6 +8654,11 @@ export default function SeoArticleEditor({
                 }
             }
 
+            // Assistant sidebar / dock: never clear active editor context on click.
+            if (isAssistantFocusStealTarget(e.target)) {
+                return;
+            }
+
             if (
                 e.target.closest('.block-editor-active') ||
                 e.target.closest('.block-image-active') ||
@@ -8416,7 +8722,28 @@ export default function SeoArticleEditor({
             }
         };
 
+        const captureInsertionBeforeAssistantFocus = (event) => {
+            if (!isAssistantFocusStealTarget(event.target)) {
+                return;
+            }
+            syncAndFreezeInsertionContext({
+                blockEditors: blockEditorsRef.current,
+                activeBlockId: activeBlockIdRef.current,
+                sectionByBlockId,
+            });
+        };
+
+        const onFreezeInsertionContext = () => {
+            syncAndFreezeInsertionContext({
+                blockEditors: blockEditorsRef.current,
+                activeBlockId: activeBlockIdRef.current,
+                sectionByBlockId,
+            });
+        };
+
         document.addEventListener('mousedown', handleClickOutside);
+        document.addEventListener('pointerdown', captureInsertionBeforeAssistantFocus, true);
+        window.addEventListener('seo-assistant-freeze-insertion-context', onFreezeInsertionContext);
 
         const onImageGenerateRequest = (event) => {
             const blockId = event.detail?.blockId;
@@ -8849,6 +9176,8 @@ export default function SeoArticleEditor({
             window.removeEventListener('seo-publish-post-type-changed', handlePublishPostTypeChanged);
             window.removeEventListener('seo-editor-analyze-result', handleServerAnalyzeResult);
             document.removeEventListener('mousedown', handleClickOutside);
+            document.removeEventListener('pointerdown', captureInsertionBeforeAssistantFocus, true);
+            window.removeEventListener('seo-assistant-freeze-insertion-context', onFreezeInsertionContext);
             for (const timer of mediaPollTimersRef.current.values()) {
                 window.clearTimeout(timer);
             }
@@ -9602,11 +9931,18 @@ export default function SeoArticleEditor({
         setCollapsedSectionIds(next);
     }, [commitActiveBlock, editorSections]);
 
+    const collapsedSectionsInitializedRef = useRef(false);
+
     useEffect(() => {
         if (editorSections.length === 0) {
             return;
         }
 
+        if (collapsedSectionsInitializedRef.current) {
+            return;
+        }
+
+        collapsedSectionsInitializedRef.current = true;
         setCollapsedSectionIds((prev) => {
             if (Object.keys(prev).length > 0) {
                 return prev;
@@ -10656,6 +10992,7 @@ export default function SeoArticleEditor({
 
                                                             <BlockEditor
                                                                 block={block}
+                                                                sectionId={section.id}
                                                                 articleId={articleId}
                                                                 siteId={siteId}
                                                                 supportsProductGallery={supportsProductGallery}

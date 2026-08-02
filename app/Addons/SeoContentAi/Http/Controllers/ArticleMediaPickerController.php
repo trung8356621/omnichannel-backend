@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Services\MediaLibraryAccessScope;
 use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
+use App\Addons\SeoContentAi\Services\WordPressMediaCapabilityResolver;
 use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
@@ -49,14 +50,17 @@ class ArticleMediaPickerController extends Controller
                 is_array($result['images'] ?? null) ? $result['images'] : [],
             );
         } else {
-            if ((int) ($record->wp_post_id ?? 0) <= 0) {
+            $capability = app(WordPressMediaCapabilityResolver::class)->forSite($site);
+            if (! $capability['available']) {
                 return response()->json([
                     'images' => [],
                     'catalog' => null,
                     'page' => 1,
                     'totalPages' => 1,
-                    'error' => 'Bài viết chưa được liên kết WordPress. Hãy đồng bộ bài viết trước khi chọn ảnh WordPress.',
+                    'error' => $capability['reason'] ?? 'Thư viện WordPress không khả dụng.',
                     'tab' => $tab,
+                    'wordpress_media_available' => false,
+                    'wordpress_media_unavailable_reason' => $capability['reason'],
                 ], 422);
             }
 

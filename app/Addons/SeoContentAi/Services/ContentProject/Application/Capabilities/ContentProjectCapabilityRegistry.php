@@ -20,6 +20,8 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\Restore
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ResumeProjectExecutionCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RetryProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ScheduleProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SendToPublishingQueueCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ReturnToContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SkipProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StopProjectExecutionCommand;
@@ -235,6 +237,56 @@ final class ContentProjectCapabilityRegistry
                 confirmation: false,
             ),
             $this->cap(
+                'content_project.resume_failed_step',
+                'Resume item from first retryable failed step (reuse upstream artifacts)',
+                \App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ResumeProjectItemFromFailedStepCommand::class,
+                'content_project.resume_failed_step',
+                riskLevel: 'write',
+                idempotencySupport: true,
+                dryRunSupport: false,
+                inputSchema: [
+                    'project_ref' => ['type' => 'string', 'required' => true],
+                    'item_refs' => ['type' => 'array', 'required' => true],
+                    'mode' => ['type' => 'string', 'enum' => ['full', 'test'], 'required' => false],
+                ],
+                phases: [
+                    ContentProjectLifecyclePhase::Failed->value,
+                ],
+                confirmation: false,
+                presentation: [
+                    'description' => 'Canonical Failed-row Retry: resume from failed step, reuse valid upstream artifacts. Not a full graph rerun.',
+                    'required_context' => ['site_ref', 'project_ref', 'item_refs'],
+                    'side_effect_level' => 'write',
+                ],
+            ),
+            $this->cap(
+                'content_project.acknowledge_generation_error',
+                'Clear stale generation Failed overlay without regenerating (keep content)',
+                \App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AcknowledgeProjectItemGenerationErrorCommand::class,
+                'content_project.acknowledge_generation_error',
+                riskLevel: 'write',
+                idempotencySupport: true,
+                dryRunSupport: false,
+                inputSchema: [
+                    'project_ref' => ['type' => 'string', 'required' => true],
+                    'item_refs' => ['type' => 'array', 'required' => true],
+                    'note' => ['type' => 'string', 'required' => false],
+                ],
+                phases: [
+                    ContentProjectLifecyclePhase::Failed->value,
+                    ContentProjectLifecyclePhase::Published->value,
+                    ContentProjectLifecyclePhase::Review->value,
+                    ContentProjectLifecyclePhase::Approved->value,
+                    ContentProjectLifecyclePhase::WaitingPublish->value,
+                ],
+                confirmation: false,
+                presentation: [
+                    'description' => 'Soft-clear latest run-item error when content already OK. Does not call AI.',
+                    'required_context' => ['site_ref', 'project_ref', 'item_refs'],
+                    'side_effect_level' => 'write',
+                ],
+            ),
+            $this->cap(
                 'content_project.start_review',
                 'Move items into review',
                 StartReviewCommand::class,
@@ -271,6 +323,45 @@ final class ContentProjectCapabilityRegistry
                 confirmation: false,
             ),
             $this->cap(
+                'content_project.send_to_publishing_queue',
+                'Send completed items to Publishing Queue (Unscheduled)',
+                SendToPublishingQueueCommand::class,
+                'content_project.send_to_publishing_queue',
+                riskLevel: 'write',
+                idempotencySupport: true,
+                dryRunSupport: true,
+                inputSchema: [
+                    'project_ref' => ['type' => 'string', 'required' => true],
+                    'item_refs' => ['type' => 'array', 'required' => true],
+                    'dry_run' => ['type' => 'boolean', 'required' => false],
+                ],
+                phases: [
+                    ContentProjectLifecyclePhase::Review->value,
+                    ContentProjectLifecyclePhase::Approved->value,
+                ],
+                confirmation: false,
+            ),
+            $this->cap(
+                'content_project.return_to_content_project',
+                'Return unpublished items from Publishing Queue to Content Project',
+                ReturnToContentProjectCommand::class,
+                'content_project.return_to_content_project',
+                riskLevel: 'write',
+                idempotencySupport: true,
+                dryRunSupport: true,
+                inputSchema: [
+                    'project_ref' => ['type' => 'string', 'required' => true],
+                    'item_refs' => ['type' => 'array', 'required' => true],
+                    'dry_run' => ['type' => 'boolean', 'required' => false],
+                ],
+                phases: [
+                    ContentProjectLifecyclePhase::WaitingPublish->value,
+                    ContentProjectLifecyclePhase::Approved->value,
+                    ContentProjectLifecyclePhase::Review->value,
+                ],
+                confirmation: false,
+            ),
+            $this->cap(
                 'content_project.schedule',
                 'Schedule items for Publishing Queue',
                 ScheduleProjectItemsCommand::class,
@@ -293,7 +384,7 @@ final class ContentProjectCapabilityRegistry
             ),
             $this->cap(
                 'content_project.auto_schedule',
-                'Auto-schedule many items by pattern',
+                'Auto-schedule / Quick Mode many items in Publishing Queue',
                 AutoScheduleProjectItemsCommand::class,
                 'content_project.auto_schedule',
                 riskLevel: 'write',
@@ -424,6 +515,54 @@ final class ContentProjectCapabilityRegistry
                     ContentProjectLifecyclePhase::Approved->value,
                 ],
                 confirmation: true,
+            ),
+            $this->cap(
+                'content_project.send_to_publishing_queue',
+                'Hand off content-complete items from Content Project to the Publishing Queue module (no WordPress call, no auto schedule).',
+                SendToPublishingQueueCommand::class,
+                'content_project.send_to_publishing_queue',
+                riskLevel: 'write',
+                idempotencySupport: true,
+                dryRunSupport: true,
+                inputSchema: [
+                    'project_ref' => ['type' => 'string', 'required' => true],
+                    'item_refs' => ['type' => 'array', 'required' => true],
+                    'dry_run' => ['type' => 'boolean', 'required' => false],
+                ],
+                phases: [
+                    ContentProjectLifecyclePhase::Review->value,
+                    ContentProjectLifecyclePhase::Approved->value,
+                ],
+                confirmation: false,
+                presentation: [
+                    'description' => 'Module handoff — content must already be complete. Does not schedule or publish, and never calls WordPress.',
+                    'required_context' => ['site_ref', 'project_ref', 'item_refs'],
+                    'side_effect_level' => 'write',
+                ],
+            ),
+            $this->cap(
+                'content_project.return_to_content_project',
+                'Return items from the Publishing Queue back into the Content Project working set (blocked once Published).',
+                ReturnToContentProjectCommand::class,
+                'content_project.return_to_content_project',
+                riskLevel: 'write',
+                idempotencySupport: true,
+                dryRunSupport: true,
+                inputSchema: [
+                    'project_ref' => ['type' => 'string', 'required' => true],
+                    'item_refs' => ['type' => 'array', 'required' => true],
+                    'dry_run' => ['type' => 'boolean', 'required' => false],
+                ],
+                phases: [
+                    ContentProjectLifecyclePhase::WaitingPublish->value,
+                    ContentProjectLifecyclePhase::Approved->value,
+                ],
+                confirmation: false,
+                presentation: [
+                    'description' => 'Module handoff back to Content Project. Blocked once Published. Never calls WordPress.',
+                    'required_context' => ['site_ref', 'project_ref', 'item_refs'],
+                    'side_effect_level' => 'write',
+                ],
             ),
             $this->cap(
                 'content_project.archive',

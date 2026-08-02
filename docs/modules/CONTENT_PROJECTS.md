@@ -25,7 +25,8 @@ Panel prefix: `/seo/{connection_hash}/`
 | `content-projects/create` | `CreateSeoProject` |
 | `content-projects/{record}` | `ViewSeoProject` — **operations workspace** (KPI + Project Items table) |
 | `content-projects/{record}/edit` | `EditSeoProject` — settings + tasks sync |
-| `content-projects/{record}/publishing-queue` | Compat redirect → `view?lifecycle=waiting_publish,published` |
+| `content-projects/{record}/publishing-queue` | Compat redirect (`ContentProjectPublishingQueue`) → `publishing-queue?projectId={record}` |
+| `publishing-queue` | `PublishingQueueHub` — independent top-level Publishing Queue page; optional `?projectId=` scopes to one project, otherwise cross-project (actions disabled per row) |
 | `content-operations` | `ContentProjectOperationsCenter` (manager+) |
 | `/admin/content-operations` | Redirect → SEO ops |
 
@@ -58,6 +59,11 @@ REST: `/api/v1/content-projects*` → same commands via Application controllers.
 | Rerun gate | `Application/Support/ContentProjectRerunEligibilityGuard` |
 | Generate pending set | `ContentProjectItemGenerationClassifier` |
 | Ops read model | `ContentProjectItemOperationsReadModel` |
+| Publishing Queue read model | `ContentProjectPublishingQueueReadModel` (`forProject` scoped, `forHub` cross-project) |
+| Generation Needs Review read-state | `ContentProjectGenerationReadStateStore` + `seo_content_project_item_generation_read_states` (per user/item `viewed_generation_completed_at`) |
+| Needs Review definition | `Support/ContentProject/ContentProjectRecentlyCompletedDefinition` (presentation filter key `recently_completed`) |
+| In Review reporting definition | `Support/ContentProject/ContentProjectInReviewReportingDefinition` (filter key `in_review_reporting`; stamp columns on `seo_project_tasks`) |
+| Ops counter transition map | `Support/ContentProject/ContentProjectOpsCounterTransitionMap` (optimistic presentation deltas only) |
 | Locks | `Application/Support/ContentProjectBusinessLock` |
 | Idempotency | `Application/Support/ContentProjectIdempotencyStore` |
 | Audit / op log | `ContentProjectBusinessAuditor`, `ContentProjectOperationLogger` |
@@ -115,23 +121,108 @@ Scheduler        ──► ProcessScheduledProjectItemPublish (internal) ──�
 4. Under `BusinessLock::projectGenerate`: `startRun` + `prepareRunQueue` (both required).
 5. Outside lock: `ContentProjectRunEngine::start($run)` (idempotent kick). Web returns immediately.
 
-### Rerun
+### Rerun / Resume
 
 | Command | Handler | Guard |
 |---------|---------|-------|
-| `RerunProjectItemsCommand` | `RerunProjectItemsHandler` | `validateFull()` |
+| `ResumeProjectItemFromFailedStepCommand` | `ResumeProjectItemFromFailedStepHandler` | fail-closed resolve via `ContentProjectFailedStepResumeResolver` then `validateStep()` |
 | `RerunProjectItemStepCommand` | `RerunProjectItemStepHandler` | `validateStep()` |
+| `RerunProjectItemsCommand` | `RerunProjectItemsHandler` | `validateFull()` — **explicit full rerun from start** |
+
+**Default Failed-row Retry = resume, not full rerun.** Primary UI action «Tiếp tục từ bước lỗi» and Agent/MCP `content_project.resume_failed_step` resolve the first retryable failed step from the **latest run-item attempt**, set `rerun_from_step`, reuse valid upstream artifacts (`ArtifactReusePolicy`), invalidate failed + downstream. Fail closed when `failed_step_key` cannot be resolved. Empty `item_refs` never expands to project-wide. Menu «Chạy lại từ đầu» is the separate full-rerun action (cost warning).
+
+**Dismiss stale Failed overlay (no AI):** when content/lifecycle already OK (e.g. Published) but Generation still shows Failed from a soft domain-write error, UI «Bỏ qua lỗi (giữ nội dung)» / `content_project.acknowledge_generation_error` marks latest failed run-item `success`, clears `error_message`, and may flip sticky task `failed|writing|processing` → `completed` if `article_id` present. Does **not** regenerate. Prefer this CTA over resume when lifecycle ∈ published/approved/review/waiting_publish and article exists.
 
 Require explicit `item_refs` (fail-closed — empty selection never expands to all pending). Stale recovery first. Eligibility **before** any run/queue mutation. Same lock → seed → `RunEngine::start` shape as Generate. Step carries `rerun_from_step` / downstream / optional `source_article_id`.
 
+**Typed workflow artifacts:** Successful prompt nodes emit typed artifacts (`article_outline`, `article_content`, `product_gallery`, `product_review`) with identity (`project_task_id`, `run_id`/`run_item_id`/`attempt`, `workflow_node_id`, `producer_hook_key`, fingerprint, status). Domain article write consumes **only** `article_content` from the declared dependency node — never `article_outline`, never latest `PromptResult` / `lastPromptOutput` fallback. Content fail → persist action `blocked` (body unchanged, Generation stays Failed).
+
+**Upstream reuse:** `Services/Workflow/ArtifactReusePolicy` — same task, compatible graph version, matching generation input fingerprint, succeeded + not invalidated. Keyword/title/description/post_type changes invalidate outline; publishing schedule alone does not.
+
 **Run settings isolation:** `ContentProjectRunSettings::snapshotForRun()` persists operational keys (`task_ids`, `rerun`, `rerun_*`) on `seo_project_runs.settings`. `prepareRunQueue()` reads those keys — must not fall back to project-wide pending when selection was explicit. On accept, `prepareOperation` marks the task `pending` and clears the latest run-item error so Failed-only filters/cards drop the row immediately.
 
-**Outline → article:** outline parse fail stops writing; full graph marks content steps `skipped` (`Không chạy vì bước Dàn ý thất bại.`). Parser pre-normalizes BOM / outer fence / short prologue before `TEXT_OUTSIDE_DECLARED_SECTIONS`.
+**Outline → article:** outline parse fail stops writing; full graph marks content steps `skipped` (`Không chạy vì bước Dàn ý thất bại.`). Content fail blocks article persist (`Không ghi nội dung vì bước Viết bài chưa tạo được article_content artifact hợp lệ.`). Parser pre-normalizes BOM / outer fence / short prologue before `TEXT_OUTSIDE_DECLARED_SECTIONS`. Outline markers never persist into `articles.body`.
+
+**Generation vs lifecycle:** Generation status reads the **latest run-item attempt** (independent from article lifecycle / published). Lifecycle may stay `Published` while Generation = `Failed`. Generation = Generated only when mandatory generation graph succeeded **and** `article_content` was domain-persisted. Run/item cannot be Completed when mandatory Write article failed. Optional product-only nodes on Article = `SKIPPED_NOT_APPLICABLE` (do not fail Article generation).
+
+**Ops filters (latest attempt):** Failed-only matches current generation failed/stale only — excludes latest run-item `pending`/`processing` and genuinely running rows. Summary cards use the same display generation status as the table.
+
+**Roles (Content Project only — no new roles):**
+
+| Role | Capability |
+|------|------------|
+| **planner** | Canonical business actor. Full CP workflow via `SeoAccessControl::canManageContentProjectWorkflow()`. |
+| **manager** | Planner-equivalent capabilities **inside Content Project only** (same `canManageContentProjectWorkflow`). Not the canonical actor; does not imply Prompt / user / system settings rights. |
+| **content_manager** | Edit assigned AI output in Article Editor; canonical Save stamps reporting In Review only. No generate / rerun / approve / schedule / publish / archive bulk. |
+
+**Workflow:**
+
+1. Planner/Manager: **Draft** (never generated) → Generate → **Pending** (AI queued/running) → **Needs Review** (reporting)
+2. Content Manager: Needs Review → Open → Edit → **canonical Save** → **stop** (no Approve / Schedule / Publish / Rerun)
+3. Planner/Manager may **Schedule** from Needs Review **or** In Review **or** Approved (Approved optional marker, not hard gate)
+4. Optional: Planner Approve → Approved → Schedule — also valid (Approved **not** an active summary card)
+
+**Normal (UI label, ex-"Draft" card):** whole Content Project **working set** — every item with `publishing_queued_at IS NULL`, regardless of generation/review/lifecycle state (never-generated, Pending, Generated, Needs Review, In Review, Failed all count). **Not** WordPress draft, **not** a lifecycle state, **not** limited to never-generated items. Clicking the Normal card clears the workflow filter (shows the full working set). Backed by `stats['normal']` / `stats['working_set']` in `ContentProjectItemOperationsReadModel`; `'draft'` kept only as a legacy filter/query alias with the same match-all semantics (`ContentProjectOpsStateClassifier::matchesSummaryFilter`).
+
+**Draft (internal ops bucket, distinct from the Normal card):** never generated AI, no active execution, no canonical generation result — used by the Generate-eligibility classifier only, not shown as its own KPI card. Definition: `ContentProjectDraftOpsDefinition`.
+
+**Pending (ops):** AI queued or running — between Draft and Needs Review. Definition: `ContentProjectPendingOpsDefinition`.
+
+**Needs Review (reporting / presentation only):** AI finished AND Content Manager has **not** stamped canonical Save (`content_manager_reviewed_at` null). Unread for viewer still applies. Filter key `recently_completed`. **Not** lifecycle. **Not** Schedule gate.
+
+**In Review (reporting / presentation only):** Content Manager stamped `content_manager_reviewed_at` (+ `content_manager_reviewed_by`) once via `ContentProjectContentManagerHandoffService`. Filter key `in_review_reporting`. Legacy residue `pending_review` / task `reviewing` still counts. **Not** lifecycle handoff. **Not** Schedule/Approve gate. Does **not** call `SubmitReview` / change generation status.
+
+**KPI / summary cards (SSOT):** Normal → Pending → Needs Review → In Review → Failed. **No Scheduled/Published/Approved cards** — those belong to **Publishing Queue**. Title badge shows project **total_items** (working set + Publishing Queue); a muted subtitle breaks it down as ":working in workspace · :queue in Publishing Queue". Handoff: Planner/Manager **Send to Publishing Queue** (`publishing_queued_at`) → item leaves CP working set as Unscheduled (no WP, no auto schedule).
+
+**Module boundary:** Content Project = content production only (workspace = the Normal/working-set items). Publishing Queue = schedule + WordPress publication, owned by the independent **Publishing Queue Hub** (`App\Addons\SeoContentAi\Filament\Pages\PublishingQueueHub`, slug `publishing-queue`, top-level page, optional `?projectId=` scopes to one project). The legacy nested `content-projects/{id}/publishing-queue` route (`ContentProjectPublishingQueue` page) is a compat redirect to the hub. `publishing_queued_at` ownership unchanged.
+
+**Shared ops UI (CP ↔ PQ):** both pages reuse `content-project-ops-styles`, `content-project-summary-cards`, `content-project-filter-toolbar` (`variant`), `content-project-bulk-selection-toolbar` (`variant`), `content-project-items-list` (`variant`), thumbnail/meta/status-badge. CP actions: `content-project-item-actions-menu` + `ContentProjectItemActionsPresenter`. PQ actions: `publishing-queue-item-actions-menu` + `PublishingQueueItemActionsPresenter`. Differ only by status chips + actions (presenter/view-model).
+
+**Counters (reporting):** CM Save `needs_review−1/review+1`; enqueue Draft→Pending `draft−1/pending+1`; approve from Needs Review `needs_review−1/approved+1`; approve In Review `review−1/approved+1`; self-edit after viewed `approved+1`; schedule from Approved `approved−1/scheduled+1`; schedule from Needs Review `needs_review−1/scheduled+1`; schedule from In Review `review−1/scheduled+1`.
+
+**Schedule:** allowed from Review lifecycle (Needs Review or In Review reporting) **or** Approved / WaitingPublish. Does **not** require In Review or Approved. Blocks only: capability, project/item validity, AI/queue busy, invalid datetime, enqueue failure. Never Schedule CTA on Published (republish separate). False-Published recovery bypasses Schedule guard (debug flag + residue).
+
+### Presentation Layer States
+
+| Kind | Examples | Notes |
+|------|----------|-------|
+| Generation | Pending, Running, Generated, Failed | AI run only — never Needs Review / In Review |
+| Workflow / publishing | Scheduled, Published, Failed | Column Workflow; Draft/Pending empty (—); Approved not shown as active workflow badge |
+| Reporting | Needs Review, In Review (Reviewed by Content Manager) | Workload only — auto-hide after Approve/Schedule/Publish; not Schedule gate |
+
+Needs Review definition:
+
+AI completed + unread + `content_manager_reviewed_at` IS NULL (and not legacy pending_review/reviewing)
+
+In Review definition:
+
+`content_manager_reviewed_at` IS NOT NULL (or legacy pending_review/reviewing) AND not Approved/Scheduled/Published
+
+Content Manager:
+Needs Review → Edit → canonical Save → reporting In Review stamp → stop (`ContentProjectContentManagerHandoffService`).
+
+Ops presentation for Content Manager (`SeoAccessControl::usesContentManagerOpsPresentation`): Total badge beside title; KPI cards Normal / Needs Review / In Review only; workflow filter All+Normal+reporting; no Generate/Queue/Retry/Approve/Schedule/debug.
+
+**Debug lifecycle override** (dev/recovery only):
+
+- Flag: `CONTENT_PROJECT_DEBUG_LIFECYCLE_OVERRIDE` → `config('seo-content-ai.content_project.debug_lifecycle_override')` (default `false`).
+- Capability: `SeoAccessControl::canDebugContentProjectLifecycle()` (Planner-equivalent + flag).
+- Command: `content_project.debug_override_lifecycle` / `DebugOverrideProjectItemLifecycleCommand`.
+- Allowed: Approved ↔ Scheduled ↔ Published. No WordPress API, no publisher dispatch.
+- Published → Scheduled clears fake `publish_published_at`, sets Waiting queue + future `scheduled_publish_at` (required if missing). Keeps `articles.wp_post_id`.
+- → Published debug stamps `last_publish_error = DEBUG_LIFECYCLE_OVERRIDE:not_wordpress_publish` — not real publisher success.
+- Audit via `ContentProjectBusinessAuditor` metadata (`reason=debug_recovery`).
+
+Do not call it AI Inbox / Inbox / Mailbox / Notification Queue. Do not use “staff” for this workflow — use content_manager.
+
+**SSOT ops Summary/List:** `ContentProjectOpsStateClassifier` + per-state Definitions (`Draft` / `Pending` / `Published` / `Scheduled` / `Approved` internal / `NeedsReview`=`RecentlyCompleted` / `InReviewReporting` / `Failed`). Ops card counts = `countSummary(mapped rows)` — same predicates as list filters (`workflowFilter` / failure quick filter). Published ignores `articles.status`. Reporting chips auto-hide after Approve/Schedule/Publish. Table columns: Generation | Workflow (not Lifecycle) | reporting chip under Item. Approved removed from active UI cards/filters.
+
 
 ### Review / approve
 
-- `StartReviewCommand` — task status → reviewing (completed/pending only); does **not** write `review_status`.
-- `ApproveProjectItemsCommand` → `ArticleReviewService::ensureApproved()` — SoT `review_status = approved`.
+- Content Manager canonical Save → `ContentProjectContentManagerHandoffService` stamps `content_manager_reviewed_at` / `content_manager_reviewed_by` once (reporting In Review). **No** `SubmitReview`, **no** task `reviewing`, **no** lifecycle transition.
+- `StartReviewCommand` — task status → reviewing (completed/pending only); does **not** write `review_status` (legacy/manual path).
+- `ApproveProjectItemsCommand` → `ArticleReviewService::ensureApproved()` — SoT `review_status = approved` (from draft or pending_review). Planner + manager via `canApproveArticleReview`. Optional before Schedule.
 - Article submit/approve/archive/reopen owned only by `ArticleReviewService::performAction()`.
 
 ### Archive
@@ -158,6 +249,8 @@ Public `content_project.*` commands (Capability Registry + Factory arm + Command
 | `add_items` / `update_item` | Add/Update item | No |
 | `generate` | GenerateProjectItems | No (pending safety confirm when needed) |
 | `rerun` | RerunProjectItems | No |
+| `resume_failed_step` | ResumeProjectItemFromFailedStep | No |
+| `acknowledge_generation_error` | AcknowledgeProjectItemGenerationError | No — soft-clear Failed overlay |
 | step rerun (Agent app path; no dedicated MCP tool) | RerunProjectItemStep | No |
 | `start_review` / `approve` | StartReview / Approve | No |
 | `schedule` / `auto_schedule` / `unschedule` / `move_schedule` | Schedule* | schedule dry-run preview |
@@ -211,8 +304,12 @@ Summary for CP:
 - Engine start failure after seed: retry `RunEngine::start` / another generate/rerun — do not orphan by rolling back queue rows.
 - Article job: `tries = 1`, timeout 900s; uniqueness per run/item/attempt.
 - Stale generation: recovery service + scheduled `--apply` command.
-- Rerun: validate eligibility first; rejected items in `metadata.rejected` — no partial start.
+- **Default item Retry:** `ResumeProjectItemFromFailedStep` → first failed retryable step; preserve valid upstream artifacts; do not silently restart from Outline.
+- **Full rerun:** `RerunProjectItems` only — explicit confirm/cost warning in UI.
+- Step rerun: validate eligibility first; rejected items in `metadata.rejected` — no partial start.
+- Agent/MCP use the same resume/step commands — no separate retry logic in Filament/Agent layers.
 - Publish retry: `RetryProjectItemPublishingCommand` → queue status `retrying`/`waiting` per transition guard.
+- **Manual artifact apply** (Article AI History) is **not** retry/rerun: does not create runs, clear failures, or change Generation status. Future Agent capabilities must call the same `ArticleAiHistoryApplicationService` / command DTOs if exposed — not Hook Engine.
 
 ## 13. Compatibility paths
 
@@ -250,6 +347,9 @@ Primary contracts (remote `$PHP_BIN vendor/bin/phpunit --filter=...`):
 | `ContentProjectApprovalSotTest` / `ArticleReviewServiceTest` | `review_status` SoT; no `is_reviewed` |
 | `ContentProjectIsReviewedCutoverMigrationTest` | Column cutover |
 | `ContentProjectRerunUnifyTest` / `ContentProjectBulkRerunPhase20Test` / `ContentProjectStepRerunPhase20Test` | Rerun CommandBus-only; deleted bulk/step services absent |
+| `WorkflowArtifactOwnershipTest` / `ContentProjectFailedStepResumeTest` | Typed artifacts; no outline→body; resume ≠ full rerun |
+| `AcknowledgeProjectItemGenerationErrorTest` | Soft-clear Failed overlay without AI; UI prefer-acknowledge CTA |
+| `OutlineAsContentDetectorTest` | Outline-as-content diagnostic |
 | `ContentProjectGenerateParityTest` / `ContentProjectGeneratePendingSafetyTest` | Generate path + fail-closed pending |
 | `ContentProjectRunEnginePhase1Test` / `ContentProjectActiveExecutionLifecycleTest` | Engine ownership |
 | `ContentProjectPublicCapabilityContractTest` | Caps + Factory + archive_items wiring |
@@ -284,6 +384,8 @@ Freeze grep invariants: no production `ContentProjectBulkRerunService`, `Content
 
 **Lifecycle precedence** (highest first): content archive → sticky published → queued/scheduled waiting_publish → publish failed → active generation → gen failed → approved → review → draft.
 
+**UI badges:** `ContentProjectStatusBadgePresenter` labels via `seo-content-ai::filament.projects.badge_*` (vi/en). Generation Failed overlay SoT = latest run-item attempt (independent of lifecycle).
+
 **Dashboard buckets:** `waiting_ai`, `ai_running`, `waiting_review`, `approved`, `waiting_publish`, `published`, `failed`, `archived`, `other`.
 
 ### Public CP CommandBus map (core)
@@ -291,7 +393,8 @@ Freeze grep invariants: no production `ContentProjectBulkRerunService`, `Content
 ```
 CreateContentProject, UpdateContentProject, SyncContentProjectItems,
 AddContentProjectItems, UpdateContentProjectItem,
-GenerateProjectItems, RerunProjectItems, RerunProjectItemStep,
+GenerateProjectItems, RerunProjectItems, RerunProjectItemStep, ResumeProjectItemFromFailedStep,
+AcknowledgeProjectItemGenerationError,
 StartReview, ApproveProjectItems,
 ScheduleProjectItems, AutoScheduleProjectItems, UnscheduleProjectItems,
 MoveProjectItemSchedule, PublishProjectItemsNow, ProcessScheduledProjectItemPublish,

@@ -18,4 +18,6 @@ enum ContentProjectItemAction: string
     case SkipPublish = 'skip_publish';
     case CancelPublish = 'cancel_publish';
     case Archive = 'archive';
+    case SendToPublishingQueue = 'send_to_publishing_queue';
+    case ReturnToContentProject = 'return_to_content_project';
 }

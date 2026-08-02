@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages;
 
+use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Concerns\InteractsWithContentProjectPublishingActions;
+use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
@@ -15,19 +17,29 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\Approve
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemStepCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ResumeProjectItemFromFailedStepCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AcknowledgeProjectItemGenerationErrorCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\DebugOverrideProjectItemLifecycleCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectPublicRef;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceDeepLink;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectDebugLifecycleOverrideService;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectGenerationReadStateStore;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemOperationsReadModel;
 use App\Addons\SeoContentAi\Enums\ContentProjectRerunFromStep;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectInReviewReportingDefinition;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectRecentlyCompletedDefinition;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectOpsCounterTransitionMap;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Support\RuntimeLogger;
+use Carbon\Carbon;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Page;
 use Illuminate\Contracts\Support\Htmlable;
+use Illuminate\Support\HtmlString;
 use Livewire\WithPagination;
 use Throwable;
 
@@ -66,11 +78,19 @@ final class ViewSeoProject extends Page
 
     public string $lifecycleFilter = '';
 
+    /** Unified workflow summary filter (All / Draft / Pending / … / Failed). */
+    public string $workflowFilter = '';
+
+    public string $reportingFilter = '';
+
     public string $queueFilter = '';
 
     public string $scheduledFilter = '';
 
     public bool $failedOnly = false;
+
+    /** Failed quick filter: prompt|model|queue|timeout|validation|wordpress|other|''. */
+    public string $failureTypeFilter = '';
 
     /** Livewire public — must live on component, not trait. */
     public bool $bulkRunning = false;
@@ -87,15 +107,43 @@ final class ViewSeoProject extends Page
 
     public string $autoDayEnd = '17:00';
 
+    /**
+     * Bumps when ops table must reload (summary changed / manual refresh).
+     * Filter/page changes already alter cache key.
+     */
+    public int $opsTableEpoch = 0;
+
+    /** @var array{total_items:int,draft:int,pending:int,needs_review:int,failed:int,review:int,approved:int,scheduled:int,published:int,running:int}|null */
+    public ?array $summarySnapshot = null;
+
+    /** Client dirty hint — Editor save sets via event; lazy refresh clears. */
+    public bool $opsNeedsRefresh = false;
+
+    /** Request-local only — never public (payload has LengthAwarePaginator). */
+    protected ?array $cachedOperationsPayload = null;
+
+    protected string $cachedOperationsKey = '';
+
+    /**
+     * Presentation-only: hide rows from current ops list after command accept
+     * until filter change / hard refresh. Survives remorph (unlike Alpine-only hide).
+     *
+     * @var array<int, true>
+     */
+    public array $optimisticHiddenTaskIds = [];
+
     /** @var array<string, mixed> */
     protected $queryString = [
         'search' => ['except' => ''],
         'typeFilter' => ['except' => '', 'as' => 'type'],
         'generationFilter' => ['except' => '', 'as' => 'generation'],
         'lifecycleFilter' => ['except' => '', 'as' => 'lifecycle'],
+        'workflowFilter' => ['except' => '', 'as' => 'workflow'],
+        'reportingFilter' => ['except' => '', 'as' => 'reporting'],
         'queueFilter' => ['except' => '', 'as' => 'queue'],
         'scheduledFilter' => ['except' => '', 'as' => 'scheduled'],
         'failedOnly' => ['except' => false, 'as' => 'failed'],
+        'failureTypeFilter' => ['except' => '', 'as' => 'failure_type'],
     ];
 
     public function mount(int|string $record): void
@@ -111,6 +159,20 @@ final class ViewSeoProject extends Page
         if ($this->autoStartAt === '') {
             $this->autoStartAt = now()->addHour()->format('Y-m-d\TH:i');
         }
+
+        // Content Manager lands on Needs Review (assigned edit queue).
+        if (
+            $this->generationFilter === ''
+            && $this->lifecycleFilter === ''
+            && $this->workflowFilter === ''
+            && $this->reportingFilter === ''
+            && ! $this->failedOnly
+            && ! SeoAccessControl::canManageContentProjectWorkflow()
+            && SeoAccessControl::canSubmitArticleReview()
+        ) {
+            $this->workflowFilter = ContentProjectRecentlyCompletedDefinition::FILTER;
+            $this->reportingFilter = ContentProjectRecentlyCompletedDefinition::FILTER;
+        }
     }
 
     public function getTitle(): string|Htmlable
@@ -120,7 +182,50 @@ final class ViewSeoProject extends Page
 
     public function getHeading(): string|Htmlable
     {
-        return (string) ($this->project?->name ?? __('seo-content-ai::filament.projects.navigation'));
+        $name = (string) ($this->project?->name ?? __('seo-content-ai::filament.projects.navigation'));
+        $total = $this->resolveTotalItemsCount();
+        $badge = __('seo-content-ai::filament.projects.ops_total_badge', ['count' => $total]);
+
+        $working = (int) ($this->summarySnapshot['working_set'] ?? 0);
+        $queue = (int) ($this->summarySnapshot['publishing_queue'] ?? 0);
+        $subtitle = __('seo-content-ai::filament.projects.ops_counts_subtitle', [
+            'working' => $working,
+            'queue' => $queue,
+        ]);
+
+        return new HtmlString(
+            '<span class="inline-flex flex-wrap items-center gap-2">'
+            .'<span>'.e($name).'</span>'
+            .'<span class="inline-flex items-center rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700 ring-1 ring-inset ring-gray-500/20 dark:bg-gray-800 dark:text-gray-200 dark:ring-gray-400/30">'
+            .e(is_string($badge) ? $badge : $total.' Items')
+            .'</span>'
+            .'<span class="text-xs font-normal text-gray-500 dark:text-gray-400">'
+            .e(is_string($subtitle) ? $subtitle : '')
+            .'</span>'
+            .'</span>'
+        );
+    }
+
+    private function resolveTotalItemsCount(): int
+    {
+        if (! is_array($this->summarySnapshot)) {
+            try {
+                $this->summarySnapshot = $this->fetchOpsSummary();
+            } catch (Throwable) {
+                return 0;
+            }
+        }
+
+        return (int) ($this->summarySnapshot['total_items'] ?? 0);
+    }
+
+    private function resolvedWorkflowFilter(): string
+    {
+        if ($this->workflowFilter !== '') {
+            return $this->workflowFilter;
+        }
+
+        return $this->lifecycleFilter;
     }
 
     public function getSubheading(): string|Htmlable|null
@@ -142,49 +247,232 @@ final class ViewSeoProject extends Page
      */
     public function getOperationsPayloadProperty(): array
     {
-        return app(ContentProjectItemOperationsReadModel::class)->forProject(
+        $cacheKey = $this->buildOpsCacheKey();
+        if ($this->cachedOperationsPayload !== null && $this->cachedOperationsKey === $cacheKey) {
+            return $this->applyOptimisticRowHides($this->cachedOperationsPayload);
+        }
+
+        $payload = app(ContentProjectItemOperationsReadModel::class)->forProject(
             $this->requireProject(),
             [
                 'search' => $this->search,
                 'type' => $this->typeFilter,
                 'generation' => $this->generationFilter,
                 'lifecycle' => $this->lifecycleFilter,
+                'workflow' => $this->resolvedWorkflowFilter(),
+                'reporting' => $this->reportingFilter,
                 'queue' => $this->queueFilter,
                 'scheduled' => $this->scheduledFilter,
                 'failed_only' => $this->failedOnly,
+                'failure_type' => $this->failureTypeFilter,
                 'page' => $this->getPage(),
+                'viewer_user_id' => (int) (auth()->id() ?? 0),
             ],
         );
+
+        $this->cachedOperationsPayload = $payload;
+        $this->cachedOperationsKey = $cacheKey;
+
+        return $this->applyOptimisticRowHides($payload);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function applyOptimisticRowHides(array $payload): array
+    {
+        if ($this->optimisticHiddenTaskIds === []) {
+            return $payload;
+        }
+
+        $hidden = $this->optimisticHiddenTaskIds;
+        $rows = is_array($payload['rows'] ?? null) ? $payload['rows'] : [];
+        $payload['rows'] = array_values(array_filter(
+            $rows,
+            static function (mixed $row) use ($hidden): bool {
+                if (! is_array($row)) {
+                    return false;
+                }
+                $tid = (int) ($row['task_id'] ?? 0);
+
+                return $tid <= 0 || ! isset($hidden[$tid]);
+            },
+        ));
+
+        return $payload;
+    }
+
+    public function persistOptimisticRemovals(array $taskIds): void
+    {
+        foreach ($taskIds as $id) {
+            $tid = (int) $id;
+            if ($tid > 0) {
+                $this->optimisticHiddenTaskIds[$tid] = true;
+            }
+        }
+        $this->cachedOperationsPayload = null;
+        $this->cachedOperationsKey = '';
+        $this->opsTableEpoch++;
+    }
+
+    public function clearOptimisticRemovals(array $taskIds = []): void
+    {
+        if ($taskIds === []) {
+            $this->optimisticHiddenTaskIds = [];
+        } else {
+            foreach ($taskIds as $id) {
+                unset($this->optimisticHiddenTaskIds[(int) $id]);
+            }
+        }
+        $this->cachedOperationsPayload = null;
+        $this->cachedOperationsKey = '';
+        $this->opsTableEpoch++;
+    }
+
+    /**
+     * @return array{pending:int,needs_review:int,failed:int,review:int,approved:int,scheduled:int,published:int,running:int}
+     */
+    public function fetchOpsSummary(): array
+    {
+        return app(ContentProjectItemOperationsReadModel::class)->summaryForProject(
+            $this->requireProject(),
+            (int) (auth()->id() ?? 0),
+        );
+    }
+
+    /**
+     * Lazy refresh: summary-only; reload table only when summary differs.
+     *
+     * @return array{changed: bool, summary: array<string, int>}
+     */
+    public function lazyRefreshOps(): array
+    {
+        $summary = $this->fetchOpsSummary();
+        $previous = $this->summarySnapshot
+            ?? ContentProjectItemOperationsReadModel::normalizeSummaryStats(
+                is_array($this->cachedOperationsPayload['stats'] ?? null)
+                    ? $this->cachedOperationsPayload['stats']
+                    : [],
+            );
+        $changed = $this->summaryFingerprint($summary) !== $this->summaryFingerprint($previous);
+        $this->summarySnapshot = $summary;
+        $this->opsNeedsRefresh = false;
+
+        if (! $changed) {
+            $this->skipRender();
+
+            return ['changed' => false, 'summary' => $summary];
+        }
+
+        $this->invalidateOpsCache();
+
+        return ['changed' => true, 'summary' => $summary];
+    }
+
+    public function manualRefreshOps(): array
+    {
+        $this->opsNeedsRefresh = false;
+        $this->invalidateOpsCache();
+        $this->summarySnapshot = $this->fetchOpsSummary();
+
+        return ['changed' => true, 'summary' => $this->summarySnapshot];
+    }
+
+    public function markOpsNeedsRefresh(): void
+    {
+        $this->opsNeedsRefresh = true;
+        $this->skipRender();
+    }
+
+    private function invalidateOpsCache(): void
+    {
+        $this->opsTableEpoch++;
+        $this->cachedOperationsPayload = null;
+        $this->cachedOperationsKey = '';
+    }
+
+    private function buildOpsCacheKey(): string
+    {
+        return hash('xxh128', (string) json_encode([
+            'epoch' => $this->opsTableEpoch,
+            'record' => (string) $this->record,
+            'page' => $this->getPage(),
+            'search' => $this->search,
+            'type' => $this->typeFilter,
+            'generation' => $this->generationFilter,
+            'lifecycle' => $this->lifecycleFilter,
+            'workflow' => $this->resolvedWorkflowFilter(),
+            'reporting' => $this->reportingFilter,
+            'queue' => $this->queueFilter,
+            'scheduled' => $this->scheduledFilter,
+            'failed' => $this->failedOnly,
+            'failure_type' => $this->failureTypeFilter,
+            'viewer' => (int) (auth()->id() ?? 0),
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * @param  array<string, int>  $summary
+     */
+    private function summaryFingerprint(array $summary): string
+    {
+        $normalized = ContentProjectItemOperationsReadModel::normalizeSummaryStats($summary);
+
+        return hash('xxh128', (string) json_encode($normalized, JSON_THROW_ON_ERROR));
+    }
+
+    private function resetClientOptimisticHints(): void
+    {
+        $this->optimisticHiddenTaskIds = [];
+        $this->dispatch('cp-ops-client-reset-optimistic');
     }
 
     public function getActiveSummaryCardProperty(): string
     {
-        if ($this->failedOnly) {
+        if ($this->failedOnly || $this->resolvedWorkflowFilter() === 'failed') {
             return 'failed';
         }
+
+        $workflow = $this->resolvedWorkflowFilter();
+        if ($workflow !== '') {
+            return match ($workflow) {
+                'normal', 'draft' => 'normal',
+                'pending' => 'pending',
+                ContentProjectRecentlyCompletedDefinition::FILTER, 'needs_review' => 'recently_completed',
+                ContentProjectInReviewReportingDefinition::FILTER, 'review', 'in_review' => 'review',
+                'approved' => 'approved',
+                'waiting_publish', 'scheduled' => 'scheduled',
+                'published' => 'published',
+                default => '',
+            };
+        }
+
         if ($this->generationFilter === 'pending') {
             return 'pending';
         }
-        if ($this->generationFilter === 'running') {
-            return 'running';
+        if ($this->generationFilter === ContentProjectRecentlyCompletedDefinition::FILTER
+            || $this->reportingFilter === ContentProjectRecentlyCompletedDefinition::FILTER
+        ) {
+            return 'recently_completed';
         }
-        if ($this->lifecycleFilter === 'review') {
+        if ($this->generationFilter === ContentProjectInReviewReportingDefinition::FILTER
+            || $this->reportingFilter === ContentProjectInReviewReportingDefinition::FILTER
+            || $this->reportingFilter === 'review') {
             return 'review';
         }
-        if ($this->lifecycleFilter === 'approved') {
-            return 'approved';
-        }
-        if ($this->lifecycleFilter === 'waiting_publish') {
-            return 'scheduled';
-        }
-        if ($this->lifecycleFilter === 'published') {
-            return 'published';
-        }
+
+        // No filter active at all — Normal (full working set) is the implicit default view.
         if (! $this->hasActiveFilters) {
-            return 'total';
+            return 'normal';
         }
 
         return '';
+    }
+
+    public function getRunningCountProperty(): int
+    {
+        return (int) (($this->operationsPayload['stats']['running'] ?? 0));
     }
 
     public function getHasActiveFiltersProperty(): bool
@@ -193,9 +481,12 @@ final class ViewSeoProject extends Page
             || $this->typeFilter !== ''
             || $this->generationFilter !== ''
             || $this->lifecycleFilter !== ''
+            || $this->workflowFilter !== ''
+            || $this->reportingFilter !== ''
             || $this->queueFilter !== ''
             || $this->scheduledFilter !== ''
-            || $this->failedOnly;
+            || $this->failedOnly
+            || $this->failureTypeFilter !== '';
     }
 
     protected function getHeaderActions(): array
@@ -210,7 +501,24 @@ final class ViewSeoProject extends Page
                 ->url(fn (): string => AgentWorkspaceDeepLink::url([
                     'project_ref' => ContentProjectPublicRef::project((int) $project->getKey()),
                 ])),
+            Actions\Action::make('running_items_indicator')
+                ->label(fn (): string => __('seo-content-ai::filament.projects.ops_running_items_indicator', [
+                    'count' => $this->runningCount,
+                ]))
+                ->icon('heroicon-o-arrow-path')
+                ->color('info')
+                ->disabled()
+                ->extraAttributes([
+                    'class' => 'pointer-events-none animate-pulse',
+                ])
+                ->visible(fn (): bool => $this->runningCount > 0),
             SeoProjectResource::makeGeneratePendingItemsAction($project),
+            Actions\Action::make('publishing_queue')
+                ->label(__('seo-content-ai::filament.projects.publishing_queue'))
+                ->icon('heroicon-o-queue-list')
+                ->color('primary')
+                ->url(fn (): string => SeoProjectResource::getPublishingQueueUrl($project))
+                ->visible(fn (): bool => SeoAccessControl::canManageContentProjectWorkflow()),
             Actions\Action::make('edit_project')
                 ->label(__('seo-content-ai::filament.projects.edit_project'))
                 ->icon('heroicon-o-pencil-square')
@@ -236,17 +544,33 @@ final class ViewSeoProject extends Page
     {
         $this->resetPage();
         $this->clearFilters(false);
+        $this->resetClientOptimisticHints();
 
         match ($card) {
-            'pending' => $this->generationFilter = 'pending',
-            'running' => $this->generationFilter = 'running',
+            // Normal = full working set — clearFilters(false) above already reset
+            // workflowFilter to '' so every working-set row shows. 'draft' kept as
+            // legacy alias (same clears-filters behavior).
+            'normal', 'draft' => null,
+            'pending' => $this->workflowFilter = 'pending',
+            'recently_completed' => $this->workflowFilter = ContentProjectRecentlyCompletedDefinition::FILTER,
             'failed' => $this->failedOnly = true,
-            'review' => $this->lifecycleFilter = 'review',
-            'approved' => $this->lifecycleFilter = 'approved',
-            'scheduled' => $this->lifecycleFilter = 'waiting_publish',
-            'published' => $this->lifecycleFilter = 'published',
+            'review' => $this->workflowFilter = ContentProjectInReviewReportingDefinition::FILTER,
+            'scheduled' => $this->workflowFilter = 'waiting_publish',
+            'published' => $this->workflowFilter = 'published',
             default => null,
         };
+    }
+
+    public function applyFailureTypeFilter(string $type): void
+    {
+        $this->resetPage();
+        $this->resetClientOptimisticHints();
+        $this->failedOnly = true;
+        $this->failureTypeFilter = strtolower(trim($type));
+        $this->workflowFilter = '';
+        $this->lifecycleFilter = '';
+        $this->generationFilter = '';
+        $this->reportingFilter = '';
     }
 
     public function clearFilters(bool $resetPage = true): void
@@ -255,10 +579,14 @@ final class ViewSeoProject extends Page
         $this->typeFilter = '';
         $this->generationFilter = '';
         $this->lifecycleFilter = '';
+        $this->workflowFilter = '';
+        $this->reportingFilter = '';
         $this->queueFilter = '';
         $this->scheduledFilter = '';
         $this->failedOnly = false;
+        $this->failureTypeFilter = '';
         $this->clearSelection();
+        $this->resetClientOptimisticHints();
         if ($resetPage) {
             $this->resetPage();
         }
@@ -268,42 +596,85 @@ final class ViewSeoProject extends Page
     {
         $this->resetPage();
         $this->clearSelection();
+        $this->resetClientOptimisticHints();
     }
 
     public function updatedTypeFilter(): void
     {
         $this->resetPage();
         $this->clearSelection();
+        $this->resetClientOptimisticHints();
     }
 
     public function updatedGenerationFilter(): void
     {
         $this->resetPage();
         $this->clearSelection();
+        $this->resetClientOptimisticHints();
     }
 
     public function updatedLifecycleFilter(): void
     {
         $this->resetPage();
         $this->clearSelection();
+        $this->resetClientOptimisticHints();
+    }
+
+    public function updatedWorkflowFilter(): void
+    {
+        $this->resetPage();
+        $this->clearSelection();
+        $this->resetClientOptimisticHints();
+        if ($this->workflowFilter === 'failed') {
+            $this->failedOnly = true;
+        }
+        if ($this->workflowFilter !== '' && $this->workflowFilter !== 'failed') {
+            $this->failedOnly = false;
+            $this->failureTypeFilter = '';
+        }
+    }
+
+    public function updatedReportingFilter(): void
+    {
+        $this->resetPage();
+        $this->clearSelection();
+        $this->resetClientOptimisticHints();
+    }
+
+    public function updatedFailureTypeFilter(): void
+    {
+        $this->resetPage();
+        $this->clearSelection();
+        $this->resetClientOptimisticHints();
+        if ($this->failureTypeFilter !== '') {
+            $this->failedOnly = true;
+        }
     }
 
     public function updatedQueueFilter(): void
     {
         $this->resetPage();
         $this->clearSelection();
+        $this->resetClientOptimisticHints();
     }
 
     public function updatedScheduledFilter(): void
     {
         $this->resetPage();
         $this->clearSelection();
+        $this->resetClientOptimisticHints();
     }
 
     public function updatedFailedOnly(): void
     {
         $this->resetPage();
         $this->clearSelection();
+        $this->resetClientOptimisticHints();
+    }
+
+    public function updatedPage(): void
+    {
+        $this->resetClientOptimisticHints();
     }
 
     public function updatedSelectedTaskIds(): void
@@ -387,8 +758,7 @@ final class ViewSeoProject extends Page
      */
     private function dispatchArchive(array $taskIds): void
     {
-        abort_if(SeoAccessControl::isContentManager(), 403);
-        abort_unless(SeoAccessControl::canMutateContentProjects(), 403);
+        abort_unless(SeoAccessControl::canManageContentProjectWorkflow(), 403);
 
         $ids = $this->normalizeSelectedIds($taskIds);
         if ($ids === []) {
@@ -451,8 +821,185 @@ final class ViewSeoProject extends Page
 
     public function openExecutionDetails(int $taskId): void
     {
+        $this->markGenerationResultViewed($taskId);
         $this->executionDetailsTaskId = $taskId;
         $this->executionDetailsOpen = true;
+    }
+
+    public function markGenerationResultViewed(int $taskId): bool
+    {
+        $userId = (int) (auth()->id() ?? 0);
+        $project = $this->requireProject();
+        $projectId = (int) $project->getKey();
+        if ($userId <= 0 || $taskId <= 0) {
+            return false;
+        }
+
+        $completedAt = $this->resolveLatestSuccessfulGenerationCompletedAt($projectId, $taskId);
+        if ($completedAt === null) {
+            return false;
+        }
+
+        return app(ContentProjectGenerationReadStateStore::class)->markViewed(
+            $userId,
+            $projectId,
+            $taskId,
+            $completedAt,
+        );
+    }
+
+    /**
+     * Optimistic Needs Review open: mark viewed, return editor URL (no Livewire redirect).
+     *
+     * @return array{ok: bool, url?: string}
+     */
+    public function claimNeedsReviewItem(int $taskId, bool $expectNeedsReviewMark = false): array
+    {
+        $taskId = max(0, $taskId);
+        if ($taskId <= 0) {
+            return ['ok' => false];
+        }
+
+        $completedAt = $this->resolveLatestSuccessfulGenerationCompletedAt(
+            (int) $this->requireProject()->getKey(),
+            $taskId,
+        );
+        $needsMark = $expectNeedsReviewMark || $completedAt !== null;
+
+        if ($needsMark) {
+            $marked = $this->markGenerationResultViewed($taskId);
+            if ($expectNeedsReviewMark && ! $marked) {
+                $this->skipRender();
+
+                return ['ok' => false];
+            }
+        }
+
+        $projectId = (int) $this->requireProject()->getKey();
+        $task = SeoProjectTask::query()
+            ->where('project_id', $projectId)
+            ->whereKey($taskId)
+            ->first(['id', 'article_id']);
+        $articleId = (int) ($task?->article_id ?? 0);
+        if ($articleId <= 0) {
+            $this->skipRender();
+
+            return ['ok' => false];
+        }
+
+        $this->skipRender();
+
+        return [
+            'ok' => true,
+            'url' => ArticleResource::getUrl('edit', ['record' => $articleId]),
+        ];
+    }
+
+    /** @deprecated Use claimNeedsReviewItem — alias for older Alpine callers. */
+    public function claimAiInboxItem(int $taskId, bool $expectInboxMark = false): array
+    {
+        return $this->claimNeedsReviewItem($taskId, $expectInboxMark);
+    }
+
+    public function openArticleEditor(int $taskId): void
+    {
+        $result = $this->claimNeedsReviewItem($taskId, expectNeedsReviewMark: false);
+        $url = (string) ($result['url'] ?? '');
+        if ($url === '') {
+            return;
+        }
+
+        $this->redirect($url);
+    }
+
+    public function markAllRecentlyCompletedViewed(): void
+    {
+        $userId = (int) (auth()->id() ?? 0);
+        $project = $this->requireProject();
+        if ($userId <= 0) {
+            return;
+        }
+
+        $unread = app(ContentProjectItemOperationsReadModel::class)
+            ->unreadSuccessfulCompletions($project, $userId);
+        $marked = app(ContentProjectGenerationReadStateStore::class)
+            ->markManyViewed($userId, (int) $project->getKey(), $unread);
+
+        $this->invalidateOpsCache();
+        $this->resetClientOptimisticHints();
+
+        if ($marked <= 0) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.ops_optimistic_update_failed'))
+                ->danger()
+                ->send();
+        }
+        // Success: no toast — motion / list refresh is the feedback.
+    }
+
+    public function notifyOptimisticFailure(?string $message = null): void
+    {
+        $this->skipRender();
+        Notification::make()
+            ->title($message ?: __('seo-content-ai::filament.projects.ops_optimistic_update_failed'))
+            ->danger()
+            ->send();
+    }
+
+    /**
+     * Row-side finalize only — never reload summary / clear optimistic counters.
+     * Command accepted ≠ canonical read-model reconciled.
+     *
+     * @deprecated Prefer persistOptimisticRemovals after client exit animation.
+     */
+    public function finalizeOpsAfterOptimistic(): void
+    {
+        $this->skipRender();
+    }
+
+    /**
+     * Summary-only fetch for Alpine merge (no table remorph).
+     *
+     * @return array{summary: array<string, int>, request_id: int}
+     */
+    public function fetchOpsSummaryOnly(int $requestId = 0): array
+    {
+        $this->skipRender();
+        $summary = $this->fetchOpsSummary();
+        $this->summarySnapshot = $summary;
+
+        // Drop hides for items that are no longer in the failed/needs_review sense
+        // once pending grace will prune separately on client. Keep hides here.
+        return [
+            'summary' => $summary,
+            'request_id' => max(0, $requestId),
+        ];
+    }
+
+    private function resolveLatestSuccessfulGenerationCompletedAt(int $projectId, int $taskId): ?Carbon
+    {
+        $task = SeoProjectTask::query()
+            ->where('project_id', $projectId)
+            ->whereKey($taskId)
+            ->first(['id']);
+        if ($task === null) {
+            return null;
+        }
+
+        $item = SeoProjectRunItem::query()
+            ->where('task_id', $taskId)
+            ->orderByDesc('id')
+            ->first(['id', 'status', 'finished_at']);
+        if ($item === null || $item->finished_at === null) {
+            return null;
+        }
+
+        $status = strtolower((string) ($item->status ?? ''));
+        if (! in_array($status, ['success', 'completed'], true)) {
+            return null;
+        }
+
+        return Carbon::parse($item->finished_at);
     }
 
     public function closeExecutionDetails(): void
@@ -506,12 +1053,49 @@ final class ViewSeoProject extends Page
             return;
         }
 
+        // Explicit full rerun from start — not the default Failed-row Retry.
         $this->dispatchBus(new RerunProjectItemsCommand(
             (int) $project->id,
             [(int) $taskId],
             SeoProjectRun::MODE_FULL,
         ));
-        // Force Livewire re-read so Running / Failed badges update after engine kick.
+    }
+
+    /**
+     * Primary Failed-row action: resume from first retryable failed step (reuse upstream artifacts).
+     */
+    public function resumeFromFailedStep(int $taskId): void
+    {
+        $project = $this->requireProject();
+        if (! SeoAccessControl::canAccessContentProjectRun($project)) {
+            Notification::make()->title('Forbidden')->danger()->send();
+
+            return;
+        }
+
+        $this->dispatchBus(new ResumeProjectItemFromFailedStepCommand(
+            (int) $project->id,
+            [(int) $taskId],
+            SeoProjectRun::MODE_FULL,
+        ));
+    }
+
+    /**
+     * Soft-clear stale generation Failed overlay — keep article content, no AI re-run.
+     */
+    public function acknowledgeGenerationError(int $taskId): void
+    {
+        $project = $this->requireProject();
+        if (! SeoAccessControl::canAccessContentProjectRun($project)) {
+            Notification::make()->title('Forbidden')->danger()->send();
+
+            return;
+        }
+
+        $this->dispatchBus(new AcknowledgeProjectItemGenerationErrorCommand(
+            (int) $project->id,
+            [(int) $taskId],
+        ));
         $this->resetPage();
     }
 
@@ -547,12 +1131,84 @@ final class ViewSeoProject extends Page
 
     public function approveSelected(): void
     {
+        abort_unless(SeoAccessControl::canApproveArticleReview(), 403);
         $this->dispatchBus(new ApproveProjectItemsCommand((int) $this->requireProject()->id, $this->selectedTaskIds));
     }
 
     public function approveOne(int $taskId): void
     {
+        abort_unless(SeoAccessControl::canApproveArticleReview(), 403);
         $this->dispatchBus(new ApproveProjectItemsCommand((int) $this->requireProject()->id, [$taskId]));
+    }
+
+    /**
+     * Feature-flagged debug/recovery — no WordPress side effects.
+     */
+    public function debugLifecycleOne(int $taskId, string $to, ?string $scheduledAt = null): void
+    {
+        abort_unless(SeoAccessControl::canDebugContentProjectLifecycle(), 403);
+
+        $at = null;
+        if (is_string($scheduledAt) && trim($scheduledAt) !== '') {
+            try {
+                $at = Carbon::parse($scheduledAt);
+            } catch (Throwable) {
+                Notification::make()
+                    ->title('Failed')
+                    ->body('Invalid schedule datetime.')
+                    ->danger()
+                    ->send();
+
+                return;
+            }
+        }
+
+        $this->dispatchBus(new DebugOverrideProjectItemLifecycleCommand(
+            (int) $this->requireProject()->id,
+            [$taskId],
+            $to,
+            $at,
+            note: 'ui.debug_lifecycle_one',
+        ));
+    }
+
+    public function debugLifecycleBulkToScheduled(?string $scheduledAt = null): void
+    {
+        abort_unless(SeoAccessControl::canDebugContentProjectLifecycle(), 403);
+
+        $ids = $this->selectedItemIds();
+        if ($ids === []) {
+            Notification::make()
+                ->title('Failed')
+                ->body((string) __('seo-content-ai::filament.projects.queue_select_required'))
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $at = null;
+        if (is_string($scheduledAt) && trim($scheduledAt) !== '') {
+            try {
+                $at = Carbon::parse($scheduledAt);
+            } catch (Throwable) {
+                Notification::make()
+                    ->title('Failed')
+                    ->body('Invalid schedule datetime.')
+                    ->danger()
+                    ->send();
+
+                return;
+            }
+        }
+
+        $this->dispatchBus(new DebugOverrideProjectItemLifecycleCommand(
+            (int) $this->requireProject()->id,
+            $ids,
+            ContentProjectDebugLifecycleOverrideService::TO_SCHEDULED,
+            $at,
+            note: 'ui.debug_lifecycle_bulk_scheduled',
+        ));
     }
 
     /**
@@ -698,11 +1354,237 @@ final class ViewSeoProject extends Page
             ),
         );
 
-        Notification::make()
-            ->title($result->success ? 'OK' : 'Failed')
-            ->body($result->message)
-            ->{$result->success ? 'success' : 'danger'}()
-            ->send();
+        if (! $result->success) {
+            Notification::make()
+                ->title('Failed')
+                ->body($result->message)
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $action = $this->resolveCounterActionForCommand($command, $result);
+        $taskIds = $this->resolveTaskIdsForCommand($command);
+        if ($action !== null && $taskIds !== []) {
+            $operationId = 'cp-op-'.bin2hex(random_bytes(8));
+            $this->dispatch(
+                'cp-ops-item-transition',
+                operationId: $operationId,
+                action: $action,
+                taskIds: $taskIds,
+                deltas: ContentProjectOpsCounterTransitionMap::deltas($action),
+            );
+            $this->skipRender();
+
+            return;
+        }
+
+        $this->invalidateOpsCache();
+    }
+
+    private function resolveCounterActionForCommand(object $command, mixed $result = null): ?string
+    {
+        return match (true) {
+            $command instanceof RerunProjectItemsCommand,
+            $command instanceof RerunProjectItemStepCommand,
+            $command instanceof ResumeProjectItemFromFailedStepCommand => ContentProjectOpsCounterTransitionMap::ACTION_RETRY,
+            $command instanceof ApproveProjectItemsCommand => $this->resolveApproveCounterAction(
+                $this->resolveTaskIdsForCommand($command),
+            ),
+            $command instanceof DebugOverrideProjectItemLifecycleCommand => $this->resolveDebugCounterAction($command, $result),
+            default => null,
+        };
+    }
+
+    private function resolveDebugCounterAction(DebugOverrideProjectItemLifecycleCommand $command, mixed $result = null): ?string
+    {
+        $transitions = is_object($result) && isset($result->metadata['transitions']) && is_array($result->metadata['transitions'])
+            ? $result->metadata['transitions']
+            : [];
+
+        if ($transitions !== [] && isset($transitions[0]['from'], $transitions[0]['to'])) {
+            return ContentProjectOpsCounterTransitionMap::debugAction(
+                (string) $transitions[0]['from'],
+                (string) $transitions[0]['to'],
+            );
+        }
+
+        $to = strtolower(trim($command->toLifecycle));
+
+        return ContentProjectOpsCounterTransitionMap::debugAction('published', $to)
+            ?? ContentProjectOpsCounterTransitionMap::debugAction('approved', $to)
+            ?? ContentProjectOpsCounterTransitionMap::debugAction('scheduled', $to);
+    }
+
+    /**
+     * @param  list<int>  $taskIds
+     */
+    private function resolveApproveCounterAction(array $taskIds): string
+    {
+        if ($taskIds === []) {
+            return ContentProjectOpsCounterTransitionMap::ACTION_APPROVE;
+        }
+
+        $project = $this->requireProject();
+        $projectId = (int) $project->getKey();
+        $tasks = SeoProjectTask::query()
+            ->where('project_id', $projectId)
+            ->whereIn('id', $taskIds)
+            ->get();
+
+        $userId = auth()->id() !== null ? (int) auth()->id() : 0;
+        $viewedMap = $userId > 0
+            ? app(ContentProjectGenerationReadStateStore::class)
+                ->viewedCompletedAtByItemIds($userId, $projectId, $taskIds)
+            : [];
+
+        $fromInReview = 0;
+        $fromNeedsReviewUnread = 0;
+        $fromSelfEdit = 0;
+
+        foreach ($tasks as $task) {
+            $tid = (int) $task->id;
+            if ($task->content_manager_reviewed_at !== null) {
+                $fromInReview++;
+                continue;
+            }
+
+            $taskStatus = strtolower(trim((string) ($task->status ?? '')));
+            // Legacy handoff residue.
+            if ($taskStatus === SeoProjectTask::STATUS_REVIEWING || $taskStatus === 'reviewing') {
+                $fromInReview++;
+                continue;
+            }
+
+            if (isset($viewedMap[$tid])) {
+                $fromSelfEdit++;
+            } else {
+                $fromNeedsReviewUnread++;
+            }
+        }
+
+        if ($fromInReview > 0 && $fromNeedsReviewUnread === 0 && $fromSelfEdit === 0) {
+            return ContentProjectOpsCounterTransitionMap::ACTION_APPROVE;
+        }
+
+        if ($fromNeedsReviewUnread > 0 && $fromInReview === 0 && $fromSelfEdit === 0) {
+            return ContentProjectOpsCounterTransitionMap::ACTION_APPROVE_FROM_NEEDS_REVIEW;
+        }
+
+        if ($fromSelfEdit > 0 && $fromInReview === 0 && $fromNeedsReviewUnread === 0) {
+            return ContentProjectOpsCounterTransitionMap::ACTION_APPROVE_SELF_EDIT;
+        }
+
+        // Mixed batch — prefer In Review / Needs Review atomic pairs over bare +approved.
+        if ($fromInReview >= $fromNeedsReviewUnread && $fromInReview >= $fromSelfEdit) {
+            return ContentProjectOpsCounterTransitionMap::ACTION_APPROVE;
+        }
+
+        if ($fromNeedsReviewUnread >= $fromSelfEdit) {
+            return ContentProjectOpsCounterTransitionMap::ACTION_APPROVE_FROM_NEEDS_REVIEW;
+        }
+
+        return ContentProjectOpsCounterTransitionMap::ACTION_APPROVE_SELF_EDIT;
+    }
+
+    /**
+     * @param  list<int>  $taskIds
+     */
+    public function afterPublishingCommandSuccess(string $op, array $taskIds, mixed $result = null): void
+    {
+        if ($op === 'send_to_publishing_queue' && $taskIds !== []) {
+            $this->persistOptimisticRemovals($taskIds);
+            $this->invalidateOpsCache();
+            $this->dispatch(
+                'cp-ops-view-publishing-queue',
+                url: SeoProjectResource::getPublishingQueueUrl($this->requireProject()),
+            );
+
+            return;
+        }
+
+        if (! in_array($op, ['schedule', 'unschedule', 'auto_schedule'], true) || $taskIds === []) {
+            $this->invalidateOpsCache();
+
+            return;
+        }
+
+        $action = match ($op) {
+            'unschedule' => ContentProjectOpsCounterTransitionMap::ACTION_UNSCHEDULE,
+            'schedule', 'auto_schedule' => $this->resolveScheduleCounterAction($taskIds),
+            default => null,
+        };
+
+        if ($action === null) {
+            $this->invalidateOpsCache();
+
+            return;
+        }
+
+        $operationId = 'cp-op-'.bin2hex(random_bytes(8));
+        $this->dispatch(
+            'cp-ops-item-transition',
+            operationId: $operationId,
+            action: $action,
+            taskIds: $taskIds,
+            deltas: ContentProjectOpsCounterTransitionMap::deltas($action),
+        );
+        $this->skipRender();
+    }
+
+    /**
+     * @param  list<int>  $taskIds
+     */
+    private function resolveScheduleCounterAction(array $taskIds): string
+    {
+        if ($taskIds === []) {
+            return ContentProjectOpsCounterTransitionMap::ACTION_SCHEDULE;
+        }
+
+        $project = $this->requireProject();
+        $tasks = SeoProjectTask::query()
+            ->where('project_id', (int) $project->getKey())
+            ->whereIn('id', $taskIds)
+            ->with(['article:id,review_status'])
+            ->get();
+
+        $votes = [];
+        foreach ($tasks as $task) {
+            $article = $task->article;
+            $reviewStatus = $article instanceof SeoArticle
+                ? strtolower(trim((string) ($article->review_status ?? '')))
+                : '';
+            $votes[] = ContentProjectOpsCounterTransitionMap::scheduleActionForRow([
+                'lifecycle' => $reviewStatus === 'approved' ? 'approved' : 'review',
+                'is_content_manager_reviewed' => $task->content_manager_reviewed_at !== null,
+                'review_status' => $reviewStatus,
+                'is_recently_completed' => $task->content_manager_reviewed_at === null
+                    && $reviewStatus !== 'approved'
+                    && $reviewStatus !== 'pending_review',
+            ]);
+        }
+
+        if ($votes === []) {
+            return ContentProjectOpsCounterTransitionMap::ACTION_SCHEDULE;
+        }
+
+        $counts = array_count_values($votes);
+        arsort($counts);
+
+        return (string) array_key_first($counts);
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function resolveTaskIdsForCommand(object $command): array
+    {
+        if (property_exists($command, 'itemRefs') && is_array($command->itemRefs)) {
+            return $this->normalizeSelectedIds($command->itemRefs);
+        }
+
+        return [];
     }
 
     private function resolveProject(int|string $key): SeoProject

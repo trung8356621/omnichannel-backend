@@ -18,14 +18,16 @@ final class AgentSkillGroupCatalog
     public static function groups(): array
     {
         return [
-            ['key' => 'content_projects', 'label' => 'Content Projects', 'label_vi' => 'Content Projects', 'description' => 'Tạo/chạy/duyệt/lịch/archive project.', 'skill_keys' => [
+            ['key' => 'content_projects', 'label' => 'Content Projects', 'label_vi' => 'Content Projects', 'description' => 'Tạo/chạy/duyệt/handoff project (không schedule/publish).', 'skill_keys' => [
                 'content_project.create', 'content_project.add_items', 'content_project.generate', 'content_project.rerun',
-                'content_project.start_review', 'content_project.approve', 'content_project.schedule', 'content_project.status',
+                'content_project.resume_failed_step', 'content_project.acknowledge_generation_error',
+                'content_project.start_review', 'content_project.approve', 'content_project.send_to_publishing_queue', 'content_project.status',
                 'content_project.archive', 'content_project.restore', 'content_project.stop_execution', 'content_project.resume_execution',
             ]],
-            ['key' => 'publishing', 'label' => 'Publishing', 'label_vi' => 'Đăng bài', 'description' => 'Queue, publish, retry, skip, cancel.', 'skill_keys' => [
-                'content_project.publishing_queue', 'content_project.publish_now', 'content_project.retry_publish',
+            ['key' => 'publishing', 'label' => 'Publishing', 'label_vi' => 'Đăng bài', 'description' => 'Publishing Queue: schedule, Quick Mode, publish, retry, return.', 'skill_keys' => [
+                'content_project.publishing_queue', 'content_project.schedule', 'content_project.auto_schedule', 'content_project.publish_now', 'content_project.retry_publish',
                 'content_project.skip_publish', 'content_project.cancel_publish', 'content_project.unschedule', 'content_project.move_schedule',
+                'content_project.return_to_content_project',
             ]],
             ['key' => 'keywords', 'label' => 'Keywords', 'label_vi' => 'Từ khóa', 'description' => 'Import/analyze/topical map.', 'skill_keys' => [
                 'keyword.list_workspaces', 'keyword.import', 'keyword.analyze', 'keyword.build_topical_map', 'keyword.list_clusters',

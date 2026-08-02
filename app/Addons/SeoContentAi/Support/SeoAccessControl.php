@@ -299,38 +299,56 @@ final class SeoAccessControl
 
     public static function canMutateContentProjects(): bool
     {
+        return self::canManageContentProjectWorkflow();
+    }
+
+    /**
+     * Planner-equivalent Content Project workflow management.
+     * planner + manager (+ admin/owner via rank). content_manager = false.
+     * Does not grant Prompt / user / system settings rights.
+     */
+    public static function canManageContentProjectWorkflow(): bool
+    {
         return self::canMutateInSeoPanel() && self::canAccessPlannerFeatures();
     }
 
+    /**
+     * Dev/recovery lifecycle override (Approved ↔ Scheduled ↔ Published).
+     * Feature-flagged; Planner-equivalent only; never content_manager.
+     */
+    public static function canDebugContentProjectLifecycle(): bool
+    {
+        if (! (bool) config('seo-content-ai.content_project.debug_lifecycle_override', false)) {
+            return false;
+        }
+
+        return self::canManageContentProjectWorkflow();
+    }
+
+    /**
+     * Content Manager simplified ops presentation (3 KPI cards, edit-only).
+     */
+    public static function usesContentManagerOpsPresentation(): bool
+    {
+        return self::canSubmitArticleReview() && ! self::canManageContentProjectWorkflow();
+    }
+
+    /**
+     * Generate / rerun / enqueue AI for Content Project — planner-equivalent only.
+     * Assigned content_manager writers may view/edit, not run generation.
+     */
     public static function canAccessContentProjectRun(?SeoProject $project): bool
     {
         if (! $project instanceof SeoProject) {
             return false;
         }
 
-        if (self::canAccessPlannerFeatures()) {
-            return true;
-        }
-
-        return self::isContentManager()
-            && (int) $project->user_id === (int) auth()->id();
+        return self::canManageContentProjectWorkflow();
     }
 
     public static function canRetryProjectRunItem(?SeoProject $project = null): bool
     {
-        if (self::canMutateInSeoPanel() && self::canAccessPlannerFeatures()) {
-            return true;
-        }
-
-        if (! self::isContentManager()) {
-            return false;
-        }
-
-        if ($project === null) {
-            return true;
-        }
-
-        return (int) $project->user_id === (int) auth()->id();
+        return self::canManageContentProjectWorkflow();
     }
 
     public static function canDeleteSeoMedia(): bool

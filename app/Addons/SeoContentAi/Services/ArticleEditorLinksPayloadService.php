@@ -33,6 +33,7 @@ final class ArticleEditorLinksPayloadService
             'domain_link_list' => app(DomainLinkListEditorService::class)->forArticle($article, $bodyHtml),
             'domain_link_list_catalog' => app(DomainLinkListEditorService::class)->forSite($article->site),
             'domain_cta_list' => app(DomainCtaEditorService::class)->forSite($article->site),
+            'cta_quick_templates' => app(DomainCtaEditorService::class)->quickTemplates(),
             'suggested_internal_links' => [],
             'suggested_internal_links_catalog' => [],
             'suggested_external_links' => [],

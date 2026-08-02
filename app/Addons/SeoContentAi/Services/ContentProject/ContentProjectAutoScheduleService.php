@@ -22,13 +22,16 @@ final class ContentProjectAutoScheduleService
     /**
      * @param  list<int>  $taskIds
      * @param  array{
-     *     mode: 'interval'|'per_day'|'random_windows',
-     *     start_at: string|Carbon,
+     *     mode: 'interval'|'per_day'|'random_windows'|'project_month'|'quick',
+     *     start_at?: string|Carbon,
      *     interval_minutes?: int,
      *     per_day?: int,
      *     day_start?: string,
      *     day_end?: string,
      *     windows?: list<array{start: string, end: string}>,
+     *     days?: int,
+     *     start_time?: string,
+     *     end_time?: string,
      * }  $options
      * @return array{scheduled: int, slots: list<string>}
      */
@@ -40,19 +43,20 @@ final class ContentProjectAutoScheduleService
         )));
 
         if ($ids === []) {
-            $ids = SeoProjectTask::query()
+            $q = SeoProjectTask::query()
                 ->where('project_id', (int) $project->getKey())
                 ->active()
                 ->where('article_id', '>', 0)
+                ->whereNull('scheduled_publish_at')
                 ->where(function ($q): void {
                     $q->whereNull('publish_queue_status')
                         ->orWhereIn('publish_queue_status', ['none', 'failed', 'cancelled', 'skipped']);
                 })
-                ->whereNull('scheduled_publish_at')
-                ->orderBy('id')
-                ->pluck('id')
-                ->map(static fn ($id): int => (int) $id)
-                ->all();
+                ->orderBy('id');
+            if (\Illuminate\Support\Facades\Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publishing_queued_at')) {
+                $q->whereNotNull('publishing_queued_at');
+            }
+            $ids = $q->pluck('id')->map(static fn ($id): int => (int) $id)->all();
         }
 
         if ($ids === []) {
@@ -60,30 +64,44 @@ final class ContentProjectAutoScheduleService
         }
 
         $mode = (string) ($options['mode'] ?? 'interval');
-        $startAt = $options['start_at'] instanceof Carbon
-            ? $options['start_at']->copy()
-            : Carbon::parse((string) $options['start_at']);
-
         $slots = match ($mode) {
             'interval' => $this->buildIntervalSlots(
-                $startAt,
+                $options['start_at'] instanceof Carbon
+                    ? $options['start_at']->copy()
+                    : Carbon::parse((string) ($options['start_at'] ?? now()->toIso8601String())),
                 count($ids),
                 max(1, (int) ($options['interval_minutes'] ?? 15)),
             ),
             'per_day' => $this->buildPerDaySlots(
-                $startAt,
+                $options['start_at'] instanceof Carbon
+                    ? $options['start_at']->copy()
+                    : Carbon::parse((string) ($options['start_at'] ?? now()->toIso8601String())),
                 count($ids),
                 max(1, (int) ($options['per_day'] ?? 3)),
                 (string) ($options['day_start'] ?? '09:00'),
                 (string) ($options['day_end'] ?? '17:00'),
             ),
             'random_windows' => $this->buildRandomWindowSlots(
-                $startAt,
+                $options['start_at'] instanceof Carbon
+                    ? $options['start_at']->copy()
+                    : Carbon::parse((string) ($options['start_at'] ?? now()->toIso8601String())),
                 count($ids),
                 is_array($options['windows'] ?? null) ? $options['windows'] : [
                     ['start' => '08:00', 'end' => '11:30'],
                     ['start' => '14:00', 'end' => '17:00'],
                 ],
+            ),
+            'project_month' => $this->buildProjectMonthSlots(
+                $project,
+                count($ids),
+                (string) ($options['day_start'] ?? '09:00'),
+                (string) ($options['day_end'] ?? '17:00'),
+            ),
+            'quick' => $this->buildQuickModeSlots(
+                count($ids),
+                max(1, (int) ($options['days'] ?? 1)),
+                (string) ($options['start_time'] ?? $options['day_start'] ?? '08:00'),
+                (string) ($options['end_time'] ?? $options['day_end'] ?? '17:00'),
             ),
             default => throw new InvalidArgumentException('Auto Schedule mode không hợp lệ.'),
         };
@@ -196,6 +214,76 @@ final class ContentProjectAutoScheduleService
         usort($slots, static fn (Carbon $a, Carbon $b): int => $a <=> $b);
 
         return array_slice($slots, 0, $count);
+    }
+
+    /**
+     * Auto Mode — distribute across remaining days of Content Project month.
+     *
+     * @return list<Carbon>
+     */
+    private function buildProjectMonthSlots(
+        SeoProject $project,
+        int $count,
+        string $dayStart,
+        string $dayEnd,
+    ): array {
+        $month = $project->month;
+        if ($month === null) {
+            throw new RuntimeException('Project month missing — use Quick Mode or custom range.');
+        }
+
+        $monthStart = $month->copy()->startOfMonth()->startOfDay();
+        $monthEnd = $month->copy()->endOfMonth()->endOfDay();
+        $today = now()->startOfDay();
+
+        if ($monthEnd->lt($today)) {
+            throw new RuntimeException('Project month already ended — use Quick Mode.');
+        }
+
+        $rangeStart = $monthStart->gt($today) ? $monthStart->copy() : $today->copy();
+        $days = max(1, $rangeStart->diffInDays($monthEnd->copy()->startOfDay()) + 1);
+        $perDay = max(1, (int) ceil($count / $days));
+
+        return $this->buildPerDaySlots($rangeStart, $count, $perDay, $dayStart, $dayEnd);
+    }
+
+    /**
+     * Quick Mode — deadline recovery (not Dev/Test). Even distribution + min interval.
+     *
+     * @return list<Carbon>
+     */
+    private function buildQuickModeSlots(
+        int $count,
+        int $days,
+        string $startTime,
+        string $endTime,
+    ): array {
+        $days = max(1, $days);
+        $startDay = now()->startOfDay();
+        if (now()->format('H:i') > $endTime) {
+            $startDay->addDay();
+        }
+
+        $perDay = max(1, (int) ceil($count / $days));
+        $slots = $this->buildPerDaySlots($startDay, $count, $perDay, $startTime, $endTime);
+
+        // Enforce minimum interval (never identical timestamps).
+        $minInterval = max(5, (int) floor((8 * 60) / max(1, $perDay)));
+        $out = [];
+        $prev = null;
+        foreach ($slots as $slot) {
+            $at = $slot->copy();
+            if ($prev instanceof Carbon && $at->lte($prev)) {
+                $at = $prev->copy()->addMinutes($minInterval);
+            }
+            if ($at->lt(now())) {
+                $at = now()->copy()->addMinutes($minInterval);
+            }
+            $out[] = $at;
+            $prev = $at;
+        }
+
+        return $out;
     }
 
     /**
