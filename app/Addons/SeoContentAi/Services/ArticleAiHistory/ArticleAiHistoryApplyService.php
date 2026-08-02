@@ -7,6 +7,8 @@ namespace App\Addons\SeoContentAi\Services\ArticleAiHistory;
 use App\Addons\SeoContentAi\Enums\WorkflowArtifactType;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoArticleAiHistoryApply;
+use App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionException;
+use App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionService;
 use App\Addons\SeoContentAi\Services\ArticleOutlineResolver;
 use Illuminate\Support\Str;
 
@@ -222,6 +224,21 @@ final class ArticleAiHistoryApplyService
         bool $confirmDirty,
     ): ArticleAiHistoryActionResult {
         $articleId = (int) $article->getKey();
+
+        try {
+            app(ArticleEditorSessionService::class)
+                ->assertNoActiveEditorSession($article, 'ai_apply_'.$target);
+        } catch (ArticleEditorSessionException $exception) {
+            return ArticleAiHistoryActionResult::fail(
+                $exception->errorCode,
+                $exception->getMessage(),
+                $articleId,
+                [
+                    'lock' => $exception->context['lock'] ?? null,
+                    'operation' => 'ai_apply_'.$target,
+                ],
+            );
+        }
 
         $artifact = $this->listService->resolveOwnedArtifact($article, $artifactRef, $accessibleProjectIds);
         if ($artifact === null) {

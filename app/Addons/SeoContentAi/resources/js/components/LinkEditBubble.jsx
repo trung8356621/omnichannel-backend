@@ -4,7 +4,7 @@ import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
 import { computeLinkBubblePosition } from '../utils/linkEditorAnchor';
 import { applyLinkToSelection } from '../utils/inlineLinkNormalizer';
-import { removeLinkKeepText } from '../utils/editorLinkCommands';
+import { executeEditorCommand } from '../utils/editorCommands';
 import { t } from '../utils/i18n';
 
 const ARTICLE_SEARCH_DEBOUNCE_MS = 450;
@@ -243,15 +243,21 @@ export default function LinkEditBubble({ editor, anchorRect, containerRef, onClo
     const applyLink = () => {
         const trimmed = url.trim();
         restoreEditorSelection();
-        const chain = editor.chain().focus();
         if (trimmed === '') {
             if (editor.isActive('link')) {
-                if (!removeLinkKeepText(editor)) {
-                    chain.extendMarkRange('link').unsetMark('link').run();
-                }
+                executeEditorCommand('remove_link_keep_text', { editor }, { notifyOnFailure: false });
             }
         } else {
-            applyLinkToSelection(editor, trimmed);
+            const commandName = editor.isActive('link') ? 'update_link' : 'create_link';
+            const result = executeEditorCommand(commandName, {
+                editor,
+                href: trimmed,
+                url: trimmed,
+            }, { notifyOnFailure: false });
+            // Fallback only if command registry missing handler (should not happen in Phase 4+).
+            if (!(result?.ok && result.transaction_applied)) {
+                applyLinkToSelection(editor, trimmed);
+            }
         }
 
         onClose();
@@ -259,15 +265,7 @@ export default function LinkEditBubble({ editor, anchorRect, containerRef, onClo
 
     const removeLink = () => {
         restoreEditorSelection();
-        if (!removeLinkKeepText(editor)) {
-            const { empty } = editor.state.selection;
-            const chain = editor.chain().focus();
-            if (empty) {
-                chain.extendMarkRange('link').unsetMark('link').run();
-            } else {
-                chain.unsetMark('link').run();
-            }
-        }
+        executeEditorCommand('remove_link_keep_text', { editor }, { notifyOnFailure: false });
         onClose();
     };
 

@@ -6,6 +6,19 @@ return [
     'common' => [
         'saving' => 'Đang lưu…',
     ],
+    'editor_document' => [
+        'editor_document_invalid' => 'Tài liệu editor không hợp lệ.',
+        'editor_document_schema_unsupported' => 'Phiên bản schema editor document không được hỗ trợ.',
+        'editor_document_node_unsupported' => 'Loại node editor document không được hỗ trợ.',
+        'editor_document_too_large' => 'Payload editor document quá lớn.',
+        'editor_document_hash_conflict' => 'Xung đột hash editor document. Tải lại trang rồi thử lại.',
+        'editor_document_render_failed' => 'Không render được HTML từ editor document.',
+        'editor_document_ingest_failed' => 'Không ingest được HTML thành editor document.',
+        'editor_document_roundtrip_mismatch' => 'HTML/JSON round-trip lệch — cần xem lại thủ công.',
+        'editor_document_stale' => 'Editor document đã stale so với body HTML.',
+        'legacy_body_requires_migration' => 'Body HTML legacy cần migrate sang editor document.',
+        'revision_document_invalid' => 'Editor document trong revision không hợp lệ.',
+    ],
     'imagen' => [
         'user_transient' => 'Imagen không thể thực thi model ở lần gọi này. Đây có thể là lỗi tạm thời của nhà cung cấp. Bạn có thể thử chạy lại.',
         'user_auth' => 'Sinh ảnh thất bại do lỗi xác thực. Kiểm tra API key trên kết nối AI.',
@@ -3082,6 +3095,7 @@ return [
         'content_project_publish_queued_title' => 'Đã đưa vào Publishing Queue',
         'content_project_publish_queued' => 'Bài thuộc Content Project đã được xếp lịch publish ngay qua Publishing Queue (không dùng WordPress Schedule).',
         'manual_sync_blocked_title' => 'Không thể đồng bộ WordPress',
+        'content_project_manual_sync_forbidden' => 'Bài thuộc Content Project — không dùng Manual Sync WordPress từ editor. Lưu nội dung bằng Save / Lưu và đóng; publish qua Content Project.',
         'manual_sync_no_site' => 'Bài viết chưa gắn site/kết nối WordPress.',
         'manual_sync_in_progress' => 'Đang có lượt đồng bộ WordPress cho bài này.',
         'manual_sync_already_queued' => 'Bài viết đã có trong hàng đợi đồng bộ WordPress.',

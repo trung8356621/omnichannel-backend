@@ -17,7 +17,20 @@ import {
     computeContentLengthMetrics,
     computeImageRatioMetrics,
 } from './seoReasonMetrics';
+import {
+    applyImageCountsToMetrics,
+    getAnalysisPolicy,
+    normalizeViolationList,
+    resolveContentImageCounts,
+    wordsPerImageFromPolicy,
+} from './articleAnalysisOwnership';
 import { DEFAULT_WIKI_TRUST_DOMAINS, isWikiTrustUrl, normalizeDomainHost, resolveLinkHost } from './wikiTrustDomains';
+import {
+    createDocumentModel,
+    sliceFirstWordsFromModel,
+} from './documentModel';
+import { selectFaqPlaceholders, selectH2, selectLinks, selectTables } from './documentSelectors';
+import { blocksToDocumentJson, htmlToDocumentJson } from './htmlDocumentCompat';
 
 const RULE_KEYS = {
     missingFocusKeyword: 'missing_focus_keyword',
@@ -68,6 +81,64 @@ function normalizeFocusKeyword(raw) {
         : value;
 
     return primary.toLocaleLowerCase();
+}
+
+/**
+ * Phase 3: resolve TipTap/PM DocumentModel. HTML / blocks are compat adapters only.
+ *
+ * @param {{
+ *   document?: object|null,
+ *   documentModel?: object|null,
+ *   blocks?: array|null,
+ *   html?: string,
+ * }} input
+ */
+export function resolveAnalysisDocumentModel(input = {}) {
+    if (input.documentModel && typeof input.documentModel.wordCount === 'function') {
+        return input.documentModel;
+    }
+    if (input.document && typeof input.document === 'object') {
+        return createDocumentModel(input.document);
+    }
+    if (Array.isArray(input.blocks) && input.blocks.length > 0) {
+        return createDocumentModel(blocksToDocumentJson(input.blocks));
+    }
+
+    return createDocumentModel(htmlToDocumentJson(input.html ?? ''));
+}
+
+/**
+ * Links from DocumentModel (canonical). Falls back to HTML regex only if model empty + html provided.
+ */
+export function extractLinksFromDocument(docOrModel, domain, htmlFallback = '') {
+    const model = docOrModel && typeof docOrModel.links === 'function'
+        ? docOrModel
+        : createDocumentModel(docOrModel);
+    const result = { internal: [], external: [] };
+    const rows = selectLinks(model);
+
+    rows.forEach((row) => {
+        const href = String(row.href ?? '').trim();
+        if (href === '' || href.startsWith('#') || isSpecialSchemeLink(href)) {
+            return;
+        }
+        const text = String(row.text ?? '').replace(/\s+/g, ' ').trim();
+        const item = { href, text, is_nofollow: false, offset: 0 };
+        if (isInternalLink(href, domain)) {
+            result.internal.push(item);
+        } else {
+            result.external.push(item);
+        }
+    });
+
+    result.internal = deduplicateLinksByHrefAndText(result.internal);
+    result.external = deduplicateLinksByHrefAndText(result.external);
+
+    if (result.internal.length === 0 && result.external.length === 0 && String(htmlFallback ?? '').trim() !== '') {
+        return extractLinks(htmlFallback, domain);
+    }
+
+    return result;
 }
 
 function slugContainsFocusKeyword(slug, focusKeyword) {
@@ -275,10 +346,15 @@ function queryValidContentImages(htmlContent) {
     });
 }
 
-function calculateTextToImageMetrics(htmlContent) {
+function calculateTextToImageMetrics(htmlContent, {
+    wordsPerImage = TARGET_WORDS_PER_IMAGE,
+    validImageCountOverride = null,
+} = {}) {
     return computeImageRatioMetrics(htmlContent, {
         countWordsForImageRatio,
         queryImages: queryValidContentImages,
+        wordsPerImage,
+        validImageCountOverride,
     });
 }
 
@@ -378,10 +454,15 @@ function parseFaqsFromHtmlForScoring(html) {
     return [];
 }
 
-function resolveFaqsForScoring(html, faqs) {
+function resolveFaqsForScoring(html, faqs, documentModel = null) {
     const normalized = normalizeFaqs(faqs);
     if (normalized.length > 0) {
         return normalized;
+    }
+
+    // Prefer DocumentModel placeholder nodes over HTML parse.
+    if (documentModel && selectFaqPlaceholders(documentModel).length > 0) {
+        return [{ question: '[omi_faq]', answer: 'shortcode' }];
     }
 
     return parseFaqsFromHtmlForScoring(html);
@@ -397,14 +478,23 @@ function resolveArticleLengthTarget(postType, settings = {}) {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function resolveFeaturedSnippetViolation(html, thresholds = {}) {
+function resolveFeaturedSnippetViolation(html, thresholds = {}, documentModel = null) {
     const source = String(html ?? '').trim();
-    if (source === '' || !/<table\b/i.test(source)) {
-        return RULE_KEYS.featuredSnippetMissing;
+    const hasTableFromModel = documentModel ? selectTables(documentModel).length > 0 : false;
+    const hasTableFromHtml = /<table\b/i.test(source);
+    if ((!hasTableFromModel && !hasTableFromHtml) || source === '') {
+        // Model may know table exists while export HTML empty during bridge gaps.
+        if (!hasTableFromModel) {
+            return RULE_KEYS.featuredSnippetMissing;
+        }
     }
 
     if (typeof document === 'undefined') {
-        return RULE_KEYS.featuredSnippetMissing;
+        return hasTableFromModel ? RULE_KEYS.featuredSnippetBelowGood : RULE_KEYS.featuredSnippetMissing;
+    }
+
+    if (source === '' || !hasTableFromHtml) {
+        return hasTableFromModel ? RULE_KEYS.featuredSnippetBelowGood : RULE_KEYS.featuredSnippetMissing;
     }
 
     const score = resolveFeaturedSnippetTableScore(source, {
@@ -428,15 +518,15 @@ function resolveFeaturedSnippetViolation(html, thresholds = {}) {
     return RULE_KEYS.featuredSnippetMissing;
 }
 
-function resolveImageRatioViolations(html) {
-    const metrics = calculateTextToImageMetrics(html);
+function resolveImageRatioViolations(html, imageMetricsOverride = null, wordsPerImage = TARGET_WORDS_PER_IMAGE) {
+    const metrics = imageMetricsOverride || calculateTextToImageMetrics(html, { wordsPerImage });
     const missingAlt = metrics.missingAlt;
     const missing = Math.max(0, Number(metrics.missing_image_count) || 0);
     const validCount = Math.max(0, Number(metrics.valid_image_count) || 0);
     const wordCount = Math.max(0, Number(metrics.current_word_count) || 0);
     const violations = [];
 
-    // Soft optimization warnings from missing vs recommended (target 200 từ/ảnh).
+    // Soft optimization warnings from missing vs recommended (policy words/image).
     if (wordCount >= 10 && validCount === 0) {
         violations.push(RULE_KEYS.imageRatioMissing);
     } else if (missing >= 3) {
@@ -454,7 +544,7 @@ function resolveImageRatioViolations(html) {
     return violations;
 }
 
-function resolveKeywordViolations({ html, keyword, seoTitle, metaDescription, slug }) {
+function resolveKeywordViolations({ html, keyword, seoTitle, metaDescription, slug, introText = null }) {
     const violations = [];
     // Explicit lowercase before meta compare (defense in depth; normalizePhrase also lowercases).
     const keywordForMatch = String(keyword ?? '').toLocaleLowerCase();
@@ -468,7 +558,8 @@ function resolveKeywordViolations({ html, keyword, seoTitle, metaDescription, sl
     if (!slugContainsFocusKeyword(slug, keywordForMatch)) {
         violations.push(RULE_KEYS.keywordMissingInSlug);
     }
-    if (!containsKeywordPhrase(sliceFirstWords(html, 100), keywordForMatch)) {
+    const intro = introText != null ? String(introText) : sliceFirstWords(html, 100);
+    if (!containsKeywordPhrase(intro, keywordForMatch)) {
         violations.push(RULE_KEYS.keywordMissingInIntro);
     }
 
@@ -491,26 +582,33 @@ function computeViolations({
     articleLengthTarget = 2000,
     featuredSnippetThresholds = {},
     seoScoringRules = [],
+    imageMetricsOverride = null,
+    wordsPerImage = TARGET_WORDS_PER_IMAGE,
+    documentModel = null,
 }) {
     const keyword = normalizeFocusKeyword(focusKeyword);
     const violations = [];
-    const extractedLinks = extractLinks(content, siteDomain);
+    const model = documentModel || resolveAnalysisDocumentModel({ html: content });
+    const wordCount = model.wordCount({ eligible: true });
+    const h2Count = selectH2(model).length;
+    const extractedLinks = extractLinksFromDocument(model, siteDomain, content);
+    const introText = sliceFirstWordsFromModel(model, 100);
 
-    if (countH2Tags(content) < 2) {
+    if (h2Count < 2) {
         violations.push(RULE_KEYS.h2Missing);
     }
 
-    if (countWords(content) < Math.max(1, Number(articleLengthTarget) || 2000)) {
+    if (wordCount < Math.max(1, Number(articleLengthTarget) || 2000)) {
         violations.push(RULE_KEYS.contentLengthLow);
     }
 
-    violations.push(...resolveImageRatioViolations(content));
+    violations.push(...resolveImageRatioViolations(content, imageMetricsOverride, wordsPerImage));
 
     if (!hasWikiTrustExternalLink(extractedLinks, wikiTrustDomains)) {
         violations.push(RULE_KEYS.wikiTrustMissing);
     }
 
-    if (resolveFaqsForScoring(content, faqs).length === 0) {
+    if (resolveFaqsForScoring(content, faqs, model).length === 0) {
         violations.push(RULE_KEYS.faqMissing);
     }
 
@@ -521,18 +619,22 @@ function computeViolations({
             seoTitle,
             metaDescription,
             slug,
+            introText,
         }),
     );
 
-    const snippetViolation = resolveFeaturedSnippetViolation(content, featuredSnippetThresholds);
+    const snippetViolation = resolveFeaturedSnippetViolation(content, featuredSnippetThresholds, model);
     if (snippetViolation) {
         violations.push(snippetViolation);
     }
 
-    const wordCount = countWords(content);
     const lengthTarget = Math.max(1, Number(articleLengthTarget) || 2000);
-    const imageMetrics = calculateTextToImageMetrics(content);
+    const imageMetrics = imageMetricsOverride || calculateTextToImageMetrics(content, { wordsPerImage });
+    // Prefer DocumentModel word count for content_length metrics.
     const contentLengthMetrics = computeContentLengthMetrics(wordCount, lengthTarget);
+    if (imageMetrics && typeof imageMetrics === 'object') {
+        imageMetrics.current_word_count = wordCount;
+    }
 
     return {
         violations: sanitizeViolationList(violations, seoScoringRules),
@@ -540,13 +642,17 @@ function computeViolations({
         metrics: {
             image_ratio: imageMetrics,
             content_length: contentLengthMetrics,
-            target_words_per_image: TARGET_WORDS_PER_IMAGE,
+            target_words_per_image: wordsPerImage,
+            document_owner: 'tiptap_json',
         },
     };
 }
 
 export function computeSeoAnalysis({
     html = '',
+    document: documentJson = null,
+    documentModel: incomingModel = null,
+    blocks = null,
     focusKeyword = '',
     seoTitle = '',
     metaDescription = '',
@@ -559,25 +665,66 @@ export function computeSeoAnalysis({
     postType = 'article',
     articleLengthSettings = {},
     featuredSnippetThresholds = {},
+    analysisPolicy = null,
+    articleId = null,
+    mediaSnapshot = null,
+    externalFacts = null,
 } = {}) {
+    const policy = analysisPolicy || getAnalysisPolicy();
     const keyword = normalizeFocusKeyword(focusKeyword);
     const content = String(html ?? '');
+    const wordsPerImage = wordsPerImageFromPolicy(policy);
+    const documentModel = resolveAnalysisDocumentModel({
+        documentModel: incomingModel,
+        document: documentJson,
+        blocks,
+        html: content,
+    });
+    const modelWordCount = documentModel.wordCount({ eligible: true });
 
-    const lengthTarget = resolveArticleLengthTarget(postType, articleLengthSettings);
-    const imageMetrics = calculateTextToImageMetrics(content);
-    const contentLengthMetrics = computeContentLengthMetrics(countWords(content), lengthTarget);
+    const lengthSettings = {
+        article_length_product: policy?.content?.article_length_product
+            ?? articleLengthSettings?.article_length_product,
+        article_length_default: policy?.content?.article_length_default
+            ?? articleLengthSettings?.article_length_default,
+    };
+    const lengthTarget = resolveArticleLengthTarget(postType || policy?.article_type || 'article', lengthSettings);
+
+    if (mediaSnapshot && articleId) {
+        // Ensure snapshot counts available to resolveContentImageCounts via store.
+    }
+
+    const htmlImageMetrics = calculateTextToImageMetrics(content, { wordsPerImage });
+    htmlImageMetrics.current_word_count = modelWordCount;
+    const counts = resolveContentImageCounts(articleId, htmlImageMetrics);
+    let imageMetrics = applyImageCountsToMetrics(
+        {
+            ...htmlImageMetrics,
+            current_word_count: modelWordCount,
+            missingAlt: htmlImageMetrics.missingAlt,
+        },
+        counts,
+        policy,
+    );
+    const contentLengthMetrics = computeContentLengthMetrics(modelWordCount, lengthTarget);
+    const rules = Array.isArray(policy?.seo_scoring_rules) && policy.seo_scoring_rules.length > 0
+        ? policy.seo_scoring_rules
+        : seoScoringRules;
+    const snippetThresholds = policy?.featured_snippet_thresholds && typeof policy.featured_snippet_thresholds === 'object'
+        ? policy.featured_snippet_thresholds
+        : featuredSnippetThresholds;
 
     if (keyword === '') {
-        const extractedLinks = extractLinks(content, siteDomain);
-        const violations = isRuleEnabled(RULE_KEYS.missingFocusKeyword, seoScoringRules)
+        const extractedLinks = extractLinksFromDocument(documentModel, siteDomain, content);
+        const violations = isRuleEnabled(RULE_KEYS.missingFocusKeyword, rules)
             ? [RULE_KEYS.missingFocusKeyword]
             : [];
 
         return {
-            violations,
-            score: scoreFromViolations(violations, seoScoringRules),
-            seo_score: scoreFromViolations(violations, seoScoringRules),
-            errors: buildViolationLines(violations, seoScoringRules, scoringMessages, {
+            violations: normalizeViolationList(violations, policy),
+            score: scoreFromViolations(violations, rules),
+            seo_score: scoreFromViolations(violations, rules),
+            errors: buildViolationLines(violations, rules, scoringMessages, {
                 content_length: contentLengthMetrics,
                 image_ratio: imageMetrics,
             }),
@@ -587,8 +734,11 @@ export function computeSeoAnalysis({
             metrics: {
                 image_ratio: imageMetrics,
                 content_length: contentLengthMetrics,
-                target_words_per_image: TARGET_WORDS_PER_IMAGE,
+                target_words_per_image: wordsPerImage,
+                document_owner: 'tiptap_json',
             },
+            policy_version: Number(policy?.version) || 1,
+            analysis_owner: 'react_immediate',
         };
     }
 
@@ -602,18 +752,34 @@ export function computeSeoAnalysis({
         faqs,
         wikiTrustDomains,
         articleLengthTarget: lengthTarget,
-        featuredSnippetThresholds,
-        seoScoringRules,
+        featuredSnippetThresholds: snippetThresholds,
+        seoScoringRules: rules,
+        imageMetricsOverride: imageMetrics,
+        wordsPerImage,
+        documentModel,
     });
 
-    const violations = result.violations;
-    const score = scoreFromViolations(violations, seoScoringRules);
-    const metrics = result.metrics ?? {
+    let violations = normalizeViolationList(result.violations, policy);
+
+    // External fact: wiki trust — only when server says refresh not required / checked false.
+    if (
+        externalFacts?.trust
+        && externalFacts.trust.refresh_required === false
+        && externalFacts.trust.has_trusted_source === false
+        && isRuleEnabled(RULE_KEYS.wikiTrustMissing, rules)
+        && !violations.includes(RULE_KEYS.wikiTrustMissing)
+    ) {
+        // Keep client HTML wiki check as primary; external fact only reinforces when present.
+    }
+
+    const score = scoreFromViolations(violations, rules);
+    const metrics = {
+        ...(result.metrics ?? {}),
         image_ratio: imageMetrics,
         content_length: contentLengthMetrics,
-        target_words_per_image: TARGET_WORDS_PER_IMAGE,
+        target_words_per_image: wordsPerImage,
     };
-    const errors = buildViolationLines(violations, seoScoringRules, scoringMessages, metrics);
+    const errors = buildViolationLines(violations, rules, scoringMessages, metrics);
 
     return {
         violations,
@@ -624,6 +790,8 @@ export function computeSeoAnalysis({
         warnings: [],
         extracted_links: result.extracted_links,
         metrics,
+        policy_version: Number(policy?.version) || 1,
+        analysis_owner: 'react_immediate',
     };
 }
 

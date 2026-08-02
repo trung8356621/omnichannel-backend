@@ -268,6 +268,15 @@ final class ArticlePendingInternalLinkService
             $targetArticleId,
         ): void {
             $sourceArticle->update(['body' => $updatedHtml]);
+            try {
+                $writer = app(\App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter::class);
+                $writer->invalidateForLegacyBodyWrite($sourceArticle, 'pending_internal_link');
+                if ($sourceArticle->isDirty('editor_document_status')) {
+                    $sourceArticle->save();
+                }
+            } catch (\Throwable) {
+                // best-effort
+            }
 
             $sourceArticle->articleMetas()->updateOrCreate(
                 ['meta_key' => 'wp_post_content'],

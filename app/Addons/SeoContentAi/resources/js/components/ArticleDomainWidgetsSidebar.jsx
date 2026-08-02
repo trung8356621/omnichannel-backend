@@ -370,9 +370,8 @@ export default function ArticleDomainWidgetsSidebar({
                     templatesByType={templatesByType}
                     emptyText={t('cta_widget_empty')}
                     onKeywordClick={(item, _index, itemKey) => scrollToItem(item, itemKey, 'cta')}
-                    onInsertValue={(item) => dispatchCtaInsert(item, 'value', null, templatesByType)}
-                    onInsertQuickCta={(item, _itemKey, templateOverride) =>
-                        dispatchCtaInsert(item, 'sentence', templateOverride, templatesByType)
+                    onInsertQuickCta={(item, _itemKey, templateOverride, mode = 'sentence') =>
+                        dispatchCtaInsert(item, mode, templateOverride, templatesByType)
                     }
                 />
             </WidgetBox>

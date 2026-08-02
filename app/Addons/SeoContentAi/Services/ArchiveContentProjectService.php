@@ -12,6 +12,7 @@ use App\Addons\SeoContentAi\Models\SeoProjectArchive;
 use App\Addons\SeoContentAi\Models\SeoProjectArchiveItem;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionService;
 use App\Addons\SeoContentAi\Services\ContentProject\Workspace\ContentProjectAiWorkspaceDestroyer;
 use App\Addons\SeoContentAi\Services\ContentProject\Workspace\ContentProjectWorkspaceCleanupContext;
 use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
@@ -34,6 +35,7 @@ final class ArchiveContentProjectService
         private readonly ArticleLastSavedTimestampService $lastSavedTimestamps,
         private readonly WordPressPermalinkBuilder $permalinkBuilder,
         private readonly ContentProjectAiWorkspaceDestroyer $workspaceDestroyer,
+        private readonly ArticleEditorSessionService $editorSessions,
     ) {}
 
     /**
@@ -243,6 +245,17 @@ final class ArchiveContentProjectService
             $archive->save();
 
             $this->syncArchiveItems($archive, $lockedProject, $now);
+
+            $articleIds = SeoProjectTask::query()
+                ->where('project_id', (int) $lockedProject->getKey())
+                ->whereNotNull('article_id')
+                ->where('article_id', '>', 0)
+                ->pluck('article_id')
+                ->map(static fn ($id): int => (int) $id)
+                ->unique()
+                ->values()
+                ->all();
+            $this->editorSessions->revokeActiveSessionsForArticles($articleIds, 'content_project_archived');
 
             // Snapshot xong mới destroy AI Workspace — lỗi = rollback cả archive.
             $cleanupContext = $this->workspaceDestroyer->destroyInTransaction($lockedProject);

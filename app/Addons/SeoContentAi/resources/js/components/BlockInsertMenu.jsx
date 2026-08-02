@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronsDown, ChevronsUp, FileText, HelpCircle, Image as ImageIcon, Plus } from 'lucide-react';
+import { openPanel } from '../editor/runtime/editorRuntimeNavigation';
 import { t } from '../utils/i18n';
 
 /**
@@ -194,14 +195,13 @@ export function ImageBlockPickerBox({
     };
 
     const openAiChat = () => {
-        window.dispatchEvent(
-            new CustomEvent('seo-article-ai-chat-open', {
-                detail: {
-                    blockId: String(blockId ?? '').trim(),
-                    focusInput: true,
-                },
-            }),
-        );
+        openPanel('ai-chat', {
+            source: 'block_insert_menu',
+            detail: {
+                blockId: String(blockId ?? '').trim(),
+                focusInput: true,
+            },
+        });
     };
 
     useEffect(() => {

@@ -1,17 +1,22 @@
 /**
  * Presentation status for assistant dock widgets.
- * Backend/analysis feeds status + reason codes; UI does not invent rules alone.
+ * Images: integrity (error) / metadata (warning) / SEO recommendation (info) — separated.
  */
 
 import {
     computeQuickFixSlugSupplementalOutcome,
-    isImageReadyForWpSlugFix,
     resolveImageRefIds,
 } from './articleImagesUtils';
+import { isWordPressProtectedMedia, isBulkSlugRenameSafeMedia } from './mediaSourceClassification';
 import { loadFeaturedImage } from './articleFeaturedImageStorage';
 import { presentSeoReason } from './seoReasonMetrics';
+import { minimumValidLinksFromPolicy } from './articleAnalysisOwnership';
 
 export const MIN_VALID_HTTP_LINKS = 5;
+
+function resolvedMinValidLinks() {
+    return minimumValidLinksFromPolicy();
+}
 
 /**
  * @typedef {{
@@ -19,6 +24,8 @@ export const MIN_VALID_HTTP_LINKS = 5;
  *   message: string,
  *   target_id?: string|null,
  *   target?: string|null,
+ *   severity?: 'error'|'warning'|'info',
+ *   action?: string|null,
  * }} AssistantHealthReason
  */
 
@@ -27,25 +34,22 @@ export const MIN_VALID_HTTP_LINKS = 5;
  *   key: string,
  *   item_count: number,
  *   issue_count: number,
- *   status: 'error'|'warning'|'success'|'neutral',
+ *   error_count?: number,
+ *   warning_count?: number,
+ *   info_count?: number,
+ *   status: 'error'|'warning'|'success'|'neutral'|'info',
  *   reasons: AssistantHealthReason[],
  * }} AssistantWidgetHealth
  */
 
-/**
- * @param {string} href
- * @returns {boolean}
- */
 export function isValidHttpLinkHref(href) {
     const value = String(href ?? '').trim();
     if (value === '' || value.startsWith('#') || value.startsWith('javascript:')) {
         return false;
     }
-
     if (/^(tel|mailto|sms|fax|callto|geo|skype|whatsapp|viber|zalo|maps):/i.test(value)) {
         return false;
     }
-
     if (/^https?:\/\//i.test(value) || value.startsWith('//') || value.startsWith('/')) {
         return true;
     }
@@ -53,19 +57,13 @@ export function isValidHttpLinkHref(href) {
     return false;
 }
 
-/**
- * @param {{ internal?: Array<{href?: string}>, external?: Array<{href?: string}> }|null|undefined} extractedLinks
- * @returns {number}
- */
 export function countValidHttpLinks(extractedLinks) {
     const buckets = [
         ...(Array.isArray(extractedLinks?.internal) ? extractedLinks.internal : []),
         ...(Array.isArray(extractedLinks?.external) ? extractedLinks.external : []),
     ];
-
     const seen = new Set();
     let count = 0;
-
     buckets.forEach((link) => {
         const href = String(link?.href ?? '').trim();
         if (!isValidHttpLinkHref(href)) {
@@ -82,10 +80,6 @@ export function countValidHttpLinks(extractedLinks) {
     return count;
 }
 
-/**
- * @param {Record<string, unknown>|null|undefined} row
- * @returns {boolean}
- */
 function rowHasMediaSignal(row) {
     if (!row) {
         return false;
@@ -97,87 +91,167 @@ function rowHasMediaSignal(row) {
     return src !== '' || localSrc !== '' || wpAttachmentId > 0 || seoMediaId > 0;
 }
 
+/** Placeholder / empty filename for local-safe media only. */
+export function rowHasLocalPlaceholderSlug(row) {
+    if (!row || isWordPressProtectedMedia(row) || !isBulkSlugRenameSafeMedia(row)) {
+        return false;
+    }
+    const src = String(row.src ?? row.url ?? row.localSrc ?? row.local_src ?? '').trim();
+    const basenameRaw = src.split('/').pop()?.split('?')[0] ?? '';
+    const basename = basenameRaw.replace(/\.[^.]+$/, '');
+    const slug = String(row.slug ?? '').trim() || basename;
+    if (slug === '') {
+        return true;
+    }
+
+    return /^(image|img|photo|untitled|download|dsc|img_)[-_]?\d*$/i.test(slug)
+        || /placeholder/i.test(slug);
+}
+
+function rowUploadIncomplete(row) {
+    const src = String(row?.src ?? row?.url ?? row?.localSrc ?? row?.local_src ?? '').trim();
+    if (src === '') {
+        return true;
+    }
+    if (src.startsWith('blob:') || /placeholder/i.test(src)) {
+        return true;
+    }
+
+    return false;
+}
+
 /**
+ * Analyze body images into integrity / metadata / recommendation buckets.
+ *
  * @param {Array<Record<string, unknown>>} rows
  * @param {string} keyword
- * @returns {{ issueCount: number, reasons: AssistantHealthReason[], itemCount: number }}
  */
 export function analyzeImageRowsHealth(rows, keyword = '') {
     const list = Array.isArray(rows) ? rows : [];
     const reasons = [];
-    let slugIssues = 0;
-    let invalidIssues = 0;
-    let firstSlugTarget = null;
-    let ordinal = 0;
+    let errorCount = 0;
+    let warningCount = 0;
+    let firstErrorTarget = null;
+    let firstWarningTarget = null;
+    void keyword;
 
     list.forEach((row) => {
-        if (!row || row.excludeQuickFix) {
+        if (!row) {
             return;
         }
-
-        ordinal += 1;
         const blockId = String(row.blockId ?? row.block_id ?? '').trim();
         const targetId = blockId || (row.wpAttachmentId ? `image-${row.wpAttachmentId}` : null);
+        const protectedWp = isWordPressProtectedMedia(row);
 
-        if (!rowHasMediaSignal(row)) {
-            invalidIssues += 1;
+        if (!rowHasMediaSignal(row) || rowUploadIncomplete(row)) {
+            errorCount += 1;
+            if (!firstErrorTarget) {
+                firstErrorTarget = targetId;
+            }
+            reasons.push({
+                code: rowHasMediaSignal(row) ? 'image_upload_incomplete' : 'image_reference_invalid',
+                message: rowHasMediaSignal(row)
+                    ? 'Ảnh chưa upload xong hoặc đang dùng placeholder'
+                    : 'Block ảnh trống / thiếu media',
+                target_id: targetId,
+                target: 'images',
+                severity: 'error',
+                action: 'focus_image',
+                protected_from_bulk_rename: protectedWp,
+            });
             return;
         }
 
-        if (!isImageReadyForWpSlugFix(row) && blockId) {
-            invalidIssues += 1;
-            if (!firstSlugTarget) {
-                firstSlugTarget = targetId;
+        const alt = String(row.alt ?? '').trim();
+        if (alt === '' || /^(image|img|photo|untitled)$/i.test(alt)) {
+            warningCount += 1;
+            if (!firstWarningTarget) {
+                firstWarningTarget = targetId;
             }
+            reasons.push({
+                code: 'image_alt_missing',
+                message: 'Thiếu ALT hoặc ALT placeholder',
+                target_id: targetId,
+                target: 'images',
+                severity: 'warning',
+                action: 'focus_alt',
+                protected_from_bulk_rename: protectedWp,
+            });
         }
 
-        const enriched = {
-            ...row,
-            quickFixIndex: Number(row.quickFixIndex ?? 0) > 0 ? Number(row.quickFixIndex) : ordinal,
-        };
-        const outcome = computeQuickFixSlugSupplementalOutcome(enriched, keyword, { wpOnly: false });
-        if (outcome.wpRename || outcome.localRename || outcome.patch?.slug) {
-            slugIssues += 1;
-            if (!firstSlugTarget) {
-                firstSlugTarget = targetId;
+        // Local/new only — WP filename ≠ keyword is NOT a warning.
+        if (rowHasLocalPlaceholderSlug(row)) {
+            warningCount += 1;
+            if (!firstWarningTarget) {
+                firstWarningTarget = targetId;
             }
+            reasons.push({
+                code: 'local_slug_placeholder',
+                message: 'Filename/slug local còn placeholder',
+                target_id: targetId,
+                target: 'images',
+                severity: 'warning',
+                action: 'fix_local_slug',
+                protected_from_bulk_rename: false,
+            });
         }
     });
 
-    if (slugIssues > 0) {
-        reasons.push({
-            code: 'image_slug_not_fixed',
-            message: slugIssues === 1
-                ? '1 ảnh chưa sửa slug'
-                : `${slugIssues} ảnh chưa sửa slug`,
-            target_id: firstSlugTarget,
+    // Deduplicate reason codes for chip summary (keep first of each code type for count messages).
+    const errorReasons = reasons.filter((r) => r.severity === 'error');
+    const warningReasons = reasons.filter((r) => r.severity === 'warning');
+    const summaryReasons = [];
+    if (errorCount > 0) {
+        summaryReasons.push({
+            code: 'image_integrity_issues',
+            message: errorCount === 1
+                ? '1 ảnh có lỗi media (trống / placeholder / hỏng)'
+                : `${errorCount} ảnh có lỗi media`,
+            target_id: firstErrorTarget,
             target: 'images',
+            severity: 'error',
+            action: 'focus_image',
         });
     }
-
-    if (invalidIssues > 0) {
-        reasons.push({
-            code: 'image_reference_invalid',
-            message: invalidIssues === 1
-                ? '1 ảnh chưa hợp lệ hoặc chưa upload xong'
-                : `${invalidIssues} ảnh chưa hợp lệ hoặc chưa upload xong`,
-            target: 'images',
-        });
+    if (warningCount > 0) {
+        const altCount = warningReasons.filter((r) => r.code === 'image_alt_missing').length;
+        const slugCount = warningReasons.filter((r) => r.code === 'local_slug_placeholder').length;
+        if (altCount > 0) {
+            summaryReasons.push({
+                code: 'image_alt_missing',
+                message: altCount === 1 ? '1 ảnh thiếu ALT' : `${altCount} ảnh thiếu ALT`,
+                target_id: firstWarningTarget,
+                target: 'images',
+                severity: 'warning',
+                action: 'focus_alt',
+            });
+        }
+        if (slugCount > 0) {
+            summaryReasons.push({
+                code: 'local_slug_placeholder',
+                message: slugCount === 1
+                    ? '1 ảnh local còn filename placeholder'
+                    : `${slugCount} ảnh local còn filename placeholder`,
+                target_id: firstWarningTarget,
+                target: 'images',
+                severity: 'warning',
+                action: 'fix_local_slug',
+            });
+        }
     }
 
     return {
         itemCount: list.length,
-        issueCount: slugIssues + invalidIssues,
-        reasons,
-        slugIssues,
-        invalidIssues,
+        errorCount,
+        warningCount,
+        reasons: summaryReasons.length > 0 ? summaryReasons : errorReasons.concat(warningReasons),
+        detailReasons: reasons,
+        slugIssues: warningReasons.filter((r) => r.code === 'local_slug_placeholder').length,
+        invalidIssues: errorCount,
+        issueCount: errorCount + warningCount,
     };
 }
 
-/**
- * @param {object} params
- * @returns {AssistantWidgetHealth}
- */
 export function buildImagesWidgetHealth({
     rows = [],
     keyword = '',
@@ -187,10 +261,30 @@ export function buildImagesWidgetHealth({
 } = {}) {
     const analyzed = analyzeImageRowsHealth(rows, keyword);
     const reasons = [...analyzed.reasons];
+    const recommended = Math.max(0, Number(imageRatioMetrics?.recommended_image_count) || 0);
+    const missingRecommended = Math.max(0, Number(imageRatioMetrics?.missing_image_count) || 0);
+    const metricsValid = imageRatioMetrics?.valid_image_count ?? imageRatioMetrics?.current_image_count;
+    const validCount = metricsValid != null && Number.isFinite(Number(metricsValid))
+        ? Math.max(0, Number(metricsValid))
+        : Math.max(0, analyzed.itemCount - analyzed.errorCount);
+
+    let infoCount = 0;
+    if (recommended > 0) {
+        infoCount += 1;
+        reasons.push({
+            code: 'image_recommendation',
+            message: locale === 'en'
+                ? `About ${recommended} images recommended (${validCount} valid).`
+                : `Đề xuất khoảng ${recommended} ảnh (${validCount} ảnh hợp lệ).`,
+            target: 'images',
+            severity: 'info',
+            action: 'open_images_panel',
+        });
+    }
 
     if (
         imageRatioMetrics
-        && Number(imageRatioMetrics.missing_image_count) > 0
+        && missingRecommended > 0
         && Number(imageRatioMetrics.recommended_image_count) > Number(imageRatioMetrics.current_image_count)
     ) {
         const presented = presentSeoReason('image_ratio_low', {
@@ -198,62 +292,47 @@ export function buildImagesWidgetHealth({
             metrics: imageRatioMetrics,
             locale,
         });
-        const codeExists = reasons.some((r) => r.code === 'image_ratio_low');
-        if (!codeExists) {
+        if (!reasons.some((r) => r.code === 'image_ratio_low')) {
+            infoCount += 1;
             reasons.push({
                 code: 'image_ratio_low',
                 message: presented.summary,
                 target: 'images',
+                severity: 'info',
+                action: 'open_images_panel',
             });
         }
     }
 
-    // Chip: valid content images. ⚠ = slug/invalid (+ at most 1 for SEO ratio). Never "6/11".
-    const fixableIssues = analyzed.slugIssues + analyzed.invalidIssues;
-    const recommended = Math.max(0, Number(imageRatioMetrics?.recommended_image_count) || 0);
-    const missingRecommended = Math.max(0, Number(imageRatioMetrics?.missing_image_count) || 0);
-    const metricsValid = imageRatioMetrics?.valid_image_count ?? imageRatioMetrics?.current_image_count;
-    const validCount = metricsValid != null && Number.isFinite(Number(metricsValid))
-        ? Math.max(0, Number(metricsValid))
-        : Math.max(0, analyzed.itemCount - analyzed.invalidIssues);
-
-    if (recommended > 0) {
-        reasons.push({
-            code: 'image_recommendation',
-            message: locale === 'en'
-                ? `About ${recommended} images recommended for this article (${validCount} valid content images).`
-                : `Đề xuất khoảng ${recommended} ảnh cho bài viết này (${validCount} ảnh nội dung hợp lệ).`,
-            target: 'images',
-            severity: 'info',
-        });
-    }
-
-    const issueCount = fixableIssues + (missingRecommended > 0 ? 1 : 0);
-
+    const errorCount = analyzed.errorCount;
+    const warningCount = analyzed.warningCount;
     let status = 'neutral';
-    if (issueCount > 0) {
+    if (errorCount > 0) {
         status = 'error';
+    } else if (warningCount > 0) {
+        status = 'warning';
+    } else if (infoCount > 0 && validCount > 0) {
+        status = 'info';
     } else if (validCount > 0) {
         status = 'success';
     }
 
     return {
         key: 'images',
-        item_count: validCount,
-        issue_count: issueCount,
+        item_count: analyzed.itemCount > 0 ? analyzed.itemCount : validCount,
+        issue_count: errorCount + warningCount,
+        error_count: errorCount,
+        warning_count: warningCount,
+        info_count: infoCount,
         recommended_count: recommended,
         missing_recommended_count: missingRecommended,
         status,
         reasons: reasons.filter((reason, index, list) => (
-            list.findIndex((entry) => entry.code === reason.code) === index
+            list.findIndex((entry) => entry.code === reason.code && entry.target_id === reason.target_id) === index
         )),
     };
 }
 
-/**
- * @param {object} params
- * @returns {AssistantWidgetHealth}
- */
 export function buildSeoWidgetHealth({
     focusKeyword = '',
     violations = [],
@@ -289,7 +368,6 @@ export function buildSeoWidgetHealth({
         });
     });
 
-    // violations that are errors but maybe not in failedItems yet
     if (Array.isArray(violations) && violations.includes('missing_focus_keyword')) {
         if (!reasons.some((r) => r.code === 'focus_keyword_missing')) {
             reasons.unshift({
@@ -309,8 +387,6 @@ export function buildSeoWidgetHealth({
             || String(r.code).includes('below_excellent'),
         );
         status = onlySoft ? 'warning' : 'error';
-    } else if (keyword === '') {
-        status = 'error';
     }
 
     return {
@@ -322,21 +398,25 @@ export function buildSeoWidgetHealth({
     };
 }
 
-/**
- * @param {object} params
- * @returns {AssistantWidgetHealth}
- */
-export function buildLinksWidgetHealth({ extractedLinks = null, locale = 'vi' } = {}) {
+export function buildLinksWidgetHealth({ extractedLinks = null, locale = 'vi', minimumValidLinks = null } = {}) {
     const validCount = countValidHttpLinks(extractedLinks);
+    const minimum = Math.max(1, Number(minimumValidLinks) || resolvedMinValidLinks());
     const reasons = [];
+    const missing = Math.max(0, minimum - validCount);
 
-    if (validCount < MIN_VALID_HTTP_LINKS) {
+    if (missing > 0) {
         reasons.push({
             code: 'links_below_minimum',
             message: locale === 'en'
-                ? `Need at least ${MIN_VALID_HTTP_LINKS} valid links (${validCount}/${MIN_VALID_HTTP_LINKS}).`
-                : `Cần tối thiểu ${MIN_VALID_HTTP_LINKS} link hợp lệ (${validCount}/${MIN_VALID_HTTP_LINKS}).`,
+                ? `Need ${missing} more valid link(s) (${validCount}/${minimum}).`
+                : `Cần thêm ${missing} liên kết hợp lệ (${validCount}/${minimum}).`,
             target: 'links',
+            severity: 'error',
+            params: {
+                current: validCount,
+                minimum,
+                missing,
+            },
         });
     }
 
@@ -349,10 +429,6 @@ export function buildLinksWidgetHealth({ extractedLinks = null, locale = 'vi' } 
     };
 }
 
-/**
- * @param {object} params
- * @returns {AssistantWidgetHealth}
- */
 export function buildFeaturedWidgetHealth({
     articleId = 0,
     featuredImage = null,
@@ -372,9 +448,9 @@ export function buildFeaturedWidgetHealth({
             code: 'featured_missing',
             message: locale === 'en' ? 'Featured image is missing' : 'Chưa có ảnh đại diện',
             target: 'featured',
+            severity: 'error',
         });
     } else {
-        // Presence wins — never keep featured_missing once a renderable URL exists.
         const row = {
             src: url,
             slug: item.slug,
@@ -390,33 +466,15 @@ export function buildFeaturedWidgetHealth({
                 code: 'featured_upload_incomplete',
                 message: locale === 'en' ? 'Featured image upload incomplete' : 'Ảnh đại diện chưa upload xong',
                 target: 'featured',
+                severity: 'error',
             });
         } else if (wpId <= 0 && seoId <= 0 && !/^https?:\/\//i.test(url)) {
             reasons.push({
                 code: 'featured_upload_incomplete',
                 message: locale === 'en' ? 'Featured image upload incomplete' : 'Ảnh đại diện chưa upload xong',
                 target: 'featured',
+                severity: 'error',
             });
-        }
-
-        // Slug warning only when filename is clearly placeholder / empty — not every SEO rename suggestion.
-        const slug = String(item.slug ?? '').trim();
-        const basename = url.split('/').pop()?.split('?')[0] ?? '';
-        const looksPlaceholderSlug = slug === ''
-            && (/^(image|img|photo|untitled|download)[-_]?\d*\./i.test(basename) || /placeholder/i.test(basename));
-        if (looksPlaceholderSlug && keyword) {
-            const outcome = computeQuickFixSlugSupplementalOutcome(
-                { ...row, quickFixIndex: 1 },
-                keyword,
-                { wpOnly: false },
-            );
-            if (outcome.wpRename || outcome.localRename || outcome.patch?.slug) {
-                reasons.push({
-                    code: 'featured_slug_not_fixed',
-                    message: locale === 'en' ? 'Featured image slug not fixed' : 'Ảnh đại diện chưa sửa slug',
-                    target: 'featured',
-                });
-            }
         }
 
         const alt = String(item.alt ?? '').trim();
@@ -425,20 +483,42 @@ export function buildFeaturedWidgetHealth({
                 code: 'featured_alt_missing',
                 message: locale === 'en' ? 'Featured image ALT is missing' : 'Ảnh đại diện thiếu ALT',
                 target: 'featured',
+                severity: 'warning',
             });
+        }
+
+        // Local featured placeholder slug only — never keyword-N for WP.
+        if (!isWordPressProtectedMedia(row) && rowHasLocalPlaceholderSlug(row) && keyword) {
+            const outcome = computeQuickFixSlugSupplementalOutcome(
+                { ...row, quickFixIndex: 1 },
+                keyword,
+                { wpOnly: false },
+            );
+            if (outcome.localRename || outcome.patch?.slug) {
+                reasons.push({
+                    code: 'featured_slug_not_fixed',
+                    message: locale === 'en' ? 'Featured local slug placeholder' : 'Slug ảnh đại diện local còn placeholder',
+                    target: 'featured',
+                    severity: 'warning',
+                });
+            }
         }
     }
 
-    const hardErrors = reasons.filter((r) => r.code !== 'featured_alt_missing' || altMandatory);
-    const onlyAltWarning = reasons.length === 1 && reasons[0].code === 'featured_alt_missing' && !altMandatory;
+    const hardErrors = reasons.filter((r) => (
+        r.code === 'featured_missing'
+        || r.code === 'featured_upload_incomplete'
+        || (r.code === 'featured_alt_missing' && altMandatory)
+    ));
+    const onlySoftWarnings = reasons.length > 0
+        && hardErrors.length === 0
+        && reasons.every((r) => r.severity === 'warning');
 
     let status = 'success';
-    if (reasons.some((r) => r.code === 'featured_missing')) {
+    if (hardErrors.length > 0) {
         status = 'error';
-    } else if (onlyAltWarning) {
+    } else if (onlySoftWarnings) {
         status = 'warning';
-    } else if (hardErrors.length > 0) {
-        status = 'error';
     } else if (url) {
         status = 'success';
     }
@@ -446,105 +526,82 @@ export function buildFeaturedWidgetHealth({
     return {
         key: 'featured',
         item_count: url ? 1 : 0,
-        issue_count: reasons.filter((r) => r.code !== 'featured_alt_missing' || altMandatory).length,
+        issue_count: hardErrors.length,
+        error_count: hardErrors.length,
+        warning_count: reasons.filter((r) => r.severity === 'warning').length,
         status,
         reasons,
     };
 }
 
-/**
- * @param {object} params
- * @returns {AssistantWidgetHealth}
- */
 export function buildGalleryWidgetHealth({
     required = false,
     items = [],
     keyword = '',
     locale = 'vi',
 } = {}) {
-    if (!required) {
+    const list = Array.isArray(items) ? items : [];
+    const reasons = [];
+    void keyword;
+
+    if (!required && list.length === 0) {
         return {
             key: 'gallery',
-            item_count: Array.isArray(items) ? items.length : 0,
+            item_count: 0,
             issue_count: 0,
             status: 'neutral',
             reasons: [],
         };
     }
 
-    const list = Array.isArray(items) ? items : [];
-    const reasons = [];
-
-    if (list.length === 0) {
+    if (required && list.length === 0) {
         reasons.push({
             code: 'gallery_missing',
-            message: locale === 'en' ? 'Gallery images are missing' : 'Chưa có ảnh gallery',
+            message: locale === 'en' ? 'Product gallery is empty' : 'Gallery sản phẩm đang trống',
             target: 'gallery',
+            severity: 'error',
         });
-    } else {
-        const analyzed = analyzeImageRowsHealth(
-            list.map((item, index) => ({
-                ...item,
-                src: item.url ?? item.src,
-                quickFixIndex: index + 1,
-            })),
-            keyword,
-        );
-        reasons.push(...analyzed.reasons.map((r) => ({
-            ...r,
-            target: 'gallery',
-            code: r.code === 'image_slug_not_fixed' ? 'gallery_slug_not_fixed' : r.code,
-        })));
     }
+
+    list.forEach((row, index) => {
+        const url = String(row?.url ?? row?.src ?? '').trim();
+        if (!url || /placeholder/i.test(url) || url.startsWith('blob:')) {
+            reasons.push({
+                code: 'gallery_item_broken',
+                message: locale === 'en'
+                    ? `Gallery item #${index + 1} is broken or incomplete`
+                    : `Ảnh album #${index + 1} lỗi hoặc chưa sẵn sàng`,
+                target: 'gallery',
+                severity: 'error',
+            });
+        }
+    });
+
+    const hard = reasons.filter((r) => r.severity === 'error');
 
     return {
         key: 'gallery',
         item_count: list.length,
-        issue_count: reasons.length,
-        status: reasons.length > 0 ? 'error' : 'success',
+        issue_count: hard.length,
+        status: hard.length > 0 ? 'error' : (list.length > 0 ? 'success' : (required ? 'error' : 'neutral')),
         reasons,
     };
 }
 
-/**
- * @param {Record<string, AssistantWidgetHealth>} healthByKey
- * @returns {Record<string, AssistantWidgetHealth>}
- */
-export function publishableWidgetHealth(healthByKey) {
-    return healthByKey && typeof healthByKey === 'object' ? healthByKey : {};
+export function dispatchAssistantWidgetHealth(detail) {
+    window.dispatchEvent(new CustomEvent('seo-assistant-widget-health', { detail }));
 }
 
-/**
- * Dispatch health update without forcing layout reflow of editor.
- *
- * @param {Record<string, AssistantWidgetHealth>} healthByKey
- */
-export function dispatchAssistantWidgetHealth(healthByKey) {
-    if (typeof window === 'undefined') {
-        return;
+export function buildNavigatorBadgesFromWidgetHealth(health) {
+    const badges = {};
+    if (health?.seo) {
+        badges.seo = health.seo.issue_count > 0 ? health.seo.issue_count : null;
     }
 
-    const detail = publishableWidgetHealth(healthByKey);
-    window.dispatchEvent(new CustomEvent('seo-assistant-widget-health', { detail }));
+    return badges;
+}
 
-    // Keep legacy badge counts in sync (item_count for display; issue via health).
-    const badges = {};
-    Object.values(detail).forEach((widget) => {
-        if (!widget?.key) {
-            return;
-        }
-        if (widget.key === 'seo') {
-            badges.seo = widget.issue_count > 0 ? widget.issue_count : null;
-        } else if (widget.key === 'links') {
-            badges.links = widget.item_count > 0 ? widget.item_count : null;
-        } else if (widget.key === 'images') {
-            badges.images = widget.item_count > 0 ? widget.item_count : null;
-        } else if (widget.key === 'featured') {
-            badges.featured = widget.item_count > 0 ? widget.item_count : null;
-        } else if (widget.key === 'gallery') {
-            badges.gallery = widget.item_count > 0 ? widget.item_count : null;
-        }
-    });
-
-    window.dispatchEvent(new CustomEvent('seo-assistant-navigator-badges', { detail: badges }));
+/** @deprecated use rowHasLocalPlaceholderSlug */
+export function rowHasUnresolvedMediaSlug(row) {
+    return rowHasLocalPlaceholderSlug(row);
 }

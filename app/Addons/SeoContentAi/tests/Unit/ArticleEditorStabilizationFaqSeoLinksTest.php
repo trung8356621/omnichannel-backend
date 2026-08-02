@@ -57,13 +57,13 @@ final class ArticleEditorStabilizationFaqSeoLinksTest extends TestCase
         self::assertStringContainsString('onCreateFaq', $source);
     }
 
-    public function test_faq_module_host_fetches_only_when_active(): void
+    public function test_faq_sidebar_panel_lazy_when_inactive(): void
     {
-        $source = $this->js('components/ArticleEditorModuleHost.jsx');
+        $source = $this->js('editor/modules/faq/FaqSidebarPanel.jsx');
 
-        self::assertStringContainsString("activeModule !== 'faq'", $source);
-        self::assertStringContainsString('editor/faqs', $source);
-        self::assertStringNotContainsString('FAQ chưa tải', $source);
+        self::assertStringContainsString('active', $source);
+        self::assertStringContainsString('editor_panel_lazy_placeholder', $source);
+        self::assertFileDoesNotExist($this->js('components/ArticleEditorModuleHost.jsx'));
     }
 
     public function test_faqs_endpoint_contract_includes_can_generate(): void
@@ -90,7 +90,8 @@ final class ArticleEditorStabilizationFaqSeoLinksTest extends TestCase
         $source = $this->js('components/SeoArticleEditor.jsx');
 
         self::assertStringContainsString("id: 'seo-idle-analyze'", $source);
-        self::assertStringContainsString('debounceMs: 4000', $source);
+        // Phase 2B: local analysis debounce 250ms (was 4000 idle-only).
+        self::assertStringContainsString('debounceMs: 250', $source);
         self::assertStringContainsString('scheduleIdleSeoAnalysis', $source);
         self::assertStringNotContainsString('debounceMs: 150', $source);
         self::assertStringContainsString('editor_seo_analyzing', $source);

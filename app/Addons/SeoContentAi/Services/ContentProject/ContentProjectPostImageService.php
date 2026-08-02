@@ -7,6 +7,8 @@ namespace App\Addons\SeoContentAi\Services\ContentProject;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
+use App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionException;
+use App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionService;
 use App\Addons\SeoContentAi\Services\ArticleEditorMediaAiService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -91,7 +93,31 @@ final class ContentProjectPostImageService
         }
 
         if ($html !== $body) {
+            try {
+                app(ArticleEditorSessionService::class)
+                    ->assertBodyRewriteAllowed($article, 'content_project_post_image');
+            } catch (ArticleEditorSessionException $exception) {
+                Log::warning('content_project.post_image.body_blocked_by_editor_session', [
+                    'run_id' => (int) $run->id,
+                    'article_id' => (int) $article->id,
+                    'error' => $exception->errorCode,
+                ]);
+                $stats['failed']++;
+                $stats['errors'][] = 'Editor session active — skipped body image insert: '.$exception->getMessage();
+
+                return $stats;
+            }
+
             $article->update(['body' => $html]);
+            try {
+                $writer = app(\App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter::class);
+                $writer->invalidateForLegacyBodyWrite($article, 'content_project_post_image');
+                if ($article->isDirty('editor_document_status')) {
+                    $article->save();
+                }
+            } catch (\Throwable) {
+                // best-effort
+            }
             $article->articleMetas()->updateOrCreate(
                 ['meta_key' => 'wp_post_content'],
                 ['meta_value' => $html],

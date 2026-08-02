@@ -1,11 +1,12 @@
 import React, { useCallback } from 'react';
 import { Sparkles } from 'lucide-react';
+import { openPanel } from '../editor/runtime/editorRuntimeNavigation';
 import { t } from '../utils/i18n';
 
-/** FAB: open AI images & videos panel directly (Extract FAQ sống ở FAQ bar). */
+/** FAB: open AI images & videos panel (runtime navigation). */
 export default function ArticleAiFloatingLauncher() {
     const openAiImagesVideos = useCallback(() => {
-        window.dispatchEvent(new CustomEvent('seo-article-ai-chat-open'));
+        openPanel('ai-chat', { source: 'ai_fab' });
     }, []);
 
     return (

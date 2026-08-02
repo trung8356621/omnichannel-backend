@@ -1,29 +1,15 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { removeLinkKeepText } from '../utils/editorLinkCommands';
+﻿import React, { useEffect, useRef, useState } from 'react';
+import { executeEditorCommand } from '../utils/editorCommands';
+import { canMutateEditor } from '../utils/editorSessionState';
 import {
-    Bold,
-    Italic,
-    Underline,
-    Strikethrough,
-    List,
-    ListOrdered,
-    Quote,
-    Code,
-    AlignLeft,
-    AlignCenter,
-    AlignRight,
-    AlignJustify,
     Link2,
     Unlink,
     Code2,
-    Minus,
-    Undo2,
-    Redo2,
+    Code,
     RemoveFormatting,
     Highlighter,
     Subscript,
     Superscript,
-    Table,
     Trash2,
     ListTree,
     Smile,
@@ -31,6 +17,8 @@ import {
 } from 'lucide-react';
 import ParagraphStyleDropdown from './ParagraphStyleDropdown';
 import EmojiPickerModal from './EmojiPickerModal';
+import { RuntimeToolbarCommandButtons } from '../editor/runtime/RuntimeToolbarCommandButtons';
+import { runFaqExtractFromToolbar } from '../editor/modules/faq/faqExtractToolbarAction';
 import { t } from '../utils/i18n';
 
 const ICON_SIZE = 16;
@@ -54,14 +42,15 @@ function ToolbarGroup({ children, className = '' }) {
     return <div className={`seo-toolbar-group${className ? ` ${className}` : ''}`}>{children}</div>;
 }
 
-function InsertActionButton({ onClick, onMouseDown, title, children, label }) {
+function InsertActionButton({ onClick, onMouseDown, title, children, label, disabled = false }) {
     return (
         <button
             type="button"
             onClick={onClick}
             onMouseDown={onMouseDown}
+            disabled={disabled}
             title={title}
-            className="seo-insert-toolbar-btn"
+            className={`seo-insert-toolbar-btn${disabled ? ' is-disabled' : ''}`}
         >
             {children}
             {label ? <span className="seo-insert-toolbar-btn__label">{label}</span> : null}
@@ -69,10 +58,13 @@ function InsertActionButton({ onClick, onMouseDown, title, children, label }) {
     );
 }
 
+/**
+ * Phase 6B — history/inline/lists/align/insert from runtime toolbar registry.
+ * Special UI (paragraph style, link bubble open, overflow, FAQ extract, emoji, delete) stays host-local.
+ */
 export default function BlockFormatToolbar({ editor, onDelete, canDelete = true, onEditLink, onViewHtml }) {
     const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
     const [overflowOpen, setOverflowOpen] = useState(false);
-    /** Giữ vị trí con trỏ trước khi modal (portal) lấy focus. */
     const savedSelectionRef = useRef(null);
     const overflowRef = useRef(null);
 
@@ -94,15 +86,29 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
 
     if (!editor) return null;
 
+    const mutationLocked = !editor.isEditable || !canMutateEditor();
+    const lockTitle = t('editor_locked_mutation_tooltip');
+    const run = (name, payload = {}) => {
+        if (mutationLocked) {
+            return;
+        }
+        return executeEditorCommand(name, { editor, ...payload }, { notifyOnFailure: true });
+    };
+
     const openLinkEditor = () => {
+        if (mutationLocked) {
+            return;
+        }
         const { from, to } = editor.state.selection;
-        const savedSelection = { from, to };
         if (onEditLink) {
-            onEditLink(savedSelection);
+            onEditLink({ from, to });
         }
     };
 
     const openEmojiPicker = () => {
+        if (mutationLocked) {
+            return;
+        }
         const { from, to } = editor.state.selection;
         savedSelectionRef.current = { from, to };
         setEmojiPickerOpen(true);
@@ -115,142 +121,47 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
 
     const insertEmoji = (emoji) => {
         const saved = savedSelectionRef.current;
-        const docSize = editor.state.doc.content.size;
-
-        let chain = editor.chain().focus();
-
-        if (saved && typeof saved.from === 'number') {
-            const from = Math.min(Math.max(0, saved.from), docSize);
-            const to = Math.min(Math.max(from, saved.to), docSize);
-            chain = chain.setTextSelection({ from, to });
-        }
-
-        chain.insertContent(emoji).run();
+        run('insert_emoji', {
+            emoji,
+            from: saved?.from,
+            to: saved?.to,
+        });
         savedSelectionRef.current = null;
         setEmojiPickerOpen(false);
     };
 
     return (
         <div className="seo-block-toolbar seo-block-toolbar-rich" onMouseDown={(e) => e.preventDefault()}>
-            {/* Format toolbar — adjacent to editable content */}
             <div className="seo-toolbar-row seo-toolbar-row--format" role="toolbar" aria-label={t('toolbar_format_aria')}>
-                <ToolbarGroup>
-                    <ToolbarButton
-                        onClick={() => editor.chain().focus().undo().run()}
-                        disabled={!editor.can().undo()}
-                        title={t('toolbar_undo')}
-                    >
-                        <Undo2 size={ICON_SIZE} />
-                    </ToolbarButton>
-                    <ToolbarButton
-                        onClick={() => editor.chain().focus().redo().run()}
-                        disabled={!editor.can().redo()}
-                        title={t('toolbar_redo')}
-                    >
-                        <Redo2 size={ICON_SIZE} />
-                    </ToolbarButton>
-                </ToolbarGroup>
+                <RuntimeToolbarCommandButtons
+                    editor={editor}
+                    groups={['history']}
+                    variant="format"
+                />
 
                 <ToolbarGroup>
                     <ParagraphStyleDropdown editor={editor} />
                 </ToolbarGroup>
 
-                <ToolbarGroup>
-                    <ToolbarButton
-                        onClick={() => editor.chain().focus().toggleBold().run()}
-                        isActive={editor.isActive('bold')}
-                        title={t('toolbar_bold')}
-                    >
-                        <Bold size={ICON_SIZE} />
-                    </ToolbarButton>
-                    <ToolbarButton
-                        onClick={() => editor.chain().focus().toggleItalic().run()}
-                        isActive={editor.isActive('italic')}
-                        title={t('toolbar_italic')}
-                    >
-                        <Italic size={ICON_SIZE} />
-                    </ToolbarButton>
-                    <ToolbarButton
-                        onClick={() => editor.chain().focus().toggleUnderline().run()}
-                        isActive={editor.isActive('underline')}
-                        title={t('toolbar_underline')}
-                    >
-                        <Underline size={ICON_SIZE} />
-                    </ToolbarButton>
-                    <ToolbarButton
-                        onClick={() => editor.chain().focus().toggleStrike().run()}
-                        isActive={editor.isActive('strike')}
-                        title={t('toolbar_strikethrough')}
-                    >
-                        <Strikethrough size={ICON_SIZE} />
-                    </ToolbarButton>
-                </ToolbarGroup>
-
-                <ToolbarGroup>
-                    <ToolbarButton
-                        onClick={() => editor.chain().focus().toggleBulletList().run()}
-                        isActive={editor.isActive('bulletList')}
-                        title={t('toolbar_bullet_list')}
-                    >
-                        <List size={ICON_SIZE} />
-                    </ToolbarButton>
-                    <ToolbarButton
-                        onClick={() => editor.chain().focus().toggleOrderedList().run()}
-                        isActive={editor.isActive('orderedList')}
-                        title={t('toolbar_ordered_list')}
-                    >
-                        <ListOrdered size={ICON_SIZE} />
-                    </ToolbarButton>
-                </ToolbarGroup>
-
-                <ToolbarGroup>
-                    <ToolbarButton
-                        onClick={() => editor.chain().focus().setTextAlign('left').run()}
-                        isActive={editor.isActive({ textAlign: 'left' })}
-                        title={t('toolbar_align_left')}
-                    >
-                        <AlignLeft size={ICON_SIZE} />
-                    </ToolbarButton>
-                    <ToolbarButton
-                        onClick={() => editor.chain().focus().setTextAlign('center').run()}
-                        isActive={editor.isActive({ textAlign: 'center' })}
-                        title={t('toolbar_align_center')}
-                    >
-                        <AlignCenter size={ICON_SIZE} />
-                    </ToolbarButton>
-                    <ToolbarButton
-                        onClick={() => editor.chain().focus().setTextAlign('right').run()}
-                        isActive={editor.isActive({ textAlign: 'right' })}
-                        title={t('toolbar_align_right')}
-                    >
-                        <AlignRight size={ICON_SIZE} />
-                    </ToolbarButton>
-                    <ToolbarButton
-                        onClick={() => editor.chain().focus().setTextAlign('justify').run()}
-                        isActive={editor.isActive({ textAlign: 'justify' })}
-                        title={t('toolbar_align_justify')}
-                    >
-                        <AlignJustify size={ICON_SIZE} />
-                    </ToolbarButton>
-                </ToolbarGroup>
+                <RuntimeToolbarCommandButtons
+                    editor={editor}
+                    groups={['inline', 'lists', 'align']}
+                    variant="format"
+                />
 
                 <ToolbarGroup>
                     <ToolbarButton
                         onClick={openLinkEditor}
                         isActive={editor.isActive('link')}
-                        title={t('toolbar_insert_edit_link')}
+                        disabled={mutationLocked}
+                        title={mutationLocked ? lockTitle : t('toolbar_insert_edit_link')}
                     >
                         <Link2 size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
-                        onClick={() => {
-                            // Mark-only unlink — never deleteSelection / remove node text.
-                            if (!removeLinkKeepText(editor)) {
-                                editor.chain().focus().extendMarkRange('link').unsetMark('link').run();
-                            }
-                        }}
-                        disabled={!editor.isActive('link')}
-                        title={t('toolbar_unlink')}
+                        onClick={() => run('remove_link_keep_text')}
+                        disabled={mutationLocked || !editor.isActive('link')}
+                        title={mutationLocked ? lockTitle : t('toolbar_unlink')}
                     >
                         <Unlink size={ICON_SIZE} />
                     </ToolbarButton>
@@ -280,60 +191,66 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                             >
                                 <ToolbarButton
                                     onClick={() => {
-                                        editor.chain().focus().toggleHighlight().run();
+                                        run('toggle_highlight');
                                         setOverflowOpen(false);
                                     }}
                                     isActive={editor.isActive('highlight')}
-                                    title={t('toolbar_highlight')}
+                                    disabled={mutationLocked}
+                                    title={mutationLocked ? lockTitle : t('toolbar_highlight')}
                                 >
                                     <Highlighter size={ICON_SIZE} />
                                 </ToolbarButton>
                                 <ToolbarButton
                                     onClick={() => {
-                                        editor.chain().focus().toggleSubscript().run();
+                                        run('toggle_subscript');
                                         setOverflowOpen(false);
                                     }}
                                     isActive={editor.isActive('subscript')}
-                                    title={t('toolbar_subscript')}
+                                    disabled={mutationLocked}
+                                    title={mutationLocked ? lockTitle : t('toolbar_subscript')}
                                 >
                                     <Subscript size={ICON_SIZE} />
                                 </ToolbarButton>
                                 <ToolbarButton
                                     onClick={() => {
-                                        editor.chain().focus().toggleSuperscript().run();
+                                        run('toggle_superscript');
                                         setOverflowOpen(false);
                                     }}
                                     isActive={editor.isActive('superscript')}
-                                    title={t('toolbar_superscript')}
+                                    disabled={mutationLocked}
+                                    title={mutationLocked ? lockTitle : t('toolbar_superscript')}
                                 >
                                     <Superscript size={ICON_SIZE} />
                                 </ToolbarButton>
-                                <label className="seo-toolbar-color-wrap" title={t('toolbar_text_color')}>
+                                <label className="seo-toolbar-color-wrap" title={mutationLocked ? lockTitle : t('toolbar_text_color')}>
                                     <input
                                         type="color"
                                         className="seo-toolbar-color"
+                                        disabled={mutationLocked}
                                         onChange={(e) => {
-                                            editor.chain().focus().setColor(e.target.value).run();
+                                            run('set_color', { color: e.target.value });
                                             setOverflowOpen(false);
                                         }}
                                     />
                                 </label>
                                 <ToolbarButton
                                     onClick={() => {
-                                        editor.chain().focus().toggleCode().run();
+                                        run('toggle_code');
                                         setOverflowOpen(false);
                                     }}
                                     isActive={editor.isActive('code')}
-                                    title={t('toolbar_inline_code')}
+                                    disabled={mutationLocked}
+                                    title={mutationLocked ? lockTitle : t('toolbar_inline_code')}
                                 >
                                     <Code size={ICON_SIZE} />
                                 </ToolbarButton>
                                 <ToolbarButton
                                     onClick={() => {
-                                        editor.chain().focus().clearNodes().unsetAllMarks().run();
+                                        run('clear_formatting');
                                         setOverflowOpen(false);
                                     }}
-                                    title={t('toolbar_clear_format')}
+                                    disabled={mutationLocked}
+                                    title={mutationLocked ? lockTitle : t('toolbar_clear_format')}
                                 >
                                     <RemoveFormatting size={ICON_SIZE} />
                                 </ToolbarButton>
@@ -345,9 +262,14 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                 <span className="seo-toolbar-end-actions">
                     <ToolbarButton
                         onClick={() => {
-                            window.dispatchEvent(new CustomEvent('extract-article-faqs-from-toolbar'));
+                            if (mutationLocked) {
+                                return;
+                            }
+                            void runFaqExtractFromToolbar();
                         }}
-                        title={t('toolbar_extract_faq')}
+                        disabled={mutationLocked}
+                        title={mutationLocked ? lockTitle : t('toolbar_extract_faq')}
+                        data-runtime-toolbar="faq.toolbar.extract"
                     >
                         <ListTree size={ICON_SIZE} />
                     </ToolbarButton>
@@ -355,51 +277,36 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                     <button
                         type="button"
                         onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => canDelete && onDelete?.()}
-                        disabled={!canDelete}
-                        title={canDelete ? t('toolbar_delete_paragraph') : t('toolbar_cannot_delete_last')}
-                        className={`seo-toolbar-btn seo-toolbar-delete${!canDelete ? ' is-disabled' : ''}`}
+                        onClick={() => {
+                            if (mutationLocked || !canDelete) {
+                                return;
+                            }
+                            onDelete?.();
+                        }}
+                        disabled={mutationLocked || !canDelete}
+                        title={mutationLocked
+                            ? lockTitle
+                            : (canDelete ? t('toolbar_delete_paragraph') : t('toolbar_cannot_delete_last'))}
+                        className={`seo-toolbar-btn seo-toolbar-delete${(mutationLocked || !canDelete) ? ' is-disabled' : ''}`}
                     >
                         <Trash2 size={ICON_SIZE} />
                     </button>
                 </span>
             </div>
 
-            {/* Insert-content toolbar — actions that already existed on BlockFormatToolbar */}
             <div className="seo-toolbar-row seo-toolbar-row--insert" role="toolbar" aria-label={t('toolbar_insert_aria')}>
-                <InsertActionButton
-                    onClick={() => editor.chain().focus().toggleBlockquote().run()}
-                    title={t('toolbar_quote')}
-                    label={t('toolbar_insert_quote_short')}
-                >
-                    <Quote size={ICON_SIZE} />
-                </InsertActionButton>
-                <InsertActionButton
-                    onClick={() => editor.chain().focus().setHorizontalRule().run()}
-                    title={t('toolbar_horizontal_rule')}
-                    label={t('toolbar_insert_divider_short')}
-                >
-                    <Minus size={ICON_SIZE} />
-                </InsertActionButton>
-                <InsertActionButton
-                    onClick={() =>
-                        editor
-                            .chain()
-                            .focus()
-                            .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
-                            .run()
-                    }
-                    title={t('toolbar_insert_table')}
-                    label={t('toolbar_insert_table_short')}
-                >
-                    <Table size={ICON_SIZE} />
-                </InsertActionButton>
+                <RuntimeToolbarCommandButtons
+                    editor={editor}
+                    groups={['insert']}
+                    variant="insert"
+                />
                 <InsertActionButton
                     onMouseDown={(e) => {
                         e.preventDefault();
                         openEmojiPicker();
                     }}
-                    title={t('toolbar_insert_emoji')}
+                    disabled={mutationLocked}
+                    title={mutationLocked ? lockTitle : t('toolbar_insert_emoji')}
                     label={t('toolbar_insert_emoji_short')}
                 >
                     <Smile size={ICON_SIZE} />

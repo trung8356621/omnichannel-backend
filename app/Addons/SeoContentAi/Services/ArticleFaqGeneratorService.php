@@ -30,13 +30,75 @@ final class ArticleFaqGeneratorService
     }
 
     /**
+     * AI FAQ preview only — no seo_faqs write, no body inject.
+     *
+     * @return array{faq_count: int, faqs: list<array<string, mixed>>, preview: true}
+     */
+    public function generatePreview(SeoArticle $article, string $editorHtml = ''): array
+    {
+        $faqs = $this->runFaqGeneration($article, $editorHtml);
+
+        return [
+            'faq_count' => count($faqs),
+            'faqs' => $faqs,
+            'preview' => true,
+        ];
+    }
+
+    /**
      * @return array{
      *     faq_count: int,
      *     faqs: list<array<string, mixed>>,
      *     editor_html: string,
      * }
      */
-    public function generate(SeoArticle $article, string $editorHtml = ''): array
+    /**
+     * @param  \App\Models\User|null  $editorUser  Owning editor session user when called from Article Editor
+     */
+    public function generate(
+        SeoArticle $article,
+        string $editorHtml = '',
+        ?\App\Models\User $editorUser = null,
+        ?string $editorSessionId = null,
+        int|string|null $expectedDocumentVersion = null,
+    ): array {
+        $faqs = $this->runFaqGeneration($article, $editorHtml);
+
+        // Domain persist — ngoài Hook runtime (caller responsibility).
+        $this->faqEditor->saveFromEditor($article, $faqs);
+        $this->extractDebug->clear($article);
+
+        $baseHtml = trim($editorHtml);
+        if ($baseHtml === '') {
+            $baseHtml = trim((string) ($article->body ?? ''));
+        }
+
+        if ($baseHtml !== '') {
+            app(ArticleFaqWordPressRestoreService::class)->persistWordPressSourceSnapshot($article, $baseHtml);
+        }
+
+        $newHtml = $this->contentFaq->injectFaqPlaceholderInEditorHtml($baseHtml);
+        $this->contentFaq->persistArticleBodyHtml(
+            $article,
+            $newHtml,
+            $editorUser,
+            $editorSessionId,
+            $expectedDocumentVersion,
+        );
+
+        $article = $article->fresh() ?? $article;
+
+        return [
+            'faq_count' => count($faqs),
+            'faqs' => $this->faqEditor->payloadForArticle($article),
+            'editor_html' => $newHtml,
+        ];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function runFaqGeneration(SeoArticle $article, string $editorHtml = ''): array
     {
         $prompt = $this->resolvePrompt();
         $article->loadMissing(['site', 'faqs']);
@@ -115,29 +177,7 @@ final class ArticleFaqGeneratorService
             );
         }
 
-        // Domain persist — ngoài Hook runtime (caller responsibility).
-        $this->faqEditor->saveFromEditor($article, $faqs);
-        $this->extractDebug->clear($article);
-
-        $baseHtml = trim($editorHtml);
-        if ($baseHtml === '') {
-            $baseHtml = trim((string) ($article->body ?? ''));
-        }
-
-        if ($baseHtml !== '') {
-            app(ArticleFaqWordPressRestoreService::class)->persistWordPressSourceSnapshot($article, $baseHtml);
-        }
-
-        $newHtml = $this->contentFaq->injectFaqPlaceholderInEditorHtml($baseHtml);
-        $this->contentFaq->persistArticleBodyHtml($article, $newHtml);
-
-        $article = $article->fresh() ?? $article;
-
-        return [
-            'faq_count' => count($faqs),
-            'faqs' => $this->faqEditor->payloadForArticle($article),
-            'editor_html' => $newHtml,
-        ];
+        return $faqs;
     }
 
     private function linkPromptResultToArticle(SeoArticle $article, SeoPrompt $prompt, PromptResult $result): void

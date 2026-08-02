@@ -51,17 +51,13 @@ final class ArticleEditorModuleSyncQueueHardeningTest extends TestCase
         self::assertStringContainsString('normalizeModulePayload(responseOrPayload)', $source);
     }
 
-    public function test_module_host_never_reads_cached_on_nullable_result(): void
+    public function test_faq_runtime_panel_exists_without_module_host(): void
     {
-        $host = $this->js('components/ArticleEditorModuleHost.jsx');
-
-        self::assertStringContainsString('EMPTY_FAQ_PAYLOAD', $host);
-        self::assertStringContainsString('normalizeFaqPayload(data)', $host);
-        self::assertStringContainsString("setFaqView({ status: 'ready', payload: normalized })", $host);
-        self::assertStringNotContainsString('Boolean(normalized.cached)', $host);
-        self::assertStringContainsString("faqView.status === 'loading'", $host);
-        self::assertStringContainsString('logModuleLoadError', $host);
-        self::assertStringContainsString('isAbortError', $host);
+        self::assertFileDoesNotExist($this->js('components/ArticleEditorModuleHost.jsx'));
+        $faq = $this->js('editor/modules/faq/FaqSidebarPanel.jsx');
+        self::assertStringContainsString('normalizeFaqPayload', $faq);
+        self::assertStringContainsString('EditorModuleErrorBoundary', $faq);
+        self::assertStringContainsString("status: 'loading'", $faq);
     }
 
     public function test_error_boundary_logs_module_context(): void

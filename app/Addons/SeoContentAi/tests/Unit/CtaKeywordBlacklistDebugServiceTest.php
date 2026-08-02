@@ -8,17 +8,25 @@ use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Services\CtaKeywordBlacklistDebugService;
 use App\Addons\SeoContentAi\Services\KeywordPersistenceService;
 use App\Addons\SeoContentAi\Services\OutlineSkipListMatcher;
+use App\Addons\SeoContentAi\Tests\Support\UsesSeoDatabase;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 final class CtaKeywordBlacklistDebugServiceTest extends TestCase
 {
     use DatabaseTransactions;
+    use UsesSeoDatabase;
 
     protected $connectionsToTransact = ['omi_seo_ai'];
 
     public function test_scan_matches_only_keywords_table(): void
     {
+        $this->requireSeoDatabaseConnection();
+        if (! Schema::connection('omi_seo_ai')->hasTable('keywords')) {
+            $this->markTestSkipped('keywords table missing on omi_seo_ai (migrated SEO DB required).');
+        }
+
         $suffix = uniqid('cta_debug_', true);
         $service = app(KeywordPersistenceService::class);
 

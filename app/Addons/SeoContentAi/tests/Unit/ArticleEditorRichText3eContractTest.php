@@ -28,11 +28,10 @@ final class ArticleEditorRichText3eContractTest extends TestCase
         $selection = $this->readAddon('resources/js/utils/editorSelectionUtils.js');
         $cta = $this->readAddon('resources/js/components/CtaContactInsertList.jsx');
 
-        self::assertStringContainsString('insertCtaInlineAtBookmark', $selection);
-        self::assertStringContainsString('insertContactValueAtBookmark', $selection);
-        self::assertStringContainsString('insertInlinePartsAtBookmark', $selection);
+        self::assertStringContainsString('insertContactCtaAtBookmark', $selection);
+        self::assertStringContainsString("class: 'article-cta'", $selection);
+        self::assertStringContainsString('article-cta__value', $selection);
         self::assertStringContainsString('is_cta_sentence', $cta);
-        self::assertStringNotContainsString("class: 'article-cta'", $selection);
     }
 
     public function test_link_mark_is_not_inclusive_and_unlink_keeps_text(): void

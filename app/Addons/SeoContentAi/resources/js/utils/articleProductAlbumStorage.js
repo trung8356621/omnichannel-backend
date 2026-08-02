@@ -1,6 +1,13 @@
-import { callEditArticleLivewire } from './articleEditorLivewire';
+import {
+    galleryFromSnapshot,
+    getMediaSnapshot,
+    replaceGalleryViaApi,
+    reorderGalleryViaApi,
+} from './articleEditorMediaSnapshot';
 
-const albumKey = (articleId) => `seo_product_album_list_${articleId}`;
+/**
+ * Product album helpers — Phase 2A: snapshot SoT, no localStorage shadow.
+ */
 
 export function normalizeProductAlbumItem(item) {
     if (!item || typeof item !== 'object') {
@@ -19,6 +26,7 @@ export function normalizeProductAlbumItem(item) {
     return {
         id: id > 0 ? id : 0,
         url,
+        stable_id: String(item.stable_id ?? item.id_key ?? ''),
     };
 }
 
@@ -49,50 +57,14 @@ export function normalizeProductAlbumList(items) {
 }
 
 export function loadProductAlbum(articleId) {
-    const id = Number(articleId ?? 0);
-    if (!Number.isFinite(id) || id <= 0) {
-        return [];
-    }
-
-    try {
-        const raw = window.localStorage.getItem(albumKey(id));
-        if (!raw) {
-            return [];
-        }
-
-        const parsed = JSON.parse(raw);
-        return normalizeProductAlbumList(Array.isArray(parsed) ? parsed : parsed?.items);
-    } catch {
-        return [];
-    }
+    return galleryFromSnapshot(articleId);
 }
 
 /**
- * Bootstrap server có thể chỉ gửi URL — giữ id từ localStorage nếu URL trùng.
+ * @deprecated Bootstrap merge no longer reads localStorage.
  */
 export function mergeProductAlbumBootstrap(serverItems, articleId) {
-    const fromServer = normalizeProductAlbumList(serverItems);
-    const id = Number(articleId ?? 0);
-    if (!Number.isFinite(id) || id <= 0 || fromServer.length === 0) {
-        return fromServer;
-    }
-
-    const existing = loadProductAlbum(id);
-    if (existing.length === 0) {
-        return fromServer;
-    }
-
-    return fromServer.map((item) => {
-        if (Number(item.id) > 0) {
-            return item;
-        }
-
-        const match = existing.find(
-            (row) => String(row?.url ?? '').trim() === item.url && Number(row?.id ?? 0) > 0,
-        );
-
-        return match ? { ...item, id: Number(match.id) } : item;
-    });
+    return normalizeProductAlbumList(serverItems);
 }
 
 export function saveProductAlbum(articleId, items, { dispatch = true } = {}) {
@@ -102,18 +74,9 @@ export function saveProductAlbum(articleId, items, { dispatch = true } = {}) {
     }
 
     const normalized = normalizeProductAlbumList(items);
-
-    try {
-        window.localStorage.setItem(
-            albumKey(id),
-            JSON.stringify({
-                items: normalized,
-                updatedAt: Date.now(),
-            }),
-        );
-    } catch (error) {
-        console.warn('Không lưu được album sản phẩm vào localStorage', error);
-    }
+    void replaceGalleryViaApi(id, normalized).catch((error) => {
+        console.warn('Gallery persist failed', error);
+    });
 
     if (dispatch) {
         dispatchProductGalleryUpdated(id, normalized);
@@ -131,6 +94,7 @@ export function dispatchProductGalleryUpdated(articleId, gallery) {
                 gallery: items,
                 article_id: Number(articleId ?? 0),
                 articleId: Number(articleId ?? 0),
+                pending: true,
             },
         }),
     );
@@ -160,67 +124,62 @@ export function removeProductAlbumItem(articleId, url) {
     return saveProductAlbum(id, next);
 }
 
-export function reorderProductAlbum(articleId, orderedUrls) {
+export function reorderProductAlbum(articleId, orderedUrlsOrIds) {
     const id = Number(articleId ?? 0);
     if (!Number.isFinite(id) || id <= 0) {
         return [];
     }
 
     const current = loadProductAlbum(id);
-    if (current.length === 0) {
-        return [];
+    const snap = getMediaSnapshot(id);
+    const stableIds = Array.isArray(snap.gallery?.items)
+        ? snap.gallery.items.map((row) => String(row.id || ''))
+        : [];
+
+    // Prefer stable snapshot ids when caller passes them.
+    const asIds = (orderedUrlsOrIds || []).map((value) => String(value ?? '').trim()).filter(Boolean);
+    if (asIds.length > 0 && asIds.every((value) => stableIds.includes(value))) {
+        void reorderGalleryViaApi(id, asIds).catch((error) => {
+            console.warn('Gallery reorder failed', error);
+        });
+
+        return current;
     }
 
-    const byUrl = new Map(current.map((row) => [String(row.url ?? '').trim(), row]));
+    const orderKeys = asIds;
+    const remaining = [...current];
     const ordered = [];
 
-    (Array.isArray(orderedUrls) ? orderedUrls : []).forEach((url) => {
-        const key = String(url ?? '').trim();
-        if (key !== '' && byUrl.has(key)) {
-            ordered.push(byUrl.get(key));
-            byUrl.delete(key);
+    orderKeys.forEach((key) => {
+        const index = remaining.findIndex(
+            (row) => String(row.url) === key || String(row.id) === key || String(row.stable_id) === key,
+        );
+        if (index < 0) {
+            return;
         }
+        ordered.push(remaining[index]);
+        remaining.splice(index, 1);
     });
 
-    byUrl.forEach((row) => ordered.push(row));
-
-    return saveProductAlbum(id, ordered);
+    return saveProductAlbum(id, [...ordered, ...remaining]);
 }
 
 export function persistProductAlbumDraftToServer(articleId, wire) {
-    const id = Number(articleId ?? 0);
-    if (!Number.isFinite(id) || id <= 0 || !wire?.persistProductAlbumFromClient) {
-        return Promise.resolve([]);
-    }
+    const items = loadProductAlbum(articleId);
 
-    const items = loadProductAlbum(id);
+    return replaceGalleryViaApi(articleId, items).catch(() => {
+        if (wire?.persistProductAlbumFromClient) {
+            return wire.persistProductAlbumFromClient(items);
+        }
 
-    return wire.persistProductAlbumFromClient(items);
-}
-
-export function syncProductAlbumToServer(articleId) {
-    const id = Number(articleId ?? 0);
-    if (!Number.isFinite(id) || id <= 0) {
-        return Promise.resolve([]);
-    }
-
-    const items = loadProductAlbum(id);
-    if (items.length === 0) {
-        return Promise.resolve([]);
-    }
-
-    return callEditArticleLivewire('persistProductAlbumFromClient', items).catch((error) => {
-        console.warn('Không đồng bộ album sản phẩm lên server', error);
-
-        return [];
+        return items;
     });
 }
 
-export function clearProductAlbumStorage(articleId) {
-    const id = Number(articleId ?? 0);
-    if (!Number.isFinite(id) || id <= 0) {
-        return;
-    }
+export async function syncProductAlbumToServer(articleId) {
+    return persistProductAlbumDraftToServer(articleId, null);
+}
 
-    window.localStorage.removeItem(albumKey(id));
+export function clearProductAlbumStorage(articleId) {
+    return saveProductAlbum(articleId, []);
 }

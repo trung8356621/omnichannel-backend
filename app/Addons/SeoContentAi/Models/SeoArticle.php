@@ -33,6 +33,7 @@ class SeoArticle extends Model
 
     protected $casts = [
         'blocks' => 'array',
+        'editor_document' => 'array',
         'seo_score' => 'decimal:2',
         'skip_seo_score' => 'boolean',
         'reviewed_at' => 'datetime',
@@ -43,7 +44,33 @@ class SeoArticle extends Model
         'last_manual_saved_at' => 'datetime',
         'last_synced_at' => 'datetime',
         'last_ai_content_at' => 'datetime',
+        'document_version' => 'integer',
+        'editor_document_schema_version' => 'integer',
+        'editor_document_updated_at' => 'datetime',
     ];
+
+    protected static function booted(): void
+    {
+        static::creating(static function (SeoArticle $article): void {
+            try {
+                app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleDocumentVersionService::class)
+                    ->ensureDefaultOnCreate($article);
+            } catch (\Throwable) {
+                if ($article->document_version === null) {
+                    $article->document_version = 1;
+                }
+            }
+        });
+
+        static::updating(static function (SeoArticle $article): void {
+            try {
+                app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleDocumentVersionService::class)
+                    ->bumpIfBodyChanging($article);
+            } catch (\Throwable) {
+                // Observer must not break writers if version service unavailable.
+            }
+        });
+    }
 
     public function updateTimestamps()
     {

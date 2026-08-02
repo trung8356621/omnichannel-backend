@@ -28,7 +28,7 @@ use ReflectionClass;
 use ReflectionMethod;
 
 /**
- * Contract: Archive = Destroy Workspace; Sync WP in Project = Save Workspace; SaaS Publishing Queue.
+ * Contract: Archive = Destroy Workspace; Manual Sync WP in Project = fail-closed; SaaS Publishing Queue.
  */
 final class ContentProjectWorkspaceDestroyArchitectureTest extends TestCase
 {
@@ -101,13 +101,20 @@ final class ContentProjectWorkspaceDestroyArchitectureTest extends TestCase
         self::assertStringNotContainsString('workspaceDestroyer', $source);
     }
 
-    public function test_manual_sync_routes_active_content_project_to_workspace_save(): void
+    public function test_manual_sync_fail_closed_for_content_project_and_publish_stays_on_queue(): void
     {
         $source = $this->readMethodSource(
             (new ReflectionClass(WordPressManualSyncService::class))->getMethod('enqueueFromEditorBundle'),
         );
-        self::assertStringContainsString('belongsToActiveContentProject', $source);
-        self::assertStringContainsString('workspaceSave->saveFromEditorBundle', $source);
+        self::assertStringContainsString('belongsToContentProject', $source);
+        self::assertStringContainsString('content_project_manual_sync_forbidden', $source);
+        self::assertStringNotContainsString('workspaceSave->saveFromEditorBundle', $source);
+
+        $membership = (string) file_get_contents(
+            (new ReflectionClass(ContentProjectArticleMembership::class))->getFileName(),
+        );
+        self::assertStringContainsString('function belongsToContentProject', $membership);
+        self::assertStringContainsString('function assignedTaskForArticle', $membership);
 
         $publishSource = $this->readMethodSource(
             (new ReflectionClass(WordPressManualSyncService::class))->getMethod('publishNow'),

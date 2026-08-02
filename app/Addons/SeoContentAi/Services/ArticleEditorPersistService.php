@@ -7,6 +7,8 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentException;
+use App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectArticleMembership;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
@@ -23,6 +25,7 @@ final class ArticleEditorPersistService
         private readonly SeoArticleRevisionService $revisions,
         private readonly ContentProjectArticleMembership $contentProjectMembership,
         private readonly ContentProjectPublishingQueueService $publishingQueue,
+        private readonly ArticleEditorDocumentWriter $documentWriter,
     ) {}
 
     /**
@@ -76,23 +79,52 @@ final class ArticleEditorPersistService
     /**
      * Critical section only: sanitize + UPDATE `articles` row.
      * Keep this free of heavy meta/revision/link work so callers can hold a short DB TX.
+     *
+     * @param  array<string, mixed>|null  $editorDocument  Canonical TipTap envelope (Phase 5A)
      */
     public function writeArticleRow(
         SeoArticle $article,
         ArticleEditorSaveContext $context,
         string $html,
+        ?array $editorDocument = null,
+        ?string $expectedEditorDocumentHash = null,
     ): string {
+        $derivedFromJson = false;
+
+        if (
+            $this->documentWriter->persistenceEnabled()
+            && is_array($editorDocument)
+            && $editorDocument !== []
+        ) {
+            try {
+                $prepared = $this->documentWriter->applyCanonicalFields(
+                    $article,
+                    $editorDocument,
+                    $expectedEditorDocumentHash,
+                );
+                $html = $prepared['html'];
+                $derivedFromJson = true;
+            } catch (ArticleEditorDocumentException $exception) {
+                throw $exception;
+            }
+        }
+
         $html = $this->htmlSanitize->stripTransientEditorMarkup($html);
         $html = $this->guardArticleBodyBeforeSave($article, $html);
 
         $faqSync = $this->faqBodySync->extractFromBodyWhenMissing($article, $html);
         $html = $faqSync['body_html'];
 
+        // Body-only writers without JSON: mark existing JSON stale.
+        if (! $derivedFromJson && $this->documentWriter->columnsReady($article)) {
+            $this->documentWriter->invalidateForLegacyBodyWrite($article, 'persist_body_only');
+        }
+
         $slug = $context->normalizedSlug();
         $publishAt = $context->resolvePublishAtForSave();
         $postType = SeoProjectTask::normalizePostType($context->postType);
 
-        $article->update([
+        $payload = [
             'title' => trim($context->title),
             'slug' => $slug !== '' ? $slug : null,
             'type' => $postType,
@@ -100,7 +132,19 @@ final class ArticleEditorPersistService
             'published_at' => $publishAt,
             'body' => $html,
             'user_id' => auth()->id(),
-        ]);
+        ];
+
+        if ($derivedFromJson && $this->documentWriter->columnsReady($article)) {
+            $payload['editor_document'] = $article->editor_document;
+            $payload['editor_document_schema_version'] = $article->editor_document_schema_version;
+            $payload['editor_document_hash'] = $article->editor_document_hash;
+            $payload['editor_document_status'] = $article->editor_document_status;
+            $payload['editor_document_updated_at'] = $article->editor_document_updated_at;
+        } elseif ($this->documentWriter->columnsReady($article) && $article->isDirty('editor_document_status')) {
+            $payload['editor_document_status'] = $article->editor_document_status;
+        }
+
+        $article->update($payload);
 
         return $html;
     }
@@ -133,6 +177,10 @@ final class ArticleEditorPersistService
                 'focus_keyword' => trim($context->focusKeyword),
                 'seo_score' => $article->seo_score !== null ? (float) $article->seo_score : null,
                 'slug' => $slug,
+                'editor_document' => is_array($article->editor_document) ? $article->editor_document : null,
+                'editor_document_schema_version' => (int) ($article->editor_document_schema_version ?? 0) ?: null,
+                'editor_document_hash' => (string) ($article->editor_document_hash ?? '') ?: null,
+                'document_version' => max(1, (int) ($article->document_version ?? 1)),
             ],
             auth()->id() !== null ? (int) auth()->id() : null,
         );

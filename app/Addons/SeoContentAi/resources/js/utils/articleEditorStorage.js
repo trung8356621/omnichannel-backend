@@ -1,8 +1,8 @@
 import { cleanBlockHtmlForEditorDisplay, stripEmptyParagraphsFromHtml } from './editorHtmlUtils';
 import { pruneEmptyTextBlocks } from './blockImageUtils';
 
-/** Schema version for the local draft (content-only, HTML canonical — matches backend `body`). */
-export const ARTICLE_EDITOR_DRAFT_VERSION = 2;
+/** Schema version for the local draft (v3+: TipTap editor_document canonical + HTML compat). */
+export const ARTICLE_EDITOR_DRAFT_VERSION = 3;
 
 const DRAFT_KEY_PREFIX = 'seo-editor:draft:';
 const LEGACY_DRAFT_PREFIX = 'seo_article_draft_';
@@ -13,7 +13,15 @@ const chatKey = (articleId) => `seo_article_chat_${articleId}`;
 const faqKey = (articleId) => `seo_article_faq_${articleId}`;
 const STORAGE_PREFIX = 'seo_article_';
 
-function draftKey(articleId, connectionHash, siteId = 0) {
+function draftKey(articleId, connectionHash, siteId = 0, userId = 0) {
+    const hash = String(connectionHash ?? '').trim() || 'default';
+    const site = Math.max(0, Number(siteId) || 0);
+    const user = Math.max(0, Number(userId) || 0);
+    return `${DRAFT_KEY_PREFIX}${hash}:${site}:${user}:${articleId}`;
+}
+
+/** Legacy key without user segment (pre user-scoped drafts). */
+function legacyUserlessDraftKey(articleId, connectionHash, siteId = 0) {
     const hash = String(connectionHash ?? '').trim() || 'default';
     const site = Math.max(0, Number(siteId) || 0);
     return `${DRAFT_KEY_PREFIX}${hash}:${site}:${articleId}`;
@@ -23,6 +31,14 @@ function draftKey(articleId, connectionHash, siteId = 0) {
 function legacyScopedDraftKey(articleId, connectionHash) {
     const hash = String(connectionHash ?? '').trim() || 'default';
     return `${DRAFT_KEY_PREFIX}${hash}:${articleId}`;
+}
+
+function resolveDraftUserId(explicitUserId = null) {
+    if (explicitUserId != null && Number(explicitUserId) > 0) {
+        return Math.max(0, Number(explicitUserId) || 0);
+    }
+
+    return Math.max(0, Number(window.__SEO_EDITOR_CURRENT_USER_ID__ ?? 0) || 0);
 }
 
 let draftPersistenceEnabled = true;
@@ -348,20 +364,32 @@ export function loadDraft(articleId, connectionHash, options = {}) {
     if (!articleId) return null;
 
     const siteId = Math.max(0, Number(options?.siteId ?? options?.site_id ?? 0) || 0);
-    const key = draftKey(articleId, connectionHash, siteId);
+    const userId = resolveDraftUserId(options?.userId ?? options?.user_id ?? null);
+    const key = draftKey(articleId, connectionHash, siteId, userId);
+    const legacyUserlessKey = legacyUserlessDraftKey(articleId, connectionHash, siteId);
     const legacyKey = legacyScopedDraftKey(articleId, connectionHash);
 
     try {
-        const raw = localStorage.getItem(key) ?? localStorage.getItem(legacyKey);
+        const raw = localStorage.getItem(key)
+            ?? localStorage.getItem(legacyUserlessKey)
+            ?? localStorage.getItem(legacyKey);
         if (raw) {
             const data = JSON.parse(raw);
-            if (data && typeof data === 'object' && Number(data.schema_version) === ARTICLE_EDITOR_DRAFT_VERSION) {
+            if (data && typeof data === 'object' && Number(data.schema_version) >= 2) {
                 const draftSiteId = Math.max(0, Number(data.site_id ?? 0) || 0);
                 if (siteId > 0 && draftSiteId > 0 && draftSiteId !== siteId) {
                     return null;
                 }
+                const draftUserId = Math.max(0, Number(data.user_id ?? 0) || 0);
+                if (userId > 0 && draftUserId > 0 && draftUserId !== userId) {
+                    return null;
+                }
 
-                return data;
+                return {
+                    ...data,
+                    schema_version: ARTICLE_EDITOR_DRAFT_VERSION,
+                    user_id: draftUserId || userId || null,
+                };
             }
         }
     } catch {
@@ -378,7 +406,10 @@ export function loadDraft(articleId, connectionHash, options = {}) {
         article_id: Number(articleId),
         connection_hash: String(connectionHash ?? '').trim(),
         site_id: siteId,
-        user_id: null,
+        user_id: userId || null,
+        client_instance_id: null,
+        editor_session_id: null,
+        base_document_version: null,
         base_updated_at: null,
         base_content_hash: null,
         saved_at: new Date(migrated.savedAtMs).toISOString(),
@@ -394,6 +425,9 @@ export function loadDraft(articleId, connectionHash, options = {}) {
         if (legacyKey !== key) {
             localStorage.removeItem(legacyKey);
         }
+        if (legacyUserlessKey !== key) {
+            localStorage.removeItem(legacyUserlessKey);
+        }
     } catch {
         // ignore quota / private mode — migrated draft still returned in-memory
     }
@@ -404,8 +438,10 @@ export function loadDraft(articleId, connectionHash, options = {}) {
 export function clearDraft(articleId, connectionHash, options = {}) {
     if (!articleId) return;
     const siteId = Math.max(0, Number(options?.siteId ?? options?.site_id ?? 0) || 0);
+    const userId = resolveDraftUserId(options?.userId ?? options?.user_id ?? null);
     try {
-        localStorage.removeItem(draftKey(articleId, connectionHash, siteId));
+        localStorage.removeItem(draftKey(articleId, connectionHash, siteId, userId));
+        localStorage.removeItem(legacyUserlessDraftKey(articleId, connectionHash, siteId));
         localStorage.removeItem(legacyScopedDraftKey(articleId, connectionHash));
         localStorage.removeItem(legacyDraftKey(articleId));
     } catch {
@@ -433,10 +469,12 @@ export function saveDraft(articleId, connectionHash, payload) {
     if (!isDraftPersistenceEnabled()) return;
 
     const siteId = Math.max(0, Number(payload?.site_id ?? 0) || 0);
-    const key = draftKey(articleId, connectionHash, siteId);
+    const userId = resolveDraftUserId(payload?.user_id ?? null);
+    const key = draftKey(articleId, connectionHash, siteId, userId);
     const existing = (() => {
         try {
             const raw = localStorage.getItem(key)
+                ?? localStorage.getItem(legacyUserlessDraftKey(articleId, connectionHash, siteId))
                 ?? localStorage.getItem(legacyScopedDraftKey(articleId, connectionHash));
             return raw ? JSON.parse(raw) : null;
         } catch {
@@ -447,6 +485,20 @@ export function saveDraft(articleId, connectionHash, payload) {
     const content = typeof payload?.content === 'string'
         ? stripEmptyParagraphsFromHtml(payload.content)
         : String(existing?.content ?? '');
+    const editorDocument = payload?.editor_document
+        && typeof payload.editor_document === 'object'
+        ? payload.editor_document
+        : (existing?.editor_document && typeof existing.editor_document === 'object'
+            ? existing.editor_document
+            : null);
+    const editorDocumentSchemaVersion = Number(
+        payload?.editor_document_schema_version
+        ?? existing?.editor_document_schema_version
+        ?? 1,
+    ) || 1;
+    const baseEditorDocumentHash = payload?.base_editor_document_hash
+        ?? existing?.base_editor_document_hash
+        ?? null;
     const contentHash = hashContent(content);
     const normalizedHash = hashNormalizedContent(content);
     const baseUpdatedAt = payload?.base_updated_at ?? existing?.base_updated_at ?? null;
@@ -470,12 +522,25 @@ export function saveDraft(articleId, connectionHash, payload) {
         ? Boolean(payload.synced)
         : (dirtyFields.length === 0 && (contentUnchangedFromExisting ? Boolean(existing?.synced) : false));
 
+    const sessionClient = window.__seoEditorSessionClient;
     const draft = {
         schema_version: ARTICLE_EDITOR_DRAFT_VERSION,
         article_id: Number(articleId),
         connection_hash: String(connectionHash ?? '').trim(),
         site_id: siteId || Math.max(0, Number(existing?.site_id ?? 0) || 0),
-        user_id: payload?.user_id ?? existing?.user_id ?? null,
+        user_id: userId || payload?.user_id || existing?.user_id || null,
+        client_instance_id: payload?.client_instance_id
+            ?? sessionClient?.clientInstanceId
+            ?? existing?.client_instance_id
+            ?? null,
+        editor_session_id: payload?.editor_session_id
+            ?? sessionClient?.sessionId
+            ?? existing?.editor_session_id
+            ?? null,
+        base_document_version: payload?.base_document_version
+            ?? sessionClient?.documentVersion
+            ?? existing?.base_document_version
+            ?? null,
         base_updated_at: baseUpdatedAt,
         base_content_hash: baseContentHash,
         saved_at: new Date().toISOString(),
@@ -484,6 +549,9 @@ export function saveDraft(articleId, connectionHash, payload) {
         title: payload?.title ?? existing?.title,
         slug: payload?.slug ?? existing?.slug,
         content,
+        editor_document: editorDocument,
+        editor_document_schema_version: editorDocumentSchemaVersion,
+        base_editor_document_hash: baseEditorDocumentHash,
         content_hash: contentHash,
         normalized_hash: normalizedHash,
         dirty_fields: dirtyFields,
@@ -495,6 +563,7 @@ export function saveDraft(articleId, connectionHash, payload) {
             article_id: Number(articleId),
             connection_hash: draft.connection_hash,
             site_id: draft.site_id,
+            user_id: draft.user_id,
             saved_at: draft.saved_at,
             content,
             content_hash: contentHash,
@@ -503,6 +572,7 @@ export function saveDraft(articleId, connectionHash, payload) {
             synced: draft.synced,
         }));
         localStorage.removeItem(legacyScopedDraftKey(articleId, connectionHash));
+        localStorage.removeItem(legacyUserlessDraftKey(articleId, connectionHash, siteId));
     } catch (e) {
         console.warn('Không lưu được nháp localStorage', e);
     }
@@ -824,6 +894,16 @@ export function saveFaqDraft(articleId, faqs) {
         );
     } catch (error) {
         console.warn('Không lưu được FAQ vào localStorage', error);
+    }
+}
+
+/** Phase 2C: FAQ localStorage is not canonical — discard so it cannot overwrite server. */
+export function clearFaqDraft(articleId) {
+    if (!articleId) return;
+    try {
+        localStorage.removeItem(faqKey(articleId));
+    } catch {
+        // ignore
     }
 }
 

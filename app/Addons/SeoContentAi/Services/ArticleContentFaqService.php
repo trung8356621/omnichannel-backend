@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionService;
+use App\Models\User;
 
 /**
  * Cắt FAQ khỏi Markdown/HTML bài viết và gắn shortcode [omi_faq].
@@ -199,16 +201,54 @@ final class ArticleContentFaqService
         }
     }
 
-    public function persistArticleBodyHtml(SeoArticle $article, string $html): void
-    {
+    /**
+     * Persist FAQ-stripped HTML into article body.
+     * When an active editor session exists: require owning session identity (editor path)
+     * or fail locked (external/system path without session).
+     *
+     * @throws \App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionException
+     */
+    public function persistArticleBodyHtml(
+        SeoArticle $article,
+        string $html,
+        ?User $user = null,
+        ?string $editorSessionId = null,
+        int|string|null $expectedDocumentVersion = null,
+    ): void {
         $html = trim($html);
         if ($html === '') {
             return;
         }
 
+        $sessions = app(ArticleEditorSessionService::class);
+        $active = $sessions->findActiveSession($article);
+        if ($active !== null) {
+            if (! $user instanceof User || trim((string) $editorSessionId) === '') {
+                $sessions->assertNoActiveEditorSession($article, 'faq_body_apply');
+            } else {
+                $sessions->assertOwningActiveSessionForWrite(
+                    $article,
+                    $user,
+                    $editorSessionId,
+                    $expectedDocumentVersion,
+                );
+            }
+        }
+
         $article->update([
             'body' => $html,
         ]);
+
+        try {
+            $fresh = $article->fresh() ?? $article;
+            $writer = app(\App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter::class);
+            $writer->invalidateForLegacyBodyWrite($fresh, 'faq_body_persist');
+            if ($fresh->isDirty('editor_document_status')) {
+                $fresh->save();
+            }
+        } catch (\Throwable) {
+            // JSON invalidation best-effort.
+        }
 
         $article->articleMetas()->updateOrCreate(
             ['meta_key' => 'wp_post_content'],

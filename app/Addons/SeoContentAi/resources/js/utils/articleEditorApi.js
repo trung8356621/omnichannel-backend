@@ -107,24 +107,34 @@ export function resolveFaqsPersistPayload(editorBundle) {
 
 export function buildArticleEditorApiPayload(editorBundle, wire) {
     const articleId = Number(editorBundle?.articleId ?? 0);
-    const featured = window.__seoFeaturedImageStorage?.load?.(articleId) ?? null;
-    const productAlbum = window.__seoProductAlbumStorage?.load?.(articleId) ?? null;
     const faqPersist = resolveFaqsPersistPayload(editorBundle);
 
     const conflictTokens = getEditorConflictTokens();
+    const sessionClient = window.__seoEditorSessionClient;
 
     return {
         html: String(editorBundle?.html ?? ''),
+        client_rendered_html: String(editorBundle?.html ?? ''),
+        editor_document: editorBundle?.editor_document ?? editorBundle?.editorDocument ?? null,
+        expected_editor_document_hash: editorBundle?.expected_editor_document_hash
+            ?? window.__SEO_EDITOR_DOCUMENT_HASH__
+            ?? null,
         seo_analysis: editorBundle?.seoAnalysis ?? null,
         article_meta: readArticleMetaFromWire(wire),
         publish_box: window.__seoPublishBoxSnapshot?.() ?? null,
         category_ids: window.__seoPublishCategoriesSnapshot?.() ?? null,
-        featured_image: featured,
-        product_album: productAlbum,
+        // Phase 2A: Featured/Gallery owned by media snapshot APIs — do not re-send LS drafts.
+        featured_image: null,
+        product_album: null,
         faqs: faqPersist.faqs,
         faqs_source: faqPersist.faqs_source,
         expected_updated_at: conflictTokens.expected_updated_at,
         expected_content_hash: conflictTokens.expected_content_hash,
+        expected_document_version: sessionClient?.documentVersion
+            ?? window.__SEO_EDITOR_DOCUMENT_VERSION__
+            ?? null,
+        editor_session_id: sessionClient?.sessionId || null,
+        article_id: articleId || null,
     };
 }
 
@@ -133,16 +143,60 @@ export function buildArticleEditorApiPayload(editorBundle, wire) {
  * @param {Record<string, unknown>} payload
  */
 export async function saveArticleViaApi(articleId, payload) {
+    const sessionClient = window.__seoEditorSessionClient;
+    if (sessionClient && !sessionClient.readOnly && sessionClient.sessionId) {
+        if (window.__SEO_EDITOR_READ_ONLY__) {
+            throw new Error('Editor đang ở chế độ chỉ đọc — không lưu được.');
+        }
+
+        const saveResult = await sessionClient.saveDocument(payload, payload?.save_mode === 'autosave' ? 'autosave' : 'explicit');
+        if (!saveResult.ok) {
+            const error = new Error(saveResult.error?.message ?? 'Không lưu được bài viết.');
+            error.conflict = [
+                'article_document_version_conflict',
+                'article_content_hash_conflict',
+                'conflict_document_version',
+                'conflict_content_hash',
+                'conflict_updated_at',
+            ].includes(String(saveResult.error?.code ?? ''));
+            error.data = saveResult.data;
+            error.sessionError = saveResult.error;
+            throw error;
+        }
+
+        if (saveResult.data?.document_version != null) {
+            window.__SEO_EDITOR_DOCUMENT_VERSION__ = Number(saveResult.data.document_version) || window.__SEO_EDITOR_DOCUMENT_VERSION__;
+        }
+
+        return {
+            success: true,
+            patch: saveResult.data?.patch,
+            content_project_handoff: saveResult.data?.content_project_handoff ?? null,
+            document_version: saveResult.data?.document_version,
+            notification: {
+                title: 'Article saved',
+                body: 'Article saved',
+                status: 'success',
+            },
+            ...saveResult.data,
+        };
+    }
+
+    const headers = {
+        'Content-Type': 'application/json',
+        'X-CSRF-TOKEN': csrfToken(),
+    };
+    if (payload?.editor_session_id) {
+        headers['X-Editor-Session-Id'] = String(payload.editor_session_id);
+    }
+
     const { response, data } = await seoArticleApiFetch(`/api/seo/articles/${articleId}/save`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-TOKEN': csrfToken(),
-        },
+        headers,
         body: JSON.stringify(payload),
     });
 
-    if (response.status === 409) {
+    if (response.status === 409 || response.status === 423) {
         const error = new Error(data?.message ?? 'Nội dung đã bị thay đổi ở nơi khác — không lưu.');
         error.conflict = true;
         error.data = data;
@@ -155,6 +209,41 @@ export async function saveArticleViaApi(articleId, payload) {
     }
 
     return data;
+}
+
+/**
+ * Atomic Save & Close via editor session.
+ *
+ * @param {number} articleId
+ * @param {Record<string, unknown>} payload
+ * @param {string} [closeReason]
+ */
+export async function closeArticleViaSessionApi(articleId, payload, closeReason = 'save_and_close') {
+    const sessionClient = window.__seoEditorSessionClient;
+    if (!sessionClient || sessionClient.readOnly || !sessionClient.sessionId) {
+        const saved = await saveArticleViaApi(articleId, payload);
+        return { ...saved, released: false, used_legacy_save: true };
+    }
+
+    const closeResult = await sessionClient.close(payload, closeReason);
+    if (!closeResult.ok) {
+        const error = new Error(closeResult.error?.message ?? 'Không lưu và đóng được bài viết.');
+        error.conflict = String(closeResult.error?.code ?? '').includes('conflict');
+        error.data = closeResult.data;
+        error.sessionError = closeResult.error;
+        throw error;
+    }
+
+    if (closeResult.data?.document_version != null) {
+        window.__SEO_EDITOR_DOCUMENT_VERSION__ = Number(closeResult.data.document_version);
+    }
+
+    return {
+        success: true,
+        released: true,
+        document_version: closeResult.data?.document_version,
+        ...closeResult.data,
+    };
 }
 
 /**
@@ -628,7 +717,7 @@ export function finishArticleSaveFromApi(result, context = {}) {
     }
 
     const { articleId, connectionHash, savedHtml } = context;
-    if (typeof savedHtml === 'string') {
+        if (typeof savedHtml === 'string') {
         const savedContentHash = hashContent(savedHtml);
         const nextUpdatedAt = result.patch?.article?.updated_at
             ?? getEditorConflictTokens().expected_updated_at;
@@ -636,6 +725,12 @@ export function finishArticleSaveFromApi(result, context = {}) {
             expected_updated_at: nextUpdatedAt,
             expected_content_hash: savedContentHash,
         });
+        if (result.document_version != null) {
+            window.__SEO_EDITOR_DOCUMENT_VERSION__ = Number(result.document_version) || window.__SEO_EDITOR_DOCUMENT_VERSION__;
+            if (window.__seoEditorSessionClient) {
+                window.__seoEditorSessionClient.setDocumentVersion(result.document_version);
+            }
+        }
 
         if (articleId) {
             window.__seoCancelArticleDraftAutosave?.();

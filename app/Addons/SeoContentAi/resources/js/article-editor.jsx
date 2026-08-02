@@ -1,8 +1,10 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
+// Composition root: register built-in modules BEFORE SeoArticleEditor/runtime singleton.
+import './editor/modules';
 import SeoArticleEditor from './components/SeoArticleEditor';
+import WordPressMediaRenameModal from './components/WordPressMediaRenameModal';
 import ArticleAiFloatingLauncher from './components/ArticleAiFloatingLauncher';
-import ArticleEditorModuleHost from './components/ArticleEditorModuleHost';
 import '../css/article-editor.css';
 import '../css/seo-select.css';
 import '../css/image-splitter.css';
@@ -19,14 +21,26 @@ import { installArticleEditorStickyHeaderBridge } from './utils/articleEditorSti
 import { normalizeArticleSlug } from './utils/articleSlugUtils';
 import {
     buildArticleEditorApiPayload,
+    closeArticleViaSessionApi,
+    closeEditorAfterProjectLocalSave,
     finishArticleEditorApiAction,
     finishArticleSaveFromApi,
     handleArticleSaveConflict,
     patchPermalinkDisplay,
+    prepareEditorExitAfterSyncEnqueue,
     syncArticleToWordPressViaApi,
 } from './utils/articleEditorApi';
 import { seoArticleApiFetch } from './utils/seoArticleApi';
 import { saveArticleViaApiSingleFlight } from './utils/articleEditorSaveQueue';
+import { EditorSessionClient } from './utils/editorSessionClient';
+import {
+    ARTICLE_EDITOR_SESSION_STATE_EVENT,
+    EDITOR_SESSION_STATUS,
+    emitArticleEditorSessionState,
+    resolveSessionStatusFromClient,
+} from './utils/editorSessionState';
+import { assertWritableEditorSession } from './utils/editorSessionState';
+import { t } from './utils/i18n';
 import {
     loadFeaturedImage,
     persistFeaturedImageDraftToServer,
@@ -43,6 +57,14 @@ import {
     saveProductAlbum,
     syncProductAlbumToServer,
 } from './utils/articleProductAlbumStorage';
+import {
+    applyMediaSnapshot,
+    discardLegacyMediaLocalStorage,
+} from './utils/articleEditorMediaSnapshot';
+import {
+    setAnalysisPolicy,
+    setExternalFacts,
+} from './utils/articleAnalysisOwnership';
 import { installArticleAutosaveLock } from './utils/articleAutosaveLock';
 import { installArticleOperationTracker } from './utils/articleOperationTracker';
 import { mountArticleTitlePromptHook } from './utils/articleTitlePromptHook';
@@ -158,10 +180,13 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
     wire,
     { renameImagesBeforeWpSync = false } = {},
 ) {
-    const normalizedAction = action === 'sync' ? 'sync' : 'save';
+    const normalizedAction = action === 'sync'
+        ? 'sync'
+        : (action === 'save-close' ? 'save-close' : 'save');
+    const overlayAction = normalizedAction === 'sync' ? 'sync' : 'save';
 
     if (!window.__seoArticleHeavyActionOverlay?.locked) {
-        window.__seoBeginArticleHeavyActionClient?.(normalizedAction);
+        window.__seoBeginArticleHeavyActionClient?.(overlayAction);
     }
 
     await window.__seoYieldForHeavyActionPaint?.();
@@ -193,48 +218,84 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
         );
 
         if (normalizedAction === 'sync') {
-            const syncMode = document.querySelector('[data-seo-sync-mode]')?.getAttribute('data-seo-sync-mode');
+            if (window.__SEO_EDITOR_READ_ONLY__ || window.__SEO_EDITOR_SESSION_STATE__?.writable === false) {
+                throw new Error('Phiên chỉnh sửa đang chỉ đọc — không Sync được.');
+            }
             window.__seoArticleHeavyActionOverlay?.setStatusMessage?.(
-                syncMode === 'project_local_save'
-                    ? 'Đang lưu workspace…'
-                    : 'Đang đưa vào hàng đợi…',
+                'Đang đưa vào hàng đợi…',
             );
             const apiPayload = buildArticleEditorApiPayload(editorBundle, wire);
             const result = await syncArticleToWordPressViaApi(articleId, apiPayload);
             finishArticleEditorApiAction(result, articleId, siteId, 'sync');
             return;
-        } else {
-            window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết…');
-            try {
-                const result = await saveArticleViaApiSingleFlight(articleId, async () => {
-                    const freshCollect = window.__seoCollectEditorHeavyBundle;
-                    let bundle = editorBundle;
-                    if (typeof freshCollect === 'function') {
-                        try {
-                            bundle = await freshCollect({ renameImagesBeforeWpSync: false });
-                        } catch {
-                            bundle = editorBundle;
-                        }
-                    }
+        }
 
-                    return buildArticleEditorApiPayload(bundle, wire);
+        window.__seoArticleHeavyActionOverlay?.setStatusMessage?.(
+            normalizedAction === 'save-close'
+                ? 'Đang lưu rồi đóng…'
+                : 'Đang lưu bài viết…',
+        );
+        try {
+            if (window.__SEO_EDITOR_READ_ONLY__) {
+                throw new Error('Bài viết đang ở chế độ chỉ đọc — không lưu được.');
+            }
+
+            const buildPayload = async () => {
+                const freshCollect = window.__seoCollectEditorHeavyBundle;
+                let bundle = editorBundle;
+                if (typeof freshCollect === 'function') {
+                    try {
+                        bundle = await freshCollect({ renameImagesBeforeWpSync: false });
+                    } catch {
+                        bundle = editorBundle;
+                    }
+                }
+
+                return buildArticleEditorApiPayload(bundle, wire);
+            };
+
+            let result;
+            if (normalizedAction === 'save-close') {
+                const payload = await buildPayload();
+                result = await closeArticleViaSessionApi(articleId, payload, 'save_and_close');
+                finishArticleSaveFromApi(result, {
+                    articleId,
+                    siteId,
+                    connectionHash: window.__SEO_EDITOR_CONNECTION_HASH__ ?? '',
+                    savedHtml: String(window.__SEO_EDITOR_LAST_SAVE_HTML__ ?? payload.html ?? editorBundle.html ?? ''),
+                    keepOverlay: true,
                 });
+                window.__seoResetPublishTabPrimed?.();
+                const projectUrl = document
+                    .querySelector('[data-seo-content-project-url]')
+                    ?.getAttribute('data-seo-content-project-url')
+                    || '';
+                prepareEditorExitAfterSyncEnqueue(articleId, siteId);
+                if (window.__seoArticleHeavyActionOverlay) {
+                    window.__seoArticleHeavyActionOverlay.persistUntilUnload = false;
+                    window.__seoArticleHeavyActionOverlay.locked = false;
+                }
+                window.__seoArticleHeavyActionOverlay?.hide?.();
+                closeEditorAfterProjectLocalSave(projectUrl);
+            } else {
+                result = await saveArticleViaApiSingleFlight(articleId, buildPayload);
                 finishArticleSaveFromApi(result, {
                     articleId,
                     siteId,
                     connectionHash: window.__SEO_EDITOR_CONNECTION_HASH__ ?? '',
                     savedHtml: String(window.__SEO_EDITOR_LAST_SAVE_HTML__ ?? editorBundle.html ?? ''),
+                    keepOverlay: false,
                 });
                 window.__seoResetPublishTabPrimed?.();
-            } catch (error) {
-                if (error?.conflict) {
-                    handleArticleSaveConflict(error);
-
-                    return;
-                }
-
-                throw error;
             }
+        } catch (error) {
+            if (error?.conflict) {
+                handleArticleSaveConflict(error);
+
+                return;
+            }
+
+            throw error;
         }
     } catch (error) {
         window.__seoEndArticleHeavyActionClient?.();
@@ -339,6 +400,7 @@ async function runArticleEditorApiAction(action, wire, editorDetail = {}) {
 
 window.__seoRunArticleEditorApiAction = runArticleEditorApiAction;
 
+/** @deprecated Phase 6C.3 — Gallery UI is React FeaturedSidebarPanel; Alpine album box is read-only stub. */
 window.seoProductAlbumBoxData = function seoProductAlbumBoxData(articleId) {
     const id = Number(articleId ?? 0);
 
@@ -347,35 +409,14 @@ window.seoProductAlbumBoxData = function seoProductAlbumBoxData(articleId) {
         albumItems: [],
         dragUrl: null,
         init() {
-            this.syncFromStorage();
-            this._onGalleryUpdated = (event) => {
-                const detail = event?.detail ?? {};
-                const aid = Number(detail.article_id ?? detail.articleId ?? 0);
-                if (aid === this.articleId) {
-                    this.syncFromStorage();
-                }
-            };
-            window.addEventListener('seo-product-gallery-updated', this._onGalleryUpdated);
+            // Phase 6C.3: no Alpine writable gallery shadow.
         },
-        destroy() {
-            if (this._onGalleryUpdated) {
-                window.removeEventListener('seo-product-gallery-updated', this._onGalleryUpdated);
-            }
-        },
+        destroy() {},
         syncFromStorage() {
-            const storage = window.__seoProductAlbumStorage;
-            this.albumItems = storage?.load ? storage.load(this.articleId) : [];
+            this.albumItems = [];
         },
-        removeItem(url) {
-            const storage = window.__seoProductAlbumStorage;
-            if (storage?.remove) {
-                storage.remove(this.articleId, url);
-            }
-            this.syncFromStorage();
-        },
-        startDrag(event) {
-            this.dragUrl = event.currentTarget.dataset.galleryUrl || null;
-        },
+        removeItem() {},
+        startDrag() {},
         allowDrop(event) {
             event.preventDefault();
         },
@@ -384,33 +425,6 @@ window.seoProductAlbumBoxData = function seoProductAlbumBoxData(articleId) {
         },
         onDrop(event) {
             event.preventDefault();
-            const dragUrl = this.dragUrl;
-            if (!dragUrl) {
-                return;
-            }
-
-            const targetEl = event.currentTarget.closest('[data-gallery-url]');
-            const targetUrl = targetEl?.dataset?.galleryUrl || null;
-            if (!targetUrl || targetUrl === dragUrl) {
-                return;
-            }
-
-            const urls = this.albumItems.map((item) => String(item?.url ?? '').trim());
-            const from = urls.indexOf(dragUrl);
-            const to = urls.indexOf(targetUrl);
-            if (from < 0 || to < 0 || from === to) {
-                return;
-            }
-
-            urls.splice(from, 1);
-            urls.splice(to, 0, dragUrl);
-
-            const storage = window.__seoProductAlbumStorage;
-            if (storage?.reorder) {
-                storage.reorder(this.articleId, urls);
-            }
-
-            this.syncFromStorage();
             this.dragUrl = null;
         },
         albumCountLabel() {
@@ -529,7 +543,7 @@ function registerArticleEditorLivewireBridge() {
     if (typeof Livewire !== 'undefined') {
         Livewire.on('collect-editor-html', forward('collect-editor-html'));
         Livewire.on('article-faqs-extracted', forward('article-faqs-extracted'));
-        Livewire.on('seo-analyze-result', forward('seo-analyze-result'));
+        // Phase 2B: Livewire no longer owns analyze UI — do not bridge seo-analyze-result.
         Livewire.on('flush-article-faqs', forward('flush-article-faqs'));
         Livewire.on('article-faq-extract-debug', forward('article-faq-extract-debug'));
         Livewire.on('article-faq-extract-debug-cleared', forward('article-faq-extract-debug-cleared'));
@@ -586,8 +600,333 @@ function getOrCreateReactRoot(element) {
     return element.__seoArticleReactRoot;
 }
 
+function EditorSessionLockBanner({
+    lockInfo,
+    canTakeover,
+    onRetry,
+    onTakeover,
+    onBack = null,
+    reasonCode = null,
+    status = null,
+}) {
+    if (!lockInfo && !onRetry && !reasonCode) {
+        return null;
+    }
+
+    const code = String(reasonCode ?? '').trim();
+    const archived = code === 'content_project_archived' || code === 'article_not_editable';
+    const conflict = status === 'conflict' || code.includes('conflict');
+    const locked = !archived && !conflict && (
+        status === 'locked'
+        || code === 'article_editor_locked'
+        || code === 'locked'
+        || Boolean(lockInfo)
+    );
+    const name = String(lockInfo?.editor_name ?? '').trim() || t('editor_locked_other_user');
+
+    let title = t('editor_locked_title');
+    let body = t('editor_locked_body', { name });
+    if (archived) {
+        title = t('editor_archived_title');
+        body = t('editor_archived_body');
+    } else if (conflict) {
+        title = t('editor_conflict_title');
+        body = t('editor_conflict_body');
+    }
+
+    const showRetry = typeof onRetry === 'function' && !archived && !conflict;
+    const showTakeover = !archived && !conflict && Boolean(canTakeover || lockInfo?.can_takeover);
+    const showBack = typeof onBack === 'function';
+    const metaBits = !archived && !conflict
+        ? [
+            lockInfo?.acquired_at ? `Bắt đầu: ${lockInfo.acquired_at}` : null,
+            lockInfo?.heartbeat_at ? `Hoạt động gần nhất: ${lockInfo.heartbeat_at}` : null,
+            lockInfo?.expires_at ? `Hết hạn dự kiến: ${lockInfo.expires_at}` : null,
+        ].filter(Boolean)
+        : [];
+
+    return (
+        <div
+            className={`seo-editor-hard-lock-bar${archived ? ' is-archived' : ''}${conflict ? ' is-conflict' : ''}${locked ? ' is-locked' : ''}`}
+            role="alert"
+            data-seo-editor-lock-banner="1"
+            data-seo-editor-hard-readonly="1"
+            data-reason-code={code || undefined}
+            data-session-status={status || undefined}
+        >
+            <div className="seo-editor-hard-lock-bar__main">
+                <span className="seo-editor-hard-lock-bar__badge" aria-hidden="true">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                    </svg>
+                    {t('editor_locked_badge')}
+                </span>
+                <div className="seo-editor-hard-lock-bar__copy">
+                    <div className="seo-editor-hard-lock-bar__title">{title}</div>
+                    <div className="seo-editor-hard-lock-bar__body">{body}</div>
+                    {metaBits.length > 0 ? (
+                        <div className="seo-editor-hard-lock-bar__meta">{metaBits.join(' · ')}</div>
+                    ) : null}
+                </div>
+            </div>
+            {(showRetry || showTakeover || showBack) ? (
+                <div className="seo-editor-hard-lock-bar__actions">
+                    {showRetry ? (
+                        <button
+                            type="button"
+                            className="seo-editor-hard-lock-bar__btn seo-editor-hard-lock-bar__btn--retry"
+                            onClick={onRetry}
+                        >
+                            {t('editor_locked_retry')}
+                        </button>
+                    ) : null}
+                    {showTakeover ? (
+                        <button
+                            type="button"
+                            className="seo-editor-hard-lock-bar__btn seo-editor-hard-lock-bar__btn--takeover"
+                            onClick={onTakeover}
+                        >
+                            {t('editor_locked_takeover')}
+                        </button>
+                    ) : null}
+                    {showBack ? (
+                        <button
+                            type="button"
+                            className="seo-editor-hard-lock-bar__btn seo-editor-hard-lock-bar__btn--back"
+                            onClick={onBack}
+                        >
+                            {t('editor_locked_back')}
+                        </button>
+                    ) : null}
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
+function ArticleEditorWithSession(props) {
+    const {
+        articleId,
+        documentVersion = 1,
+        currentUserId = null,
+        canTakeoverEditorSession = false,
+        editorSessionConfig = null,
+        ...editorProps
+    } = props;
+
+    const [sessionReady, setSessionReady] = React.useState(false);
+    const [sessionReadOnly, setSessionReadOnly] = React.useState(true);
+    const [lockInfo, setLockInfo] = React.useState(null);
+    const [acquireError, setAcquireError] = React.useState(null);
+    const [sessionStatus, setSessionStatus] = React.useState(EDITOR_SESSION_STATUS.ACQUIRING);
+    const [sessionReasonCode, setSessionReasonCode] = React.useState(null);
+    const clientRef = React.useRef(null);
+    const editorMountedRef = React.useRef(false);
+    const acquireGenerationRef = React.useRef(0);
+    const heartbeatSeconds = Math.max(
+        10,
+        Number(
+            editorSessionConfig?.heartbeatSeconds
+            ?? editorSessionConfig?.heartbeat_seconds
+            ?? 30,
+        ) || 30,
+    );
+
+    const applyClientState = React.useCallback((client, reasonCode = null) => {
+        window.__seoEditorSessionClient = client;
+        const writable = !Boolean(client.readOnly);
+        const status = resolveSessionStatusFromClient(
+            reasonCode || client.lockStatus,
+            { readOnly: client.readOnly, sessionId: client.sessionId },
+        );
+        emitArticleEditorSessionState({
+            article_id: Number(articleId) || 0,
+            session_id: client.sessionId,
+            status,
+            writable,
+            document_version: client.documentVersion,
+            reason_code: reasonCode,
+            lock: client.lockInfo,
+        });
+        setSessionReadOnly(Boolean(client.readOnly));
+        setLockInfo(client.lockInfo);
+        setSessionStatus(status);
+        setSessionReasonCode(reasonCode || client.lockStatus || null);
+        setSessionReady(true);
+        editorMountedRef.current = true;
+
+        try {
+            const livewireId = String(window.__SEO_EDIT_ARTICLE_LIVEWIRE_ID__ ?? '');
+            const component = livewireId && window.Livewire?.find?.(livewireId);
+            component?.set?.('editorSessionId', client.sessionId || null);
+            component?.set?.('expectedDocumentVersion', client.documentVersion || null);
+        } catch {
+            // ignore
+        }
+    }, [articleId]);
+
+    const runAcquire = React.useCallback(async () => {
+        const generation = ++acquireGenerationRef.current;
+        const previous = clientRef.current;
+        previous?.destroy?.();
+
+        emitArticleEditorSessionState({
+            article_id: Number(articleId) || 0,
+            session_id: null,
+            status: EDITOR_SESSION_STATUS.ACQUIRING,
+            writable: false,
+            document_version: documentVersion,
+            reason_code: null,
+            lock: null,
+        });
+
+        const client = new EditorSessionClient({
+            articleId,
+            documentVersion,
+            heartbeatSeconds,
+            onStateChange: (snap) => {
+                if (acquireGenerationRef.current !== generation) {
+                    return;
+                }
+                const status = resolveSessionStatusFromClient(snap.lockStatus, {
+                    readOnly: snap.readOnly,
+                    sessionId: snap.sessionId,
+                });
+                emitArticleEditorSessionState({
+                    article_id: Number(articleId) || 0,
+                    session_id: snap.sessionId,
+                    status,
+                    writable: !snap.readOnly,
+                    document_version: snap.documentVersion,
+                    reason_code: snap.lockStatus || null,
+                    lock: snap.lockInfo,
+                });
+                setSessionReadOnly(Boolean(snap.readOnly));
+                setLockInfo(snap.lockInfo);
+                setSessionStatus(status);
+                setSessionReasonCode(snap.lockStatus || null);
+                try {
+                    const livewireId = String(window.__SEO_EDIT_ARTICLE_LIVEWIRE_ID__ ?? '');
+                    const component = livewireId && window.Livewire?.find?.(livewireId);
+                    component?.set?.('editorSessionId', snap.sessionId || null);
+                    component?.set?.('expectedDocumentVersion', snap.documentVersion || null);
+                } catch {
+                    // ignore
+                }
+            },
+        });
+        clientRef.current = client;
+        if (!editorMountedRef.current) {
+            setSessionReady(false);
+        }
+        setAcquireError(null);
+
+        const result = await client.acquire(documentVersion);
+        if (acquireGenerationRef.current !== generation) {
+            client.destroy?.();
+            return;
+        }
+        if (!result.ok) {
+            setAcquireError(result.error);
+            applyClientState(client, result.error?.code || 'article_editor_locked');
+            return;
+        }
+
+        setAcquireError(null);
+        applyClientState(client, null);
+    }, [articleId, applyClientState, documentVersion, heartbeatSeconds]);
+
+    React.useEffect(() => {
+        window.__SEO_EDITOR_CURRENT_USER_ID__ = currentUserId != null ? Number(currentUserId) || 0 : 0;
+        void runAcquire();
+
+        return () => {
+            acquireGenerationRef.current += 1;
+            const client = clientRef.current;
+            clientRef.current = null;
+            client?.destroy?.();
+            if (window.__seoEditorSessionClient === client) {
+                delete window.__seoEditorSessionClient;
+            }
+            window.__SEO_EDITOR_READ_ONLY__ = false;
+        };
+    }, [currentUserId, runAcquire]);
+
+    const onTakeover = React.useCallback(async () => {
+        const confirmed = window.confirm(
+            'Phiên chỉnh sửa hiện tại sẽ bị thu hồi. Những thay đổi chưa được lưu của người đang sửa có thể bị mất.',
+        );
+        if (!confirmed) {
+            return;
+        }
+
+        const client = clientRef.current;
+        if (!client) {
+            return;
+        }
+
+        const result = await client.takeover(documentVersion);
+        if (!result.ok) {
+            setAcquireError(result.error);
+            return;
+        }
+
+        setAcquireError(null);
+        applyClientState(client);
+    }, [applyClientState, documentVersion]);
+
+    const onBack = React.useCallback(() => {
+        if (typeof window.history !== 'undefined' && window.history.length > 1) {
+            window.history.back();
+            return;
+        }
+        window.location.href = '/seo';
+    }, []);
+
+    if (!sessionReady) {
+        return (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-600 animate-pulse">
+                Đang mở phiên chỉnh sửa…
+            </div>
+        );
+    }
+
+    const hardReadonly = Boolean(sessionReadOnly);
+
+    return (
+        <div
+            className={`seo-editor-session-shell${hardReadonly ? ' seo-editor-session-shell--hard-readonly' : ''}`}
+            data-seo-editor-session-shell="1"
+            data-seo-editor-hard-readonly={hardReadonly ? '1' : '0'}
+            data-session-status={sessionStatus || undefined}
+            data-session-writable={hardReadonly ? '0' : '1'}
+        >
+            {hardReadonly ? (
+                <EditorSessionLockBanner
+                    lockInfo={lockInfo || acquireError?.lock}
+                    canTakeover={canTakeoverEditorSession || Boolean(lockInfo?.can_takeover || acquireError?.lock?.can_takeover)}
+                    reasonCode={sessionReasonCode || acquireError?.code || null}
+                    status={sessionStatus}
+                    onRetry={() => { void runAcquire(); }}
+                    onTakeover={() => { void onTakeover(); }}
+                    onBack={onBack}
+                />
+            ) : null}
+            <SeoArticleEditor
+                {...editorProps}
+                articleId={articleId}
+                sessionReadOnly={sessionReadOnly}
+                documentVersion={documentVersion}
+            />
+        </div>
+    );
+}
+
 function readArticleEditorBootstrap() {
     let initialHtml = '';
+    let initialEditorDocument = null;
+    let initialEditorDocumentHash = null;
     let initialSeo = null;
     let editorSettings = { history_step: 20, autosave_interval_seconds: 2 };
     let initialPostImages = [];
@@ -600,6 +939,10 @@ function readArticleEditorBootstrap() {
     let connectionHash = '';
     let expectedUpdatedAt = '';
     let expectedContentHash = '';
+    let documentVersion = 1;
+    let currentUserId = null;
+    let canTakeoverEditorSession = false;
+    let editorSessionConfig = null;
     let supportsProductGallery = false;
     let isCanaryProduct = false;
     let productCategoryOptions = [];
@@ -627,9 +970,26 @@ function readArticleEditorBootstrap() {
             connectionHash = String(core?.connectionHash ?? core?.seo_connection_hash ?? '').trim();
             expectedUpdatedAt = String(core?.expectedUpdatedAt ?? core?.expected_updated_at ?? '').trim();
             expectedContentHash = String(core?.expectedContentHash ?? core?.expected_content_hash ?? '').trim();
+            documentVersion = Math.max(1, Number(core?.documentVersion ?? core?.document_version ?? 1) || 1);
+            currentUserId = core?.currentUserId ?? core?.current_user_id ?? null;
+            canTakeoverEditorSession = Boolean(core?.canTakeoverEditorSession ?? core?.can_takeover_editor_session);
+            editorSessionConfig = core?.editorSession && typeof core.editorSession === 'object'
+                ? core.editorSession
+                : null;
             supportsProductGallery = Boolean(core?.supportsProductGallery ?? core?.supports_product_gallery);
             isCanaryProduct = Boolean(core?.isCanaryProduct ?? core?.is_canary_product);
             initialHtml = typeof core?.content === 'string' ? core.content : '';
+            if (core?.editorDocument && typeof core.editorDocument === 'object') {
+                initialEditorDocument = core.editorDocument;
+            } else if (core?.editor_document && typeof core.editor_document === 'object') {
+                initialEditorDocument = core.editor_document;
+            }
+            initialEditorDocumentHash = core?.editorDocumentHash
+                ?? core?.editor_document_hash
+                ?? null;
+            if (initialEditorDocumentHash) {
+                window.__SEO_EDITOR_DOCUMENT_HASH__ = String(initialEditorDocumentHash);
+            }
             if (core?.aiHistoryPendingApply && typeof core.aiHistoryPendingApply === 'object') {
                 aiHistoryPendingApply = core.aiHistoryPendingApply;
             }
@@ -641,6 +1001,21 @@ function readArticleEditorBootstrap() {
             }
             if (typeof core?.featuredImageUrl === 'string' && core.featuredImageUrl.trim() !== '') {
                 // Featured URL available; images catalog still lazy.
+            }
+            if (core?.mediaSnapshot && typeof core.mediaSnapshot === 'object') {
+                window.__SEO_EDITOR_MEDIA_SNAPSHOT_BOOTSTRAP__ = core.mediaSnapshot;
+            } else if (core?.media_snapshot && typeof core.media_snapshot === 'object') {
+                window.__SEO_EDITOR_MEDIA_SNAPSHOT_BOOTSTRAP__ = core.media_snapshot;
+            }
+            if (core?.analysisPolicy && typeof core.analysisPolicy === 'object') {
+                window.__SEO_ANALYSIS_POLICY_BOOTSTRAP__ = core.analysisPolicy;
+            } else if (core?.analysis_policy && typeof core.analysis_policy === 'object') {
+                window.__SEO_ANALYSIS_POLICY_BOOTSTRAP__ = core.analysis_policy;
+            }
+            if (core?.externalFacts && typeof core.externalFacts === 'object') {
+                window.__SEO_EXTERNAL_FACTS_BOOTSTRAP__ = core.externalFacts;
+            } else if (core?.external_facts && typeof core.external_facts === 'object') {
+                window.__SEO_EXTERNAL_FACTS_BOOTSTRAP__ = core.external_facts;
             }
             // Light SERP / SEO identity from core — never wait for seo-summary to paint preview.
             if (!initialSeo) {
@@ -761,6 +1136,8 @@ function readArticleEditorBootstrap() {
 
     return {
         initialHtml,
+        initialEditorDocument,
+        initialEditorDocumentHash,
         initialSeo,
         editorSettings,
         initialPostImages,
@@ -773,6 +1150,10 @@ function readArticleEditorBootstrap() {
         connectionHash,
         expectedUpdatedAt,
         expectedContentHash,
+        documentVersion,
+        currentUserId,
+        canTakeoverEditorSession,
+        editorSessionConfig,
         supportsProductGallery,
         isCanaryProduct,
         productCategoryOptions,
@@ -823,6 +1204,8 @@ function mountArticleEditorPage() {
     const bootstrap = readArticleEditorBootstrap();
     const {
         initialHtml,
+        initialEditorDocument,
+        initialEditorDocumentHash,
         initialSeo,
         editorSettings,
         initialPostImages,
@@ -835,6 +1218,10 @@ function mountArticleEditorPage() {
         connectionHash,
         expectedUpdatedAt,
         expectedContentHash,
+        documentVersion,
+        currentUserId,
+        canTakeoverEditorSession,
+        editorSessionConfig,
         supportsProductGallery,
         isCanaryProduct,
         productCategoryOptions,
@@ -865,6 +1252,8 @@ function mountArticleEditorPage() {
         expected_updated_at: expectedUpdatedAt || null,
         expected_content_hash: expectedContentHash || null,
     };
+    window.__SEO_EDITOR_DOCUMENT_VERSION__ = Math.max(1, Number(documentVersion) || 1);
+    window.__SEO_EDITOR_CURRENT_USER_ID__ = currentUserId != null ? Number(currentUserId) || 0 : 0;
     window.__SEO_EDITOR_CONNECTION_HASH__ = connectionHash || '';
     window.__SEO_ARTICLE_SITE_ID__ = Number(siteId ?? 0) || 0;
     window.__SEO_EDITOR_LAZY_ENDPOINTS__ = lazyEndpoints || window.__SEO_EDITOR_LAZY_ENDPOINTS__ || {};
@@ -874,8 +1263,28 @@ function mountArticleEditorPage() {
         performance.mark('seo-article-editor-mount-start');
     }
 
-    if (articleId && initialProductGallery.length > 0) {
-        saveProductAlbum(articleId, mergeProductAlbumBootstrap(initialProductGallery, articleId));
+    if (articleId) {
+        discardLegacyMediaLocalStorage(articleId);
+        const bootSnap = window.__SEO_EDITOR_MEDIA_SNAPSHOT_BOOTSTRAP__;
+        if (bootSnap && typeof bootSnap === 'object') {
+            applyMediaSnapshot(articleId, bootSnap, { force: true });
+        } else if (initialProductGallery.length > 0) {
+            // Legacy meta-only bootstrap: hydrate gallery via API replace (no LS).
+            saveProductAlbum(articleId, mergeProductAlbumBootstrap(initialProductGallery, articleId));
+        }
+    }
+
+    const bootPolicy = window.__SEO_ANALYSIS_POLICY_BOOTSTRAP__
+        || editorSettings?.analysis_policy
+        || null;
+    if (bootPolicy && typeof bootPolicy === 'object') {
+        setAnalysisPolicy(bootPolicy);
+        if (Array.isArray(bootPolicy.seo_scoring_rules) && bootPolicy.seo_scoring_rules.length > 0) {
+            window.__SEO_SCORING_RULES__ = bootPolicy.seo_scoring_rules;
+        }
+    }
+    if (window.__SEO_EXTERNAL_FACTS_BOOTSTRAP__ && typeof window.__SEO_EXTERNAL_FACTS_BOOTSTRAP__ === 'object') {
+        setExternalFacts(window.__SEO_EXTERNAL_FACTS_BOOTSTRAP__);
     }
 
     const scoringRules = Array.isArray(editorSettings?.seo_scoring_rules) && editorSettings.seo_scoring_rules.length > 0
@@ -895,10 +1304,16 @@ function mountArticleEditorPage() {
 
     getOrCreateReactRoot(rootElement).render(
         <>
-            <SeoArticleEditor
+            <ArticleEditorWithSession
                 articleId={articleId}
                 siteId={siteId}
+                documentVersion={documentVersion}
+                currentUserId={currentUserId}
+                canTakeoverEditorSession={canTakeoverEditorSession}
+                editorSessionConfig={editorSessionConfig}
                 initialHtml={initialHtml}
+                initialEditorDocument={initialEditorDocument}
+                initialEditorDocumentHash={initialEditorDocumentHash}
                 initialSeo={initialSeo}
                 initialPostImages={initialPostImages}
                 initialSupplementalImages={initialSupplementalImages}
@@ -914,20 +1329,16 @@ function mountArticleEditorPage() {
                 initialFaqs={[]}
                 initialVirtualReviews={[]}
                 articleTitle={articleTitle}
-                editorSettings={editorSettings}
+                editorSettings={{
+                    ...(editorSettings && typeof editorSettings === 'object' ? editorSettings : {}),
+                    ai_debug: aiDebug,
+                }}
                 mediaPickerUrl={mediaPickerUrl}
                 initialLoaiSanPham={initialLoaiSanPham}
                 initialGalleryDescription={initialGalleryDescription}
                 perfDebug={perfDebugEnabled}
             />
-            <ArticleEditorModuleHost
-                articleId={articleId}
-                siteId={siteId}
-                aiDebug={aiDebug}
-                canGenerateImage={editorSettings?.can_generate_image !== false}
-                canGenerateVideo={editorSettings?.can_generate_video === true}
-                showLinkWidgets={editorSettings?.show_link_widgets !== false}
-            />
+            <WordPressMediaRenameModal />
         </>,
     );
 
@@ -998,6 +1409,12 @@ function mountArticleEditorPage() {
                         }
                         if (settingsData.seo_rule_messages && typeof settingsData.seo_rule_messages === 'object') {
                             window.__SEO_RULE_MESSAGES__ = settingsData.seo_rule_messages;
+                        }
+                        if (settingsData.analysis_policy && typeof settingsData.analysis_policy === 'object') {
+                            setAnalysisPolicy(settingsData.analysis_policy);
+                        }
+                        if (settingsData.external_facts && typeof settingsData.external_facts === 'object') {
+                            setExternalFacts(settingsData.external_facts);
                         }
                         window.dispatchEvent(
                             new CustomEvent('seo-editor-settings-loaded', { detail: settingsData }),

@@ -37,6 +37,30 @@ final class ContentProjectArticleMembership
         return $this->activeTaskForArticle($article) instanceof SeoProjectTask;
     }
 
+    /**
+     * Article gắn task Content Project (kể cả project đã archive).
+     * Dùng cho Manual Sync visibility / fail-closed — archive ≠ bài độc lập.
+     */
+    public function assignedTaskForArticle(SeoArticle|int $article): ?SeoProjectTask
+    {
+        $articleId = $article instanceof SeoArticle ? (int) $article->getKey() : $article;
+        if ($articleId <= 0) {
+            return null;
+        }
+
+        $task = SeoProjectTask::query()
+            ->where('article_id', $articleId)
+            ->orderByDesc('id')
+            ->first();
+
+        return $task instanceof SeoProjectTask ? $task : null;
+    }
+
+    public function belongsToContentProject(SeoArticle|int $article): bool
+    {
+        return $this->assignedTaskForArticle($article) instanceof SeoProjectTask;
+    }
+
     public function activeProjectForArticle(SeoArticle|int $article): ?SeoProject
     {
         $task = $this->activeTaskForArticle($article);

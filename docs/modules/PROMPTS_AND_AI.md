@@ -21,6 +21,8 @@ Layers (must stay separate):
 
 Unassigned Prompt (no Hook, no binding, no Task ref) is valid storage — does **not** auto-run.
 
+**Article Editor (Phase 6C.4):** in-editor AI Chat (image/video generate + selection) is React runtime module `article-editor.ai`. Prompt configuration, AI history, billing/audit stay Filament/Laravel shell. See [`ARTICLE_EDITOR_RUNTIME_COMPLETION.md`](../architecture/ARTICLE_EDITOR_RUNTIME_COMPLETION.md).
+
 ## 2. Canonical routes
 
 Panel prefix: `/seo/{connection_hash}/`
@@ -157,6 +159,7 @@ Task / Content Project workflow
 - Settings-visible hook binding CRUD (manager).
 - Prompt CRUD (planner); Test Prompt; Sync models on connection.
 - Execute hook API for editor fields (title/meta/FAQ/… per catalog).
+- Article Editor FAQ AI: `article.faq.generate` via `generatePreview` (no auto body write); Apply uses FAQ snapshot + owning editor session — see [`ARTICLE_EDITOR_WIDGETS_OWNERSHIP.md`](../architecture/ARTICLE_EDITOR_WIDGETS_OWNERSHIP.md).
 - Explicit editor binding may run Hook Runtime for one Prompt without flipping global migration mode.
 - API Connections: AI (`gemini`/`claude`) + SEO providers via unified list.
 - Extension AI providers listed/health via Extensions UI.

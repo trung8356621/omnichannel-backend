@@ -24,6 +24,15 @@ Root `/README.md` = repository landing.
 | [DATA_AND_RUNTIME_BOUNDARIES.md](architecture/DATA_AND_RUNTIME_BOUNDARIES.md) | DB / logging / addon boundaries |
 | [ARCHITECTURE_FREEZE_V1.md](architecture/ARCHITECTURE_FREEZE_V1.md) | Frozen public contracts |
 | [ARCHITECTURE_DECISIONS.md](architecture/ARCHITECTURE_DECISIONS.md) | ADR-001.. |
+| [ARTICLE_EDITOR_SEPARATION_INVENTORY.md](architecture/ARTICLE_EDITOR_SEPARATION_INVENTORY.md) | Article Editor island / lock / separation inventory |
+| [ARTICLE_EDITOR_SESSION_LOCK.md](architecture/ARTICLE_EDITOR_SESSION_LOCK.md) | Phase 1 server edit-session lock + document_version |
+| [ARTICLE_EDITOR_MEDIA_SNAPSHOT.md](architecture/ARTICLE_EDITOR_MEDIA_SNAPSHOT.md) | Phase 2A Featured/Gallery media snapshot ownership |
+| [ARTICLE_EDITOR_ANALYSIS_OWNERSHIP.md](architecture/ARTICLE_EDITOR_ANALYSIS_OWNERSHIP.md) | Phase 2B React immediate analysis + Laravel policy |
+| [ARTICLE_EDITOR_WIDGETS_OWNERSHIP.md](architecture/ARTICLE_EDITOR_WIDGETS_OWNERSHIP.md) | Phase 2C FAQ/CTA ownership + insertion context |
+| [ARTICLE_EDITOR_DOCUMENT_MODEL.md](architecture/ARTICLE_EDITOR_DOCUMENT_MODEL.md) | Phase 3 TipTap JSON DocumentModel + selectors |
+| [ARTICLE_EDITOR_COMMAND_LAYER.md](architecture/ARTICLE_EDITOR_COMMAND_LAYER.md) | Phase 4 Editor Command Layer + document-changed signal |
+| [ARTICLE_EDITOR_JSON_PERSISTENCE.md](architecture/ARTICLE_EDITOR_JSON_PERSISTENCE.md) | Phase 5A TipTap JSON persistence + derived HTML body |
+| [ARTICLE_EDITOR_RUNTIME.md](architecture/ARTICLE_EDITOR_RUNTIME.md) | Phase 6A internal editor runtime (built-in modules, not public SDK) |
 
 ## Modules
 

@@ -74,7 +74,7 @@ final class ArticleEditorPhase4ClientUtilitiesTest extends TestCase
         $source = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/js/utils/articleEditorStorage.js',
         );
-        self::assertStringContainsString('ARTICLE_EDITOR_DRAFT_VERSION = 2', $source);
+        self::assertStringContainsString('ARTICLE_EDITOR_DRAFT_VERSION = 3', $source);
         self::assertStringContainsString('HTML canonical', $source);
         self::assertStringContainsString('export function hashContent', $source);
         self::assertStringContainsString('export function resolveLocalDraftDecision', $source);

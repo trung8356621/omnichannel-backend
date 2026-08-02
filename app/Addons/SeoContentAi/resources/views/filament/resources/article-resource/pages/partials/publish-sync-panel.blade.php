@@ -11,7 +11,8 @@
         'publishWhenLabel' => $this->getPublishWhenLabel(),
         'status' => $articleStatus,
         'hasWpPost' => (int) ($record->wp_post_id ?? 0) > 0,
-        'canSync' => ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager(),
+        'canSync' => ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager()
+            && ! \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsInContentProject($record),
         'displayTimezone' => SeoDisplayTimezone::name(),
     ];
 @endphp

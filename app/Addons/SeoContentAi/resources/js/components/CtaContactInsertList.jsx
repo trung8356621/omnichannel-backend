@@ -1,7 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
     ChevronDown,
+    Link2,
+    Mail,
+    MapPin,
+    MessageCircle,
+    Phone,
     Plus,
+    Quote,
 } from 'lucide-react';
 import { t } from '../utils/i18n';
 import {
@@ -11,7 +17,12 @@ import {
     isCtaPlainTextType,
 } from '../utils/ctaLinkFormat';
 import { filterUsableCtaContacts } from '../utils/ctaContactUsability';
-import { getInsertionContextForCommand } from '../utils/editorInsertionContext';
+import {
+    getInsertionContextForCommand,
+    preserveEditorContextBeforeSidebarAction,
+} from '../utils/editorInsertionContext';
+import { getEditorCommandHost } from '../utils/editorCommands';
+import { canMutateEditor } from '../utils/editorSessionState';
 import {
     getDefaultCtaQuickTemplate,
     loadCtaQuickTemplatesFromStorage,
@@ -20,26 +31,35 @@ import {
     saveCtaQuickTemplatesToStorage,
     validateCtaQuickTemplate,
 } from '../utils/ctaQuickTemplates';
+import { seoArticleApiFetch } from '../utils/seoArticleApi';
 
 /**
- * Capture caret BEFORE dropdown/button steals focus. Must run on pointerdown
- * (not click). preventDefault keeps TipTap focused when possible.
+ * Snapshot editor caret before sidebar action. No preventDefault — keep a11y.
  *
- * @param {React.PointerEvent|React.MouseEvent} event
+ * @param {React.PointerEvent|React.MouseEvent} [_event]
  */
-function captureCtaInsertionBeforeFocusSteal(event) {
-    event.preventDefault();
-    window.dispatchEvent(new CustomEvent('seo-assistant-freeze-insertion-context'));
+function captureCtaInsertionBeforeFocusSteal(_event) {
+    preserveEditorContextBeforeSidebarAction(_event);
 }
 
-/**
- * Menu items: keep editor from taking focus, but do NOT re-freeze (bookmark
- * already captured on CTA trigger). Re-freeze after blur overwrites caret.
- *
- * @param {React.PointerEvent|React.MouseEvent} event
- */
-function preserveCtaFocusWithoutRefreeze(event) {
-    event.preventDefault();
+function ctaTypeIcon(type) {
+    switch (String(type || '').toLowerCase()) {
+        case 'phone':
+        case 'hotline':
+            return Phone;
+        case 'email':
+            return Mail;
+        case 'zalo':
+        case 'chat':
+            return MessageCircle;
+        case 'address':
+            return MapPin;
+        case 'facebook':
+        case 'website':
+            return Link2;
+        default:
+            return Quote;
+    }
 }
 
 /**
@@ -47,7 +67,6 @@ function preserveCtaFocusWithoutRefreeze(event) {
  *   items: unknown[],
  *   activeKey: string,
  *   onKeywordClick: Function,
- *   onInsertValue: Function,
  *   onInsertQuickCta: Function,
  *   templatesByType: Record<string, { defaultIndex: number, templates: string[] }>,
  *   emptyText: string,
@@ -57,7 +76,6 @@ export function CtaContactInsertList({
     items,
     activeKey,
     onKeywordClick,
-    onInsertValue,
     onInsertQuickCta,
     templatesByType,
     emptyText,
@@ -91,7 +109,14 @@ export function CtaContactInsertList({
                 const type = String(item?.type ?? '').toLowerCase();
                 const itemKey = `cta-${type}-${label}-${index}`;
                 const isActive = activeKey === itemKey;
-                const insertable = isCtaItemInsertable(item);
+                const insertable = isCtaItemInsertable(item) && canMutateEditor();
+                const contactTooltip = insertable
+                    ? t(`cta_widget_insert_${type === 'hotline' ? 'phone' : type}_tooltip`)
+                    : t('editor_locked_mutation_tooltip');
+                const primaryTooltip = contactTooltip === `cta_widget_insert_${type === 'hotline' ? 'phone' : type}_tooltip`
+                    ? t('cta_widget_insert_contact_tooltip')
+                    : contactTooltip;
+                const TypeIcon = ctaTypeIcon(type);
                 const templates =
                     templatesByType?.[type]?.templates
                     ?? templatesByType?.[type === 'hotline' ? 'phone' : type]?.templates
@@ -113,58 +138,62 @@ export function CtaContactInsertList({
                             </span>
                         </button>
                         <div className="wp-article-links-cta-actions" data-cta-quick-menu>
-                            <button
-                                type="button"
-                                className="wp-article-links-insert-btn wp-article-links-insert-btn--text"
-                                aria-label={t('cta_widget_insert_value')}
-                                title={t('cta_widget_insert_value')}
-                                disabled={!insertable}
-                                onPointerDown={captureCtaInsertionBeforeFocusSteal}
-                                onMouseDown={captureCtaInsertionBeforeFocusSteal}
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (insertable) {
-                                        onInsertValue(item, itemKey);
-                                    }
-                                }}
-                            >
-                                {t('cta_widget_insert_value_short')}
-                            </button>
                             <div className="wp-article-links-cta-quick-wrap">
                                 <button
                                     type="button"
-                                    className="wp-article-links-insert-btn wp-article-links-insert-btn--text"
-                                    aria-label={t('cta_widget_insert_sentence')}
-                                    title={t('cta_widget_insert_sentence')}
+                                    className="wp-article-links-insert-btn"
+                                    aria-label={primaryTooltip}
+                                    title={primaryTooltip}
+                                    data-cta-action="insert_contact_value"
                                     disabled={!insertable}
                                     onPointerDown={captureCtaInsertionBeforeFocusSteal}
                                     onMouseDown={captureCtaInsertionBeforeFocusSteal}
                                     onClick={(e) => {
                                         e.stopPropagation();
-                                        if (templates.length > 1) {
-                                            setMenuKey((prev) => (prev === itemKey ? '' : itemKey));
-                                            return;
-                                        }
                                         if (insertable) {
-                                            onInsertQuickCta(item, itemKey, null);
+                                            onInsertQuickCta(item, itemKey, null, 'value');
                                         }
                                     }}
                                 >
-                                    CTA
-                                    {templates.length > 1 ? <ChevronDown size={12} aria-hidden /> : null}
+                                    <TypeIcon size={14} aria-hidden />
+                                </button>
+                                <button
+                                    type="button"
+                                    className="wp-article-links-insert-btn wp-article-links-insert-btn--icon"
+                                    aria-label={t('cta_widget_insert_sentence_tooltip')}
+                                    title={t('cta_widget_insert_sentence_tooltip')}
+                                    data-cta-action="open_cta_templates"
+                                    disabled={!insertable}
+                                    onPointerDown={captureCtaInsertionBeforeFocusSteal}
+                                    onMouseDown={captureCtaInsertionBeforeFocusSteal}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (!insertable) {
+                                            return;
+                                        }
+                                        if (templates.length <= 1) {
+                                            onInsertQuickCta(item, itemKey, null, 'sentence');
+                                            return;
+                                        }
+                                        setMenuKey((prev) => (prev === itemKey ? '' : itemKey));
+                                    }}
+                                >
+                                    <Quote size={12} aria-hidden />
+                                    {templates.length > 1 ? <ChevronDown size={10} aria-hidden /> : null}
                                 </button>
                                 {menuKey === itemKey ? (
                                     <ul className="wp-article-links-cta-template-menu">
                                         <li>
                                             <button
                                                 type="button"
-                                                onPointerDown={preserveCtaFocusWithoutRefreeze}
-                                                onMouseDown={preserveCtaFocusWithoutRefreeze}
+                                                data-cta-action="insert_contact_cta"
+                                                onPointerDown={captureCtaInsertionBeforeFocusSteal}
+                                                onMouseDown={captureCtaInsertionBeforeFocusSteal}
                                                 onClick={(e) => {
                                                     e.stopPropagation();
                                                     setMenuKey('');
                                                     if (insertable) {
-                                                        onInsertQuickCta(item, itemKey, null);
+                                                        onInsertQuickCta(item, itemKey, null, 'sentence');
                                                     }
                                                 }}
                                             >
@@ -175,12 +204,13 @@ export function CtaContactInsertList({
                                             <li key={template}>
                                                 <button
                                                     type="button"
-                                                    onPointerDown={preserveCtaFocusWithoutRefreeze}
-                                                    onMouseDown={preserveCtaFocusWithoutRefreeze}
+                                                    data-cta-action="insert_contact_cta"
+                                                    onPointerDown={captureCtaInsertionBeforeFocusSteal}
+                                                    onMouseDown={captureCtaInsertionBeforeFocusSteal}
                                                     onClick={(e) => {
                                                         e.stopPropagation();
                                                         setMenuKey('');
-                                                        onInsertQuickCta(item, itemKey, template);
+                                                        onInsertQuickCta(item, itemKey, template, 'sentence');
                                                     }}
                                                 >
                                                     {resolveCtaQuickTemplate(template, item)}
@@ -326,9 +356,52 @@ export function CtaQuickTemplateSettingsPopover({ siteId = 0, open, onClose, set
                     type="button"
                     className="is-primary"
                     onClick={() => {
-                        const saved = saveCtaQuickTemplatesToStorage(siteId, draft);
-                        onSave(saved);
-                        onClose();
+                        const normalized = normalizeCtaQuickTemplateSettings(draft);
+                        for (const [type, row] of Object.entries(normalized)) {
+                            for (const template of row.templates) {
+                                const check = validateCtaQuickTemplate(template, type);
+                                if (!check.ok) {
+                                    setError(check.error || 'Invalid template');
+                                    return;
+                                }
+                            }
+                        }
+                        void (async () => {
+                            try {
+                                const { response, data } = await seoArticleApiFetch('/api/seo/domain-cta/quick-templates', {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        cta_quick_templates: Object.fromEntries(
+                                            Object.entries(normalized).map(([type, row]) => [
+                                                type,
+                                                {
+                                                    default_index: row.defaultIndex,
+                                                    templates: row.templates,
+                                                },
+                                            ]),
+                                        ),
+                                    }),
+                                });
+                                if (!response.ok || data?.success === false) {
+                                    setError(String(data?.message || data?.error || 'cta_template_save_failed'));
+                                    return;
+                                }
+                                const saved = normalizeCtaQuickTemplateSettings(
+                                    data?.cta_quick_templates ?? normalized,
+                                );
+                                // Legacy LS write removed as SoT — optional discard only.
+                                try {
+                                    window.localStorage?.removeItem(`seo-cta-quick-templates:v1:${Number(siteId) || 0}`);
+                                } catch {
+                                    // ignore
+                                }
+                                onSave(saved);
+                                onClose();
+                            } catch (error) {
+                                setError(String(error?.message || 'cta_template_save_failed'));
+                            }
+                        })();
                     }}
                 >
                     {t('apply')}
@@ -346,11 +419,34 @@ export function CtaQuickTemplateSettingsPopover({ siteId = 0, open, onClose, set
  * @param {string|null} templateOverride
  * @param {Record<string, { defaultIndex: number, templates: string[] }>} templatesByType
  */
+function notifyCta(detail) {
+    const host = getEditorCommandHost();
+    if (typeof host?.notify === 'function') {
+        host.notify(detail);
+        return;
+    }
+    window.dispatchEvent(new CustomEvent('seo-article-editor-notify', { detail }));
+}
+
+/**
+ * CTA insert via command-host action (Phase 6C.2 — no internal CustomEvent bus).
+ */
 export function dispatchCtaInsert(item, mode, templateOverride, templatesByType) {
+    if (!canMutateEditor()) {
+        notifyCta({
+            title: t('editor_locked_title'),
+            body: t('editor_locked_mutation_tooltip'),
+            status: 'warning',
+            reason_code: 'editor_read_only',
+        });
+        return;
+    }
     const type = String(item?.type ?? '').toLowerCase();
     if (!type) {
         return;
     }
+
+    const effectiveMode = mode === 'value' ? 'value' : 'sentence';
 
     // Prefer bookmark frozen on pointerdown (before dropdown stole focus).
     const ctx = getInsertionContextForCommand();
@@ -360,22 +456,28 @@ export function dispatchCtaInsert(item, mode, templateOverride, templatesByType)
         selectionBookmark: ctx.selection,
     };
 
-    if (mode === 'sentence') {
+    const runInsert = (detail) => {
+        const actions = getEditorCommandHost()?.actions;
+        if (typeof actions?.insertCtaLink === 'function') {
+            actions.insertCtaLink(detail);
+            return;
+        }
+        // Deprecated fallback for external consumers mid-rollout.
+        window.dispatchEvent(new CustomEvent('seo-editor-insert-cta-link', { detail }));
+    };
+
+    if (effectiveMode === 'sentence') {
         const template =
             String(templateOverride ?? '').trim()
             || getDefaultCtaQuickTemplate(type, templatesByType)
             || getDefaultCtaQuickTemplate(type === 'hotline' ? 'phone' : type, templatesByType);
         const resolved = resolveCtaQuickTemplate(template, item);
         if (!resolved || resolved.includes('[') && /\[(phone|email|zalo|address|facebook|working_hours|website|label)\]/i.test(resolved)) {
-            window.dispatchEvent(
-                new CustomEvent('seo-article-editor-notify', {
-                    detail: {
-                        title: t('cta_widget_missing_data_title'),
-                        body: t('cta_widget_missing_data_body', { type }),
-                        status: 'warning',
-                    },
-                }),
-            );
+            notifyCta({
+                title: t('cta_widget_missing_data_title'),
+                body: t('cta_widget_missing_data_body', { type }),
+                status: 'warning',
+            });
             return;
         }
 
@@ -384,65 +486,50 @@ export function dispatchCtaInsert(item, mode, templateOverride, templatesByType)
         const valueLabel = ctaDisplayLabel(item);
         const stillHasPlaceholder = /\[[^\]]+\]/u.test(resolved);
         if (!resolved || stillHasPlaceholder) {
-            window.dispatchEvent(
-                new CustomEvent('seo-article-editor-notify', {
-                    detail: {
-                        title: t('cta_widget_missing_data_title'),
-                        body: t('cta_widget_missing_data_body', { type }),
-                        status: 'warning',
-                    },
-                }),
-            );
+            notifyCta({
+                title: t('cta_widget_missing_data_title'),
+                body: t('cta_widget_missing_data_body', { type }),
+                status: 'warning',
+            });
             return;
         }
 
-        window.dispatchEvent(
-            new CustomEvent('seo-editor-insert-cta-link', {
-                detail: {
-                    text: resolved,
-                    href: plainText ? '' : href,
-                    type,
-                    value_label: valueLabel,
-                    sentence: resolved,
-                    is_sentence: true,
-                    is_cta_sentence: true,
-                    is_cta_block: false,
-                    target,
-                },
-            }),
-        );
+        runInsert({
+            text: resolved,
+            href: plainText ? '' : href,
+            type,
+            value_label: valueLabel,
+            sentence: resolved,
+            is_sentence: true,
+            is_cta_sentence: true,
+            is_cta_block: true,
+            target,
+        });
         return;
     }
 
+    // Non-sidebar / legacy callers only.
     const text = ctaDisplayLabel(item);
     const plainText = isCtaPlainTextType(type) || item?.plain_text === true;
     const href = plainText ? '' : String(item?.href ?? formatCtaHref(type, item?.value)).trim();
     if (!text || (!href && !plainText)) {
-        window.dispatchEvent(
-            new CustomEvent('seo-article-editor-notify', {
-                detail: {
-                    title: t('cta_widget_missing_data_title'),
-                    body: t('cta_widget_missing_data_body', { type }),
-                    status: 'warning',
-                },
-            }),
-        );
+        notifyCta({
+            title: t('cta_widget_missing_data_title'),
+            body: t('cta_widget_missing_data_body', { type }),
+            status: 'warning',
+        });
         return;
     }
 
-    window.dispatchEvent(
-        new CustomEvent('seo-editor-insert-cta-link', {
-            detail: {
-                text,
-                href,
-                type,
-                target,
-                is_cta_block: false,
-                is_sentence: false,
-                is_contact_value: true,
-            },
-        }),
-    );
+    runInsert({
+        text,
+        href,
+        type,
+        target,
+        is_cta_block: false,
+        is_sentence: false,
+        is_contact_value: true,
+    });
 }
 
 /**
@@ -451,25 +538,28 @@ export function dispatchCtaInsert(item, mode, templateOverride, templatesByType)
  */
 export function useCtaQuickTemplates(siteId, serverTemplates = null) {
     const [templatesByType, setTemplatesByType] = useState(() => {
-        const local = loadCtaQuickTemplatesFromStorage(siteId);
+        // Phase 2C: server canonical; localStorage is not SoT.
         if (serverTemplates && typeof serverTemplates === 'object') {
-            return normalizeCtaQuickTemplateSettings({ ...local, ...normalizeServerTemplates(serverTemplates) });
+            return normalizeCtaQuickTemplateSettings(normalizeServerTemplates(serverTemplates));
         }
-        return local;
+        return normalizeCtaQuickTemplateSettings(null);
     });
+    const [settingsVersion, setSettingsVersion] = useState('');
 
     useEffect(() => {
         if (serverTemplates && typeof serverTemplates === 'object') {
-            setTemplatesByType((prev) =>
-                normalizeCtaQuickTemplateSettings({
-                    ...prev,
-                    ...normalizeServerTemplates(serverTemplates),
-                }),
-            );
+            setTemplatesByType(normalizeCtaQuickTemplateSettings(normalizeServerTemplates(serverTemplates)));
+            // Discard legacy LS shadow SoT.
+            try {
+                const id = Number(siteId) || 0;
+                window.localStorage?.removeItem(`seo-cta-quick-templates:v1:${id}`);
+            } catch {
+                // ignore
+            }
         }
-    }, [serverTemplates]);
+    }, [serverTemplates, siteId]);
 
-    return [templatesByType, setTemplatesByType];
+    return [templatesByType, setTemplatesByType, settingsVersion, setSettingsVersion];
 }
 
 function normalizeServerTemplates(serverTemplates) {

@@ -15,7 +15,6 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\PublishProjectItemsNowCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectArticleMembership;
-use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectWorkspaceSaveService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\User;
@@ -38,7 +37,6 @@ final class WordPressManualSyncService
         private readonly ArticleWpSyncLeaseService $lease,
         private readonly BusinessActionDispatcher $actions,
         private readonly ContentProjectArticleMembership $contentProjectMembership,
-        private readonly ContentProjectWorkspaceSaveService $workspaceSave,
         private readonly ContentProjectCommandBus $contentProjectCommandBus,
     ) {}
 
@@ -53,9 +51,12 @@ final class WordPressManualSyncService
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
         abort_unless($actor->getKey() > 0, 403);
 
-        // Content Project active: Sync WP = Save Workspace only (no WP API / no publish).
-        if ($this->contentProjectMembership->belongsToActiveContentProject($article)) {
-            return $this->workspaceSave->saveFromEditorBundle($article, $bundle, $actor, $initiatedFrom);
+        // Content Project (active hoặc archived assignment): Manual Sync fail-closed — không gọi WP.
+        if ($this->contentProjectMembership->belongsToContentProject($article)) {
+            return $this->blocked(
+                'content_project_manual_sync_forbidden',
+                (string) __('seo-content-ai::filament.automation.content_project_manual_sync_forbidden'),
+            );
         }
 
         $bundle = $this->syncQueue->applyPublishImmediatelyToBundle($bundle);
@@ -123,19 +124,11 @@ final class WordPressManualSyncService
         abort_unless(SeoAccessControl::canSyncArticlesToWordPress(), 403);
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
-        if ($this->contentProjectMembership->belongsToActiveContentProject($article)) {
-            return [
-                'success' => true,
-                'status' => 'workspace_saved',
-                'queued' => false,
-                'workspace_only' => true,
-                'message' => __('seo-content-ai::filament.automation.content_project_workspace_saved'),
-                'notification' => [
-                    'title' => __('seo-content-ai::filament.automation.content_project_workspace_saved_title'),
-                    'body' => __('seo-content-ai::filament.automation.content_project_workspace_saved'),
-                    'status' => 'success',
-                ],
-            ];
+        if ($this->contentProjectMembership->belongsToContentProject($article)) {
+            return $this->blocked(
+                'content_project_manual_sync_forbidden',
+                (string) __('seo-content-ai::filament.automation.content_project_manual_sync_forbidden'),
+            );
         }
 
         return $this->enqueueManual($article, $actor, $initiatedFrom, ['mode' => 'sync']);

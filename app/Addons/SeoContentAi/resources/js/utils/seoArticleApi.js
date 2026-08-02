@@ -85,15 +85,24 @@ export async function seoArticleApiFetch(url, options = {}) {
     const method = String(options.method ?? 'GET').toUpperCase();
     const token = csrfToken();
     const needsCsrf = !['GET', 'HEAD', 'OPTIONS'].includes(method);
+    const incomingHeaders = options.headers ?? {};
+    const hasContentType = Object.keys(incomingHeaders).some(
+        (key) => key.toLowerCase() === 'content-type',
+    );
+    // Only auto-tag string JSON bodies. Never set Content-Type on FormData/Blob.
+    const isJsonStringBody = typeof options.body === 'string' && options.body !== '';
 
     const response = await fetch(url, {
         credentials: 'same-origin',
         ...options,
         headers: {
             Accept: 'application/json',
+            // Laravel only parses JSON bodies when Content-Type is application/json.
+            // Missing header → empty input → editor-sessions 422 invalid_client_instance_id.
+            ...(isJsonStringBody && !hasContentType ? { 'Content-Type': 'application/json' } : {}),
             ...seoArticleApiHeaders(),
             ...(needsCsrf && token !== '' ? { 'X-CSRF-TOKEN': token } : {}),
-            ...(options.headers ?? {}),
+            ...incomingHeaders,
         },
     });
 

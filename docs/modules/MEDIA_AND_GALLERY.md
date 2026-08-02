@@ -12,6 +12,9 @@ SEO media library, upload/optimize/watermark pipeline, image editors, and WordPr
 - Storage + rows on `omi_seo_ai` (`seo_media`, meta, watermark/optimization settings, processing history, WP backup/pending tables).
 - Site ACL via core `sites` (cross-DB).
 - Editor gallery / featured / product album consume these APIs — rename/slug contracts owned with Article Editor.
+- **Article Editor Phase 2A:** Featured/Gallery canonical SoT = Laravel `media_snapshot` ([`ARTICLE_EDITOR_MEDIA_SNAPSHOT.md`](../architecture/ARTICLE_EDITOR_MEDIA_SNAPSHOT.md)). Mutations persist immediately; no localStorage shadow SoT.
+- **Article Editor Phase 2B:** Image ratio / widget health consume `media_snapshot.content_images` + analysis policy (`words_per_image`); ratio is **info**, not Images hard error. See [`ARTICLE_EDITOR_ANALYSIS_OWNERSHIP.md`](../architecture/ARTICLE_EDITOR_ANALYSIS_OWNERSHIP.md).
+- **Article Editor Phase 6C.3:** React owns Featured/Gallery sidebar UI + one Shared Media Picker (`mode`: `content_image` | `featured` | `gallery`). Alpine modal/drafts removed. WP Fix Slug All still skips WP attachments; picker selection never renames.
 
 ## 2. Canonical routes
 
@@ -131,6 +134,16 @@ Called from article sync prepare path:
 3. Plugin import/replace-binary (≥1.0.50 can switch extension to `.webp`).
 4. WebP backfill only when usable local WebP and **no** persistent `-wp-upload.jpg` fallback (avoids duplicate WP attachments).
 5. Dead `wp_attachment_id` → clear → fresh import.
+
+### WordPress media safe rename (explicit single)
+
+- **Bulk Fix Slug All never renames WordPress media** (frontend filter + backend fail-closed `wordpress_media_requires_explicit_rename`).
+- **Except** UI/state removed — protection is by media source classification (`wordpress` vs local/generated/uploaded).
+- Explicit rename: `WordPressMediaRenameService` + `POST /api/seo/media/wordpress/rename/preview|rename` (shared by Article Editor + Media Library modal).
+- Requires manager permission, usage scan, checkbox + typed `RENAME`, strict collision, audit log, partial-failure status (no silent success).
+- Updates known references only (WP post content/featured via plugin ≥1.0.69 usage/rename; Laravel `articles.body` + media metas). Does **not** claim theme options / page builders / external sites.
+- **Editor lock policy (Phase 1.1):** `SeoMediaUrlReplacementService::rewriteArticleReferences` calls `ArticleEditorSessionService::assertBodyRewriteAllowed` — **block** rewrite when any active `article_editor_sessions` row exists (no silent overwrite of open editor). Successful rewrite still bumps `document_version` via observer.
+- Media Library preview actions: Edit image · **Đổi tên ảnh** · Apply watermark.
 
 ### Watermark
 

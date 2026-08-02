@@ -21,6 +21,8 @@ Extensions (Builtin/* + Extensions/{id})
 
 SDK major: **1** (`SdkVersion::MAJOR`). Cutover v1.0 complete — registries are production path, not optional scaffold.
 
+**Not the Article Editor runtime.** Phase 6A–6C `ARTICLE_EDITOR_RUNTIME.md` / `ARTICLE_EDITOR_RUNTIME_COMPLETION.md` describe an **internal** React registry for built-in editor modules. Public editor SDK ADR status: **Ready for internal stability testing** (not public SDK) — `docs/architecture/decisions/ARTICLE_EDITOR_RUNTIME_PUBLIC_SDK_READINESS.md`. Do not merge with Extension SDK v1.0 without a separate design.
+
 ## 2. Canonical routes
 
 | Surface | Path | Role |

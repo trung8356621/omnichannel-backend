@@ -48,6 +48,16 @@ final class ArticleMediaLocalService
         $this->markMediaPendingSync($article);
     }
 
+    public function clearFeaturedLocal(SeoArticle $article): void
+    {
+        $article->articleMetas()->whereIn('meta_key', [
+            self::META_FEATURED_URL,
+            self::META_FEATURED_ATTACHMENT_ID,
+        ])->delete();
+        $article->unsetRelation('articleMetas');
+        $this->markMediaPendingSync($article);
+    }
+
     /**
      * @return list<array{id: int, url: string}>
      */

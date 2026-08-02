@@ -121,6 +121,8 @@ Scheduler        ──► ProcessScheduledProjectItemPublish (internal) ──�
 4. Under `BusinessLock::projectGenerate`: `startRun` + `prepareRunQueue` (both required).
 5. Outside lock: `ContentProjectRunEngine::start($run)` (idempotent kick). Web returns immediately.
 
+Archived project note: Article Editor FAQ/CTA body mutations blocked via session `assertArticleEditable` — see [`ARTICLE_EDITOR_WIDGETS_OWNERSHIP.md`](../architecture/ARTICLE_EDITOR_WIDGETS_OWNERSHIP.md).
+
 ### Rerun / Resume
 
 | Command | Handler | Guard |
@@ -233,7 +235,7 @@ Do not call it AI Inbox / Inbox / Mailbox / Notification Queue. Do not use “st
 | Item content archive | `ArchiveProjectItemsHandler` | `ArchiveProjectItemsCommand` |
 | Project Destroy AI Workspace | `ArchiveContentProjectHandler` | `ArchiveContentProjectCommand` |
 
-No item-level restore (`ContentProjectItemAction::Restore` removed). Project restore: `RestoreContentProjectCommand` (`workspace_reused = false`).
+No item-level restore (`ContentProjectItemAction::Restore` removed). Project restore: `RestoreContentProjectCommand` (`workspace_reused = false`). Archive revokes active Article Editor sessions for project articles; restore does not restore those sessions.
 
 ### Publish writes
 
@@ -367,6 +369,7 @@ Freeze grep invariants: no production `ContentProjectBulkRerunService`, `Content
 - [AGENT_AND_MCP_CONTRACTS.md](../contracts/AGENT_AND_MCP_CONTRACTS.md) — Agent/MCP surface (owned elsewhere)
 - [SITE_SYNC.md](SITE_SYNC.md) — catalog sync ≠ publish
 - [ARTICLE_EDITOR.md](ARTICLE_EDITOR.md) — editor save vs CP publish
+- [ARTICLE_EDITOR_JSON_PERSISTENCE.md](../architecture/ARTICLE_EDITOR_JSON_PERSISTENCE.md) — CP body writers must invalidate/update `editor_document` (not HTML-only silent)
 - Architecture freeze: `docs/architecture/ARCHITECTURE_FREEZE_V1.md` / `ARCHITECTURE_DECISIONS.md`
 - Historical detail: `docs/archive/content-projects/*`
 

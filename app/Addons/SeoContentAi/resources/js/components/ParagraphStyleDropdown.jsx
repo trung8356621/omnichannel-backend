@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChevronDown } from 'lucide-react';
+import { executeEditorCommand } from '../utils/editorCommands';
+import { canMutateEditor } from '../utils/editorSessionState';
 import { t } from '../utils/i18n';
 
 const STYLES = [
@@ -22,22 +24,17 @@ function getActiveStyle(editor) {
 }
 
 function applyStyle(editor, value) {
-    const chain = editor.chain().focus();
-    if (value === 'p') {
-        chain.setParagraph().run();
+    if (!canMutateEditor()) {
         return;
     }
-    if (value === 'pre') {
-        chain.toggleCodeBlock().run();
-        return;
-    }
-    const level = parseInt(value.replace('h', ''), 10);
-    chain.setHeading({ level }).run();
+    executeEditorCommand('set_paragraph_style', { editor, value }, { notifyOnFailure: true });
 }
 
 export default function ParagraphStyleDropdown({ editor }) {
     const [open, setOpen] = useState(false);
     const rootRef = useRef(null);
+    const mutationLocked = !editor?.isEditable || !canMutateEditor();
+    const lockTitle = t('editor_locked_mutation_tooltip');
 
     const activeValue = getActiveStyle(editor);
     const activeLabel = STYLES.find((s) => s.value === activeValue)?.label ?? t('style_paragraph');
@@ -54,12 +51,18 @@ export default function ParagraphStyleDropdown({ editor }) {
     }, [open]);
 
     return (
-        <div ref={rootRef} className="seo-fmt-dropdown">
+        <div ref={rootRef} className={`seo-fmt-dropdown${mutationLocked ? ' is-disabled' : ''}`}>
             <button
                 type="button"
                 className="seo-fmt-dropdown-trigger"
-                onClick={() => setOpen((v) => !v)}
-                title={t('style_block_type')}
+                onClick={() => {
+                    if (mutationLocked) {
+                        return;
+                    }
+                    setOpen((v) => !v);
+                }}
+                disabled={mutationLocked}
+                title={mutationLocked ? lockTitle : t('style_block_type')}
                 aria-expanded={open}
             >
                 <span className="seo-fmt-dropdown-label">{activeLabel}</span>

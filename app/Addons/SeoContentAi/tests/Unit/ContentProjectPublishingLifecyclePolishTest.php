@@ -74,15 +74,15 @@ final class ContentProjectPublishingLifecyclePolishTest extends TestCase
             (new ReflectionClass(\App\Addons\SeoContentAi\Filament\Pages\PublishingQueueHub::class))->getFileName(),
         );
         self::assertStringContainsString('canManageContentProjectWorkflow', $hubSrc);
-        $hubBlade = (string) file_get_contents(
-            dirname(__DIR__, 2).'/resources/views/filament/pages/publishing-queue-hub.blade.php',
-        );
+        $hubBladePath = dirname(__DIR__, 2).'/resources/views/filament/pages/publishing-queue-hub.blade.php';
+        self::assertFileExists($hubBladePath);
+        $hubBlade = (string) file_get_contents($hubBladePath);
         self::assertStringContainsString('content-project-bulk-selection-toolbar', $hubBlade);
         self::assertStringContainsString('variant="publishing_queue"', $hubBlade);
         // bulkPublishNow is wired inside the shared bulk-selection-toolbar's publishing_queue variant.
-        self::assertStringContainsString('bulkPublishNow', (string) file_get_contents(
-            dirname(__DIR__, 2).'/resources/views/components/content-project-bulk-selection-toolbar.blade.php',
-        ));
+        $bulkToolbarPath = dirname(__DIR__, 2).'/resources/views/components/content-project-bulk-selection-toolbar.blade.php';
+        self::assertFileExists($bulkToolbarPath);
+        self::assertStringContainsString('bulkPublishNow', (string) file_get_contents($bulkToolbarPath));
     }
 
     public function test_archive_service_exposes_gate_and_confirm_flag(): void

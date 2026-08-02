@@ -12,6 +12,8 @@ import {
     toPreviewImageUrl,
 } from './wordpressImageUrl';
 import { loadProductAlbum, saveProductAlbum } from './articleProductAlbumStorage';
+import { featuredFromSnapshot, setFeaturedViaApi } from './articleEditorMediaSnapshot';
+import { isWordPressProtectedMedia, isBulkSlugRenameSafeMedia } from './mediaSourceClassification';
 
 export function slugFromUrl(src) {
     if (!src) return '';
@@ -36,20 +38,14 @@ export function isWordPressOriginalPickerTab(pickerTab) {
     return String(pickerTab ?? '').trim() === 'original';
 }
 
-/** Ảnh chọn từ tab Gốc (WP) trong media picker → tự Except khỏi quick-fix hàng loạt. */
-export function shouldAutoExcludeQuickFixFromWpPicker(pickerTab, wpAttachmentId = 0) {
-    return isWordPressOriginalPickerTab(pickerTab) && Number(wpAttachmentId ?? 0) > 0;
+/** @deprecated Except removed — WP media protected by source classification, not Except flag. */
+export function shouldAutoExcludeQuickFixFromWpPicker(_pickerTab, _wpAttachmentId = 0) {
+    return false;
 }
 
-export function withWpPickerExcludeQuickFix(image, pickerTab, wpAttachmentId = 0) {
-    if (!shouldAutoExcludeQuickFixFromWpPicker(pickerTab, wpAttachmentId)) {
-        return image;
-    }
-
-    return {
-        ...image,
-        excludeQuickFix: true,
-    };
+/** @deprecated Except removed — returns image unchanged. */
+export function withWpPickerExcludeQuickFix(image, _pickerTab, _wpAttachmentId = 0) {
+    return image;
 }
 
 export function replaceUrlSlug(src, newSlug) {
@@ -1073,7 +1069,7 @@ function buildSlugRenameQueuesForRow(
     renameQueue,
     localRenameQueue,
     localRenameSeen,
-    { wpOnly = true, includeWordPressRenames = true } = {},
+    { wpOnly = true, includeWordPressRenames = false } = {},
 ) {
     const mappedIndex =
         slugIndexByBlockId && slugIndexByBlockId[row.blockId] != null
@@ -1082,6 +1078,13 @@ function buildSlugRenameQueuesForRow(
     const slugIndex = mappedIndex > 0 ? mappedIndex : quickFixSlugIndexForBlock(images, row.blockId);
     if (slugIndex < 1) {
         return null;
+    }
+
+    // WordPress media: never enqueue for Fix Slug All / bulk queues.
+    if (isWordPressProtectedMedia(row) || !isBulkSlugRenameSafeMedia(row)) {
+        if (!includeWordPressRenames || isWordPressProtectedMedia(row)) {
+            return null;
+        }
     }
 
     const slug = imageSlugFromKeyword(phrase, slugIndex);
@@ -1093,8 +1096,10 @@ function buildSlugRenameQueuesForRow(
     const localFileSrc = resolveLocalRenameSrc(row);
     const oldUrlForWp = resolveWpRenameOldUrl(row);
 
+    // Explicit single-item path may pass includeWordPressRenames=true; bulk defaults false.
     if (
         includeWordPressRenames
+        && !isWordPressProtectedMedia(row)
         && shouldRenameSlugOnWordPress(row)
         && slug !== ''
         && slug !== wpOldSlug
@@ -1141,20 +1146,21 @@ export function applyQuickFixSlugToBlocks(
     keyword,
     slugIndexByBlockId = null,
     enrichmentByBlockId = null,
-    { wpOnly = true, includeWordPressRenames = true } = {},
+    { wpOnly = true, includeWordPressRenames = false } = {},
 ) {
     const phrase = String(keyword ?? '').trim();
     const base = keywordToImageSlugBase(phrase);
     if (!base || !phrase) {
-        return { blocks, applied: 0, renameQueue: [], localRenameQueue: [] };
+        return { blocks, applied: 0, renameQueue: [], localRenameQueue: [], skippedWordPress: 0 };
     }
 
     const images = collectImagesFromBlocks(blocks).map((row) =>
         enrichmentByBlockId ? enrichImageRowFromLookup(row, enrichmentByBlockId) : row,
     );
-    const eligible = images.filter((row) => !row.excludeQuickFix);
+    const skippedWordPress = images.filter((row) => isWordPressProtectedMedia(row)).length;
+    const eligible = images.filter((row) => isBulkSlugRenameSafeMedia(row));
     if (!eligible.length) {
-        return { blocks, applied: 0, renameQueue: [], localRenameQueue: [] };
+        return { blocks, applied: 0, renameQueue: [], localRenameQueue: [], skippedWordPress };
     }
 
     let result = blocks;
@@ -1171,7 +1177,7 @@ export function applyQuickFixSlugToBlocks(
             renameQueue,
             localRenameQueue,
             localRenameSeen,
-            { wpOnly, includeWordPressRenames },
+            { wpOnly, includeWordPressRenames: false },
         );
         if (!slug) {
             return;
@@ -1179,7 +1185,13 @@ export function applyQuickFixSlugToBlocks(
 
     });
 
-    return { blocks: result, applied: eligible.length, renameQueue, localRenameQueue };
+    return {
+        blocks: result,
+        applied: eligible.length,
+        renameQueue: [],
+        localRenameQueue,
+        skippedWordPress,
+    };
 }
 
 /**
@@ -1248,7 +1260,7 @@ export function applyQuickFixSlugToBlock(
     keyword,
     blockId,
     enrichmentRow = null,
-    { wpOnly = true, includeWordPressRenames = true } = {},
+    { wpOnly = true, includeWordPressRenames = false } = {},
 ) {
     const phrase = String(keyword ?? '').trim();
     const base = keywordToImageSlugBase(phrase);
@@ -1263,7 +1275,7 @@ export function applyQuickFixSlugToBlock(
         enrichmentByBlockId ? enrichImageRowFromLookup(row, enrichmentByBlockId) : row,
     );
     const row = images.find((entry) => entry.blockId === targetId);
-    if (!row || row.excludeQuickFix) {
+    if (!row || isWordPressProtectedMedia(row) || !isBulkSlugRenameSafeMedia(row)) {
         return { blocks, applied: 0, renameQueue: [], localRenameQueue: [] };
     }
 
@@ -2555,7 +2567,7 @@ export function syncProductAlbumUrlsFromBlockImages(articleId, blocks, wpRenamed
 }
 
 /**
- * Apply rename map lên featured image localStorage (nếu có).
+ * Apply rename map lên featured image trong media snapshot (không localStorage).
  */
 export function applyRenameMapToFeaturedImageStorage(articleId, wpRenamed = [], localResults = []) {
     const id = Number(articleId ?? 0);
@@ -2569,29 +2581,18 @@ export function applyRenameMapToFeaturedImageStorage(articleId, wpRenamed = [], 
     }
 
     try {
-        const raw = window.localStorage.getItem(`seo_featured_image_${id}`);
-        if (!raw) {
-            return null;
-        }
-        const parsed = JSON.parse(raw);
-        const item = parsed?.item ?? parsed;
+        const item = featuredFromSnapshot(id);
         const currentUrl = stripSeoReloadParam(String(item?.url ?? item?.src ?? '').trim());
         const nextUrl = applyRenameUrlMapToSrc(currentUrl, urlMap);
-        if (!nextUrl || nextUrl === currentUrl) {
+        if (!nextUrl || nextUrl === currentUrl || !item) {
             return item ?? null;
         }
 
         const nextItem = {
-            ...(item && typeof item === 'object' ? item : {}),
+            ...item,
             url: nextUrl,
         };
-        window.localStorage.setItem(
-            `seo_featured_image_${id}`,
-            JSON.stringify({
-                item: nextItem,
-                updatedAt: Date.now(),
-            }),
-        );
+        void setFeaturedViaApi(id, nextItem);
 
         return nextItem;
     } catch {

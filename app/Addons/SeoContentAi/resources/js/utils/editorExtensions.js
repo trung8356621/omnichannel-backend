@@ -16,7 +16,8 @@ import { TableHeader } from '@tiptap/extension-table-header';
 import Paragraph from '@tiptap/extension-paragraph';
 import { SEO_EDITOR_LINK_CLASS } from './articleEditorTransientMarkup';
 import { SEO_LINK_DEFAULT_ATTRS } from './inlineLinkNormalizer';
-import { exitLinkAtBoundary, handleLinkBoundaryKeydown, removeLinkKeepText } from './editorLinkCommands';
+import { handleLinkBoundaryKeydown } from './editorLinkCommands';
+import { executeEditorCommand } from './editorCommands';
 
 /** Giữ class / data attribute trên paragraph (vd. placeholder FAQ). */
 const PreservedParagraph = Paragraph.extend({
@@ -113,10 +114,13 @@ const SeoEditorLink = Link.extend({
 
     addKeyboardShortcuts() {
         return {
-            'Mod-Shift-k': () => removeLinkKeepText(this.editor),
+            'Mod-Shift-k': () => {
+                const result = executeEditorCommand('remove_link_keep_text', { editor: this.editor }, { notifyOnFailure: false });
+                return Boolean(result?.ok && result.transaction_applied);
+            },
             ArrowRight: () => handleLinkBoundaryKeydown(this.editor, { key: 'ArrowRight', preventDefault() {} }),
             ' ': () => {
-                exitLinkAtBoundary(this.editor);
+                executeEditorCommand('exit_link_at_boundary', { editor: this.editor }, { notifyOnFailure: false });
                 return false;
             },
         };

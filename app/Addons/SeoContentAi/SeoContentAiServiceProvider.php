@@ -522,6 +522,7 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
         $this->mergeConfigFrom(__DIR__.'/config/seo_architecture.php', 'seo-content-ai.seo_architecture');
         $this->mergeConfigFrom(__DIR__.'/config/keyword_intelligence.php', 'seo-content-ai.keyword_intelligence');
         $this->mergeConfigFrom(__DIR__.'/config/gsc_intelligence.php', 'seo-content-ai.gsc_intelligence');
+        $this->mergeConfigFrom(__DIR__.'/config/article_editor.php', 'seo-content-ai.article_editor');
         $this->registerExtensionSdk();
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationInputMapper::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Platform\Registry\AutomationConditionRegistry::class);
@@ -708,6 +709,7 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 \App\Addons\SeoContentAi\Console\AssignWorkflowExecutionRolesCommand::class,
                 \App\Addons\SeoContentAi\Console\WorkflowDoctorCommand::class,
                 \App\Addons\SeoContentAi\Console\InstallDefaultImprovePromptCommand::class,
+                \App\Addons\SeoContentAi\Console\ArticleEditorDocumentBackfillCommand::class,
             ];
 
             // Agent Workspace commands — optional so partial deploy never kills publish cron (exit 255).

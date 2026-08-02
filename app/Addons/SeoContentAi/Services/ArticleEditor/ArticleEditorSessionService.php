@@ -1,0 +1,867 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Services\ArticleEditor;
+
+use App\Addons\SeoContentAi\Automation\Support\ActionSupport;
+use App\Addons\SeoContentAi\Automation\Support\ArticleContentConflictGuard;
+use App\Addons\SeoContentAi\Enums\ArticleEditorSessionStatus;
+use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoArticleEditorSession;
+use App\Addons\SeoContentAi\Models\SeoProject;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectArticleMembership;
+use App\Addons\SeoContentAi\Support\ArticleEditorSessionErrorCode;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Models\User;
+use App\Support\RuntimeLogger;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+
+/**
+ * Server-authoritative Article Editor session lock.
+ * Cache lock via ActionSupport::withArticleLock only serializes acquire/release races.
+ */
+final class ArticleEditorSessionService
+{
+    public function __construct(
+        private readonly ArticleDocumentVersionService $documentVersions,
+        private readonly ArticleContentConflictGuard $conflictGuard,
+        private readonly ContentProjectArticleMembership $membership,
+    ) {}
+
+    public function lockTtlSeconds(): int
+    {
+        return max(30, (int) config('seo-content-ai.article_editor.lock_ttl_seconds', 120));
+    }
+
+    public function heartbeatIntervalSeconds(): int
+    {
+        return max(10, (int) config('seo-content-ai.article_editor.heartbeat_seconds', 30));
+    }
+
+    /**
+     * @return array{session: array<string, mixed>, article: array<string, mixed>, lock: array<string, mixed>}
+     *
+     * @throws ArticleEditorSessionException
+     */
+    public function acquire(
+        SeoArticle $article,
+        User $user,
+        string $clientInstanceId,
+        int|string|null $knownDocumentVersion = null,
+        ?string $userAgent = null,
+    ): array {
+        $this->assertArticleEditable($article);
+
+        $clientInstanceId = $this->normalizeUuid($clientInstanceId, 'client_instance_id');
+
+        return ActionSupport::withArticleLock((int) $article->getKey(), function () use (
+            $article,
+            $user,
+            $clientInstanceId,
+            $knownDocumentVersion,
+            $userAgent,
+        ): array {
+            return DB::connection('omi_seo_ai')->transaction(function () use (
+                $article,
+                $user,
+                $clientInstanceId,
+                $knownDocumentVersion,
+                $userAgent,
+            ): array {
+                $fresh = SeoArticle::query()->lockForUpdate()->findOrFail((int) $article->getKey());
+                $this->expireStaleSessionsForArticle($fresh);
+
+                $active = $this->findActiveSessionLocked($fresh);
+                if ($active instanceof SeoArticleEditorSession) {
+                    if (
+                        (int) $active->user_id === (int) $user->getKey()
+                        && (string) $active->client_instance_id === $clientInstanceId
+                    ) {
+                        $this->touchHeartbeat($active);
+
+                        return $this->ownedAcquirePayload($fresh, $active->fresh() ?? $active, $knownDocumentVersion);
+                    }
+
+                    throw ArticleEditorSessionException::locked($this->publicLockPayload($active, $user));
+                }
+
+                $now = now();
+                $session = new SeoArticleEditorSession([
+                    'id' => (string) Str::uuid(),
+                    'article_id' => (int) $fresh->getKey(),
+                    'user_id' => (int) $user->getKey(),
+                    'site_id' => (int) ($fresh->site_id ?? 0) ?: null,
+                    'status' => ArticleEditorSessionStatus::Active,
+                    'client_instance_id' => $clientInstanceId,
+                    'acquired_at' => $now,
+                    'heartbeat_at' => $now,
+                    'expires_at' => $now->copy()->addSeconds($this->lockTtlSeconds()),
+                    'user_agent' => $this->truncateUserAgent($userAgent),
+                ]);
+                $session->save();
+
+                RuntimeLogger::info('seo.editor.session_acquired', [
+                    'article_id' => (int) $fresh->getKey(),
+                    'session_id' => (string) $session->id,
+                    'user_id' => (int) $user->getKey(),
+                    'client_instance_id' => $clientInstanceId,
+                ]);
+
+                return $this->ownedAcquirePayload($fresh, $session, $knownDocumentVersion);
+            });
+        });
+    }
+
+    /**
+     * @return array{status: string, expires_at: string|null, document_version: int}
+     *
+     * @throws ArticleEditorSessionException
+     */
+    public function heartbeat(SeoArticle $article, string $sessionId, User $user): array
+    {
+        $session = $this->requireOwnedActiveSession($article, $sessionId, $user);
+        $this->touchHeartbeat($session);
+        $fresh = $session->fresh() ?? $session;
+
+        return [
+            'status' => ArticleEditorSessionStatus::Active->value,
+            'expires_at' => $fresh->expires_at?->toIso8601String(),
+            'document_version' => $this->documentVersions->current($article->fresh() ?? $article),
+        ];
+    }
+
+    /**
+     * @param  callable(SeoArticle, array<string, mixed>): array{success: bool, message?: string, content_hash?: string, updated_at?: string|null, content_project_handoff?: array<string, mixed>|null}  $persist
+     * @return array{saved: bool, document_version: int, content_hash: string, saved_at: string|null, content_project_handoff?: array<string, mixed>|null}
+     *
+     * @throws ArticleEditorSessionException
+     */
+    public function saveDocument(
+        SeoArticle $article,
+        string $sessionId,
+        User $user,
+        array $document,
+        int|string|null $expectedDocumentVersion,
+        ?string $expectedContentHash,
+        string $saveMode,
+        callable $persist,
+    ): array {
+        $this->assertArticleEditable($article);
+        $session = $this->requireOwnedActiveSession($article, $sessionId, $user);
+
+        return ActionSupport::withArticleLock((int) $article->getKey(), function () use (
+            $article,
+            $session,
+            $document,
+            $expectedDocumentVersion,
+            $expectedContentHash,
+            $saveMode,
+            $persist,
+        ): array {
+            return DB::connection('omi_seo_ai')->transaction(function () use (
+                $article,
+                $session,
+                $document,
+                $expectedDocumentVersion,
+                $expectedContentHash,
+                $saveMode,
+                $persist,
+            ): array {
+                $freshSession = SeoArticleEditorSession::query()->lockForUpdate()->find($session->id);
+                if (! $freshSession instanceof SeoArticleEditorSession || ! $freshSession->isActiveLock()) {
+                    throw $this->sessionInactiveException($freshSession);
+                }
+
+                $freshArticle = SeoArticle::query()->lockForUpdate()->findOrFail((int) $article->getKey());
+                $this->documentVersions->assertExpected($freshArticle, $expectedDocumentVersion);
+                $this->assertContentHash($freshArticle, $expectedContentHash);
+
+                $result = $persist($freshArticle, $document);
+                if (! ($result['success'] ?? false)) {
+                    throw ArticleEditorSessionException::make(
+                        'persist_rejected',
+                        (string) ($result['message'] ?? 'Persist failed.'),
+                        [],
+                        422,
+                    );
+                }
+
+                $this->touchHeartbeat($freshSession);
+                $saved = $freshArticle->fresh() ?? $freshArticle;
+
+                RuntimeLogger::info('seo.editor.session_document_saved', [
+                    'article_id' => (int) $saved->getKey(),
+                    'session_id' => (string) $freshSession->id,
+                    'save_mode' => $saveMode,
+                    'document_version' => $this->documentVersions->current($saved),
+                ]);
+
+                $payload = [
+                    'saved' => true,
+                    'document_version' => $this->documentVersions->current($saved),
+                    'content_hash' => (string) ($result['content_hash']
+                        ?? $this->conflictGuard->contentHash((string) ($saved->body ?? ''))),
+                    'editor_document_hash' => (string) ($saved->editor_document_hash ?? ''),
+                    'editor_document_schema_version' => (int) ($saved->editor_document_schema_version ?? 0),
+                    'saved_at' => $saved->updated_at?->toIso8601String(),
+                ];
+
+                if (isset($result['content_project_handoff']) && is_array($result['content_project_handoff'])) {
+                    $payload['content_project_handoff'] = $result['content_project_handoff'];
+                }
+
+                return $payload;
+            });
+        });
+    }
+
+    /**
+     * Atomic save + release. On validation/persist failure lock stays active.
+     *
+     * @param  callable(SeoArticle, array<string, mixed>): array{success: bool, message?: string, content_hash?: string}  $persist
+     * @return array{saved: bool, released: bool, document_version: int, content_hash: string, saved_at: string|null}
+     *
+     * @throws ArticleEditorSessionException
+     */
+    public function close(
+        SeoArticle $article,
+        string $sessionId,
+        User $user,
+        array $document,
+        int|string|null $expectedDocumentVersion,
+        ?string $expectedContentHash,
+        string $closeReason,
+        callable $persist,
+    ): array {
+        $this->assertArticleEditable($article);
+        $session = $this->requireOwnedActiveSession($article, $sessionId, $user);
+
+        return ActionSupport::withArticleLock((int) $article->getKey(), function () use (
+            $article,
+            $session,
+            $document,
+            $expectedDocumentVersion,
+            $expectedContentHash,
+            $closeReason,
+            $persist,
+        ): array {
+            return DB::connection('omi_seo_ai')->transaction(function () use (
+                $article,
+                $session,
+                $document,
+                $expectedDocumentVersion,
+                $expectedContentHash,
+                $closeReason,
+                $persist,
+            ): array {
+                $freshSession = SeoArticleEditorSession::query()->lockForUpdate()->find($session->id);
+                if (! $freshSession instanceof SeoArticleEditorSession || ! $freshSession->isActiveLock()) {
+                    throw $this->sessionInactiveException($freshSession);
+                }
+
+                $freshArticle = SeoArticle::query()->lockForUpdate()->findOrFail((int) $article->getKey());
+                $this->documentVersions->assertExpected($freshArticle, $expectedDocumentVersion);
+                $this->assertContentHash($freshArticle, $expectedContentHash);
+
+                $result = $persist($freshArticle, $document);
+                if (! ($result['success'] ?? false)) {
+                    throw ArticleEditorSessionException::make(
+                        'persist_rejected',
+                        (string) ($result['message'] ?? 'Persist failed.'),
+                        [],
+                        422,
+                    );
+                }
+
+                $now = now();
+                $freshSession->status = ArticleEditorSessionStatus::Released;
+                $freshSession->released_at = $now;
+                $freshSession->save();
+
+                $saved = $freshArticle->fresh() ?? $freshArticle;
+
+                RuntimeLogger::info('seo.editor.session_closed', [
+                    'article_id' => (int) $saved->getKey(),
+                    'session_id' => (string) $freshSession->id,
+                    'close_reason' => $closeReason,
+                    'document_version' => $this->documentVersions->current($saved),
+                ]);
+
+                return [
+                    'saved' => true,
+                    'released' => true,
+                    'document_version' => $this->documentVersions->current($saved),
+                    'content_hash' => (string) ($result['content_hash']
+                        ?? $this->conflictGuard->contentHash((string) ($saved->body ?? ''))),
+                    'saved_at' => $saved->updated_at?->toIso8601String(),
+                ];
+            });
+        });
+    }
+
+    /**
+     * Explicit release without document — only after latest save ACK.
+     *
+     * @throws ArticleEditorSessionException
+     */
+    public function release(SeoArticle $article, string $sessionId, User $user): void
+    {
+        $session = $this->requireOwnedSession($article, $sessionId, $user);
+
+        ActionSupport::withArticleLock((int) $article->getKey(), function () use ($session): void {
+            DB::connection('omi_seo_ai')->transaction(function () use ($session): void {
+                $fresh = SeoArticleEditorSession::query()->lockForUpdate()->find($session->id);
+                if (! $fresh instanceof SeoArticleEditorSession) {
+                    return;
+                }
+
+                if ($fresh->status === ArticleEditorSessionStatus::Active) {
+                    $fresh->status = ArticleEditorSessionStatus::Released;
+                    $fresh->released_at = now();
+                    $fresh->save();
+
+                    RuntimeLogger::info('seo.editor.session_released', [
+                        'article_id' => (int) $fresh->article_id,
+                        'session_id' => (string) $fresh->id,
+                        'user_id' => (int) $fresh->user_id,
+                    ]);
+                }
+            });
+        });
+    }
+
+    /**
+     * @return array{session: array<string, mixed>, article: array<string, mixed>, lock: array<string, mixed>}
+     *
+     * @throws ArticleEditorSessionException
+     */
+    public function takeover(
+        SeoArticle $article,
+        User $user,
+        string $clientInstanceId,
+        int|string|null $knownDocumentVersion,
+        bool $confirmation,
+        ?string $userAgent = null,
+    ): array {
+        if (! $confirmation) {
+            throw ArticleEditorSessionException::make(
+                ArticleEditorSessionErrorCode::TAKEOVER_FORBIDDEN,
+                'Takeover requires explicit confirmation.',
+                [],
+                422,
+            );
+        }
+
+        if (! $this->userCanTakeover($user)) {
+            throw ArticleEditorSessionException::make(
+                ArticleEditorSessionErrorCode::TAKEOVER_FORBIDDEN,
+                'Takeover forbidden for current role.',
+                [],
+                403,
+            );
+        }
+
+        $this->assertArticleEditable($article);
+        $clientInstanceId = $this->normalizeUuid($clientInstanceId, 'client_instance_id');
+
+        return ActionSupport::withArticleLock((int) $article->getKey(), function () use (
+            $article,
+            $user,
+            $clientInstanceId,
+            $knownDocumentVersion,
+            $userAgent,
+        ): array {
+            return DB::connection('omi_seo_ai')->transaction(function () use (
+                $article,
+                $user,
+                $clientInstanceId,
+                $knownDocumentVersion,
+                $userAgent,
+            ): array {
+                $fresh = SeoArticle::query()->lockForUpdate()->findOrFail((int) $article->getKey());
+                $this->expireStaleSessionsForArticle($fresh);
+
+                $active = $this->findActiveSessionLocked($fresh);
+                $oldSessionId = $active?->id;
+
+                if ($active instanceof SeoArticleEditorSession) {
+                    $active->status = ArticleEditorSessionStatus::TakenOver;
+                    $active->revoked_at = now();
+                    $active->takeover_by_user_id = (int) $user->getKey();
+                    $active->save();
+                }
+
+                $now = now();
+                $session = new SeoArticleEditorSession([
+                    'id' => (string) Str::uuid(),
+                    'article_id' => (int) $fresh->getKey(),
+                    'user_id' => (int) $user->getKey(),
+                    'site_id' => (int) ($fresh->site_id ?? 0) ?: null,
+                    'status' => ArticleEditorSessionStatus::Active,
+                    'client_instance_id' => $clientInstanceId,
+                    'acquired_at' => $now,
+                    'heartbeat_at' => $now,
+                    'expires_at' => $now->copy()->addSeconds($this->lockTtlSeconds()),
+                    'user_agent' => $this->truncateUserAgent($userAgent),
+                ]);
+                $session->save();
+
+                RuntimeLogger::info('seo.editor.session_takeover', [
+                    'article_id' => (int) $fresh->getKey(),
+                    'old_session_id' => $oldSessionId,
+                    'new_session_id' => (string) $session->id,
+                    'user_id' => (int) $user->getKey(),
+                ]);
+
+                return $this->ownedAcquirePayload($fresh, $session, $knownDocumentVersion);
+            });
+        });
+    }
+
+    public function revokeActiveSessionsForArticle(int $articleId, string $reason = 'revoked'): int
+    {
+        if ($articleId <= 0) {
+            return 0;
+        }
+
+        $now = now();
+        $count = SeoArticleEditorSession::query()
+            ->where('article_id', $articleId)
+            ->where('status', ArticleEditorSessionStatus::Active)
+            ->update([
+                'status' => ArticleEditorSessionStatus::Revoked,
+                'revoked_at' => $now,
+                'updated_at' => $now,
+            ]);
+
+        if ($count > 0) {
+            RuntimeLogger::info('seo.editor.sessions_revoked', [
+                'article_id' => $articleId,
+                'count' => $count,
+                'reason' => $reason,
+            ]);
+        }
+
+        return $count;
+    }
+
+    /**
+     * @param  list<int>  $articleIds
+     */
+    public function revokeActiveSessionsForArticles(array $articleIds, string $reason = 'content_project_archived'): int
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $articleIds), static fn (int $id): bool => $id > 0)));
+        if ($ids === []) {
+            return 0;
+        }
+
+        $now = now();
+        $count = SeoArticleEditorSession::query()
+            ->whereIn('article_id', $ids)
+            ->where('status', ArticleEditorSessionStatus::Active)
+            ->update([
+                'status' => ArticleEditorSessionStatus::Revoked,
+                'revoked_at' => $now,
+                'updated_at' => $now,
+            ]);
+
+        if ($count > 0) {
+            RuntimeLogger::info('seo.editor.sessions_revoked_bulk', [
+                'article_ids_count' => count($ids),
+                'count' => $count,
+                'reason' => $reason,
+            ]);
+        }
+
+        return $count;
+    }
+
+    public function findActiveSession(SeoArticle|int $article): ?SeoArticleEditorSession
+    {
+        $articleId = $article instanceof SeoArticle ? (int) $article->getKey() : $article;
+        $this->expireStaleSessionsForArticleId($articleId);
+
+        $session = SeoArticleEditorSession::query()
+            ->where('article_id', $articleId)
+            ->where('status', ArticleEditorSessionStatus::Active)
+            ->where('expires_at', '>', now())
+            ->orderByDesc('acquired_at')
+            ->first();
+
+        return $session instanceof SeoArticleEditorSession ? $session : null;
+    }
+
+    public function userFacingSaveBlockedByForeignSession(SeoArticle $article, ?User $user): ?SeoArticleEditorSession
+    {
+        $active = $this->findActiveSession($article);
+        if (! $active instanceof SeoArticleEditorSession) {
+            return null;
+        }
+
+        if ($user instanceof User && (int) $active->user_id === (int) $user->getKey()) {
+            // Same user without session token still cannot bypass via legacy endpoint.
+            return $active;
+        }
+
+        return $active;
+    }
+
+    public function userCanTakeover(?User $user = null): bool
+    {
+        if ($user === null) {
+            return SeoAccessControl::canAccessManagerFeatures();
+        }
+
+        if (in_array((string) ($user->role ?? ''), [User::ROLE_ADMIN, User::ROLE_OWNER], true)) {
+            return true;
+        }
+
+        $role = SeoAccessControl::normalizeRole((string) ($user->seo_role ?? SeoAccessControl::ROLE_CONTENT_MANAGER));
+
+        return $role === SeoAccessControl::ROLE_MANAGER;
+    }
+
+    /**
+     * User-facing write from editor shell (Livewire/API) must own active session.
+     *
+     * @throws ArticleEditorSessionException
+     */
+    public function assertOwningActiveSessionForWrite(
+        SeoArticle $article,
+        User $user,
+        ?string $sessionId,
+        int|string|null $expectedDocumentVersion = null,
+    ): SeoArticleEditorSession {
+        $sessionId = trim((string) $sessionId);
+        if ($sessionId === '') {
+            throw ArticleEditorSessionException::make(
+                ArticleEditorSessionErrorCode::LOCK_NOT_OWNED,
+                'Editor session id required for body write.',
+                [],
+                409,
+            );
+        }
+
+        $this->assertArticleEditable($article);
+        $session = $this->requireOwnedActiveSession($article, $sessionId, $user);
+        $this->documentVersions->assertExpected($article->fresh() ?? $article, $expectedDocumentVersion);
+
+        return $session;
+    }
+
+    /**
+     * External user-facing body mutation (revision restore, AI apply outside owning session).
+     *
+     * @throws ArticleEditorSessionException
+     */
+    public function assertNoActiveEditorSession(SeoArticle $article, string $operation = 'body_write'): void
+    {
+        $active = $this->findActiveSession($article);
+        if (! $active instanceof SeoArticleEditorSession) {
+            return;
+        }
+
+        RuntimeLogger::warning('seo.editor.external_write_blocked_by_session', [
+            'article_id' => (int) $article->getKey(),
+            'session_id' => (string) $active->id,
+            'operation' => $operation,
+        ]);
+
+        throw ArticleEditorSessionException::locked($this->publicLockPayload(
+            $active,
+            auth()->user() instanceof User ? auth()->user() : null,
+        ));
+    }
+
+    /**
+     * Media/body rewrite policy: block when any active editor session exists.
+     *
+     * @throws ArticleEditorSessionException
+     */
+    public function assertBodyRewriteAllowed(SeoArticle $article, string $operation = 'media_url_rewrite'): void
+    {
+        $this->assertNoActiveEditorSession($article, $operation);
+    }
+
+    /**
+     * @throws ArticleEditorSessionException
+     */
+    public function assertArticleEditable(SeoArticle $article): void
+    {
+        if (method_exists($article, 'trashed') && $article->trashed()) {
+            throw ArticleEditorSessionException::make(
+                ArticleEditorSessionErrorCode::NOT_EDITABLE,
+                'Article is not editable.',
+                [],
+                422,
+            );
+        }
+
+        $assigned = $this->membership->assignedTaskForArticle($article);
+        if ($assigned === null) {
+            return;
+        }
+
+        $project = $assigned->relationLoaded('project')
+            ? $assigned->project
+            : SeoProject::query()->find((int) ($assigned->project_id ?? 0));
+
+        if ($project instanceof SeoProject && ($project->archived_at !== null || $project->isArchive())) {
+            throw ArticleEditorSessionException::make(
+                ArticleEditorSessionErrorCode::CONTENT_PROJECT_ARCHIVED,
+                'Content project is archived; writable editor session denied.',
+                [
+                    'content_project_id' => (int) $project->getKey(),
+                ],
+                422,
+            );
+        }
+    }
+
+    private function expireStaleSessionsForArticle(SeoArticle $article): void
+    {
+        $this->expireStaleSessionsForArticleId((int) $article->getKey());
+    }
+
+    private function expireStaleSessionsForArticleId(int $articleId): void
+    {
+        if ($articleId <= 0) {
+            return;
+        }
+
+        $now = now();
+        $expired = SeoArticleEditorSession::query()
+            ->where('article_id', $articleId)
+            ->where('status', ArticleEditorSessionStatus::Active)
+            ->where('expires_at', '<=', $now)
+            ->update([
+                'status' => ArticleEditorSessionStatus::Expired,
+                'updated_at' => $now,
+            ]);
+
+        if ($expired > 0) {
+            RuntimeLogger::info('seo.editor.sessions_expired', [
+                'article_id' => $articleId,
+                'count' => $expired,
+            ]);
+        }
+    }
+
+    private function findActiveSessionLocked(SeoArticle $article): ?SeoArticleEditorSession
+    {
+        $session = SeoArticleEditorSession::query()
+            ->where('article_id', (int) $article->getKey())
+            ->where('status', ArticleEditorSessionStatus::Active)
+            ->where('expires_at', '>', now())
+            ->orderByDesc('acquired_at')
+            ->lockForUpdate()
+            ->first();
+
+        return $session instanceof SeoArticleEditorSession ? $session : null;
+    }
+
+    private function touchHeartbeat(SeoArticleEditorSession $session): void
+    {
+        $now = now();
+        $session->heartbeat_at = $now;
+        $session->expires_at = $now->copy()->addSeconds($this->lockTtlSeconds());
+        $session->save();
+    }
+
+    /**
+     * @throws ArticleEditorSessionException
+     */
+    private function requireOwnedActiveSession(SeoArticle $article, string $sessionId, User $user): SeoArticleEditorSession
+    {
+        $session = $this->requireOwnedSession($article, $sessionId, $user);
+        $this->expireStaleSessionsForArticle($article);
+        $session->refresh();
+
+        if (! $session->isActiveLock()) {
+            throw $this->sessionInactiveException($session);
+        }
+
+        return $session;
+    }
+
+    /**
+     * @throws ArticleEditorSessionException
+     */
+    private function requireOwnedSession(SeoArticle $article, string $sessionId, User $user): SeoArticleEditorSession
+    {
+        $session = SeoArticleEditorSession::query()->find($sessionId);
+        if (! $session instanceof SeoArticleEditorSession) {
+            throw ArticleEditorSessionException::make(
+                ArticleEditorSessionErrorCode::SESSION_NOT_FOUND,
+                'Editor session not found.',
+                [],
+                404,
+            );
+        }
+
+        if ((int) $session->article_id !== (int) $article->getKey()) {
+            throw ArticleEditorSessionException::make(
+                ArticleEditorSessionErrorCode::SESSION_NOT_FOUND,
+                'Editor session not found for article.',
+                [],
+                404,
+            );
+        }
+
+        if ((int) $session->user_id !== (int) $user->getKey()) {
+            throw ArticleEditorSessionException::make(
+                ArticleEditorSessionErrorCode::LOCK_NOT_OWNED,
+                'Editor session is not owned by current user.',
+                [],
+                409,
+            );
+        }
+
+        return $session;
+    }
+
+    private function sessionInactiveException(?SeoArticleEditorSession $session): ArticleEditorSessionException
+    {
+        $status = $session?->status;
+
+        $code = match ($status) {
+            ArticleEditorSessionStatus::Expired => ArticleEditorSessionErrorCode::SESSION_EXPIRED,
+            ArticleEditorSessionStatus::Revoked => ArticleEditorSessionErrorCode::SESSION_REVOKED,
+            ArticleEditorSessionStatus::TakenOver => ArticleEditorSessionErrorCode::SESSION_TAKEN_OVER,
+            ArticleEditorSessionStatus::Released => ArticleEditorSessionErrorCode::LOCK_NOT_OWNED,
+            default => ArticleEditorSessionErrorCode::SESSION_EXPIRED,
+        };
+
+        return ArticleEditorSessionException::make(
+            $code,
+            'Editor session is no longer active.',
+            [
+                'session_id' => $session?->id,
+                'status' => $status?->value,
+            ],
+            409,
+        );
+    }
+
+    /**
+     * @throws ArticleEditorSessionException
+     */
+    private function assertContentHash(SeoArticle $article, ?string $expectedContentHash): void
+    {
+        if (! is_string($expectedContentHash) || $expectedContentHash === '') {
+            return;
+        }
+
+        $conflict = $this->conflictGuard->assertCompatible($article, [
+            'expected_content_hash' => $expectedContentHash,
+        ]);
+
+        if ($conflict !== null) {
+            RuntimeLogger::warning('seo.editor.content_hash_conflict', [
+                'article_id' => (int) $article->getKey(),
+            ]);
+
+            throw ArticleEditorSessionException::make(
+                ArticleEditorSessionErrorCode::CONTENT_HASH_CONFLICT,
+                (string) ($conflict->error['message'] ?? 'Content hash conflict.'),
+                is_array($conflict->error) ? $conflict->error : [],
+                409,
+            );
+        }
+    }
+
+    /**
+     * @return array{session: array<string, mixed>, article: array<string, mixed>, lock: array<string, mixed>}
+     */
+    private function ownedAcquirePayload(
+        SeoArticle $article,
+        SeoArticleEditorSession $session,
+        int|string|null $knownDocumentVersion,
+    ): array {
+        $version = $this->documentVersions->current($article);
+        if ($knownDocumentVersion !== null && $knownDocumentVersion !== '' && (int) $knownDocumentVersion !== $version) {
+            // Soft signal only — client must reload document; acquire still succeeds for owner.
+            RuntimeLogger::info('seo.editor.acquire_version_skew', [
+                'article_id' => (int) $article->getKey(),
+                'known' => (int) $knownDocumentVersion,
+                'actual' => $version,
+            ]);
+        }
+
+        return [
+            'session' => [
+                'id' => (string) $session->id,
+                'status' => ArticleEditorSessionStatus::Active->value,
+                'heartbeat_interval_seconds' => $this->heartbeatIntervalSeconds(),
+                'expires_at' => $session->expires_at?->toIso8601String(),
+                'client_instance_id' => (string) $session->client_instance_id,
+            ],
+            'article' => [
+                'document_version' => $version,
+                'updated_at' => $article->updated_at?->toIso8601String(),
+                'content_hash' => $this->conflictGuard->contentHash((string) ($article->body ?? '')),
+            ],
+            'lock' => [
+                'owned_by_current_session' => true,
+            ],
+        ];
+    }
+
+    /**
+     * @return array{editor_name: string, acquired_at: string|null, heartbeat_at: string|null, expires_at: string|null, can_takeover: bool}
+     */
+    private function publicLockPayload(SeoArticleEditorSession $session, ?User $viewer = null): array
+    {
+        $editorName = 'Another editor';
+        try {
+            $owner = User::query()->find((int) $session->user_id);
+            if ($owner instanceof User) {
+                $name = trim((string) ($owner->name ?? ''));
+                if ($name !== '') {
+                    $editorName = $name;
+                }
+            }
+        } catch (\Throwable) {
+            // keep generic name
+        }
+
+        return [
+            'editor_name' => $editorName,
+            'acquired_at' => $session->acquired_at?->toIso8601String(),
+            'heartbeat_at' => $session->heartbeat_at?->toIso8601String(),
+            'expires_at' => $session->expires_at?->toIso8601String(),
+            'can_takeover' => $this->userCanTakeover($viewer),
+        ];
+    }
+
+    private function normalizeUuid(string $value, string $field): string
+    {
+        $value = trim($value);
+        if ($value === '' || ! Str::isUuid($value)) {
+            throw ArticleEditorSessionException::make(
+                'invalid_'.$field,
+                $field.' must be a UUID.',
+                [],
+                422,
+            );
+        }
+
+        return strtolower($value);
+    }
+
+    private function truncateUserAgent(?string $userAgent): ?string
+    {
+        if ($userAgent === null) {
+            return null;
+        }
+
+        $trimmed = trim($userAgent);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        return mb_substr($trimmed, 0, 255);
+    }
+}

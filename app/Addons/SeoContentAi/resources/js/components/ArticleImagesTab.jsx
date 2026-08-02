@@ -8,7 +8,7 @@ import {
     MoreHorizontal,
     RotateCcw,
     Scissors,
-    ShieldOff,
+    Shield,
     Trash2,
     Type,
 } from 'lucide-react';
@@ -17,11 +17,10 @@ import {
     collectImagesFromBlocks,
     filterSupplementalDuplicatesOfBlockRows,
     hasTrustedWordPressUrl,
-    isImageReadyForWpSlugFix,
     mergeArticleImageRow,
     resolveArticleImageRemoveTarget,
 } from '../utils/articleImagesUtils';
-import { SLUG_RENAME_WARNING } from '../utils/imageSlugRenameConfirm';
+import { isWordPressProtectedMedia } from '../utils/mediaSourceClassification';
 import { t } from '../utils/i18n';
 import {
     AI_PLACEHOLDER_LOADING_URL,
@@ -286,7 +285,6 @@ function ImageRow({
     const slugText = (row.slug || '').trim();
     const showActions = canProcessArticleImage(row);
     const busy = openingEditor || applyingWatermark || optimizingWebp || makingFeatured;
-    const excluded = Boolean(row.excludeQuickFix);
     const rawWpSrc = String(row.wpSrc || '').trim();
     const trustedWpUrl = hasTrustedWordPressUrl(row)
         ? (!isLocalSeoMediaSrc(rawWpSrc) ? rawWpSrc : String(row.src || '').trim())
@@ -306,12 +304,17 @@ function ImageRow({
     const primaryUrl = trustedWpUrl || localUrl || String(row.src || '').trim();
     const showLocalExtra = Boolean(trustedWpUrl) && distinctUrls(trustedWpUrl, localUrl);
     const seoMediaId = Number(row.seoMediaId ?? row.seo_media_id ?? 0);
-    const canQuickFixSlugOne =
-        canQuickFix &&
-        (isImageReadyForWpSlugFix(row) ||
-            seoMediaId > 0 ||
-            isLocalSeoMediaSrc(String(row.src || '').trim()) ||
-            isLocalSeoMediaSrc(String(row.localSrc || '').trim()));
+    const isWpProtected = isWordPressProtectedMedia(row);
+    const canQuickFixSlugOne = isWpProtected
+        ? Number(row.wpAttachmentId ?? row.wp_attachment_id ?? 0) > 0
+        : (
+            canQuickFix &&
+            (
+                seoMediaId > 0 ||
+                isLocalSeoMediaSrc(String(row.src || '').trim()) ||
+                isLocalSeoMediaSrc(String(row.localSrc || '').trim())
+            )
+        );
 
     useEffect(() => {
         setAlt(row.alt ?? '');
@@ -636,20 +639,15 @@ function ImageRow({
 
                 {showActions ? (
                     <div className="seo-article-images-actions">
-                        <button
-                            type="button"
-                            className={`seo-article-images-watermark-btn${excluded ? ' is-except' : ''}`}
-                            disabled={busy || !canPatchInEditor}
-                            onClick={() => onPatch?.(row.blockId, { excludeQuickFix: !excluded })}
-                            title={
-                                excluded
-                                    ? t('image_except_disable_hint')
-                                    : t('image_except_enable_hint')
-                            }
-                        >
-                            <ShieldOff size={14} />
-                            {t('except')}
-                        </button>
+                        {isWpProtected ? (
+                            <span
+                                className="seo-article-images-watermark-btn is-protected"
+                                title={t('wp_media_bulk_protected_hint')}
+                            >
+                                <Shield size={14} />
+                                {t('wp_media_bulk_protected')}
+                            </span>
+                        ) : null}
 
                         <div className="seo-article-images-more-wrap" ref={moreMenuRef}>
                             <button
@@ -670,11 +668,15 @@ function ImageRow({
                                         type="button"
                                         className="seo-article-images-more-item"
                                         role="menuitem"
-                                        disabled={busy || excluded || !canQuickFixSlugOne}
+                                        disabled={busy || !canQuickFixSlugOne}
                                         title={
-                                            !canQuickFix
-                                                ? t('image_quick_fix_missing_keyword')
-                                                : t('image_quick_fix_slug_hint')
+                                            isWpProtected
+                                                ? t('wp_media_rename_menu_hint')
+                                                : (
+                                                    !canQuickFix
+                                                        ? t('image_quick_fix_missing_keyword')
+                                                        : t('image_quick_fix_slug_hint')
+                                                )
                                         }
                                         onClick={() => {
                                             setMoreOpen(false);
@@ -682,13 +684,13 @@ function ImageRow({
                                         }}
                                     >
                                         <Link2 size={14} />
-                                        {t('fix_slug')}
+                                        {isWpProtected ? t('wp_media_rename_menu') : t('fix_slug')}
                                     </button>
                                     <button
                                         type="button"
                                         className="seo-article-images-more-item"
                                         role="menuitem"
-                                        disabled={busy || excluded || !canQuickFix}
+                                        disabled={busy || !canQuickFix}
                                         onClick={() => {
                                             setMoreOpen(false);
                                             onQuickFixAltTitle?.(row);
@@ -1032,7 +1034,7 @@ export default function ArticleImagesTab({
                             <summary className="seo-images-tab-warning-summary">
                                 {t('images_tab_wp_slug_warning')}
                             </summary>
-                            <p className="seo-images-tab-warning">{SLUG_RENAME_WARNING}</p>
+                            <p className="seo-images-tab-warning">{t('editor_fix_slug_all_local_only_warning')}</p>
                         </details>
                     ) : null}
                 </div>

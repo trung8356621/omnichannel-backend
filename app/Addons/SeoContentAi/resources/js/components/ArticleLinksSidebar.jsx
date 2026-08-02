@@ -33,6 +33,7 @@ import {
 } from '../utils/articleEditorPayloadAdapters';
 import { filterUsableCtaContacts } from '../utils/ctaContactUsability';
 import { getEditorInsertionContext } from '../utils/editorInsertionContext';
+import { getEditorCommandHost } from '../utils/editorCommands';
 import {
     CtaContactInsertList,
     CtaQuickTemplateSettingsPopover,
@@ -1562,24 +1563,26 @@ export default function ArticleLinksSidebar({
             [itemKey]: currentCycle + 1,
         }));
 
-        window.dispatchEvent(
-            new CustomEvent('seo-editor-scroll-to-link', {
-                detail: {
-                    href,
-                    text,
-                    offset: item.offset,
-                    type,
-                    index: type === 'faq'
-                        ? (typeof item.index === 'number' ? item.index : nextIndex)
-                        : nextIndex,
-                    faqIndex: type === 'faq'
-                        ? (typeof item.index === 'number' ? item.index : nextIndex)
-                        : undefined,
-                    searchPlainText: options.searchPlainText === true,
-                    preferHrefMatch: !text && !!href,
-                },
-            }),
-        );
+        const detail = {
+            href,
+            text,
+            offset: item.offset,
+            type,
+            index: type === 'faq'
+                ? (typeof item.index === 'number' ? item.index : nextIndex)
+                : nextIndex,
+            faqIndex: type === 'faq'
+                ? (typeof item.index === 'number' ? item.index : nextIndex)
+                : undefined,
+            searchPlainText: options.searchPlainText === true,
+            preferHrefMatch: !text && !!href,
+        };
+        const actions = getEditorCommandHost()?.actions;
+        if (typeof actions?.scrollToLink === 'function') {
+            actions.scrollToLink(detail);
+            return;
+        }
+        window.dispatchEvent(new CustomEvent('seo-editor-scroll-to-link', { detail }));
     };
 
     const removeInternalLink = (item) => {
@@ -1589,11 +1592,13 @@ export default function ArticleLinksSidebar({
             return;
         }
 
-        window.dispatchEvent(
-            new CustomEvent('seo-editor-remove-internal-link', {
-                detail: { text, href },
-            }),
-        );
+        const detail = { text, href };
+        const actions = getEditorCommandHost()?.actions;
+        if (typeof actions?.removeInternalLink === 'function') {
+            actions.removeInternalLink(detail);
+            return;
+        }
+        window.dispatchEvent(new CustomEvent('seo-editor-remove-internal-link', { detail }));
     };
 
     const insertSuggestedLink = (item, _index, itemKey) => {
@@ -1617,16 +1622,18 @@ export default function ArticleLinksSidebar({
             return;
         }
 
-        window.dispatchEvent(
-            new CustomEvent('seo-editor-insert-suggested-link', {
-                detail: {
-                    text,
-                    href,
-                    keyword_id: item.keyword_id ?? null,
-                    occurrence_index: occurrenceIndex,
-                },
-            }),
-        );
+        const detail = {
+            text,
+            href,
+            keyword_id: item.keyword_id ?? null,
+            occurrence_index: occurrenceIndex,
+        };
+        const actions = getEditorCommandHost()?.actions;
+        if (typeof actions?.insertSuggestedLink === 'function') {
+            actions.insertSuggestedLink(detail);
+            return;
+        }
+        window.dispatchEvent(new CustomEvent('seo-editor-insert-suggested-link', { detail }));
     };
 
     const hideDomainRow = (itemKey) => {
@@ -1651,20 +1658,22 @@ export default function ArticleLinksSidebar({
         }
         const text = variant === 'cta' ? ctaDisplayLabel(item) : String(item?.text ?? '').trim();
 
-        window.dispatchEvent(
-            new CustomEvent('seo-editor-scroll-to-link', {
-                detail: {
-                    href:
-                        variant === 'cta'
-                            ? String(item?.href ?? formatCtaHref(item?.type, item?.value)).trim()
-                            : String(item?.href ?? item?.target_url ?? '').trim(),
-                    text,
-                    type: 'internal',
-                    index: 0,
-                    searchPlainText: true,
-                },
-            }),
-        );
+        const detail = {
+            href:
+                variant === 'cta'
+                    ? String(item?.href ?? formatCtaHref(item?.type, item?.value)).trim()
+                    : String(item?.href ?? item?.target_url ?? '').trim(),
+            text,
+            type: 'internal',
+            index: 0,
+            searchPlainText: true,
+        };
+        const actions = getEditorCommandHost()?.actions;
+        if (typeof actions?.scrollToLink === 'function') {
+            actions.scrollToLink(detail);
+            return;
+        }
+        window.dispatchEvent(new CustomEvent('seo-editor-scroll-to-link', { detail }));
     };
 
     const insertDomainLink = (item, itemKey) => {
@@ -1677,21 +1686,23 @@ export default function ArticleLinksSidebar({
         }
 
         const ctx = getEditorInsertionContext();
-        window.dispatchEvent(
-            new CustomEvent('seo-editor-insert-suggested-link', {
-                detail: {
-                    text,
-                    href,
-                    keyword_id: item.keyword_id ?? null,
-                    insert_mode: 'caret',
-                    target: {
-                        sectionId: ctx.activeSectionId,
-                        blockId: ctx.activeBlockId,
-                        selectionBookmark: ctx.selection,
-                    },
-                },
-            }),
-        );
+        const detail = {
+            text,
+            href,
+            keyword_id: item.keyword_id ?? null,
+            insert_mode: 'caret',
+            target: {
+                sectionId: ctx.activeSectionId,
+                blockId: ctx.activeBlockId,
+                selectionBookmark: ctx.selection,
+            },
+        };
+        const actions = getEditorCommandHost()?.actions;
+        if (typeof actions?.insertSuggestedLink === 'function') {
+            actions.insertSuggestedLink(detail);
+            return;
+        }
+        window.dispatchEvent(new CustomEvent('seo-editor-insert-suggested-link', { detail }));
     };
 
     const linkCountBadge = internal.length + external.length + domainLinks.length;
@@ -1896,9 +1907,8 @@ export default function ArticleLinksSidebar({
                         templatesByType={templatesByType}
                         emptyText={t('cta_widget_empty')}
                         onKeywordClick={(item, _index, itemKey) => scrollToDomainItem(item, itemKey, 'cta')}
-                        onInsertValue={(item) => dispatchCtaInsert(item, 'value', null, templatesByType)}
-                        onInsertQuickCta={(item, _itemKey, templateOverride) =>
-                            dispatchCtaInsert(item, 'sentence', templateOverride, templatesByType)
+                        onInsertQuickCta={(item, _itemKey, templateOverride, mode = 'sentence') =>
+                            dispatchCtaInsert(item, mode, templateOverride, templatesByType)
                         }
                     />
                 </LinkAssistantSection>

@@ -6,6 +6,19 @@ return [
     'common' => [
         'saving' => 'Saving…',
     ],
+    'editor_document' => [
+        'editor_document_invalid' => 'Editor document is invalid.',
+        'editor_document_schema_unsupported' => 'Unsupported editor document schema version.',
+        'editor_document_node_unsupported' => 'Unsupported editor document node type.',
+        'editor_document_too_large' => 'Editor document payload is too large.',
+        'editor_document_hash_conflict' => 'Editor document hash conflict. Reload and try again.',
+        'editor_document_render_failed' => 'Failed to render HTML from editor document.',
+        'editor_document_ingest_failed' => 'Failed to ingest HTML into editor document.',
+        'editor_document_roundtrip_mismatch' => 'HTML/JSON round-trip mismatch — manual review required.',
+        'editor_document_stale' => 'Editor document is stale relative to body HTML.',
+        'legacy_body_requires_migration' => 'Legacy HTML body requires migration to editor document.',
+        'revision_document_invalid' => 'Revision editor document is invalid.',
+    ],
     'imagen' => [
         'user_transient' => 'Imagen could not execute the model on this attempt. This may be a temporary provider issue. You can try again.',
         'user_auth' => 'Image generation failed due to an authentication problem. Check the API key on the AI connection.',
@@ -3113,6 +3126,7 @@ return [
         'content_project_publish_queued_title' => 'Queued for publish',
         'content_project_publish_queued' => 'Content Project article was queued for immediate publish via the Publishing Queue (not WordPress Schedule).',
         'manual_sync_blocked_title' => 'Cannot sync WordPress',
+        'content_project_manual_sync_forbidden' => 'This article belongs to a Content Project — Manual Sync WordPress is blocked in the editor. Use Save / Save & close for content; publish via the Content Project.',
         'manual_sync_no_site' => 'Article has no site/WordPress connection.',
         'manual_sync_in_progress' => 'A WordPress sync is already in progress for this article.',
         'manual_sync_already_queued' => 'This article is already in the WordPress sync queue.',

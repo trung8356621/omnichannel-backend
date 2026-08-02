@@ -200,6 +200,7 @@ export function normalizeFaqPayload(responseOrPayload) {
         extractDebug: src.extract_debug ?? src.extractDebug ?? null,
         canGenerateFaq: canGenerateRaw !== false,
         canImportMarkdownFaq: Boolean(src.can_import_markdown_faq ?? src.canImportMarkdownFaq),
+        faqSnapshot: src.faq_snapshot && typeof src.faq_snapshot === 'object' ? src.faq_snapshot : null,
         error: base.error,
     };
 }

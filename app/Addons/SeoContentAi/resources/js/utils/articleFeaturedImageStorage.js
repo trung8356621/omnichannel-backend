@@ -1,4 +1,13 @@
-const featuredImageKey = (articleId) => `seo_featured_image_${articleId}`;
+import {
+    clearFeaturedViaApi,
+    featuredFromSnapshot,
+    getMediaSnapshot,
+    setFeaturedViaApi,
+} from './articleEditorMediaSnapshot';
+
+/**
+ * Featured helpers — Phase 2A: in-memory snapshot only (no localStorage SoT).
+ */
 
 export function normalizeFeaturedImage(item) {
     if (!item || typeof item !== 'object') {
@@ -23,25 +32,13 @@ export function normalizeFeaturedImage(item) {
 }
 
 export function loadFeaturedImage(articleId) {
-    const id = Number(articleId ?? 0);
-    if (!Number.isFinite(id) || id <= 0) {
-        return null;
-    }
-
-    try {
-        const raw = window.localStorage.getItem(featuredImageKey(id));
-        if (!raw) {
-            return null;
-        }
-
-        const parsed = JSON.parse(raw);
-
-        return normalizeFeaturedImage(parsed?.item ?? parsed);
-    } catch {
-        return null;
-    }
+    return featuredFromSnapshot(articleId);
 }
 
+/**
+ * Optimistic UI only — canonical persist via setFeaturedViaApi / Livewire bridge.
+ * Does NOT write localStorage.
+ */
 export function saveFeaturedImage(articleId, item) {
     const id = Number(articleId ?? 0);
     const normalized = normalizeFeaturedImage(item);
@@ -49,24 +46,17 @@ export function saveFeaturedImage(articleId, item) {
         return null;
     }
 
-    try {
-        window.localStorage.setItem(
-            featuredImageKey(id),
-            JSON.stringify({
-                item: normalized,
-                updatedAt: Date.now(),
-            }),
-        );
-    } catch (error) {
-        console.warn('Không lưu được ảnh đại diện vào localStorage', error);
-    }
+    // Fire-and-forget API; callers that need ACK should await setFeaturedViaApi.
+    void setFeaturedViaApi(id, normalized).catch((error) => {
+        console.warn('Featured persist failed', error);
+    });
 
-    // Sidebar Alpine chỉ sync lúc load / cleared — bắn event để cập nhật featuredImageDraft ngay.
     window.dispatchEvent(
         new CustomEvent('seo-featured-image-updated', {
             detail: {
                 articleId: id,
                 item: normalized,
+                pending: true,
             },
         }),
     );
@@ -76,11 +66,17 @@ export function saveFeaturedImage(articleId, item) {
 
 export function persistFeaturedImageDraftToServer(articleId, wire) {
     const item = loadFeaturedImage(articleId);
-    if (!item || !wire?.persistFeaturedImageFromClient) {
-        return Promise.resolve(item);
+    if (!item) {
+        return Promise.resolve(null);
     }
 
-    return wire.persistFeaturedImageFromClient(item);
+    return setFeaturedViaApi(articleId, item).catch(() => {
+        if (wire?.persistFeaturedImageFromClient) {
+            return wire.persistFeaturedImageFromClient(item);
+        }
+
+        return item;
+    });
 }
 
 export function clearFeaturedImageStorage(articleId) {
@@ -89,5 +85,17 @@ export function clearFeaturedImageStorage(articleId) {
         return;
     }
 
-    window.localStorage.removeItem(featuredImageKey(id));
+    void clearFeaturedViaApi(id).catch((error) => {
+        console.warn('Featured clear failed', error);
+    });
+
+    window.dispatchEvent(
+        new CustomEvent('seo-featured-image-cleared', {
+            detail: { articleId: id, pending: true },
+        }),
+    );
+}
+
+export function featuredPresent(articleId) {
+    return Boolean(getMediaSnapshot(articleId)?.featured?.url);
 }

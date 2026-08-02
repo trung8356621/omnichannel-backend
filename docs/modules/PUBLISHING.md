@@ -80,6 +80,8 @@ Operations center may show queue health; it does not own a second dispatcher.
 | `articles.wp_post_id` | Publisher success path (sticky identity) |
 | WP post body/meta at publish time | `WordPressPublisher` → `WordPressArticleSyncService` |
 
+When `ARTICLE_EDITOR_JSON_PUBLISH_FROM_JSON=true`, sync prepares `post_content` via `ArticleEditorDocumentWriter::ensureDerivedBodyForPublish` (re-render from `editor_document`, refresh stale `body`). Default off — see [`ARTICLE_EDITOR_JSON_PERSISTENCE.md`](../architecture/ARTICLE_EDITOR_JSON_PERSISTENCE.md).
+
 **Queue status enum** `ContentProjectPublishQueueStatus`:
 
 | Value | Meaning |

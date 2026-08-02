@@ -1,4 +1,4 @@
-import { normalizeLinkText } from './articleLinkScroll';
+import { normalizeLinkText } from './articleLinkTextNormalize';
 import { SEO_EDITOR_LINK_CLASS } from './articleEditorTransientMarkup';
 import { SEO_LINK_DEFAULT_ATTRS } from './inlineLinkNormalizer';
 

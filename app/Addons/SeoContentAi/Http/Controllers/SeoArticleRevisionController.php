@@ -49,6 +49,15 @@ final class SeoArticleRevisionController extends Controller
     ): RedirectResponse {
         abort_unless(ArticleResource::canEdit($article), 403);
 
+        try {
+            app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionService::class)
+                ->assertNoActiveEditorSession($article, 'revision_restore');
+        } catch (\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionException $exception) {
+            return redirect()
+                ->back()
+                ->with('seo_revision_restore_blocked', $exception->getMessage());
+        }
+
         $revisionId = (int) $request->validated('revision_id');
         $revision = $this->revisionService->findForArticle((int) $article->id, $revisionId);
         abort_if($revision === null, 404);

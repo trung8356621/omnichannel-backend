@@ -9,12 +9,14 @@ use App\Addons\SeoContentAi\Automation\Data\ActionContext;
 use App\Addons\SeoContentAi\Http\Requests\ArticleEditorActionRequest;
 use App\Addons\SeoContentAi\Http\Requests\ArticleEditorSeoMetaRequest;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionService;
 use App\Addons\SeoContentAi\Services\ArticleEditorBundleApplyService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSavePatchService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSeoMetaService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSeoPayloadService;
 use App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
+use App\Addons\SeoContentAi\Support\ArticleEditorSessionErrorCode;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
 use App\Models\User;
@@ -47,6 +49,11 @@ final class ArticleEditorSyncController extends Controller
     {
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
+        $sessionBlock = $this->rejectLegacySaveWhenSessionActive($request, $article);
+        if ($sessionBlock instanceof JsonResponse) {
+            return $sessionBlock;
+        }
+
         $bundle = $request->editorBundle();
         $context = ArticleEditorSaveContext::fromBundle($article, $bundle);
         $html = (string) ($bundle['html'] ?? '');
@@ -63,11 +70,16 @@ final class ArticleEditorSyncController extends Controller
             $code = (string) ($result->error['code'] ?? '');
             $message = (string) ($result->error['message'] ?? 'Không lưu được bài viết.');
 
-            if (in_array($code, ['conflict_updated_at', 'conflict_content_hash'], true)) {
+            if (in_array($code, ['conflict_updated_at', 'conflict_content_hash', 'conflict_document_version'], true)) {
                 return response()->json([
                     'success' => false,
                     'message' => $message,
                     'conflict' => $result->error,
+                    'error' => $code === 'conflict_document_version'
+                        ? ArticleEditorSessionErrorCode::DOCUMENT_VERSION_CONFLICT
+                        : ($code === 'conflict_content_hash'
+                            ? ArticleEditorSessionErrorCode::CONTENT_HASH_CONFLICT
+                            : $code),
                     'notification' => [
                         'title' => 'Xung đột khi lưu',
                         'body' => $message,
@@ -296,13 +308,60 @@ final class ArticleEditorSyncController extends Controller
             }
         }
 
-        foreach (['expected_updated_at', 'expected_content_hash'] as $field) {
+        foreach (['expected_updated_at', 'expected_content_hash', 'expected_document_version'] as $field) {
             if (array_key_exists($field, $bundle) && $bundle[$field] !== null && $bundle[$field] !== '') {
-                $input[$field] = (string) $bundle[$field];
+                $input[$field] = $bundle[$field];
             }
         }
 
         return $input;
+    }
+
+    /**
+     * User-facing legacy save must not bypass an active editor session.
+     * Allow only when request carries the owning session id.
+     */
+    private function rejectLegacySaveWhenSessionActive(Request $request, SeoArticle $article): ?JsonResponse
+    {
+        /** @var ArticleEditorSessionService $sessions */
+        $sessions = app(ArticleEditorSessionService::class);
+        $active = $sessions->findActiveSession($article);
+        if ($active === null) {
+            return null;
+        }
+
+        $provided = (string) ($request->input('editor_session_id')
+            ?: $request->header('X-Editor-Session-Id')
+            ?: '');
+        $user = $request->user();
+
+        if (
+            $provided !== ''
+            && $user instanceof User
+            && (string) $active->id === $provided
+            && (int) $active->user_id === (int) $user->getKey()
+            && $active->isActiveLock()
+        ) {
+            return null;
+        }
+
+        RuntimeLogger::warning('seo.editor.legacy_save_blocked_by_session', [
+            'article_id' => (int) $article->getKey(),
+            'active_session_id' => (string) $active->id,
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'error' => ArticleEditorSessionErrorCode::LOCKED,
+            'message' => 'Article has an active editor session; use session document endpoint.',
+            'lock' => [
+                'editor_name' => 'Active editor session',
+                'acquired_at' => $active->acquired_at?->toIso8601String(),
+                'heartbeat_at' => $active->heartbeat_at?->toIso8601String(),
+                'expires_at' => $active->expires_at?->toIso8601String(),
+                'can_takeover' => $sessions->userCanTakeover($user instanceof User ? $user : null),
+            ],
+        ], 423);
     }
 
     private function buildActionContext(Request $request, SeoArticle $article): ActionContext

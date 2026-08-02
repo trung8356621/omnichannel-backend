@@ -24,23 +24,21 @@ use ReflectionMethod;
  */
 final class ContentProjectEditorLocalSaveTest extends TestCase
 {
-    public function test_manual_sync_routes_project_articles_to_workspace_save_only(): void
+    public function test_manual_sync_fail_closed_for_content_project_articles(): void
     {
         $source = $this->methodSource(
             new ReflectionMethod(WordPressManualSyncService::class, 'enqueueFromEditorBundle'),
         );
 
-        self::assertStringContainsString('belongsToActiveContentProject', $source);
-        self::assertStringContainsString('workspaceSave->saveFromEditorBundle', $source);
-
-        $projectBranch = $this->extractBetween(
+        self::assertStringContainsString('belongsToContentProject', $source);
+        self::assertStringContainsString('content_project_manual_sync_forbidden', $source);
+        self::assertStringContainsString('return $this->blocked(', $source);
+        self::assertStringNotContainsString('workspaceSave->saveFromEditorBundle', $source);
+        self::assertStringNotContainsString('enqueueManual($article', $this->extractBetween(
             $source,
-            'if ($this->contentProjectMembership->belongsToActiveContentProject($article)) {',
+            'if ($this->contentProjectMembership->belongsToContentProject($article)) {',
             '$bundle = $this->syncQueue->applyPublishImmediatelyToBundle($bundle);',
-        );
-        self::assertStringContainsString('return $this->workspaceSave->saveFromEditorBundle', $projectBranch);
-        self::assertStringNotContainsString('enqueueManual', $projectBranch);
-        self::assertStringNotContainsString('ManualWordPressSyncJob', $projectBranch);
+        ));
     }
 
     public function test_workspace_save_returns_canonical_project_local_save_result(): void
@@ -66,48 +64,38 @@ final class ContentProjectEditorLocalSaveTest extends TestCase
         self::assertStringNotContainsString('gateway->postJson', $source);
     }
 
-    public function test_sync_wp_controller_never_forces_queued_for_project_local_save(): void
+    public function test_sync_wp_controller_marks_blocked_without_queue(): void
     {
         $source = $this->methodSource(
             new ReflectionMethod(ArticleEditorSyncController::class, 'syncWp'),
         );
 
-        self::assertStringContainsString('project_local_save', $source);
-        self::assertStringContainsString('workspaceOnly', $source);
+        self::assertStringContainsString("\$dispatchStatus === 'blocked'", $source);
         self::assertStringContainsString("\$result['queued'] = false", $source);
-        self::assertStringContainsString('content_hash', $source);
-        self::assertStringContainsString('\$proven', $source);
-        self::assertStringContainsString("\$result['close_editor'] = \$proven", $source);
+        self::assertStringContainsString("\$result['close_editor'] = false", $source);
+        self::assertStringNotContainsString('enqueueManual', $source);
     }
 
-    public function test_frontend_closes_only_after_proven_project_local_save(): void
+    public function test_content_project_editor_hides_sync_wp_and_uses_save_close(): void
     {
-        $apiPath = dirname(__DIR__, 2).'/resources/js/utils/articleEditorApi.js';
-        $api = (string) file_get_contents($apiPath);
-
-        self::assertStringContainsString('closeEditorAfterProjectLocalSave', $api);
-        self::assertStringContainsString('project_local_save', $api);
-        self::assertStringContainsString('contentHash', $api);
-        self::assertStringContainsString('savedAt', $api);
-        self::assertStringContainsString('const proven = result?.success !== false', $api);
-        self::assertStringContainsString('if (!proven)', $api);
-        self::assertStringContainsString('closeEditorAfterProjectLocalSave(', $api);
-
-        $provenBlock = $this->extractBetween($api, 'if (workspaceOnly) {', 'if (result.queued) {');
-        self::assertStringContainsString('if (!proven)', $provenBlock);
-        self::assertStringContainsString('return;', $provenBlock);
-        self::assertStringNotContainsString('closeEditorTabOrRedirectToSyncQueue()', $provenBlock);
-
         $actions = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/views/filament/resources/article-resource/pages/partials/article-editor-page-actions.blade.php',
         );
-        self::assertMatchesRegularExpression(
-            '/\$inContentProject\s*=.*articleIsInContentProject[\s\S]*?\$syncLabel\s*=\s*\$inContentProject/',
-            $actions,
-        );
+        self::assertStringContainsString('articleIsInContentProject', $actions);
         self::assertStringContainsString('page_action_save_close_label', $actions);
-        self::assertStringContainsString('data-seo-sync-mode', $actions);
-        self::assertStringContainsString('project_local_save', $actions);
+        self::assertStringContainsString('data-seo-page-action="save-close"', $actions);
+        self::assertStringContainsString('data-seo-content-project-url', $actions);
+        self::assertStringContainsString("action: 'save-close'", $actions);
+        self::assertStringNotContainsString('project_local_save', $actions);
+        self::assertStringContainsString('data-seo-sync-mode="wordpress_sync"', $actions);
+
+        $editorEntry = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/article-editor.jsx',
+        );
+        self::assertStringContainsString("action === 'save-close'", $editorEntry);
+        self::assertStringContainsString('closeEditorAfterProjectLocalSave', $editorEntry);
+        self::assertStringContainsString('saveArticleViaApiSingleFlight', $editorEntry);
+        self::assertStringContainsString("normalizedAction === 'save-close'", $editorEntry);
     }
 
     public function test_has_unpublished_changes_ignores_stale_wp_post_id_alone(): void

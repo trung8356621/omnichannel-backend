@@ -7,7 +7,7 @@ namespace App\Addons\SeoContentAi\Tests\Unit;
 use PHPUnit\Framework\TestCase;
 
 /**
- * 3G — sidebar keeps editor bookmark; CTA/Insert are inline at caret (no article-cta block).
+ * 3G — sidebar keeps editor bookmark; contact UI inserts CTA only (no raw value).
  */
 final class ArticleEditorSidebarCtaInlineContractTest extends TestCase
 {
@@ -28,39 +28,38 @@ final class ArticleEditorSidebarCtaInlineContractTest extends TestCase
 
         self::assertStringContainsString('isAssistantFocusStealTarget(e.target)', $editor);
         self::assertStringContainsString('never clear active editor context on click', $editor);
-        self::assertStringContainsString('syncAndFreezeInsertionContext', $editor);
+        self::assertStringContainsString('preserveEditorContextBeforeSidebarAction', $ctx);
         self::assertStringContainsString('Do not overwrite', $ctx);
-        self::assertStringContainsString('.seo-assistant-dock', $ctx);
-        self::assertStringContainsString('.wp-article-edit-sidebar', $ctx);
+        self::assertStringContainsString('looksLikeDocEnd', $ctx);
+        self::assertStringContainsString('isAssistantFocusStealTarget(related)', $editor);
     }
 
-    public function test_cta_and_value_share_inline_insertion_flow(): void
+    public function test_contact_ui_only_exposes_cta_insert(): void
+    {
+        $cta = $this->readAddon('resources/js/components/CtaContactInsertList.jsx');
+        $links = $this->readAddon('resources/js/components/ArticleLinksSidebar.jsx');
+        $domain = $this->readAddon('resources/js/components/ArticleDomainWidgetsSidebar.jsx');
+
+        self::assertStringContainsString('cta_widget_insert_cta', $cta);
+        self::assertStringContainsString('onInsertQuickCta', $cta);
+        self::assertStringNotContainsString('onInsertValue', $cta);
+        self::assertStringNotContainsString('onInsertValue=', $links);
+        self::assertStringNotContainsString('onInsertValue=', $domain);
+        self::assertStringContainsString("effectiveMode = mode === 'value' ? 'value' : 'sentence'", $cta);
+        self::assertStringContainsString("data-cta-action=\"insert_contact_value\"", $cta);
+        self::assertStringContainsString("onInsertQuickCta(item, itemKey, null, 'value')", $cta);
+    }
+
+    public function test_canonical_cta_command_is_insert_contact_cta_at_bookmark(): void
     {
         $selection = $this->readAddon('resources/js/utils/editorSelectionUtils.js');
         $editor = $this->readAddon('resources/js/components/SeoArticleEditor.jsx');
-        $cta = $this->readAddon('resources/js/components/CtaContactInsertList.jsx');
 
-        self::assertStringContainsString('insertInlinePartsAtBookmark', $selection);
-        self::assertStringContainsString('insertCtaInlineAtBookmark', $selection);
-        self::assertStringContainsString('insertContactValueAtBookmark', $selection);
-        self::assertStringContainsString('insertCtaInlineAtBookmark', $editor);
-        self::assertStringContainsString('same inline flow', $editor);
-        self::assertStringContainsString('is_cta_block: false', $cta);
-        self::assertStringContainsString('is_cta_sentence: true', $cta);
-
+        self::assertStringContainsString('insertContactCtaAtBookmark', $selection);
+        self::assertStringContainsString('insertContactCtaAtBookmark', $editor);
+        self::assertStringContainsString("class: 'article-cta'", $selection);
+        self::assertStringContainsString('article-cta__value', $selection);
         self::assertStringNotContainsString('commands.lift()', $selection);
-        self::assertStringNotContainsString('commands.setParagraph()', $selection);
-        self::assertStringNotContainsString("class: 'article-cta'", $selection);
         self::assertStringNotContainsString('setTextSelection(docSize)', $selection);
-    }
-
-    public function test_inline_insert_collapses_caret_after_content(): void
-    {
-        $selection = $this->readAddon('resources/js/utils/editorSelectionUtils.js');
-
-        self::assertStringContainsString('chainCollapseCaretAfterInsert', $selection);
-        self::assertStringContainsString('TextSelection.create', $selection);
-        self::assertStringContainsString('setStoredMarks([])', $selection);
-        self::assertStringContainsString('NEVER force doc end', $selection);
     }
 }

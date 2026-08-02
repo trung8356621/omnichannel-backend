@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ImageIcon, Video, X } from 'lucide-react';
+import { runFaqExtractFromToolbar } from '../editor/modules/faq/faqExtractToolbarAction';
+import { getEditorInsertionContext } from '../utils/editorInsertionContext';
 import { t } from '../utils/i18n';
 
 function hydratePromptTemplate(template, variables) {
@@ -11,11 +13,20 @@ function hydratePromptTemplate(template, variables) {
     });
 }
 
+/**
+ * Editor AI chat — image/video generate with selection context.
+ * Phase 6C.4: no internal CustomEvent for open/close/generate (host actions / props).
+ */
 export default function ArticleAiChatPanel({
     articleId,
     aiDebug = { enabled: false },
     canGenerateImage = true,
     canGenerateVideo = true,
+    onClose = null,
+    onGenerateImage = null,
+    onGenerateVideo = null,
+    collectContext = null,
+    canApply = null,
 }) {
     const [selectedText, setSelectedText] = useState('');
     const [selectedHtml, setSelectedHtml] = useState('');
@@ -23,139 +34,91 @@ export default function ArticleAiChatPanel({
     const [input, setInput] = useState('');
     const [generatingImage, setGeneratingImage] = useState(false);
     const [generatingVideo, setGeneratingVideo] = useState(false);
+    const [applyBlocked, setApplyBlocked] = useState(false);
     const generateLockRef = useRef(false);
     const inputRef = useRef(null);
 
-    useEffect(() => {
-        const onOpen = (event) => {
-            const detail = event.detail != null && typeof event.detail === 'object' ? event.detail : {};
-            const blockId = String(detail.blockId ?? '').trim();
-            if (blockId) {
-                setActiveBlockId(blockId);
-            }
-
-            const prefill = String(detail.prefill ?? detail.prompt ?? '').trim();
-            if (prefill) {
-                setInput(prefill);
-            }
-
-            if (detail.focusInput !== false) {
-                requestAnimationFrame(() => inputRef.current?.focus());
-            }
-        };
-
-        window.addEventListener('seo-article-ai-chat-open', onOpen);
-
-        return () => window.removeEventListener('seo-article-ai-chat-open', onOpen);
-    }, []);
+    const refreshSelection = useCallback(() => {
+        const ctx = typeof collectContext === 'function' ? collectContext() : null;
+        const insertion = getEditorInsertionContext?.() || {};
+        const text = String(ctx?.selection?.text ?? insertion?.text ?? '').trim();
+        const html = String(ctx?.selection?.html ?? insertion?.html ?? '').trim();
+        const blockId = String(ctx?.block_id ?? insertion?.blockId ?? '').trim();
+        setSelectedText(text);
+        setSelectedHtml(html);
+        if (blockId) setActiveBlockId(blockId);
+    }, [collectContext]);
 
     useEffect(() => {
-        const onSelection = (e) => {
-            const detail = e.detail ?? {};
-            if (detail.hasSelection && detail.text) {
-                setSelectedText(detail.text);
-                setSelectedHtml(detail.html ?? '');
-            } else {
-                setSelectedText('');
-                setSelectedHtml('');
-            }
-            setActiveBlockId((detail.activeBlockId ?? '').trim());
-        };
-
-        window.addEventListener('seo-editor-text-selection', onSelection);
-        return () => window.removeEventListener('seo-editor-text-selection', onSelection);
-    }, []);
+        refreshSelection();
+        const timer = window.setInterval(refreshSelection, 800);
+        return () => window.clearInterval(timer);
+    }, [refreshSelection]);
 
     useEffect(() => {
         const onMediaFailed = (e) => {
             const type = e.detail?.type;
-            if (type === 'image') {
-                setGeneratingImage(false);
-            } else if (type === 'video') {
-                setGeneratingVideo(false);
-            }
-            releaseLock();
-        };
-
-        const releaseLock = () => {
+            if (type === 'image') setGeneratingImage(false);
+            else if (type === 'video') setGeneratingVideo(false);
             generateLockRef.current = false;
+            if (typeof canApply === 'function' && !canApply()) {
+                setApplyBlocked(true);
+            }
         };
-
         const onImageDone = (event) => {
             const status = String(event.detail?.status ?? '').toLowerCase();
-            if (status !== 'processing' && status !== 'pending' && status !== 'completed') {
-                return;
-            }
-
+            if (status !== 'processing' && status !== 'pending' && status !== 'completed') return;
             setGeneratingImage(false);
-            releaseLock();
+            generateLockRef.current = false;
+            if (typeof canApply === 'function' && !canApply()) setApplyBlocked(true);
         };
         const onVideoDone = (event) => {
             const status = String(event.detail?.status ?? '').toLowerCase();
-            if (status !== 'processing' && status !== 'pending' && status !== 'completed') {
-                return;
-            }
-
+            if (status !== 'processing' && status !== 'pending' && status !== 'completed') return;
             setGeneratingVideo(false);
-            releaseLock();
+            generateLockRef.current = false;
+            if (typeof canApply === 'function' && !canApply()) setApplyBlocked(true);
         };
 
+        // Domain completion signals from media pipeline (shell/Laravel) — not React-to-React bus.
         window.addEventListener('article-ai-media-failed', onMediaFailed);
         window.addEventListener('article-ai-image-generated', onImageDone);
         window.addEventListener('article-ai-video-generated', onVideoDone);
-
         return () => {
             window.removeEventListener('article-ai-media-failed', onMediaFailed);
             window.removeEventListener('article-ai-image-generated', onImageDone);
             window.removeEventListener('article-ai-video-generated', onVideoDone);
         };
+    }, [canApply]);
+
+    useEffect(() => {
+        requestAnimationFrame(() => inputRef.current?.focus());
     }, []);
 
     const handleExtractFaq = useCallback(() => {
         const html = selectedHtml.trim();
         const text = selectedText.trim();
-        if (!html && !text) {
-            return;
-        }
-
-        const payloadHtml =
-            html ||
-            text
-                .split(/\n{2,}/)
-                .map((p) => `<p>${p.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`)
-                .join('');
-
-        window.dispatchEvent(
-            new CustomEvent('extract-article-faqs', {
-                detail: { html: payloadHtml },
-            }),
-        );
+        if (!html && !text) return;
+        const payloadHtml = html || text
+            .split(/\n{2,}/)
+            .map((p) => `<p>${p.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`)
+            .join('');
+        void runFaqExtractFromToolbar({ html: payloadHtml });
     }, [selectedHtml, selectedText]);
 
-    useEffect(() => {
-        const onToolbarExtract = () => handleExtractFaq();
-
-        window.addEventListener('extract-article-faqs-from-toolbar', onToolbarExtract);
-
-        return () => window.removeEventListener('extract-article-faqs-from-toolbar', onToolbarExtract);
-    }, [handleExtractFaq]);
-
     const dispatchGenerate = useCallback(
-        (type) => {
+        async (type) => {
             const userBrief = input.trim();
             const selectionText = selectedText.trim();
             const selectionHtml = selectedHtml.trim();
-
-            if (!userBrief && !selectionText) {
-                return;
-            }
-
-            if (generateLockRef.current) {
+            if (!userBrief && !selectionText) return;
+            if (generateLockRef.current) return;
+            if (typeof canApply === 'function' && !canApply()) {
+                setApplyBlocked(true);
                 return;
             }
 
             generateLockRef.current = true;
-
             const detail = {
                 selectionText,
                 selectionHtml,
@@ -164,20 +127,30 @@ export default function ArticleAiChatPanel({
                 articleId,
             };
 
-            if (type === 'image') {
-                setGeneratingImage(true);
-                window.dispatchEvent(new CustomEvent('generate-article-image', { detail }));
-            } else {
-                setGeneratingVideo(true);
-                window.dispatchEvent(new CustomEvent('generate-article-video', { detail }));
+            try {
+                if (type === 'image') {
+                    setGeneratingImage(true);
+                    if (typeof onGenerateImage === 'function') {
+                        await onGenerateImage(detail);
+                    }
+                } else {
+                    setGeneratingVideo(true);
+                    if (typeof onGenerateVideo === 'function') {
+                        await onGenerateVideo(detail);
+                    }
+                }
+                setInput('');
+            } catch {
+                setGeneratingImage(false);
+                setGeneratingVideo(false);
+                generateLockRef.current = false;
+                if (typeof canApply === 'function' && !canApply()) setApplyBlocked(true);
             }
-
-            setInput('');
         },
-        [activeBlockId, articleId, input, selectedHtml, selectedText],
+        [activeBlockId, articleId, canApply, input, onGenerateImage, onGenerateVideo, selectedHtml, selectedText],
     );
 
-    const canGenerate = Boolean(input.trim() || selectedText.trim());
+    const canGenerate = Boolean(input.trim() || selectedText.trim()) && !applyBlocked;
     const busy = generatingImage || generatingVideo;
     const userBrief = input.trim();
     const contextText = selectedText.trim();
@@ -186,7 +159,6 @@ export default function ArticleAiChatPanel({
         if (userBrief && contextText) {
             return `${userBrief}\n\n---\n${t('debug_context_label')}:\n${contextText}`;
         }
-
         return userBrief || contextText;
     }, [contextText, userBrief]);
     const debugVariables = useMemo(
@@ -218,13 +190,20 @@ export default function ArticleAiChatPanel({
                     className="seo-ai-chat-panel__close"
                     title={t('close_panel')}
                     aria-label={t('close_panel')}
-                    onClick={() => window.dispatchEvent(new CustomEvent('seo-article-ai-chat-close'))}
+                    onClick={() => {
+                        if (typeof onClose === 'function') onClose();
+                    }}
                 >
                     <X size={18} />
                 </button>
             </div>
             <div className="seo-ai-chat-body">
                 <div className="seo-ai-chat-compose">
+                    {applyBlocked ? (
+                        <p className="mb-2 text-xs text-amber-700 dark:text-amber-300">
+                            Session read-only — generation/apply blocked
+                        </p>
+                    ) : null}
                     <textarea
                         ref={inputRef}
                         className="seo-ai-chat-input"
@@ -232,13 +211,13 @@ export default function ArticleAiChatPanel({
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         placeholder={t('compose_placeholder')}
-                        disabled={busy}
+                        disabled={busy || applyBlocked}
                     />
                     <div className="seo-ai-chat-actions">
                         <button
                             type="button"
                             className="seo-ai-chat-generate-image"
-                            onClick={() => dispatchGenerate('image')}
+                            onClick={() => void dispatchGenerate('image')}
                             disabled={!canGenerate || !canGenerateImage || busy || generateLockRef.current}
                             title={
                                 !canGenerateImage
@@ -252,7 +231,7 @@ export default function ArticleAiChatPanel({
                         <button
                             type="button"
                             className="seo-ai-chat-generate-video"
-                            onClick={() => dispatchGenerate('video')}
+                            onClick={() => void dispatchGenerate('video')}
                             disabled={!canGenerate || !canGenerateVideo || busy || generateLockRef.current}
                             title={
                                 !canGenerateVideo
@@ -263,6 +242,16 @@ export default function ArticleAiChatPanel({
                             <Video size={15} />
                             {generatingVideo ? t('generating_video') : t('generate_video')}
                         </button>
+                        {(selectedHtml.trim() || selectedText.trim()) ? (
+                            <button
+                                type="button"
+                                className="seo-ai-chat-extract-faq"
+                                onClick={handleExtractFaq}
+                                disabled={busy}
+                            >
+                                {t('extract_faq') || 'Extract FAQ'}
+                            </button>
+                        ) : null}
                     </div>
                     {Boolean(aiDebug?.enabled) ? (
                         <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950 space-y-2">
@@ -271,26 +260,12 @@ export default function ArticleAiChatPanel({
                             </p>
                             <div>
                                 <p className="font-semibold">{t('debug_generate_image')} #{aiDebug?.image?.prompt_id ?? 'n/a'}</p>
-                                <p className="text-[11px] text-amber-900/80 mb-1">
-                                    tools={aiDebug?.image?.tools ?? 'n/a'}
-                                    {aiDebug?.image?.connection_name
-                                        ? ` · connection=${aiDebug.image.connection_name}`
-                                        : ''}
-                                    {aiDebug?.image?.execution ? ` · ${aiDebug.image.execution}` : ''}
-                                </p>
                                 <pre className="max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word bg-white p-2 border rounded">
                                     {imageDebugPrompt || t('debug_no_image_prompt')}
                                 </pre>
                             </div>
                             <div>
                                 <p className="font-semibold">{t('debug_generate_video')} #{aiDebug?.video?.prompt_id ?? 'n/a'}</p>
-                                <p className="text-[11px] text-amber-900/80 mb-1">
-                                    tools={aiDebug?.video?.tools ?? 'n/a'}
-                                    {aiDebug?.video?.connection_name
-                                        ? ` · connection=${aiDebug.video.connection_name}`
-                                        : ''}
-                                    {aiDebug?.video?.execution ? ` · ${aiDebug.video.execution}` : ''}
-                                </p>
                                 <pre className="max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word bg-white p-2 border rounded">
                                     {videoDebugPrompt || t('debug_no_video_prompt')}
                                 </pre>

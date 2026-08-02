@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Filament\Pages\Auth\SeoChangePassword;
 use App\Addons\SeoContentAi\Filament\Pages\Auth\SeoEditProfile;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorLazyPayloadController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorSyncController;
+use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorSessionController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorOperationController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleProductReviewReconcileController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleProductReviewStatusController;
@@ -301,6 +302,10 @@ class SeoPanelProvider extends PanelProvider
                 Route::delete('/{media}/ai-job', [SeoMediaController::class, 'deleteAiJob'])
                     ->whereNumber('media')
                     ->name('seo.media.delete-ai-job');
+                Route::post('/wordpress/rename/preview', [\App\Addons\SeoContentAi\Http\Controllers\WordPressMediaRenameController::class, 'preview'])
+                    ->name('seo.media.wordpress.rename.preview');
+                Route::post('/wordpress/rename', [\App\Addons\SeoContentAi\Http\Controllers\WordPressMediaRenameController::class, 'rename'])
+                    ->name('seo.media.wordpress.rename');
                 Route::post('/{media}/rename', [SeoMediaController::class, 'rename'])
                     ->whereNumber('media')
                     ->name('seo.media.rename');
@@ -317,6 +322,15 @@ class SeoPanelProvider extends PanelProvider
                 Route::post('/{hookKey}/execute', PromptHookExecuteController::class)
                     ->where('hookKey', '[A-Za-z0-9_.-]+')
                     ->name('seo.prompt-hooks.execute');
+            });
+
+        Route::middleware($seoWebApiMiddleware)
+            ->prefix('api/seo')
+            ->group(function (): void {
+                Route::get('/domain-cta/quick-templates', [\App\Addons\SeoContentAi\Http\Controllers\DomainCtaQuickTemplatesController::class, 'show'])
+                    ->name('seo.domain-cta.quick-templates.show');
+                Route::put('/domain-cta/quick-templates', [\App\Addons\SeoContentAi\Http\Controllers\DomainCtaQuickTemplatesController::class, 'update'])
+                    ->name('seo.domain-cta.quick-templates.update');
             });
 
         Route::middleware($seoWebApiMiddleware)
@@ -352,6 +366,24 @@ class SeoPanelProvider extends PanelProvider
                 Route::post('/{article}/save', [ArticleEditorSyncController::class, 'save'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.save');
+                Route::post('/{article}/editor-sessions', [ArticleEditorSessionController::class, 'store'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor-sessions.store');
+                Route::post('/{article}/editor-sessions/takeover', [ArticleEditorSessionController::class, 'takeover'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor-sessions.takeover');
+                Route::put('/{article}/editor-sessions/{session}/heartbeat', [ArticleEditorSessionController::class, 'heartbeat'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor-sessions.heartbeat');
+                Route::put('/{article}/editor-sessions/{session}/document', [ArticleEditorSessionController::class, 'document'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor-sessions.document');
+                Route::post('/{article}/editor-sessions/{session}/close', [ArticleEditorSessionController::class, 'close'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor-sessions.close');
+                Route::delete('/{article}/editor-sessions/{session}', [ArticleEditorSessionController::class, 'destroy'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor-sessions.destroy');
                 Route::post('/{article}/seo-meta', [ArticleEditorSyncController::class, 'saveSeoMeta'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.seo-meta');
@@ -371,6 +403,21 @@ class SeoPanelProvider extends PanelProvider
                 Route::get('/{article}/editor/faqs/count', [ArticleEditorLazyPayloadController::class, 'faqsCount'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.faqs-count');
+                Route::get('/{article}/editor/faq-snapshot', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorFaqSnapshotController::class, 'show'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.faq-snapshot');
+                Route::put('/{article}/editor/faq-snapshot', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorFaqSnapshotController::class, 'replace'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.faq-snapshot.replace');
+                Route::post('/{article}/editor/faq-snapshot/generate-preview', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorFaqSnapshotController::class, 'generatePreview'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.faq-snapshot.generate-preview');
+                Route::post('/{article}/editor/faq-snapshot/apply', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorFaqSnapshotController::class, 'apply'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.faq-snapshot.apply');
+                Route::post('/{article}/editor/faq-snapshot/extract', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorFaqSnapshotController::class, 'extract'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.faq-snapshot.extract');
                 Route::get('/{article}/editor/meta', [ArticleEditorLazyPayloadController::class, 'meta'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.meta');
@@ -389,6 +436,21 @@ class SeoPanelProvider extends PanelProvider
                 Route::get('/{article}/editor/media-picker-config', [ArticleEditorLazyPayloadController::class, 'mediaPickerConfig'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.media-picker-config');
+                Route::get('/{article}/editor/media-snapshot', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorMediaSnapshotController::class, 'show'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.media-snapshot');
+                Route::put('/{article}/editor/media/featured', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorMediaSnapshotController::class, 'setFeatured'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.media.featured.set');
+                Route::delete('/{article}/editor/media/featured', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorMediaSnapshotController::class, 'clearFeatured'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.media.featured.clear');
+                Route::put('/{article}/editor/media/gallery', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorMediaSnapshotController::class, 'replaceGallery'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.media.gallery.replace');
+                Route::post('/{article}/editor/media/gallery/reorder', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorMediaSnapshotController::class, 'reorderGallery'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.media.gallery.reorder');
                 Route::post('/{article}/sync-wp', [ArticleEditorSyncController::class, 'syncWp'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.sync-wp');

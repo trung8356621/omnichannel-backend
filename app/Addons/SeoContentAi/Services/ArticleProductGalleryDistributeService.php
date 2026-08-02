@@ -32,6 +32,15 @@ final class ArticleProductGalleryDistributeService
         }
 
         $article->update(['body' => $result['html']]);
+        try {
+            $writer = app(\App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter::class);
+            $writer->invalidateForLegacyBodyWrite($article, 'product_gallery_distribute');
+            if ($article->isDirty('editor_document_status')) {
+                $article->save();
+            }
+        } catch (\Throwable) {
+            // best-effort
+        }
         $article->articleMetas()->updateOrCreate(
             ['meta_key' => 'wp_post_content'],
             ['meta_value' => $result['html']],

@@ -776,7 +776,17 @@ final class WordPressArticleSyncService
 
         $this->storeWpPostContentMeta($article, $postContent);
         if ($postContent !== '' && trim((string) ($article->body ?? '')) !== $postContent) {
-            $article->update(['body' => $postContent]);
+            try {
+                app(\App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter::class)
+                    ->writeLegacyHtmlAndInvalidateDocument(
+                        $article,
+                        $postContent,
+                        'wp_sync_store_post_content',
+                        true,
+                    );
+            } catch (\Throwable) {
+                $article->update(['body' => $postContent]);
+            }
         }
 
         $message = (string) ($decoded['message'] ?? 'Đã đồng bộ lên WordPress.');
@@ -820,7 +830,17 @@ final class WordPressArticleSyncService
             if ($articleFresh instanceof SeoArticle) {
                 $updatedBody = $localMediaSync->replaceUrlsInHtml((string) ($articleFresh->body ?? ''), $webpUrlMap);
                 if ($updatedBody !== (string) ($articleFresh->body ?? '')) {
-                    $articleFresh->update(['body' => $updatedBody]);
+                    try {
+                        app(\App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter::class)
+                            ->writeLegacyHtmlAndInvalidateDocument(
+                                $articleFresh,
+                                $updatedBody,
+                                'wp_sync_webp_url_map',
+                                true,
+                            );
+                    } catch (\Throwable) {
+                        $articleFresh->update(['body' => $updatedBody]);
+                    }
                     $postContent = $localMediaSync->replaceUrlsInHtml($postContent, $webpUrlMap);
                     $this->storeWpPostContentMeta($articleFresh, $postContent);
                 }
@@ -1035,7 +1055,11 @@ final class WordPressArticleSyncService
             ];
         }
 
-        $postContent = trim((string) ($article->body ?? ''));
+        $postContent = trim(app(\App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter::class)
+            ->ensureDerivedBodyForPublish($article));
+        if ($postContent === '') {
+            $postContent = trim((string) ($article->body ?? ''));
+        }
         $localMediaSyncErrors = [];
         $syncedLocalMediaIds = [];
         if ($postContent !== '') {

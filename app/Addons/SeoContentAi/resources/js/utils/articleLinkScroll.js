@@ -1,8 +1,11 @@
 import { findPlainTextRangeInRoot } from './articlePlainTextRange';
+import { normalizeLinkText } from './articleLinkTextNormalize';
 import {
     SEO_EDITOR_LINK_MARK_CLASS,
     SEO_EDITOR_LINK_SCROLL_LEGACY_CLASS,
 } from './articleEditorTransientMarkup';
+
+export { normalizeLinkText };
 
 /**
  * Tìm block chứa offset trong HTML export (join \n\n).
@@ -42,12 +45,6 @@ export function findBlockIdForExportOffset(blocks, offset) {
     }
 
     return null;
-}
-
-export function normalizeLinkText(text) {
-    return String(text ?? '')
-        .replace(/\s+/g, ' ')
-        .trim();
 }
 
 function normalizeHrefForCompare(href) {

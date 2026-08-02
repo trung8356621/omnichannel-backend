@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoArticleRevision;
+use App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionService;
 use Illuminate\Support\Collection;
 
 final class SeoArticleRevisionService
@@ -87,6 +88,9 @@ final class SeoArticleRevisionService
 
     public function restoreRevisionToArticle(SeoArticle $article, SeoArticleRevision $revision): SeoArticle
     {
+        app(ArticleEditorSessionService::class)
+            ->assertNoActiveEditorSession($article, 'revision_restore');
+
         $seoMeta = is_array($revision->seo_meta) ? $revision->seo_meta : [];
         $title = trim((string) ($revision->title ?? ''));
         $content = (string) ($revision->content ?? '');
@@ -95,6 +99,25 @@ final class SeoArticleRevisionService
             'title' => $title !== '' ? $title : $article->title,
             'body' => $content !== '' ? $content : null,
         ];
+
+        if (is_array($seoMeta['editor_document'] ?? null)) {
+            $updates['editor_document'] = $seoMeta['editor_document'];
+            $updates['editor_document_schema_version'] = (int) ($seoMeta['editor_document_schema_version'] ?? 1);
+            $updates['editor_document_hash'] = (string) ($seoMeta['editor_document_hash'] ?? '');
+            $updates['editor_document_status'] = \App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentSchema::STATUS_CURRENT;
+            $updates['editor_document_updated_at'] = now();
+        } else {
+            // Legacy revision: body restored → mark JSON stale for re-ingest.
+            try {
+                app(\App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter::class)
+                    ->invalidateForLegacyBodyWrite($article, 'revision_restore_html_only');
+                if ($article->isDirty('editor_document_status')) {
+                    $updates['editor_document_status'] = $article->editor_document_status;
+                }
+            } catch (\Throwable) {
+                // best-effort
+            }
+        }
 
         if (array_key_exists('seo_score', $seoMeta) && $seoMeta['seo_score'] !== null) {
             $updates['seo_score'] = (float) $seoMeta['seo_score'];

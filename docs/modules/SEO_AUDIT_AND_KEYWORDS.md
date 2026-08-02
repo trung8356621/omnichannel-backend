@@ -9,6 +9,8 @@
 
 SEO technical audit + keyword research stack for one SEO DB connection (`omi_seo_ai`).
 
+**Article Editor immediate analysis** (word count, links, image ratio in edit UI) is **not** owned by ArticlesOptimal — see [`ARTICLE_EDITOR_ANALYSIS_OWNERSHIP.md`](../architecture/ARTICLE_EDITOR_ANALYSIS_OWNERSHIP.md). Audit list still uses persisted `seo_rule_violations` / server `SeoAnalyzerService`.
+
 | Surface | Role |
 |---------|------|
 | **ArticlesOptimal** | Scan/filter articles failing SEO rules; assign into Content Projects; Reviewed dashboard |

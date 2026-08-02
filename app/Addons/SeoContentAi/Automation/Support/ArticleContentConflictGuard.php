@@ -10,7 +10,8 @@ use Carbon\Carbon;
 
 /**
  * Concurrency guard cho article.content.update.
- * Domain chưa có revision column trên articles → dùng expected_updated_at / expected_content_hash.
+ * Primary: expected_document_version (canonical).
+ * Compat: expected_updated_at / expected_content_hash.
  */
 final class ArticleContentConflictGuard
 {
@@ -19,10 +20,25 @@ final class ArticleContentConflictGuard
      */
     public function assertCompatible(SeoArticle $article, array $input): ?ActionResult
     {
+        $expectedVersion = $input['expected_document_version'] ?? null;
+        if ($expectedVersion !== null && $expectedVersion !== '') {
+            $actualVersion = max(1, (int) ($article->document_version ?? 1));
+            if ((int) $expectedVersion !== $actualVersion) {
+                return ActionResult::failure(
+                    'conflict_document_version',
+                    'Article document_version mismatch; refusing silent overwrite.',
+                    error: [
+                        'expected_document_version' => (int) $expectedVersion,
+                        'actual_document_version' => $actualVersion,
+                    ],
+                );
+            }
+        }
+
         $expectedUpdatedAt = $input['expected_updated_at'] ?? null;
         $expectedHash = $input['expected_content_hash'] ?? null;
 
-        if ($expectedUpdatedAt === null && ($expectedHash === null || $expectedHash === '')) {
+        if ($expectedUpdatedAt === null && ($expectedHash === null || $expectedHash === '') && ($expectedVersion === null || $expectedVersion === '')) {
             return null;
         }
 

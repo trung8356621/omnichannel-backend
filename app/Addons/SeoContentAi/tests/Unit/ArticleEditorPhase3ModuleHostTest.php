@@ -7,7 +7,7 @@ namespace App\Addons\SeoContentAi\Tests\Unit;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Phase 3 static contracts: module host + dynamic import + no eager heavy mounts.
+ * Phase 3 contracts updated through Phase 6C.4 — ModuleHost removed; runtime portals own panels.
  */
 final class ArticleEditorPhase3ModuleHostTest extends TestCase
 {
@@ -20,44 +20,32 @@ final class ArticleEditorPhase3ModuleHostTest extends TestCase
         self::assertStringNotContainsString("from './components/ArticleLinksSidebar'", $source);
         self::assertStringNotContainsString("from './components/ArticleFaqEditor'", $source);
         self::assertStringNotContainsString("from './components/ArticleAiChatPanel'", $source);
-        self::assertStringContainsString('ArticleEditorModuleHost', $source);
+        self::assertStringNotContainsString('ArticleEditorModuleHost', $source);
         self::assertStringContainsString('__seoArticleEditorNavigatedBound', $source);
         self::assertStringContainsString('__seoArticleLivewireBridgeRegistered', $source);
     }
 
-    public function test_module_host_uses_lazy_dynamic_imports_and_abort(): void
+    public function test_ai_module_lazy_loads_chat_panel(): void
     {
-        $source = (string) file_get_contents(
+        $panel = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/editor/modules/ai/AiChatSidebarPanel.jsx',
+        );
+        self::assertStringContainsString('lazy(() => import(', $panel);
+        self::assertStringContainsString('ArticleAiChatPanel', $panel);
+        self::assertFileDoesNotExist(
             dirname(__DIR__, 2).'/resources/js/components/ArticleEditorModuleHost.jsx',
         );
-
-        self::assertStringContainsString("lazy(() => import('../modules/LinksModule'))", $source);
-        self::assertStringContainsString("lazy(() => import('../modules/FaqModule'))", $source);
-        self::assertStringContainsString("lazy(() => import('../modules/AiChatModule'))", $source);
-        self::assertStringContainsString('AbortController', $source);
-        self::assertStringContainsString('isAbortError', $source);
-        self::assertStringContainsString('activeModule === \'faq\'', $source);
-        self::assertStringContainsString('activeModule === \'ai-chat\'', $source);
-        self::assertStringContainsString('activeModule === \'links\'', $source);
     }
 
-    public function test_seo_article_editor_lazy_imports_editor_hosted_modules(): void
+    public function test_seo_article_editor_uses_runtime_portal_host(): void
     {
         $source = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/js/components/SeoArticleEditor.jsx',
         );
 
-        self::assertStringNotContainsString("import SeoScorePanel from './SeoScorePanel'", $source);
-        self::assertStringNotContainsString("import ArticleImagesTab from './ArticleImagesTab'", $source);
-        self::assertStringNotContainsString("import ArticleReviewsTab from './ArticleReviewsTab'", $source);
-        self::assertStringContainsString("lazy(() => import('../modules/SeoModule'))", $source);
-        self::assertStringContainsString("lazy(() => import('../modules/ImagesModule'))", $source);
-        self::assertStringContainsString("lazy(() => import('../modules/ReviewsModule'))", $source);
+        self::assertStringContainsString('EditorSidebarPortalHost', $source);
         self::assertStringContainsString('activeHeavyModule', $source);
-        self::assertStringNotContainsString('activatedPanels', $source);
-        self::assertStringContainsString('seoPanelActive', $source);
-        self::assertStringContainsString('imagesPanelActive', $source);
-        self::assertStringContainsString('reviewsPanelActive', $source);
+        self::assertStringContainsString('EditorInspectorBubbleHost', $source);
     }
 
     public function test_module_reexport_files_exist(): void

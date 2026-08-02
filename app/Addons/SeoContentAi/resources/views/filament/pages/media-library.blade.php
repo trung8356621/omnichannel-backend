@@ -5,7 +5,89 @@
     @vite([
         'app/Addons/SeoContentAi/resources/css/media-library.css',
         'app/Addons/SeoContentAi/resources/js/media-library-actions.js',
+        'app/Addons/SeoContentAi/resources/js/media-library-page.jsx',
     ])
+    {{-- Inline override: rename modal above preview + actions/footer without waiting for vite rebuild. --}}
+    <style>
+        .seo-wp-rename-modal { z-index: 100100 !important; padding: 1rem; box-sizing: border-box; }
+        .seo-wp-rename-modal__panel {
+            display: flex !important;
+            flex-direction: column !important;
+            max-height: min(90vh, 760px) !important;
+            overflow: hidden !important;
+            padding: 0 !important;
+        }
+        .seo-wp-rename-modal__head { padding: 1rem 1.1rem .65rem; flex-shrink: 0; }
+        .seo-wp-rename-modal__body {
+            flex: 1 1 auto !important;
+            min-height: 0 !important;
+            overflow: auto !important;
+            padding: 0 1.1rem .5rem !important;
+        }
+        .seo-wp-rename-modal__actions {
+            flex-shrink: 0 !important;
+            display: flex !important;
+            justify-content: flex-end !important;
+            align-items: center !important;
+            gap: .55rem !important;
+            padding: .85rem 1.1rem 1rem !important;
+            border-top: 1px solid #e2e8f0 !important;
+            background: #fff !important;
+            margin-top: 0 !important;
+        }
+        .seo-wp-rename-modal__btn {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            gap: .35rem !important;
+            min-height: 2.35rem !important;
+            padding: .55rem .9rem !important;
+            border-radius: .5rem !important;
+            border: 1px solid #cbd5e1 !important;
+            font-size: .875rem !important;
+            font-weight: 600 !important;
+            line-height: 1.2 !important;
+            cursor: pointer !important;
+        }
+        .seo-wp-rename-modal__btn.is-ghost { background: #fff !important; color: #334155 !important; }
+        .seo-wp-rename-modal__btn.is-danger {
+            background: #dc2626 !important;
+            border-color: #b91c1c !important;
+            color: #fff !important;
+        }
+        .seo-wp-rename-modal__btn.is-danger:disabled {
+            background: #f87171 !important;
+            border-color: #f87171 !important;
+            color: #fff !important;
+            opacity: 1 !important;
+            cursor: not-allowed !important;
+        }
+        .seo-wp-rename-modal__block {
+            margin: .55rem 0 0 !important;
+            padding: .55rem .65rem !important;
+            border-radius: .45rem !important;
+            font-size: .82rem !important;
+            line-height: 1.35 !important;
+            background: #fff7ed !important;
+            color: #9a3412 !important;
+            border: 1px solid #fed7aa !important;
+        }
+        /* Legacy class on old bundle until rebuild */
+        .seo-wp-rename-modal__actions button.is-danger {
+            background: #dc2626 !important;
+            border-color: #b91c1c !important;
+            color: #fff !important;
+            min-height: 2.35rem !important;
+            padding: .55rem .9rem !important;
+            border-radius: .5rem !important;
+            font-weight: 600 !important;
+        }
+        .seo-wp-rename-modal__actions button.is-danger:disabled {
+            background: #f87171 !important;
+            opacity: 1 !important;
+            cursor: not-allowed !important;
+        }
+    </style>
 
     <div
         class="seo-media-library"
@@ -496,7 +578,7 @@
                 role="dialog"
                 aria-modal="true"
                 aria-label="{{ $previewMediaType === 'video' ? 'Preview video' : 'Preview image' }}"
-                wire:click.stop
+                x-on:click.stop
             >
                 <div class="seo-media-preview-modal__head">
                     <div>
@@ -561,6 +643,47 @@
                         >
                             <span wire:loading.remove wire:target="openImageEditor">Edit image</span>
                             <span wire:loading wire:target="openImageEditor">Preparing...</span>
+                        </button>
+                    @endif
+                    @php
+                        $canRenameWp = ($previewMediaType === 'image')
+                            && (
+                                (int) ($previewImage['wp_attachment_id'] ?? 0) > 0
+                                || ($previewImage['kind'] ?? '') === 'wordpress'
+                            )
+                            && app(\App\Addons\SeoContentAi\Services\WordPress\WordPressMediaRenameService::class)->canRenameWordPressMedia();
+                        $renameUrl = (string) ($previewImage['url'] ?? '');
+                        $renamePath = (string) (parse_url($renameUrl, PHP_URL_PATH) ?: $renameUrl);
+                        $renameSlug = (string) pathinfo($renamePath, PATHINFO_FILENAME);
+                        if ($renameSlug === '') {
+                            $renameSlug = (string) ($previewImage['slug'] ?? '');
+                        }
+                        $wpRenamePayload = [
+                            'siteId' => (int) $siteId,
+                            'attachmentId' => (int) ($previewImage['wp_attachment_id'] ?? $previewImage['id'] ?? 0),
+                            'oldUrl' => $renameUrl,
+                            'previewUrl' => $renameUrl,
+                            'currentSlug' => $renameSlug,
+                            'sourceAction' => 'media_library',
+                        ];
+                    @endphp
+                    @if ($canRenameWp)
+                        <button
+                            type="button"
+                            class="seo-media-preview-btn"
+                            title="Đổi tên file và cập nhật các tham chiếu được phát hiện."
+                            data-seo-wp-rename-b64="{{ base64_encode(json_encode($wpRenamePayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) }}"
+                            onclick="(function (el) {
+                                try {
+                                    var raw = el.getAttribute('data-seo-wp-rename-b64') || '';
+                                    var detail = JSON.parse(atob(raw));
+                                    window.dispatchEvent(new CustomEvent('seo-wordpress-media-rename-open', { detail: detail }));
+                                } catch (err) {
+                                    console.error('seo-wp-rename-open failed', err);
+                                }
+                            })(this)"
+                        >
+                            Đổi tên ảnh
                         </button>
                     @endif
                     @if ($previewCanSyncToWp && $previewMediaType === 'image')

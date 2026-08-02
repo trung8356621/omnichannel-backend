@@ -172,27 +172,64 @@ export function insertContactValueAtBookmark(editor, label, href, type = '', boo
 }
 
 /**
- * CTA sentence at caret — same inline flow as raw value; only content differs.
- * Example: "Gọi ngay: " + linked phone. Stays inside quote/list/paragraph.
+ * Canonical CTA insert from contact sidebar.
+ * Inserts article-cta paragraph at bookmark (splits parent textblock; no lift/focus-end).
  *
  * @param {import('@tiptap/core').Editor|null|undefined} editor
  * @param {{
+ *   contactType?: string,
+ *   type?: string,
+ *   contactValue?: string,
  *   label?: string,
  *   href?: string,
- *   type?: string,
  *   sentence?: string,
  *   valueLabel?: string,
+ *   templateKey?: string|null,
  *   bookmark?: { from: number, to: number, docSize?: number }|null,
  * }} opts
  * @returns {boolean}
  */
-export function insertCtaInlineAtBookmark(editor, opts = {}) {
+/**
+ * Position after enclosing blockquote/list (or current textblock) for block-level CTA.
+ * @param {import('@tiptap/core').Editor} editor
+ * @param {number} from
+ * @returns {number}
+ */
+export function resolveInsertionAfterEnclosingBlock(editor, from) {
+    const docSize = Number(editor?.state?.doc?.content?.size ?? 0);
+    const safeFrom = Math.max(0, Math.min(Number(from) || 0, docSize));
+    try {
+        const $pos = editor.state.doc.resolve(safeFrom);
+        for (let depth = $pos.depth; depth > 0; depth -= 1) {
+            const name = String($pos.node(depth)?.type?.name ?? '');
+            if (
+                name === 'blockquote'
+                || name === 'bulletList'
+                || name === 'orderedList'
+                || name === 'table'
+            ) {
+                return $pos.after(depth);
+            }
+        }
+        for (let depth = $pos.depth; depth > 0; depth -= 1) {
+            const node = $pos.node(depth);
+            if (node?.isTextblock) {
+                return $pos.after(depth);
+            }
+        }
+    } catch {
+        // fall through
+    }
+    return safeFrom;
+}
+
+export function insertContactCtaAtBookmark(editor, opts = {}) {
     if (!editor?.state || editor.isDestroyed) {
         return false;
     }
 
-    const type = String(opts.type ?? '').toLowerCase();
-    const valueLabel = String(opts.valueLabel ?? opts.label ?? '').trim();
+    const type = String(opts.contactType ?? opts.type ?? '').toLowerCase();
+    const valueLabel = String(opts.valueLabel ?? opts.contactValue ?? opts.label ?? '').trim();
     const sentence = String(opts.sentence ?? '').trim();
     const href = String(opts.href ?? '').trim();
     const bookmark = opts.bookmark ?? null;
@@ -204,60 +241,135 @@ export function insertCtaInlineAtBookmark(editor, opts = {}) {
 
     if (sentence && valueLabel && sentence.includes(valueLabel)) {
         const idx = sentence.indexOf(valueLabel);
-        labelPart = sentence.slice(0, idx);
+        labelPart = sentence.slice(0, idx).trim();
         linkedPart = valueLabel;
         suffixPart = sentence.slice(idx + valueLabel.length);
     } else if (sentence) {
-        // Whole sentence as plain/linked text when value cannot be split out.
-        if (plainText) {
-            return insertInlinePartsAtBookmark(editor, [{ text: sentence }], bookmark);
-        }
-        return insertInlinePartsAtBookmark(editor, [{ text: sentence, href }], bookmark);
+        labelPart = '';
+        linkedPart = sentence;
     }
 
+    const safeType = type.replace(/[^a-z0-9_-]/gi, '') || 'cta';
+    const safeLabel = labelPart.trim();
     const safeValue = String(linkedPart || valueLabel || sentence).trim();
-    if (!safeValue && !labelPart.trim()) {
+    if (!safeValue) {
         return false;
     }
 
-    /** @type {Array<{ text: string, href?: string }>} */
-    const parts = [];
-    if (labelPart !== '') {
-        parts.push({ text: labelPart });
+    const labelNeedsColon = safeLabel !== '' && !/[:：]$/.test(safeLabel);
+    const labelText = safeLabel
+        ? `${safeLabel}${labelNeedsColon ? ':' : ''} `
+        : '';
+
+    /** @type {Array<Record<string, unknown>>} */
+    const inlineContent = [];
+    if (labelText) {
+        inlineContent.push({
+            type: 'text',
+            text: labelText,
+            marks: [{ type: 'bold' }],
+        });
     }
-    if (safeValue) {
-        if (plainText) {
-            parts.push({ text: safeValue });
-        } else {
-            parts.push({ text: safeValue, href });
-        }
+    if (plainText || !href) {
+        inlineContent.push({ type: 'text', text: safeValue });
+    } else {
+        inlineContent.push({
+            type: 'text',
+            text: safeValue,
+            marks: [
+                {
+                    type: 'link',
+                    attrs: {
+                        ...normalizedLinkAttrs(href),
+                        class: `${SEO_EDITOR_LINK_CLASS} article-cta__value`.trim(),
+                    },
+                },
+            ],
+        });
     }
-    if (suffixPart !== '') {
-        parts.push({ text: suffixPart });
+    if (suffixPart) {
+        inlineContent.push({ type: 'text', text: suffixPart });
     }
 
-    return insertInlinePartsAtBookmark(editor, parts, bookmark);
+    const ctaNode = {
+        type: 'paragraph',
+        attrs: {
+            class: 'article-cta',
+            'data-cta-type': safeType,
+        },
+        content: inlineContent,
+    };
+    const trailParagraph = { type: 'paragraph' };
+
+    const resolved = resolveBookmarkSelection(editor, bookmark);
+    const docSize = Number(editor.state.doc?.content?.size ?? 0);
+    const caretFrom = resolved
+        ? resolved.from
+        : Math.max(0, Math.min(editor.state.selection.from, docSize));
+    // Block-level CTA: after enclosing quote/list/table (never nested inside).
+    const insertPos = resolveInsertionAfterEnclosingBlock(editor, caretFrom);
+
+    return editor
+        .chain()
+        .focus()
+        .command(({ tr, commands, state }) => {
+            const pos = Math.max(0, Math.min(insertPos, state.doc.content.size));
+            return commands.insertContentAt(
+                pos,
+                [ctaNode, trailParagraph],
+                { updateSelection: false },
+            );
+        })
+        .command(({ tr, dispatch }) => {
+            if (!dispatch) {
+                return true;
+            }
+            const scanFrom = Math.max(0, Math.min(insertPos, tr.doc.content.size));
+            let caretPos = null;
+            tr.doc.nodesBetween(scanFrom, tr.doc.content.size, (node, pos) => {
+                if (
+                    node.type.name === 'paragraph'
+                    && String(node.attrs?.class ?? '').includes('article-cta')
+                ) {
+                    caretPos = pos + node.nodeSize + 1;
+                    return false;
+                }
+                return true;
+            });
+            const maxPos = tr.doc.content.size;
+            const safePos = Math.max(1, Math.min(caretPos ?? maxPos - 1, maxPos));
+            try {
+                tr.setSelection(TextSelection.near(tr.doc.resolve(safePos), 1));
+            } catch {
+                tr.setSelection(TextSelection.near(tr.doc.resolve(Math.max(1, maxPos - 1)), -1));
+            }
+            tr.setStoredMarks([]);
+            dispatch(tr.scrollIntoView());
+            return true;
+        })
+        .run();
+}
+
+/** @deprecated Use insertContactCtaAtBookmark */
+export function insertCtaInlineAtBookmark(editor, opts = {}) {
+    return insertContactCtaAtBookmark(editor, opts);
 }
 
 /**
- * @deprecated Use insertContactValueAtBookmark / insertCtaInlineAtBookmark.
+ * @deprecated Raw value kept for non-sidebar consumers only.
  */
 export function insertCtaInEditor(editor, label, href, type = '', bookmark = null) {
     return insertContactValueAtBookmark(editor, label, href, type, bookmark);
 }
 
-/**
- * @deprecated Block CTA removed — delegates to inline insert (keeps parent node).
- */
+/** @deprecated Use insertContactCtaAtBookmark */
 export function insertCtaBlockAtBookmark(editor, opts = {}) {
-    return insertCtaInlineAtBookmark(editor, opts);
+    return insertContactCtaAtBookmark(editor, opts);
 }
 
-/**
- * @deprecated Block CTA removed — delegates to inline insert.
- */
+/** @deprecated Use insertContactCtaAtBookmark */
 export function insertCtaBlockInEditor(editor, opts = {}) {
-    return insertCtaInlineAtBookmark(editor, opts);
+    return insertContactCtaAtBookmark(editor, opts);
 }
 
 /**

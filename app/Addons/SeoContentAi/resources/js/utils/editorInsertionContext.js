@@ -1,6 +1,6 @@
 /**
- * Transient frontend insertion bookmark (CTA / link / media assistants).
- * Not persisted to DB.
+ * Canonical editor insertion bookmark store (CTA / link / media assistants).
+ * Alias concept: EditorInsertionContextStore — not persisted to DB.
  */
 
 /** @typedef {{ from: number, to: number, docSize: number }} SelectionBookmark */
@@ -11,6 +11,9 @@
  *   activeBlockId: string|null,
  *   activeEditorId: string|null,
  *   selection: SelectionBookmark|null,
+ *   selectionType: 'text'|'node'|'all'|null,
+ *   documentVersion: number,
+ *   preserved: boolean,
  *   updatedAt: number,
  * }} EditorInsertionContext
  */
@@ -21,6 +24,9 @@ let context = {
     activeBlockId: null,
     activeEditorId: null,
     selection: null,
+    selectionType: null,
+    documentVersion: 0,
+    preserved: false,
     updatedAt: 0,
 };
 
@@ -32,7 +38,10 @@ let frozenContext = null;
  * @returns {EditorInsertionContext}
  */
 export function getEditorInsertionContext() {
-    return { ...context, selection: context.selection ? { ...context.selection } : null };
+    return {
+        ...context,
+        selection: context.selection ? { ...context.selection } : null,
+    };
 }
 
 /**
@@ -49,6 +58,16 @@ export function getFrozenEditorInsertionContext() {
         ...frozenContext,
         selection: frozenContext.selection ? { ...frozenContext.selection } : null,
     };
+}
+
+/**
+ * pointerdown/mousedown on assistant sidebar — snapshot before focus moves.
+ * Does NOT preventDefault (keeps keyboard / dropdown a11y).
+ *
+ * @param {Event|null|undefined} [_event]
+ */
+export function preserveEditorContextBeforeSidebarAction(_event = null) {
+    window.dispatchEvent(new CustomEvent('seo-assistant-freeze-insertion-context'));
 }
 
 /**
@@ -85,6 +104,9 @@ export function freezeEditorInsertionContext(snapshot = null, options = {}) {
         activeBlockId: source.activeBlockId,
         activeEditorId: source.activeEditorId,
         selection: nextSelection,
+        selectionType: source.selectionType ?? 'text',
+        documentVersion: Number(source.documentVersion) || 0,
+        preserved: true,
         updatedAt: Date.now(),
     };
     // Keep live context aligned with freeze so resolveEditorForInsertion stays consistent.
@@ -131,20 +153,46 @@ export function captureEditorInsertionContext({ sectionId = null, blockId = null
         activeBlockId: blockId != null && String(blockId).trim() !== '' ? String(blockId) : context.activeBlockId,
         activeEditorId: blockId != null && String(blockId).trim() !== '' ? String(blockId) : context.activeEditorId,
         selection: context.selection,
+        selectionType: context.selectionType,
+        documentVersion: context.documentVersion,
+        preserved: context.preserved,
         updatedAt: Date.now(),
     };
 
     if (editor && !editor.isDestroyed && editor.state?.selection) {
         const { from, to } = editor.state.selection;
         const docSize = Number(editor.state.doc?.content?.size ?? 0);
-        next.selection = {
-            from: Number(from) || 0,
-            to: Number(to) || 0,
-            docSize,
-        };
-        if (blockId) {
-            next.activeBlockId = String(blockId);
-            next.activeEditorId = String(blockId);
+        const nextFrom = Number(from) || 0;
+        const nextTo = Number(to) || 0;
+        const looksLikeDocEnd =
+            docSize > 0
+            && nextFrom >= docSize
+            && nextTo >= docSize;
+
+        // Blur/sidebar must not overwrite a preserved caret with "end of editor".
+        const priorGood = frozenContext?.selection ?? context.selection;
+        if (
+            looksLikeDocEnd
+            && priorGood
+            && priorGood.from < docSize
+            && (frozenContext?.preserved || context.preserved)
+        ) {
+            next.selection = { ...priorGood };
+            next.selectionType = frozenContext?.selectionType ?? context.selectionType ?? 'text';
+            next.documentVersion = Number(frozenContext?.documentVersion ?? context.documentVersion) || docSize;
+            next.preserved = true;
+        } else {
+            next.selection = {
+                from: nextFrom,
+                to: nextTo,
+                docSize,
+            };
+            next.selectionType = editor.state.selection.empty ? 'text' : 'text';
+            next.documentVersion = docSize;
+            if (blockId) {
+                next.activeBlockId = String(blockId);
+                next.activeEditorId = String(blockId);
+            }
         }
     }
 

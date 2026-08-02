@@ -35,12 +35,18 @@ final class ArticleEditorBladeLazyBootstrapTest extends TestCase
         $source = $this->bladeSource();
 
         self::assertStringContainsString('id="seo-article-faq-root"', $source);
-        self::assertStringContainsString('seo-faq-panel-activate', $source);
         self::assertStringNotContainsString('seo-article-faq-config', $source);
         self::assertStringNotContainsString('$this->getEditorSeoPayload()', $source);
         self::assertStringNotContainsString('$this->getEditorMetaPayload()', $source);
         self::assertStringNotContainsString('$this->getEditorSettingsPayload()', $source);
         self::assertStringContainsString('getArticleMediaPickerMinimalPayload', $source);
+
+        // Compat FAQ activate lives in ModuleHost (not Blade).
+        $host = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/components/ArticleEditorModuleHost.jsx',
+        );
+        self::assertStringContainsString('seo-faq-panel-activate', $host);
+        self::assertStringContainsString('article-editor:module-open', $host);
     }
 
     private function bladeSource(): string

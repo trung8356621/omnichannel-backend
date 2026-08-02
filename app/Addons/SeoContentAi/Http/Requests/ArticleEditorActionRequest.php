@@ -39,10 +39,33 @@ final class ArticleEditorActionRequest extends FormRequest
             'category_ids.*' => ['integer'],
             'expected_updated_at' => ['nullable', 'string'],
             'expected_content_hash' => ['nullable', 'string'],
+            'expected_document_version' => ['nullable', 'integer', 'min:1'],
+            'editor_session_id' => ['nullable', 'uuid'],
+            'save_mode' => ['nullable', 'string', 'in:autosave,explicit'],
+            'close_reason' => ['nullable', 'string', 'max:64'],
+            'document' => ['nullable'],
             'featured_image' => ['nullable', 'array'],
             'product_album' => ['nullable', 'array'],
             'faqs' => ['nullable', 'array'],
         ];
+    }
+
+    protected function prepareForValidation(): void
+    {
+        if ($this->filled('html')) {
+            return;
+        }
+
+        $document = $this->input('document');
+        if (is_string($document)) {
+            $this->merge(['html' => $document]);
+
+            return;
+        }
+
+        if (is_array($document) && isset($document['html']) && is_string($document['html'])) {
+            $this->merge(['html' => $document['html']]);
+        }
     }
 
     /**

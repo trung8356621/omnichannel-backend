@@ -24,7 +24,8 @@ Panel prefix: `/seo/{connection_hash}/`
 | `articles/queue` | `ListArticleSyncQueue` |
 | `GET/POST .../editor/*` | Lazy editor payloads (`ArticleEditorLazyPayloadController`) |
 | `POST /api/seo/articles/{id}/seo-meta` | SEO meta save (no Livewire) |
-| `POST /api/seo/articles/{id}/fix-media-slugs` | Batch image slug fix |
+| `POST /api/seo/articles/{id}/fix-media-slugs` | Batch **local/safe** image slug fix (WP media skipped) |
+| `POST /api/seo/media/wordpress/rename[/preview]` | Explicit WordPress media rename (strong confirm) |
 | `POST /api/seo/prompt-hooks/{hookKey}/execute` | Title / meta prompt hooks |
 
 Route binding: edit/view **does not** 404 when global domain ≠ `article.site_id` (`includeGlobalSiteScope: false`). List still scopes.
@@ -55,8 +56,9 @@ Route binding: edit/view **does not** 404 when global domain ≠ `article.site_i
 | AI History (manual recovery) | `ViewArticlePrompts` + `Services/ArticleAiHistory/*` — preview/apply/delete typed artifacts into editor draft |
 | Insertion context (transient) | `resources/js/utils/editorInsertionContext.js` — `activeSectionId` / `activeBlockId` / selection bookmark; used by CTA, link, media assistants |
 | CTA / Contact sidebar | `CtaContactInsertList.jsx` + `DomainCtaEditorService` — usable contacts only; insert value / quick CTA sentence (deterministic templates, no AI) |
-| Quick CTA templates | `Support/CtaQuickTemplates` + `SeoDomainCtaGlobalSettingsService::cta_quick_templates` (+ localStorage editor override) |
-| Assistant widget health | `resources/js/utils/assistantWidgetHealth.js` + `Support/AssistantWidgetHealthRules` — dock status `error\|warning\|success\|neutral`, reasons, click-to-fix |
+| Quick CTA templates | `Support/CtaQuickTemplates` + `SeoDomainCtaGlobalSettingsService::cta_quick_templates` via `PUT /api/seo/domain-cta/quick-templates` (React form draft only) |
+| Assistant widget health | `resources/js/utils/assistantWidgetHealth.js` — Images: `error` (integrity) / `warning` (ALT/local placeholder slug) / `info` (SEO ratio); WP filename≠keyword is **not** an issue; WP media `protected_from_bulk_rename` |
+| Fix Slug All | Local/safe media only (`mediaSourceClassification.js`); WP → explicit `WordPressMediaRenameModal` + `WordPressMediaRenameService`. **Except removed.** |
 | SEO reason metrics | `resources/js/utils/seoReasonMetrics.js` + `Support/SeoReasonPresentation` — `image_ratio_*` / `content_length_low` with current/recommended/missing; locale `lang/{vi,en}/seo_rules.php` |
 | CTA block insert | `insertCtaBlockInEditor` → `<p class="article-cta">` + label/value; `unsetAllMarks` / lift blockquote |
 | CTA freeze bookmark | `freezeEditorInsertionContext` on CTA `pointerdown` + `seo-assistant-freeze-insertion-context`; insert uses frozen caret |
@@ -89,7 +91,18 @@ Route binding: edit/view **does not** 404 when global domain ≠ `article.site_i
 | Display score | Recomputed from violations + current registry deductions | Stale `seo_score` alone for UI truth |
 | Conflict tokens | `updated_at` + content hash | Force overwrite without `canForceArticleContentOverwrite` |
 | Manual save stamp | `last_manual_saved_at` | Touching `updated_at` for CP row semantics |
-| Featured / gallery | Meta + editor events | SSR-only product gallery gates |
+| Featured / gallery | Laravel `media_snapshot` + REST mutations | See [`ARTICLE_EDITOR_MEDIA_SNAPSHOT.md`](../architecture/ARTICLE_EDITOR_MEDIA_SNAPSHOT.md) |
+| Immediate SEO analysis (editor) | React `composeImmediateArticleAnalysis` + Laravel `analysisPolicy` / `externalFacts` | Livewire `seo-analyze-result` (removed as UI SoT) — see [`ARTICLE_EDITOR_ANALYSIS_OWNERSHIP.md`](../architecture/ARTICLE_EDITOR_ANALYSIS_OWNERSHIP.md) |
+| Editor document traversal | TipTap JSON `DocumentModel` + selectors | Raw HTML regex for analysis — see [`ARTICLE_EDITOR_DOCUMENT_MODEL.md`](../architecture/ARTICLE_EDITOR_DOCUMENT_MODEL.md) |
+| Document mutations | `executeEditorCommand` command layer | Direct `editor.chain()` in widgets — see [`ARTICLE_EDITOR_COMMAND_LAYER.md`](../architecture/ARTICLE_EDITOR_COMMAND_LAYER.md) |
+| Canonical editable document | `articles.editor_document` TipTap envelope; `body` derived HTML | HTML-only save as SoT — see [`ARTICLE_EDITOR_JSON_PERSISTENCE.md`](../architecture/ARTICLE_EDITOR_JSON_PERSISTENCE.md) |
+| Editor module wiring | Runtime slots + `EditorSidebarPortalHost` / toolbar registry / nav API | Hard-coded panel switch in `SeoArticleEditor` — see [`ARTICLE_EDITOR_RUNTIME.md`](../architecture/ARTICLE_EDITOR_RUNTIME.md) |
+| Editor dock navigation (6C.1) | React `EditorSidebarNavigation` + runtime `openPanel` / health store | Alpine chips/`activePanel`/health SoT — Blade mount roots only; Publishing shell boundary — [`ARTICLE_EDITOR_SHELL_BOUNDARY.md`](../architecture/ARTICLE_EDITOR_SHELL_BOUNDARY.md) |
+| Links/FAQ/CTA modules (6C.2) | Runtime sidebar panels + command host actions; FAQ extract REST | `ArticleEditorModuleHost` Links/FAQ branches; insert via CustomEvent — see [`ARTICLE_EDITOR_RUNTIME.md`](../architecture/ARTICLE_EDITOR_RUNTIME.md) |
+| Featured/Gallery + Shared Media Picker (6C.3) | React panels + `openMediaPicker` modes + media snapshot APIs | Alpine Featured/Gallery draft + Alpine media modal — see [`ARTICLE_EDITOR_MEDIA_SNAPSHOT.md`](../architecture/ARTICLE_EDITOR_MEDIA_SNAPSHOT.md) |
+| AI Chat runtime (6C.4) | `article-editor.ai` + host generate actions; ModuleHost removed | `ArticleEditorModuleHost` — see [`ARTICLE_EDITOR_RUNTIME_COMPLETION.md`](../architecture/ARTICLE_EDITOR_RUNTIME_COMPLETION.md) |
+| FAQ domain | Laravel `faq_snapshot` API (`seo_faqs`); React draft/preview | Livewire FAQ shadow / LS SoT — see [`ARTICLE_EDITOR_WIDGETS_OWNERSHIP.md`](../architecture/ARTICLE_EDITOR_WIDGETS_OWNERSHIP.md) |
+| CTA quick templates | Laravel domain CTA settings API | localStorage CTA templates SoT |
 | FAQ catch keywords | `SeoOverviewSettingsService::KEY_FAQ_CATCH_KEYWORDS` | Hardcoded VI/EN only when setting empty |
 
 List tabs: posts/categories/queue exclude skip meta; reviewed uses `review_status` approved path; skipped = skip meta only.
@@ -106,6 +119,22 @@ Policy: max **one** heavy sidebar module mounted; switch unmounts (no CSS-hide t
 
 ## 6. Write path
 
+### Edit session lock (Phase 1 / 1.1)
+
+See [`ARTICLE_EDITOR_SESSION_LOCK.md`](../architecture/ARTICLE_EDITOR_SESSION_LOCK.md).
+
+- Acquire writable session before edit; other tabs/users → TipTap `setEditable(false)`.
+- Canonical guard: `expected_document_version` (`articles.document_version`).
+- Compat: `expected_updated_at` + `expected_content_hash`.
+- Explicit Save → session document endpoint; Save & Close → atomic `close`.
+- Legacy `POST .../save` cannot bypass active session without owning session id.
+- Livewire `EditArticle` persist requires owning `editorSessionId` and delegates `ArticleEditorPersistService` (no direct body update).
+- Shell Save/Save&Close reactive-disable via `article-editor-session-state-changed`.
+- Revision restore / media body rewrite blocked while active editor session exists.
+- Server autosave (debounced) + localStorage draft schema v3 (user-scoped).
+- Featured/Gallery: immediate API persist + `media_snapshot` (no localStorage SoT).
+- Immediate analysis (Phase 2B): React owns live checks; Laravel owns `analysisPolicy` / `externalFacts` + save/publish validation. See [`ARTICLE_EDITOR_ANALYSIS_OWNERSHIP.md`](../architecture/ARTICLE_EDITOR_ANALYSIS_OWNERSHIP.md).
+
 ### Local persist
 
 ```text
@@ -121,7 +150,7 @@ SEO modal: `POST .../seo-meta` → `ArticleEditorSeoMetaService` (queues score; 
 
 Save payload SEO analysis: **violations (+ extracted_links) only** — never send fixed score/breakdown.
 
-Conflict: hash match allows pass despite `updated_at` skew. Force overwrite: `SeoAccessControl::canForceArticleContentOverwrite()` (actualRole rank > content_manager).
+Conflict: `document_version` primary; hash match allows pass despite `updated_at` skew. Force overwrite: `SeoAccessControl::canForceArticleContentOverwrite()` (actualRole rank > content_manager).
 
 ### Sync WP (editor)
 
@@ -174,7 +203,7 @@ Related public:
 | Quick post reviews | `GenerateArticleReviewsJob` |
 | CP full rewrite from editor menu | `ArticleWritingExecutionService` path (not Publish graph) |
 
-No second scheduler for editor autosave — client debounce + Livewire/REST.
+No second scheduler for editor autosave — client debounce (local draft + server session document) + REST session APIs.
 
 ## 11. Transactions and side effects
 

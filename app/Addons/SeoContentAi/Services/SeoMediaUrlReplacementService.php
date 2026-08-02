@@ -161,6 +161,9 @@ final class SeoMediaUrlReplacementService
             return ['article_updated' => false, 'remaining_old_refs' => []];
         }
 
+        app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionService::class)
+            ->assertBodyRewriteAllowed($article, 'media_url_rewrite');
+
         $article = $article->fresh(['articleMetas']) ?? $article;
         $updated = false;
 
@@ -169,6 +172,12 @@ final class SeoMediaUrlReplacementService
         if ($nextBody !== $body) {
             $article->body = $nextBody;
             $updated = true;
+            try {
+                app(\App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter::class)
+                    ->invalidateForLegacyBodyWrite($article, 'media_url_rewrite');
+            } catch (\Throwable) {
+                // best-effort
+            }
         }
 
         $metaKeys = [

@@ -3,8 +3,17 @@ import { RefreshCw, Plus, Trash2, AlertCircle, Sparkles, FileCode, ListTree } fr
 import FaqAnswerEditor from './FaqAnswerEditor';
 import { answerHtmlForEditor } from '../utils/faqAnswerHtml';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
-import { loadFaqDraft, saveFaqDraft } from '../utils/articleEditorStorage';
+import { loadFaqDraft, saveFaqDraft, clearFaqDraft } from '../utils/articleEditorStorage';
+import {
+    applyFaqSnapshot,
+    generateFaqPreview,
+    itemsFromFaqSnapshot,
+    rememberFaqSnapshot,
+    replaceFaqSnapshot,
+} from '../utils/articleEditorFaqSnapshot';
+import { runFaqExtractFromToolbar } from '../editor/modules/faq/faqExtractToolbarAction';
 import { t } from '../utils/i18n';
+import { canMutateEditor } from '../utils/editorSessionState';
 
 const normalizeQuestion = (text) =>
     (text || '')
@@ -176,17 +185,36 @@ export default function ArticleFaqEditor({
     initialExtractDebug = null,
     canGenerateFaq = false,
     canImportMarkdownFaq = false,
+    initialFaqSnapshot = null,
 }) {
     const [faqs, setFaqs] = useState(() => {
+        // Phase 2C: server/initial snapshot wins — never hydrate SoT from localStorage.
+        if (Array.isArray(initialFaqs) && initialFaqs.length > 0) {
+            return normalizeFaqRows(initialFaqs);
+        }
+        if (initialFaqSnapshot?.items) {
+            return normalizeFaqRows(itemsFromFaqSnapshot(initialFaqSnapshot));
+        }
+        // Recovery-only: local draft if server empty (shown once; cleared after first canonical save).
         const localFaqs = loadFaqDraft(articleId);
-
         return normalizeFaqRows(localFaqs ?? initialFaqs);
     });
     const [extractDebug, setExtractDebug] = useState(
         initialExtractDebug && typeof initialExtractDebug === 'object' ? initialExtractDebug : null,
     );
+    const [aiPreviewPending, setAiPreviewPending] = useState(false);
     const faqsRef = React.useRef(faqs);
     faqsRef.current = faqs;
+
+    useEffect(() => {
+        if (initialFaqSnapshot) {
+            rememberFaqSnapshot(articleId, initialFaqSnapshot);
+        }
+        // Drop legacy canonical shadow LS when server items present.
+        if (Array.isArray(initialFaqs) && initialFaqs.length > 0) {
+            clearFaqDraft(articleId);
+        }
+    }, [articleId, initialFaqSnapshot, initialFaqs]);
 
     useEffect(() => {
         window.__seoCollectArticleFaqs = () => [...(faqsRef.current ?? [])];
@@ -227,30 +255,50 @@ export default function ArticleFaqEditor({
     }, []);
 
     const extractFaqFromSelection = useCallback(() => {
-        window.dispatchEvent(new CustomEvent('extract-article-faqs-from-toolbar'));
-    }, []);
+        void runFaqExtractFromToolbar({ articleId });
+    }, [articleId]);
 
     const flushFaqs = useCallback(() => {
         if (!articleId) return;
         if (flushFaqsInFlightRef.current) {
             return;
         }
+        if (!canMutateEditor()) {
+            setSaveStatus('pending');
+            return;
+        }
         flushFaqsInFlightRef.current = true;
         setSaveStatus('saving');
-        window.dispatchEvent(
-            new CustomEvent('save-article-faqs', {
-                detail: { faqs: faqsRef.current },
-            }),
-        );
-        window.setTimeout(() => {
-            flushFaqsInFlightRef.current = false;
-        }, 400);
+        void (async () => {
+            try {
+                const snap = await replaceFaqSnapshot(articleId, faqsRef.current);
+                const rows = itemsFromFaqSnapshot(snap);
+                setFaqs(normalizeFaqRows(rows));
+                clearFaqDraft(articleId);
+                setSaveStatus('saved');
+                window.dispatchEvent(new CustomEvent('article-faqs-save-finished'));
+            } catch (error) {
+                setSaveStatus('pending');
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('faq_saving'),
+                            body: String(error?.code || error?.message || 'faq_snapshot_save_failed'),
+                            status: 'danger',
+                        },
+                    }),
+                );
+            } finally {
+                flushFaqsInFlightRef.current = false;
+            }
+        })();
     }, [articleId]);
 
     const { debounced: debouncedSave } = useDebouncedCallback((rows) => {
         if (!articleId) return;
+        // Transient recovery only — canonical persist via FAQ snapshot API.
         saveFaqDraft(articleId, rows);
-        setSaveStatus('saved');
+        flushFaqs();
     }, 1200);
 
     const persistRows = useCallback(
@@ -451,8 +499,80 @@ export default function ArticleFaqEditor({
         if (!canGenerateFaq || generatingAll) {
             return;
         }
+        if (!canMutateEditor()) {
+            return;
+        }
         setGeneratingAll(true);
-        window.dispatchEvent(new CustomEvent('generate-article-faqs'));
+        void (async () => {
+            try {
+                const html = typeof window.__seoExportEditorHtml === 'function'
+                    ? String(window.__seoExportEditorHtml() ?? '')
+                    : '';
+                const preview = await generateFaqPreview(articleId, html);
+                const rows = normalizeFaqRows(preview?.faqs ?? []);
+                setFaqs(rows);
+                setAiPreviewPending(true);
+                setSaveStatus('pending');
+            } catch (error) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('faq_generate_failed') || 'FAQ AI',
+                            body: String(error?.message || error?.code || 'faq_generation_failed'),
+                            status: 'danger',
+                        },
+                    }),
+                );
+            } finally {
+                setGeneratingAll(false);
+            }
+        })();
+    };
+
+    const applyAiFaqPreview = () => {
+        if (!aiPreviewPending || !articleId) {
+            return;
+        }
+        if (!canMutateEditor()) {
+            return;
+        }
+        setGeneratingAll(true);
+        void (async () => {
+            try {
+                const html = typeof window.__seoExportEditorHtml === 'function'
+                    ? String(window.__seoExportEditorHtml() ?? '')
+                    : '';
+                const result = await applyFaqSnapshot(articleId, faqsRef.current, html);
+                if (result?.faq_snapshot) {
+                    setFaqs(normalizeFaqRows(itemsFromFaqSnapshot(result.faq_snapshot)));
+                }
+                if (result?.editor_html) {
+                    window.dispatchEvent(
+                        new CustomEvent('article-faqs-extracted', {
+                            detail: {
+                                faqs: faqsRef.current,
+                                editorHtml: result.editor_html,
+                            },
+                        }),
+                    );
+                }
+                clearFaqDraft(articleId);
+                setAiPreviewPending(false);
+                setSaveStatus('saved');
+            } catch (error) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('faq_saving'),
+                            body: String(error?.code || error?.message || 'faq_apply_failed'),
+                            status: 'danger',
+                        },
+                    }),
+                );
+            } finally {
+                setGeneratingAll(false);
+            }
+        })();
     };
 
     const addFaq = () => {
@@ -524,6 +644,17 @@ export default function ArticleFaqEditor({
                         >
                             <Sparkles size={14} className={generatingAll ? 'animate-pulse' : ''} />
                             {generatingAll ? t('faq_generate_ai_loading') : t('faq_generate_ai')}
+                        </button>
+                    ) : null}
+                    {aiPreviewPending ? (
+                        <button
+                            type="button"
+                            className="seo-faq-btn-generate"
+                            disabled={generatingAll}
+                            onClick={applyAiFaqPreview}
+                            title={t('faq_apply_ai_preview') || 'Apply AI FAQ'}
+                        >
+                            {t('faq_apply_ai_preview') || 'Apply AI FAQ'}
                         </button>
                     ) : null}
                     {canImportMarkdownFaq ? (

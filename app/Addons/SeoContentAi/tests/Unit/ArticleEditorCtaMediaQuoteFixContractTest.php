@@ -25,10 +25,11 @@ final class ArticleEditorCtaMediaQuoteFixContractTest extends TestCase
         $editor = $this->readAddon('resources/js/components/SeoArticleEditor.jsx');
 
         self::assertStringContainsString('captureCtaInsertionBeforeFocusSteal', $cta);
-        self::assertStringContainsString('preserveCtaFocusWithoutRefreeze', $cta);
+        self::assertStringContainsString('preserveEditorContextBeforeSidebarAction', $cta);
         self::assertStringContainsString('onPointerDown={captureCtaInsertionBeforeFocusSteal}', $cta);
-        self::assertStringContainsString('seo-assistant-freeze-insertion-context', $cta);
         self::assertStringContainsString('getInsertionContextForCommand', $cta);
+        self::assertStringContainsString('preserveEditorContextBeforeSidebarAction', $ctx);
+        self::assertStringContainsString('seo-assistant-freeze-insertion-context', $ctx);
         self::assertStringContainsString('freezeEditorInsertionContext', $ctx);
         self::assertStringContainsString('clearFrozenEditorInsertionContext', $ctx);
         self::assertStringContainsString('syncAndFreezeInsertionContext', $ctx);
@@ -43,13 +44,10 @@ final class ArticleEditorCtaMediaQuoteFixContractTest extends TestCase
         $selection = $this->readAddon('resources/js/utils/editorSelectionUtils.js');
         $editor = $this->readAddon('resources/js/components/SeoArticleEditor.jsx');
 
-        self::assertStringContainsString('insertContactValueAtBookmark', $selection);
-        self::assertStringContainsString('insertCtaInlineAtBookmark', $selection);
-        self::assertStringContainsString('insertContactValueAtBookmark', $editor);
-        self::assertStringContainsString('insertCtaInlineAtBookmark', $editor);
-        self::assertStringContainsString('insertInlinePartsAtBookmark', $selection);
+        self::assertStringContainsString('insertContactCtaAtBookmark', $selection);
+        self::assertStringContainsString('insertContactCtaAtBookmark', $editor);
+        self::assertStringContainsString("class: 'article-cta'", $selection);
         self::assertStringContainsString('NEVER force doc end', $selection);
-        self::assertStringContainsString('editor_contact_value_inserted', $editor);
         self::assertStringContainsString('editor_cta_block_inserted', $editor);
     }
 

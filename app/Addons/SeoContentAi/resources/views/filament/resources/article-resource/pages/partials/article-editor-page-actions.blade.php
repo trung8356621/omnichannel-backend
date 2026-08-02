@@ -33,12 +33,10 @@
         ? \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleContentProjectUrl($record)
         : null;
     $saveLabel = __('seo-content-ai::filament.article_list.page_action_save_label');
-    $syncLabel = $inContentProject
-        ? __('seo-content-ai::filament.article_list.page_action_save_close_label')
-        : __('seo-content-ai::filament.article_list.page_action_sync_label');
-    $syncTitle = $inContentProject
-        ? __('seo-content-ai::filament.article_list.page_action_save_close_help')
-        : __('seo-content-ai::filament.article_list.sync_to_wordpress');
+    $saveCloseLabel = __('seo-content-ai::filament.article_list.page_action_save_close_label');
+    $saveCloseTitle = __('seo-content-ai::filament.article_list.page_action_save_close_help');
+    $syncLabel = __('seo-content-ai::filament.article_list.page_action_sync_label');
+    $syncTitle = __('seo-content-ai::filament.article_list.sync_to_wordpress');
     $previewLabel = __('seo-content-ai::filament.article_list.page_action_preview_label');
     $historyUrl = route('seo.articles.revisions.compare', ['article' => $record->getKey()]);
     $promptsUrl = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('prompts', ['record' => $record]);
@@ -63,6 +61,42 @@
                 reviewNote: '',
                 reviewNoteMax: 5000,
                 reviewGenericError: config.reviewGenericError ?? '',
+                editorWritable: false,
+                editorSessionStatus: 'acquiring',
+                editorLockReason: null,
+
+                init() {
+                    const applyState = (detail) => {
+                        const payload = detail && typeof detail === 'object' ? detail : {};
+                        this.editorWritable = Boolean(payload.writable);
+                        this.editorSessionStatus = String(payload.status || 'read_only');
+                        this.editorLockReason = payload.reason_code || null;
+                    };
+
+                    if (window.__SEO_EDITOR_SESSION_STATE__) {
+                        applyState(window.__SEO_EDITOR_SESSION_STATE__);
+                    }
+
+                    window.addEventListener('article-editor-session-state-changed', (event) => {
+                        applyState(event.detail || {});
+                    });
+                },
+
+                canMutateDocument() {
+                    return this.editorWritable === true;
+                },
+
+                notifyReadOnly() {
+                    window.dispatchEvent(new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: 'Chỉ đọc',
+                            body: this.editorLockReason
+                                ? ('Phiên không writable: ' + this.editorLockReason)
+                                : 'Bài viết đang ở chế độ chỉ đọc.',
+                            status: 'warning',
+                        },
+                    }));
+                },
 
                 reviewPrimaryAction() {
                     return this.reviewActions[0] ?? null;
@@ -239,7 +273,9 @@
             class="seo-editor-toolbar-btn seo-editor-toolbar-btn--primary seo-editor-toolbar-btn--labeled"
             title="{{ __('seo-content-ai::filament.article_list.page_action_save') }}"
             aria-label="{{ __('seo-content-ai::filament.article_list.page_action_save') }}"
-            x-on:click="window.dispatchEvent(new CustomEvent('article-editor-shortcut', { detail: { action: 'save' } }))"
+            x-bind:disabled="!canMutateDocument()"
+            x-bind:title="canMutateDocument() ? '{{ __('seo-content-ai::filament.article_list.page_action_save') }}' : 'Chỉ đọc — phiên chỉnh sửa không writable'"
+            x-on:click="if (!canMutateDocument()) { notifyReadOnly(); return; } window.dispatchEvent(new CustomEvent('article-editor-shortcut', { detail: { action: 'save' } }))"
             data-seo-page-action="save"
         >
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
@@ -250,20 +286,40 @@
         </button>
 
         @if (! $isContentManager)
-            <button
-                type="button"
-                class="seo-editor-toolbar-btn seo-editor-toolbar-btn--accent seo-editor-toolbar-btn--labeled"
-                title="{{ $syncTitle }}"
-                aria-label="{{ $syncTitle }}"
-                data-seo-page-action="sync"
-                data-seo-sync-mode="{{ $inContentProject ? 'project_local_save' : 'wordpress_sync' }}"
-                x-on:click="window.dispatchEvent(new CustomEvent('article-editor-shortcut', { detail: { action: 'sync' } }))"
-            >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1.1 15.9-3.3-9.7h2l1.5 5.1 1.5-5.1h1.9l1.5 5.1 1.5-5.1h2l-3.3 9.7h-1.9l-1.5-4.9-1.5 4.9h-1.9z"/>
-                </svg>
-                <span class="seo-editor-toolbar-btn__label">{{ $syncLabel }}</span>
-            </button>
+            @if ($inContentProject)
+                {{-- Content Project: không hiện Manual Sync WP. Save & Close = lưu nội dung + về project. --}}
+                <button
+                    type="button"
+                    class="seo-editor-toolbar-btn seo-editor-toolbar-btn--accent seo-editor-toolbar-btn--labeled"
+                    title="{{ $saveCloseTitle }}"
+                    aria-label="{{ $saveCloseTitle }}"
+                    data-seo-page-action="save-close"
+                    data-seo-content-project-url="{{ $contentProjectUrl ?? '' }}"
+                    x-bind:disabled="!canMutateDocument()"
+                    x-on:click="if (!canMutateDocument()) { notifyReadOnly(); return; } window.dispatchEvent(new CustomEvent('article-editor-shortcut', { detail: { action: 'save-close' } }))"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M17 21v-8H7v8M7 3v5h8" />
+                    </svg>
+                    <span class="seo-editor-toolbar-btn__label">{{ $saveCloseLabel }}</span>
+                </button>
+            @else
+                <button
+                    type="button"
+                    class="seo-editor-toolbar-btn seo-editor-toolbar-btn--accent seo-editor-toolbar-btn--labeled"
+                    title="{{ $syncTitle }}"
+                    aria-label="{{ $syncTitle }}"
+                    data-seo-page-action="sync"
+                    data-seo-sync-mode="wordpress_sync"
+                    x-on:click="window.dispatchEvent(new CustomEvent('article-editor-shortcut', { detail: { action: 'sync' } }))"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1.1 15.9-3.3-9.7h2l1.5 5.1 1.5-5.1h1.9l1.5 5.1 1.5-5.1h2l-3.3 9.7h-1.9l-1.5-4.9-1.5 4.9h-1.9z"/>
+                    </svg>
+                    <span class="seo-editor-toolbar-btn__label">{{ $syncLabel }}</span>
+                </button>
+            @endif
         @endif
 
         <div class="seo-editor-preview-split seo-editor-page-actions__desktop-only" data-seo-page-action="preview">

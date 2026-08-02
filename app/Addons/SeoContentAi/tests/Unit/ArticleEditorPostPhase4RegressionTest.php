@@ -99,24 +99,23 @@ final class ArticleEditorPostPhase4RegressionTest extends TestCase
         $modules = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/js/utils/articleEditorModules.js',
         );
-        $host = (string) file_get_contents(
-            dirname(__DIR__, 2).'/resources/js/components/ArticleEditorModuleHost.jsx',
+        $faqModule = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/editor/modules/faq/index.js',
         );
         $editor = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/js/components/SeoArticleEditor.jsx',
         );
 
         self::assertStringNotContainsString("id: 'faq'", $navigator);
-        self::assertStringContainsString("id: 'cta'", $navigator);
+        self::assertFileDoesNotExist(
+            dirname(__DIR__, 2).'/resources/js/components/ArticleEditorModuleHost.jsx',
+        );
         self::assertStringNotContainsString('FAQ (', $links);
         self::assertStringNotContainsString('seo-editor-faqs-updated', $links);
         self::assertStringContainsString('seo-editor-links-rescan-request', $links);
         self::assertStringContainsString("MODULE_EVENT_OPEN = 'article-editor:module-open'", $modules);
-        self::assertStringContainsString('MODULE_EVENT_OPEN', $host);
-        self::assertStringContainsString('EMPTY_FAQ_PAYLOAD', $host);
-        self::assertStringContainsString('modules/FaqModule', $host);
+        self::assertStringContainsString('FaqSidebarPanel', $faqModule);
         self::assertStringContainsString('MODULE_EVENT_OPEN', $editor);
-        self::assertStringContainsString("module: 'faq'", $editor);
         self::assertStringContainsString('LINKS_RESCAN_REQUEST_EVENT', $editor);
         self::assertStringContainsString('scanExistingLinksCompat', $editor);
     }
@@ -159,17 +158,20 @@ final class ArticleEditorPostPhase4RegressionTest extends TestCase
         self::assertStringContainsString('AbortController', $source);
     }
 
-    public function test_module_host_normalizes_faq_and_passes_article_id_to_links(): void
+    public function test_faq_and_links_runtime_modules_receive_article_id(): void
     {
-        $source = (string) file_get_contents(
-            dirname(__DIR__, 2).'/resources/js/components/ArticleEditorModuleHost.jsx',
+        $faq = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/editor/modules/faq/FaqSidebarPanel.jsx',
+        );
+        $links = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/editor/modules/links/LinksSidebarPanel.jsx',
         );
 
-        self::assertStringContainsString('normalizeFaqPayload', $source);
-        self::assertStringContainsString('articleId={articleId}', $source);
-        self::assertStringContainsString("next === 'cta' ? 'links'", $source);
-        self::assertStringNotContainsString('clearHostChildren', $source);
-        self::assertStringNotContainsString('removeChild', $source);
+        self::assertStringContainsString('articleId', $faq);
+        self::assertStringContainsString('articleId', $links);
+        self::assertFileDoesNotExist(
+            dirname(__DIR__, 2).'/resources/js/components/ArticleEditorModuleHost.jsx',
+        );
     }
 
     public function test_seo_article_editor_defaults_seo_module_and_terminates_loading(): void

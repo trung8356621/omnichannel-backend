@@ -24,6 +24,9 @@ use App\Addons\SeoContentAi\Services\ArticleContentFaqService;
 use App\Addons\SeoContentAi\Services\ArticleCtaPlaceholderService;
 use App\Addons\SeoContentAi\Services\ArticleEditorHistoryService;
 use App\Addons\SeoContentAi\Services\ArticleEditorHtmlSanitizeService;
+use App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionException;
+use App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionService;
+use App\Addons\SeoContentAi\Services\ArticleEditorPersistService;
 use App\Addons\SeoContentAi\Services\ArticleEditorMediaAiService;
 use App\Addons\SeoContentAi\Services\ArticleEditorReadinessService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSeoMetaService;
@@ -86,6 +89,8 @@ use App\Addons\SeoContentAi\Support\RankMathSeoValueNormalizer;
 use App\Addons\SeoContentAi\Automation\Support\ArticleContentConflictGuard;
 use App\Addons\SeoContentAi\Support\ArticleEditorPerfDebug;
 use App\Addons\SeoContentAi\Support\ArticleMetaMap;
+use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
+use App\Addons\SeoContentAi\Support\ArticleEditorSessionErrorCode;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Addons\SeoContentAi\Support\SeoDisplayTimezone;
@@ -94,6 +99,7 @@ use App\Addons\SeoContentAi\Support\WordPressImageUrl;
 use App\Services\SeoEngineService;
 use Filament\Actions;
 use Filament\Notifications\Notification;
+use App\Support\RuntimeLogger;
 use Filament\Support\Enums\MaxWidth;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -181,6 +187,12 @@ class EditArticle extends SeoEditRecord
 
     /** @var 'save'|'sync'|null */
     public ?string $articleHeavyAction = null;
+
+    /** Owning editor session id — set from React after acquire. Required for Livewire body writes. */
+    public ?string $editorSessionId = null;
+
+    /** Canonical document version known by React session client. */
+    public ?int $expectedDocumentVersion = null;
 
     /** @var array<string, mixed>|null */
     public ?array $wpSyncContext = null;
@@ -933,6 +945,11 @@ class EditArticle extends SeoEditRecord
         $cached = trim((string) (ArticleMetaMap::for($this->record)->get('wp_post_content', '')));
 
         if ($cached === '') {
+            return;
+        }
+
+        $active = app(ArticleEditorSessionService::class)->findActiveSession($this->record);
+        if ($active !== null) {
             return;
         }
 
@@ -2183,6 +2200,17 @@ class EditArticle extends SeoEditRecord
             return [];
         }
 
+        $user = auth()->user();
+        $sessions = app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionService::class);
+        if ($user instanceof \App\Models\User && $sessions->findActiveSession($this->record) !== null) {
+            $sessions->assertOwningActiveSessionForWrite(
+                $this->record,
+                $user,
+                $this->editorSessionId,
+                null,
+            );
+        }
+
         $localMedia = app(ArticleMediaLocalService::class);
         $siteId = (int) ($this->record->site_id ?? 0);
         $album = [];
@@ -2214,6 +2242,8 @@ class EditArticle extends SeoEditRecord
         $this->productGallery = $localMedia->saveProductAlbumLocal($this->record, $album);
         $this->featuredImageUrl = $this->productGallery[0]['url'] ?? $this->featuredImageUrl;
         $this->record->refresh();
+        app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorMediaSnapshotService::class)
+            ->bumpVersion($this->record);
         $this->syncProductGalleryToEditor();
 
         $this->skipRender();
@@ -2230,6 +2260,17 @@ class EditArticle extends SeoEditRecord
             $this->skipRender();
 
             return;
+        }
+
+        $user = auth()->user();
+        $sessions = app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionService::class);
+        if ($user instanceof \App\Models\User && $sessions->findActiveSession($this->record) !== null) {
+            $sessions->assertOwningActiveSessionForWrite(
+                $this->record,
+                $user,
+                $this->editorSessionId,
+                null,
+            );
         }
 
         $url = trim((string) ($item['url'] ?? ''));
@@ -2255,6 +2296,8 @@ class EditArticle extends SeoEditRecord
             $localMedia->applyFeaturedLocal($this->record, $localRefId, $url);
             $this->featuredImageUrl = $url;
             $this->record->refresh();
+            app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorMediaSnapshotService::class)
+                ->bumpVersion($this->record);
         }
 
         $this->skipRender();
@@ -3011,14 +3054,11 @@ class EditArticle extends SeoEditRecord
         $this->record->refresh();
         $this->record->loadMissing('articleMetas');
 
-        $seoResult = app(SeoAnalyzerService::class)->analyzePreview(
-            $this->record,
-            trim((string) ($this->record->body ?? $this->bootstrapEditorHtml)),
-            trim($this->articleTitle),
-            $this->articleSlug !== '' ? $this->articleSlug : trim((string) ($this->record->slug ?? '')),
-            trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
-        );
-        $this->dispatch('seo-analyze-result', result: $seoResult);
+        // Phase 2B: React owns immediate analysis — nudge slug only; no shadow seo-analyze-result.
+        $this->js(sprintf(
+            'window.dispatchEvent(new CustomEvent("seo-editor-slug-updated", { detail: %s }))',
+            json_encode(['slug' => $this->articleSlug], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ));
     }
 
     /**
@@ -3062,106 +3102,181 @@ class EditArticle extends SeoEditRecord
 
     /**
      * Lưu vào Laravel (không đẩy WordPress).
+     * User-facing body write bắt buộc owning editor session — không direct model update.
      */
     public function persistArticleLocal(string $html, ?array $seoAnalysis = null): void
     {
         try {
-            $html = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html);
-            $html = $this->guardArticleBodyBeforeSave($html);
+            $html = $this->persistBodyViaSessionAwarePath($html, $seoAnalysis, notify: true);
+            if ($html === null) {
+                return;
+            }
+        } catch (ArticleEditorSessionException $exception) {
+            $this->notifyEditorSessionWriteBlocked($exception);
+            $this->cancelHeavyArticleAction();
 
-            if (strlen(trim($html)) < 50 && $this->articleHadSubstantialContent()) {
+            return;
+        } catch (\Throwable $exception) {
+            $this->cancelHeavyArticleAction();
+
+            throw $exception;
+        }
+    }
+
+    /**
+     * Session-aware body persist used by Sync WP local phase / FAQ inject.
+     * Returns null when write blocked (caller must abort).
+     */
+    private function persistArticleLocalSilent(string $html): ?string
+    {
+        try {
+            return $this->persistBodyViaSessionAwarePath($html, null, notify: false);
+        } catch (ArticleEditorSessionException $exception) {
+            RuntimeLogger::warning('seo.editor.livewire_silent_persist_blocked', [
+                'article_id' => (int) $this->record->getKey(),
+                'error' => $exception->errorCode,
+            ]);
+
+            return null;
+        }
+    }
+
+    /**
+     * Canonical Livewire body write: session lock + ArticleEditorPersistService (no direct body update).
+     *
+     * @return string|null Written HTML, or null when blocked/rejected.
+     *
+     * @throws ArticleEditorSessionException
+     */
+    private function persistBodyViaSessionAwarePath(string $html, ?array $seoAnalysis, bool $notify): ?string
+    {
+        $user = auth()->user();
+        if (! $user instanceof \App\Models\User) {
+            if ($notify) {
+                Notification::make()
+                    ->title('Không lưu được nội dung')
+                    ->body('Phiên đăng nhập không hợp lệ.')
+                    ->warning()
+                    ->send();
+                $this->cancelHeavyArticleAction();
+            }
+
+            return null;
+        }
+
+        app(ArticleEditorSessionService::class)->assertOwningActiveSessionForWrite(
+            $this->record,
+            $user,
+            $this->editorSessionId,
+            $this->expectedDocumentVersion,
+        );
+
+        $html = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html);
+        $html = $this->guardArticleBodyBeforeSave($html);
+
+        if (strlen(trim($html)) < 50 && $this->articleHadSubstantialContent()) {
+            if ($notify) {
                 Notification::make()
                     ->title('Không lưu được nội dung')
                     ->body('Editor trả về nội dung rỗng. Hãy thử lại hoặc dùng Lấy từ WordPress / Restore trước khi lưu.')
                     ->warning()
                     ->send();
                 $this->cancelHeavyArticleAction();
-
-                return;
             }
 
-            $faqSync = app(ArticleFaqBodySyncService::class)->extractFromBodyWhenMissing($this->record, $html);
-            $html = $faqSync['body_html'];
-            if ($faqSync['extracted']) {
-                $this->dispatch('article-faqs-extracted', faqs: $faqSync['faqs'], editorHtml: $html);
-            } else {
-                $this->dispatchFaqExtractDebugIfPresent($faqSync['extract_debug'] ?? null);
-            }
+            return null;
+        }
 
-            $slug = Str::slug($this->articleSlug);
-            $seoTitle = trim($this->articleTitle);
-            $seoMetaDescription = trim($this->seoMetaDescription);
+        $faqSync = app(ArticleFaqBodySyncService::class)->extractFromBodyWhenMissing($this->record, $html);
+        $html = $faqSync['body_html'];
+        if ($faqSync['extracted']) {
+            $this->dispatch('article-faqs-extracted', faqs: $faqSync['faqs'], editorHtml: $html);
+        } else {
+            $this->dispatchFaqExtractDebugIfPresent($faqSync['extract_debug'] ?? null);
+        }
 
-            $publishAt = $this->resolvePublishAtForSave();
-            $postType = SeoProjectTask::normalizePostType($this->articlePostType);
-
-            $this->record->update([
+        $slug = Str::slug($this->articleSlug);
+        $postType = SeoProjectTask::normalizePostType($this->articlePostType);
+        $bundle = [
+            'article_meta' => [
                 'title' => trim($this->articleTitle),
-                'slug' => $slug !== '' ? $slug : null,
-                'type' => $postType,
+                'slug' => $slug,
+                'seo_meta_description' => trim($this->seoMetaDescription),
+                'focus_keyword' => trim($this->focusKeyword),
+            ],
+            'publish_box' => [
+                'post_type' => $postType,
                 'status' => $this->articleStatus,
-                'published_at' => $publishAt,
-                'body' => $html,
-                'user_id' => auth()->id(),
-            ]);
-            $this->persistArticlePostTypeMeta($postType);
-            $this->articlePostType = $postType;
-            $this->persistSeoMetaFields();
+                'visibility' => $this->visibility ?? 'public',
+                'publish_day' => (string) ($this->publishDay ?? ''),
+                'publish_month' => (string) ($this->publishMonth ?? ''),
+                'publish_year' => (string) ($this->publishYear ?? ''),
+                'publish_hour' => (string) ($this->publishHour ?? ''),
+                'publish_minute' => (string) ($this->publishMinute ?? ''),
+            ],
+            'expected_document_version' => $this->expectedDocumentVersion,
+        ];
 
-            $this->articleSlug = $slug;
-            $this->syncPublishDatePartsFromRecord();
+        $context = ArticleEditorSaveContext::fromBundle($this->record, $bundle);
+        $persist = app(ArticleEditorPersistService::class);
+        $writtenHtml = $persist->writeArticleRow($this->record, $context, $html);
+        $persist->runAfterPersistSideEffects($this->record->fresh() ?? $this->record, $context, $writtenHtml);
 
-            app(ArticlePostImagesService::class)->syncFromHtml($this->record, $html);
-            $this->record->refresh();
-            app(ArticleWordPressSyncFlagService::class)->markLocalEditPending($this->record);
-            app(ArticleLastSavedTimestampService::class)->touchManualSaved($this->record);
+        $this->persistArticlePostTypeMeta($postType);
+        $this->articlePostType = $postType;
+        $this->persistSeoMetaFields();
+        $this->articleSlug = $slug;
+        $this->syncPublishDatePartsFromRecord();
+        $this->record->refresh();
 
-            $this->captureArticleRevisionAfterSave($html);
+        app(ArticleWordPressSyncFlagService::class)->markLocalEditPending($this->record);
+        app(ArticleLastSavedTimestampService::class)->touchManualSaved($this->record);
+        $this->captureArticleRevisionAfterSave($writtenHtml);
 
-            app(ArticleAiHistoryApplicationService::class)->commitPendingOnSave(
-                $this->record,
-                (int) (auth()->id() ?? 0),
+        app(ArticleAiHistoryApplicationService::class)->commitPendingOnSave(
+            $this->record,
+            (int) (auth()->id() ?? 0),
+        );
+        $this->refreshAiHistoryPendingBanner();
+
+        if (is_array($seoAnalysis) && array_key_exists('violations', $seoAnalysis)) {
+            app(SeoAnalyzerService::class)->persistClientAnalysis(
+                $this->record->fresh(),
+                $writtenHtml,
+                $seoAnalysis,
             );
-            $this->refreshAiHistoryPendingBanner();
+        }
 
-            if (is_array($seoAnalysis) && array_key_exists('violations', $seoAnalysis)) {
-                $seoResult = app(SeoAnalyzerService::class)->persistClientAnalysis(
-                    $this->record->fresh(),
-                    $html,
-                    $seoAnalysis,
-                );
-            } else {
-                $seoResult = app(SeoAnalyzerService::class)->analyzeSubmittedContent(
-                    $this->record->fresh(),
-                    $html,
-                    $seoTitle,
-                    $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
-                    $seoMetaDescription !== '' ? $seoMetaDescription : null,
-                );
-            }
-            $this->dispatch('seo-analyze-result', result: $seoResult);
+        $this->expectedDocumentVersion = max(
+            1,
+            (int) (($this->record->fresh()?->document_version) ?? $this->expectedDocumentVersion ?? 1),
+        );
 
-            $saveBody = 'Content is saved only in SEO system. Use "Sync" to push to WordPress.';
-            if ($faqSync['extracted']) {
-                $saveBody = 'Extracted '.$faqSync['faq_count'].' FAQ items from content into FAQ panel. '.$saveBody;
-            } elseif (! empty($faqSync['extract_debug'])) {
-                $saveBody = 'FAQ heading exists but questions/answers were not extracted - check FAQ debug block. '.$saveBody;
-            }
-
+        if ($notify) {
             Notification::make()
                 ->title('Article saved')
-                ->body($saveBody)
+                ->body('Content is saved only in SEO system. Use "Sync" to push to WordPress.')
                 ->success()
                 ->send();
-
-            if ($this->articleHeavyActionBusy) {
-                $this->finishHeavyArticleActionWithReload(clearLocalState: false);
-            }
-        } catch (\Throwable $exception) {
             $this->cancelHeavyArticleAction();
-
-            throw $exception;
         }
+
+        return $writtenHtml;
+    }
+
+    private function notifyEditorSessionWriteBlocked(ArticleEditorSessionException $exception): void
+    {
+        Notification::make()
+            ->title('Không lưu được nội dung')
+            ->body($exception->getMessage())
+            ->warning()
+            ->send();
+
+        $this->dispatch('seo-editor-session-write-blocked', [
+            'error' => $exception->errorCode,
+            'message' => $exception->getMessage(),
+            'context' => $exception->context,
+        ]);
     }
 
     /**
@@ -3193,6 +3308,13 @@ class EditArticle extends SeoEditRecord
             }
 
             $html = $this->persistArticleLocalSilent($html);
+            if ($html === null) {
+                return [
+                    'success' => false,
+                    'message' => 'Không lưu local được — thiếu editor session hoặc bài đang bị khóa.',
+                    'step' => 'save_local',
+                ];
+            }
             $slug = Str::slug($this->articleSlug);
 
             if (is_array($seoAnalysis) && array_key_exists('violations', $seoAnalysis)) {
@@ -3290,6 +3412,16 @@ class EditArticle extends SeoEditRecord
 
         try {
             $html = $this->persistArticleLocalSilent($html);
+            if ($html === null) {
+                Notification::make()
+                    ->title(__('seo-content-ai::filament.automation.wp_sync_blocked_title'))
+                    ->body('Không lưu local được — thiếu editor session hoặc bài đang bị khóa.')
+                    ->danger()
+                    ->send();
+                $this->cancelHeavyArticleAction();
+
+                return;
+            }
 
             $slug = Str::slug($this->articleSlug);
             if (is_array($seoAnalysis) && array_key_exists('violations', $seoAnalysis)) {
@@ -3346,51 +3478,6 @@ class EditArticle extends SeoEditRecord
 
             throw $exception;
         }
-    }
-
-    private function persistArticleLocalSilent(string $html): string
-    {
-        $html = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html);
-        $html = $this->guardArticleBodyBeforeSave($html);
-
-        $faqSync = app(ArticleFaqBodySyncService::class)->extractFromBodyWhenMissing($this->record, $html);
-        $html = $faqSync['body_html'];
-        if ($faqSync['extracted']) {
-            $this->dispatch('article-faqs-extracted', faqs: $faqSync['faqs'], editorHtml: $html);
-        } else {
-            $this->dispatchFaqExtractDebugIfPresent($faqSync['extract_debug'] ?? null);
-        }
-
-        $slug = Str::slug($this->articleSlug);
-
-        $publishAt = $this->resolvePublishAtForSave();
-        $postType = SeoProjectTask::normalizePostType($this->articlePostType);
-
-        $this->record->update([
-            'title' => trim($this->articleTitle),
-            'slug' => $slug !== '' ? $slug : null,
-            'type' => $postType,
-            'status' => $this->articleStatus,
-            'published_at' => $publishAt,
-            'body' => $html,
-            'user_id' => auth()->id(),
-        ]);
-        $this->persistArticlePostTypeMeta($postType);
-        $this->articlePostType = $postType;
-        $this->persistSeoMetaFields();
-
-        $this->articleSlug = $slug;
-        $this->syncPublishDatePartsFromRecord();
-        app(ArticlePostImagesService::class)->syncFromHtml($this->record, $html);
-        $this->record->refresh();
-
-        app(ArticleWordPressSyncFlagService::class)->markLocalEditPending($this->record);
-
-        $this->captureArticleRevisionAfterSave($html);
-
-        app(ArticleKeywordLinkReconcileService::class)->reconcileForArticle($this->record->fresh(), $html);
-
-        return $html;
     }
 
     /**
@@ -3638,7 +3725,18 @@ class EditArticle extends SeoEditRecord
         $newHtml = app(ArticleContentFaqService::class)->injectFaqPlaceholderInEditorHtml($baseHtml);
         if ($newHtml !== '') {
             $this->bootstrapEditorHtml = $newHtml;
-            $this->persistArticleLocalSilent($newHtml);
+            try {
+                $written = $this->persistArticleLocalSilent($newHtml);
+                if ($written === null) {
+                    Notification::make()
+                        ->title('Không cập nhật body FAQ')
+                        ->body('Cần phiên chỉnh sửa hợp lệ để ghi body.')
+                        ->warning()
+                        ->send();
+                }
+            } catch (ArticleEditorSessionException $exception) {
+                $this->notifyEditorSessionWriteBlocked($exception);
+            }
         }
 
         $this->record->refresh();
@@ -3718,7 +3816,31 @@ class EditArticle extends SeoEditRecord
             'updatedAt' => $this->record->updated_at?->copy()->utc()->toIso8601String(),
             'expectedUpdatedAt' => $this->record->updated_at?->copy()->utc()->toIso8601String(),
             'expectedContentHash' => $bodyHash,
+            'documentVersion' => max(1, (int) ($this->record->document_version ?? 1)),
+            'editorDocument' => ($editorDocBoot = app(\App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter::class)
+                ->resolveForBootstrap($this->record))['document'],
+            'editorDocumentSource' => $editorDocBoot['source'] ?? 'body_html',
+            'editorDocumentHash' => $editorDocBoot['hash'] ?? null,
+            'editorDocumentSchemaVersion' => $editorDocBoot['schema_version'] ?? null,
+            'editorDocumentStatus' => $editorDocBoot['status'] ?? null,
+            'canTakeoverEditorSession' => app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionService::class)
+                ->userCanTakeover(auth()->user() instanceof \App\Models\User ? auth()->user() : null),
+            'editorSession' => [
+                'lockTtlSeconds' => (int) config('seo-content-ai.article_editor.lock_ttl_seconds', 120),
+                'heartbeatSeconds' => (int) config('seo-content-ai.article_editor.heartbeat_seconds', 30),
+                'serverAutosaveDebounceMs' => (int) config('seo-content-ai.article_editor.server_autosave_debounce_ms', 4000),
+                'endpoints' => [
+                    'acquire' => route('seo.articles.editor-sessions.store', ['article' => $articleId]),
+                    'takeover' => route('seo.articles.editor-sessions.takeover', ['article' => $articleId]),
+                ],
+            ],
             'featuredImageUrl' => $this->featuredImageUrl,
+            'mediaSnapshot' => app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorMediaSnapshotService::class)
+                ->build($this->record, auth()->user() instanceof \App\Models\User ? auth()->user() : null),
+            'analysisPolicy' => app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorAnalysisPolicyService::class)
+                ->forArticle($this->record),
+            'externalFacts' => app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorAnalysisPolicyService::class)
+                ->externalFacts($this->record),
             'supportsProductGallery' => $this->supportsProductGallery(),
             'isCanaryProduct' => in_array(strtolower(trim((string) $metaMap->get('is_canary', ''))), ['1', 'true', 'yes'], true)
                 || strtolower(trim((string) $metaMap->get('canary_type', ''))) === 'product_gallery',
@@ -3739,11 +3861,15 @@ class EditArticle extends SeoEditRecord
                 'images' => route('seo.articles.editor.images', ['article' => $articleId]),
                 'faqs' => route('seo.articles.editor.faqs', ['article' => $articleId]),
                 'faqsCount' => route('seo.articles.editor.faqs-count', ['article' => $articleId]),
+                'faqSnapshot' => route('seo.articles.editor.faq-snapshot', ['article' => $articleId]),
                 'meta' => route('seo.articles.editor.meta', ['article' => $articleId]),
                 'links' => route('seo.articles.editor.links', ['article' => $articleId]),
                 'linksSuggestions' => route('seo.articles.editor.links-suggestions', ['article' => $articleId]),
                 'settings' => route('seo.articles.editor.settings', ['article' => $articleId]),
                 'mediaPickerConfig' => route('seo.articles.editor.media-picker-config', ['article' => $articleId]),
+                'mediaSnapshot' => route('seo.articles.editor.media-snapshot', ['article' => $articleId]),
+                'mediaFeatured' => route('seo.articles.editor.media.featured.set', ['article' => $articleId]),
+                'mediaGallery' => route('seo.articles.editor.media.gallery.replace', ['article' => $articleId]),
             ],
             'faqCount' => (int) $this->record->faqs()->count(),
             'settings' => $this->getEditorCoreSettingsPayload(),
@@ -3828,6 +3954,10 @@ class EditArticle extends SeoEditRecord
             'can_generate_faq' => app(SeoCreateArticleSettingsService::class)->getRenewFaqPromptId() !== null,
             'prompt_hooks' => $this->getPromptHooksEditorPayload(),
             'perf_debug' => (bool) config('seo-content-ai.article_editor_perf_debug', false),
+            'analysis_policy' => app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorAnalysisPolicyService::class)
+                ->forArticle($this->record),
+            'external_facts' => app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorAnalysisPolicyService::class)
+                ->externalFacts($this->record),
         ];
     }
 
@@ -3917,7 +4047,8 @@ class EditArticle extends SeoEditRecord
         );
 
         $this->record->refresh();
-        $this->dispatch('seo-analyze-result', result: $result);
+        // Phase 2B: React owns immediate analysis UI — do not dispatch shadow seo-analyze-result.
+        // Server result remains for DB/canonical; client recomputes locally on keyword/document change.
 
         return $result;
     }
@@ -3962,6 +4093,10 @@ class EditArticle extends SeoEditRecord
             'can_generate_video' => $this->canGenerateEditorVideo(),
             'prompt_hooks' => $this->getPromptHooksEditorPayload(),
             'perf_debug' => (bool) config('seo-content-ai.article_editor_perf_debug', false),
+            'analysis_policy' => app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorAnalysisPolicyService::class)
+                ->forArticle($this->record),
+            'external_facts' => app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorAnalysisPolicyService::class)
+                ->externalFacts($this->record),
         ];
 
         app(ArticleEditorPerfDebug::class)->recordBootstrapSize('settings', $payload);
@@ -4046,6 +4181,7 @@ class EditArticle extends SeoEditRecord
             'content_revision' => hash('sha256', $contentRevisionSource),
             'expected_updated_at' => $this->record->updated_at?->toIso8601String(),
             'expected_content_hash' => $bodyHash,
+            'document_version' => max(1, (int) ($this->record->document_version ?? 1)),
             'media_picker_url' => route('seo.articles.media-picker', ['article' => $this->record->id]),
             'title' => (string) $this->articleTitle,
             'post_type' => SeoProjectTask::normalizePostType($this->articlePostType),
@@ -4319,8 +4455,20 @@ class EditArticle extends SeoEditRecord
     public function extractFaqsFromSelection(string $html, string $articleHtml = ''): void
     {
         try {
+            $user = auth()->user();
             $result = app(ArticleFaqManualExtractService::class)
-                ->extractFromHtmlFragment($this->record, $html, $articleHtml);
+                ->extractFromHtmlFragment(
+                    $this->record,
+                    $html,
+                    $articleHtml,
+                    $user instanceof \App\Models\User ? $user : null,
+                    $this->editorSessionId,
+                    $this->expectedDocumentVersion,
+                );
+        } catch (ArticleEditorSessionException $exception) {
+            $this->notifyEditorSessionWriteBlocked($exception);
+
+            return;
         } catch (FaqManualExtractException $exception) {
             $this->dispatch('article-faq-extract-debug', debug: $exception->debug);
 
@@ -4343,6 +4491,12 @@ class EditArticle extends SeoEditRecord
 
         $faqs = $result['faqs'] ?? [];
         $editorHtml = (string) ($result['editor_html'] ?? '');
+
+        $this->record->refresh();
+        $this->expectedDocumentVersion = max(
+            1,
+            (int) (($this->record->document_version) ?? $this->expectedDocumentVersion ?? 1),
+        );
 
         $this->dispatch('article-faqs-extracted', faqs: $faqs, editorHtml: $editorHtml);
 
@@ -4795,7 +4949,14 @@ class EditArticle extends SeoEditRecord
         Cache::put($lockKey.':held', 1, 180);
 
         try {
-            $result = app(ArticleFaqGeneratorService::class)->generate($this->record, $editorHtml);
+            $user = auth()->user();
+            $result = app(ArticleFaqGeneratorService::class)->generate(
+                $this->record,
+                $editorHtml,
+                $user instanceof \App\Models\User ? $user : null,
+                $this->editorSessionId,
+                $this->expectedDocumentVersion,
+            );
 
             $html = (string) ($result['editor_html'] ?? '');
             if ($html !== '') {
@@ -4803,6 +4964,10 @@ class EditArticle extends SeoEditRecord
             }
 
             $this->record->refresh();
+            $this->expectedDocumentVersion = max(
+                1,
+                (int) (($this->record->document_version) ?? $this->expectedDocumentVersion ?? 1),
+            );
 
             $this->dispatch(
                 'article-faqs-extracted',
@@ -4817,6 +4982,8 @@ class EditArticle extends SeoEditRecord
                 ->body(__('seo-content-ai::filament.article_edit.faq_generate_success_body', ['count' => $count]))
                 ->success()
                 ->send();
+        } catch (ArticleEditorSessionException $exception) {
+            $this->notifyEditorSessionWriteBlocked($exception);
         } catch (\InvalidArgumentException $exception) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.article_edit.faq_generate_failed'))
@@ -5279,7 +5446,9 @@ class EditArticle extends SeoEditRecord
      */
     public function renameAttachmentSlugsOnWordPress(array $items, bool $silent = false): void
     {
-        $result = app(WordPressAttachmentRenameService::class)->renameBatch($this->record, $items);
+        // Bulk WP rename forbidden — Fix Slug All must not rename WordPress media.
+        $result = app(\App\Addons\SeoContentAi\Services\WordPress\WordPressMediaRenameService::class)
+            ->rejectBulkWordPressRename($items);
 
         $renamed = is_array($result['renamed'] ?? null) ? $result['renamed'] : [];
         $renamed = $this->enrichAttachmentRenameResultsWithRequestMeta($items, $renamed);
@@ -5372,7 +5541,15 @@ class EditArticle extends SeoEditRecord
             return;
         }
 
-        app(SeoMediaUrlReplacementService::class)->rewriteArticleReferences($this->record, $urlMap);
+        try {
+            app(SeoMediaUrlReplacementService::class)->rewriteArticleReferences($this->record, $urlMap);
+        } catch (ArticleEditorSessionException $exception) {
+            Notification::make()
+                ->title('Không rewrite URL media')
+                ->body($exception->getMessage())
+                ->warning()
+                ->send();
+        }
     }
 
     private function replaceAttachmentUrlSlug(string $url, string $newSlug): string

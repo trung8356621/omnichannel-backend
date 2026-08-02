@@ -4,6 +4,8 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
 
+const editorDebugBuild = process.env.VITE_EDITOR_DEBUG_BUILD === '1';
+
 export default defineConfig({
     plugins: [
         laravel({
@@ -24,6 +26,7 @@ export default defineConfig({
                 'app/Addons/SeoContentAi/resources/css/media-library.css',
                 'app/Addons/SeoContentAi/resources/css/image-splitter.css',
                 'app/Addons/SeoContentAi/resources/js/media-library-actions.js',
+                'app/Addons/SeoContentAi/resources/js/media-library-page.jsx',
                 'app/Addons/SeoContentAi/resources/js/watermark-editor-page.jsx',
                 'app/Addons/SeoContentAi/resources/css/watermark-editor.css',
                 'app/Addons/SeoContentAi/resources/css/image-optimization-settings.css',
@@ -43,6 +46,10 @@ export default defineConfig({
         tailwindcss(),
     ],
     build: {
+        // Temporary investigation only: VITE_EDITOR_DEBUG_BUILD=1 npm run build
+        // Default production stays minified, no public sourcemaps.
+        minify: editorDebugBuild ? false : undefined,
+        sourcemap: editorDebugBuild,
         chunkSizeWarningLimit: 1000,
         rollupOptions: {
             output: {

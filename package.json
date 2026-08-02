@@ -3,7 +3,8 @@
     "type": "module",
     "scripts": {
         "dev": "vite",
-        "build": "vite build"
+        "build": "vite build",
+        "check:editor-cycles": "node app/Addons/SeoContentAi/scripts/check-editor-cycles.cjs"
     },
     "devDependencies": {
         "@tailwindcss/vite": "^4.0.0",

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
-import { articleEditorExtensions } from '../utils/editorExtensions';
+import { getDefaultArticleEditorRuntime } from '../editor/runtime/defaultArticleEditorRuntime';
 import { answerHtmlForEditor } from '../utils/faqAnswerHtml';
 import BlockFormatToolbar from './BlockFormatToolbar';
 
@@ -8,7 +8,7 @@ export default function FaqAnswerEditor({ html, onChange, onFocus }) {
     const initialContent = useMemo(() => answerHtmlForEditor(html), []);
 
     const editor = useEditor({
-        extensions: articleEditorExtensions,
+        extensions: getDefaultArticleEditorRuntime().getDocumentExtensions(),
         content: initialContent,
         onUpdate: ({ editor: ed }) => {
             onChange(ed.getHTML());

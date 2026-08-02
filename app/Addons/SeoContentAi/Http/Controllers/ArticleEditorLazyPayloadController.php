@@ -62,6 +62,8 @@ final class ArticleEditorLazyPayloadController extends Controller
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
         $items = app(ArticleFaqEditorService::class)->payloadForArticle($article);
+        $faqSnapshot = app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorFaqSnapshotService::class)
+            ->build($article, auth()->user() instanceof \App\Models\User ? auth()->user() : null);
 
         return response()->json([
             'success' => true,
@@ -71,6 +73,7 @@ final class ArticleEditorLazyPayloadController extends Controller
                 'cached_at' => null,
                 'items' => $items,
                 'count' => count($items),
+                'faq_snapshot' => $faqSnapshot,
                 'can_generate' => app(SeoCreateArticleSettingsService::class)->getRenewFaqPromptId() !== null,
                 // Legacy keys for older clients.
                 'faqs' => $items,

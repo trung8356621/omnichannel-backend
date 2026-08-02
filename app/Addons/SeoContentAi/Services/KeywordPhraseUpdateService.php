@@ -99,6 +99,15 @@ final class KeywordPhraseUpdateService
             $updatedBody = $this->replaceAnchorsInHtml($body, $urls, $previousPhrase, $newPhrase);
             if ($updatedBody !== $body && $updatedBody !== '') {
                 $article->forceFill(['body' => $updatedBody])->save();
+                try {
+                    $writer = app(\App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter::class);
+                    $writer->invalidateForLegacyBodyWrite($article, 'keyword_phrase_update');
+                    if ($article->isDirty('editor_document_status')) {
+                        $article->save();
+                    }
+                } catch (\Throwable) {
+                    // best-effort
+                }
                 $article->articleMetas()->updateOrCreate(
                     ['meta_key' => 'wp_post_content'],
                     ['meta_value' => $updatedBody],

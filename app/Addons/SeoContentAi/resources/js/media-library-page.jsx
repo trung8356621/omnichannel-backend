@@ -2,6 +2,7 @@ import React from 'react';
 import '../css/media-library.css';
 import { createRoot } from 'react-dom/client';
 import MediaLibraryTools from './components/MediaLibraryTools';
+import WordPressMediaRenameModal from './components/WordPressMediaRenameModal';
 
 function readBootstrap() {
     const el = document.getElementById('seo-media-library-react-root');
@@ -23,21 +24,36 @@ function readBootstrap() {
     };
 }
 
-function mount() {
-    const el = document.getElementById('seo-media-library-react-root');
-    if (!el) return;
-
-    const props = readBootstrap();
-    let root = el.__seoMediaLibraryRoot;
-
-    if (!root) {
-        root = createRoot(el);
-        el.__seoMediaLibraryRoot = root;
+function ensureRenameModalRoot() {
+    let el = document.getElementById('seo-wp-media-rename-root');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'seo-wp-media-rename-root';
+        document.body.appendChild(el);
     }
 
-    root.render(
-        <MediaLibraryTools sites={props.sites} siteId={props.siteId} />,
-    );
+    return el;
+}
+
+function mount() {
+    const toolsEl = document.getElementById('seo-media-library-react-root');
+    if (toolsEl) {
+        const props = readBootstrap();
+        let root = toolsEl.__seoMediaLibraryRoot;
+        if (!root) {
+            root = createRoot(toolsEl);
+            toolsEl.__seoMediaLibraryRoot = root;
+        }
+        root.render(<MediaLibraryTools sites={props.sites} siteId={props.siteId} />);
+    }
+
+    const renameEl = ensureRenameModalRoot();
+    let renameRoot = renameEl.__seoWpRenameRoot;
+    if (!renameRoot) {
+        renameRoot = createRoot(renameEl);
+        renameEl.__seoWpRenameRoot = renameRoot;
+    }
+    renameRoot.render(<WordPressMediaRenameModal />);
 }
 
 mount();

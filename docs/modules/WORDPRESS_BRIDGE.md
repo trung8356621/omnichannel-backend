@@ -121,6 +121,7 @@ Invariants:
 - `createForArticle` includes `post_content` (+ FAQ/SEO/categories) to avoid empty stub posts; `publishForArticle` lock per `article_id`.
 - Outbound status payload: publish only; future `post_date` clamped.
 - Product reviews share `SyncArticleToWordPressPipeline` (no separate orphan publish rule).
+- Editor canonical document: TipTap JSON on Laravel (`articles.editor_document`); WP still receives derived HTML. Import/body rewrites should invalidate or re-ingest JSON — [`ARTICLE_EDITOR_JSON_PERSISTENCE.md`](../architecture/ARTICLE_EDITOR_JSON_PERSISTENCE.md).
 
 ### Media sync
 
@@ -131,6 +132,13 @@ Inside editor-sync prepare:
 3. Featured/gallery push; dirty/WebP backfill rules (no junk JPEG→WebP when upload is JPEG)
 
 Rename/meta: dedicated REST; stale attachment id resolved by URL on plugin ≥ 1.0.54.
+
+WordPress media rename (plugin ≥ **1.0.69**):
+
+- `GET|POST /attachments/usage` — usage scan (post_content + featured) before rename.
+- `POST /attachments/rename` with `mode=explicit_single` — requires `acknowledge_url_change` + `confirmation_phrase=RENAME`, `strict_collision` (no silent `-2`).
+- Bulk rename from Laravel editor Fix Slug All is **blocked**; Laravel uses `WordPressMediaRenameService` only for explicit single rename.
+- No redirect mapping promised unless plugin reports `supports_redirect`.
 
 ### Inbound (plugin → Laravel)
 

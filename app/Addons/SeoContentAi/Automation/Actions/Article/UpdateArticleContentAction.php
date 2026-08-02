@@ -62,12 +62,18 @@ final class UpdateArticleContentAction implements BusinessAction
                 'focus_keyword' => ['type' => 'string', 'required' => false],
                 'expected_updated_at' => ['type' => 'string', 'required' => false],
                 'expected_content_hash' => ['type' => 'string', 'required' => false],
+                'expected_document_version' => ['type' => 'integer', 'required' => false],
+                'editor_document' => ['type' => 'object', 'required' => false],
+                'expected_editor_document_hash' => ['type' => 'string', 'required' => false],
+                'client_rendered_html' => ['type' => 'string', 'required' => false],
                 'force_overwrite' => ['type' => 'boolean', 'required' => false],
             ],
             outputSchema: [
                 'article_id' => ['type' => 'integer'],
                 'status' => ['type' => 'string'],
                 'content_hash' => ['type' => 'string'],
+                'document_version' => ['type' => 'integer'],
+                'editor_document_hash' => ['type' => 'string'],
             ],
             idempotent: true,
             lockScope: 'article',
@@ -124,6 +130,8 @@ final class UpdateArticleContentAction implements BusinessAction
             });
         } catch (ArticleContentConflictException $exception) {
             return $exception->result;
+        } catch (\App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentException $exception) {
+            return ActionResult::failure($exception->errorCode, $exception->getMessage(), $exception->context);
         } catch (\Throwable $exception) {
             return ActionResult::failure('persist_failed', $this->friendlyPersistError($exception));
         }
@@ -161,6 +169,9 @@ final class UpdateArticleContentAction implements BusinessAction
                 'message' => (string) ($result['message'] ?? ''),
                 'content_hash' => $this->conflictGuard->contentHash((string) ($fresh?->body ?? $content)),
                 'updated_at' => $fresh?->updated_at?->toIso8601String(),
+                'document_version' => max(1, (int) ($fresh?->document_version ?? $article->document_version ?? 1)),
+                'editor_document_hash' => (string) ($fresh?->editor_document_hash ?? ''),
+                'editor_document_schema_version' => (int) ($fresh?->editor_document_schema_version ?? 0),
                 'content_project_handoff' => $handoff,
             ],
             events: [
@@ -201,7 +212,17 @@ final class UpdateArticleContentAction implements BusinessAction
                         }
                     }
 
-                    $html = $this->persistService->writeArticleRow($fresh, $saveContext, $content);
+                    $editorDocument = is_array($input['editor_document'] ?? null) ? $input['editor_document'] : null;
+                    $expectedDocHash = isset($input['expected_editor_document_hash'])
+                        ? (string) $input['expected_editor_document_hash']
+                        : null;
+                    $html = $this->persistService->writeArticleRow(
+                        $fresh,
+                        $saveContext,
+                        $content,
+                        $editorDocument,
+                        $expectedDocHash !== '' ? $expectedDocHash : null,
+                    );
 
                     return [
                         'article' => $fresh->fresh() ?? $fresh,

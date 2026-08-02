@@ -15,6 +15,8 @@ import { applyWordPressImageSize, detectWordPressImageSize } from '../utils/word
 import { resolveWordPressBaseUrl, resolveFullWordPressImageUrl } from '../utils/wordpressImageUrl';
 import { slugFromUrl } from '../utils/articleImagesUtils';
 import { installBrokenImageGuard } from '../utils/brokenImageGuard';
+import { openMediaPicker } from '../editor/runtime/editorMediaPickerStore';
+import { executeEditorCommand, getEditorCommandHost } from '../utils/editorCommands';
 
 const ALIGN_OPTIONS = [
     { id: 'left', icon: AlignLeft, title: t('toolbar_align_left') },
@@ -661,11 +663,47 @@ export default function ImageBlockEditor({
                             event?.preventDefault?.();
                             event?.stopPropagation?.();
                             const blockId = block.id;
-                            window.dispatchEvent(
-                                new CustomEvent('seo-open-article-media-picker', {
-                                    detail: { blockId },
-                                }),
-                            );
+                            openMediaPicker({
+                                mode: 'content_image',
+                                selection: 'single',
+                                target: { blockId },
+                                onConfirm: async (items) => {
+                                    const item = items?.[0];
+                                    if (!item?.url) return;
+                                    const host = getEditorCommandHost();
+                                    if (typeof host?.actions?.applyEditorBlockImage === 'function') {
+                                        host.actions.applyEditorBlockImage({
+                                            blockId,
+                                            url: item.url,
+                                            alt: item.alt || '',
+                                            slug: item.slug || '',
+                                            attachmentId: Number(item.wp_attachment_id || 0) || 0,
+                                            seoMediaId: Number(item.seo_media_id || 0) || 0,
+                                            mediaType: item.media_type || 'image',
+                                        });
+                                        return;
+                                    }
+                                    const result = executeEditorCommand('insert_image', {
+                                        src: item.url,
+                                        url: item.url,
+                                        alt: item.alt || '',
+                                        attrs: {
+                                            slug: item.slug || '',
+                                            wpAttachmentId: Number(item.wp_attachment_id || 0) || undefined,
+                                            seoMediaId: Number(item.seo_media_id || 0) || undefined,
+                                        },
+                                    });
+                                    if (result && result.ok === false) {
+                                        window.dispatchEvent(new CustomEvent('seo-article-editor-notify', {
+                                            detail: {
+                                                title: t('image_block_label'),
+                                                body: String(result.message || result.code || 'insert_failed'),
+                                                status: 'warning',
+                                            },
+                                        }));
+                                    }
+                                },
+                            });
                         }}
                         onImportFromUrl={handleImportFromUrl}
                         importLoading={importLoading || pasteUploading}

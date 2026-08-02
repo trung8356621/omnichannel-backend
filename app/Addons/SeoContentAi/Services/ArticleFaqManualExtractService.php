@@ -33,7 +33,17 @@ final class ArticleFaqManualExtractService
      *     editor_html: string,
      * }
      */
-    public function extractFromHtmlFragment(SeoArticle $article, string $html, string $articleHtml = ''): array
+    /**
+     * @param  \App\Models\User|null  $editorUser  Owning editor session user when called from Article Editor
+     */
+    public function extractFromHtmlFragment(
+        SeoArticle $article,
+        string $html,
+        string $articleHtml = '',
+        ?\App\Models\User $editorUser = null,
+        ?string $editorSessionId = null,
+        int|string|null $expectedDocumentVersion = null,
+    ): array
     {
         $fragment = trim($html);
         if ($fragment === '') {
@@ -99,7 +109,13 @@ final class ArticleFaqManualExtractService
             ? $this->contentFaq->replaceFaqFragmentInArticleHtml($baseHtml, $fragment, $strippedFragment)
             : $strippedFragment;
 
-        $this->contentFaq->persistArticleBodyHtml($article, $newHtml);
+        $this->contentFaq->persistArticleBodyHtml(
+            $article,
+            $newHtml,
+            $editorUser,
+            $editorSessionId,
+            $expectedDocumentVersion,
+        );
         $this->extractDebug->clear($article);
 
         return [

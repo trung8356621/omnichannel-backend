@@ -90,6 +90,18 @@ final class SeoMediaArticleSlugFixService
                         continue;
                     }
 
+                    // Fail-closed: WordPress-linked media never bulk-renamed via Fix Slug All.
+                    if ((int) ($media->wp_attachment_id ?? 0) > 0) {
+                        $skipped[] = [
+                            'index' => $index,
+                            'seo_media_id' => (int) $media->id,
+                            'url' => $item['url'],
+                            'new_slug' => $item['new_slug'],
+                            'reason' => 'wordpress_media_requires_explicit_rename',
+                        ];
+                        continue;
+                    }
+
                     try {
                         $oldUrl = $media->publicUrl();
                         $oldPath = ltrim(str_replace('\\', '/', (string) $media->path), '/');
