@@ -11,7 +11,7 @@ use Carbon\Carbon;
 /**
  * Concurrency guard cho article.content.update.
  * Primary: expected_document_version (canonical).
- * Compat: expected_updated_at / expected_content_hash.
+ * Compat: expected_updated_at / expected_content_hash — must not veto when document_version matches.
  */
 final class ArticleContentConflictGuard
 {
@@ -21,6 +21,7 @@ final class ArticleContentConflictGuard
     public function assertCompatible(SeoArticle $article, array $input): ?ActionResult
     {
         $expectedVersion = $input['expected_document_version'] ?? null;
+        $versionMatched = false;
         if ($expectedVersion !== null && $expectedVersion !== '') {
             $actualVersion = max(1, (int) ($article->document_version ?? 1));
             if ((int) $expectedVersion !== $actualVersion) {
@@ -33,6 +34,8 @@ final class ArticleContentConflictGuard
                     ],
                 );
             }
+            // Canonical lock satisfied — legacy content_hash must not veto JSON/session writers.
+            $versionMatched = true;
         }
 
         $expectedUpdatedAt = $input['expected_updated_at'] ?? null;
@@ -67,7 +70,8 @@ final class ArticleContentConflictGuard
                     && $expectedHash !== ''
                     && hash_equals($this->contentHash((string) ($article->body ?? '')), $expectedHash);
 
-                if (! $hashMatches) {
+                // Version already matched → updated_at drift alone is not a body conflict.
+                if (! $hashMatches && ! $versionMatched) {
                     return ActionResult::failure(
                         'conflict_updated_at',
                         'Article was modified by another writer (updated_at mismatch).',
@@ -80,7 +84,7 @@ final class ArticleContentConflictGuard
             }
         }
 
-        if (is_string($expectedHash) && $expectedHash !== '') {
+        if (! $versionMatched && is_string($expectedHash) && $expectedHash !== '') {
             $actualHash = $this->contentHash((string) ($article->body ?? ''));
             if (! hash_equals($expectedHash, $actualHash)) {
                 return ActionResult::failure(

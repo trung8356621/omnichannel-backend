@@ -45,7 +45,7 @@ return [
     /** Giới hạn upload ảnh thư viện SEO (kilobytes). */
     'media_max_upload_kb' => (int) env('SEO_CONTENT_AI_MEDIA_MAX_UPLOAD_KB', 10240),
 
-    /** Múi giờ hiển thị lên lịch publish & queue sync trong panel SEO. */
+    /** Múi giờ hiển thị fallback khi chưa có seo_datetime_settings trong wp_options. Canonical: SystemDateTime + SeoDateTimeSettingsService. */
     'display_timezone' => env('SEO_CONTENT_AI_DISPLAY_TIMEZONE', 'Asia/Ho_Chi_Minh'),
 
     /**

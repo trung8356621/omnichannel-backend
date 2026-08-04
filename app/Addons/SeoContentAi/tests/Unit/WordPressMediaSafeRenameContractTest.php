@@ -107,11 +107,11 @@ final class WordPressMediaSafeRenameContractTest extends TestCase
         self::assertStringContainsString('error_count', $health);
         self::assertStringContainsString('warning_count', $health);
         self::assertStringContainsString('info_count', $health);
-        self::assertStringContainsString('local_slug_placeholder', $health);
+        self::assertStringContainsString('image_slug_unresolved', $health);
         self::assertStringContainsString('image_ratio_low', $health);
         self::assertStringContainsString("severity: 'info'", $health);
         self::assertStringContainsString('isWordPressProtectedMedia', $health);
-        self::assertStringContainsString('WP filename ≠ keyword is NOT a warning', $health);
+        self::assertStringContainsString('WP filename ≠ keyword is NOT a hard error', $health);
     }
 
     private function methodSource(ReflectionMethod $method): string

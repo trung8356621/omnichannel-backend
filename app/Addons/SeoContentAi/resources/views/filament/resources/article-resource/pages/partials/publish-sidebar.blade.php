@@ -128,9 +128,6 @@
 
                     window.addEventListener('article-wordpress-sync-lock', lockPage);
                     window.addEventListener('article-wordpress-sync-unlock', unlockPage);
-                    window.addEventListener('article-editor-save-started', () => {
-                        this.saveInFlight = true;
-                    });
                     window.addEventListener('article-editor-save-finished', () => {
                         this.saveInFlight = false;
                         this.activeHeavyAction = null;

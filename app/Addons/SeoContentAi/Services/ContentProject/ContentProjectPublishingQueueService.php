@@ -28,8 +28,58 @@ final class ContentProjectPublishingQueueService
     ) {}
 
     /**
-     * Plan schedule time. Future at ⇒ execution not started (status none).
-     * Past/now at ⇒ waiting for runner. Does not call WordPress.
+     * Persist per-item UTC schedule map (Quick Mode / Auto Schedule).
+     * Never bulk-set one timestamp for all ids.
+     *
+     * @param  array<int, Carbon|string>  $itemScheduleMap  task_id => UTC Carbon|ISO
+     */
+    public function schedulePlan(SeoProject $project, array $itemScheduleMap): int
+    {
+        $this->assertProjectActive($project);
+        if ($itemScheduleMap === []) {
+            return 0;
+        }
+
+        $ids = $this->normalizeIds(array_keys($itemScheduleMap));
+        if ($ids === []) {
+            return 0;
+        }
+
+        $this->assertTasksCanScheduleOrReschedule($project, $ids);
+        $this->ensureInPublishingQueue($project, $ids);
+
+        $scheduled = 0;
+        DB::connection('omi_seo_ai')->transaction(function () use ($project, $itemScheduleMap, &$scheduled): void {
+            foreach ($itemScheduleMap as $taskId => $at) {
+                $id = (int) $taskId;
+                if ($id <= 0) {
+                    continue;
+                }
+                $carbon = $at instanceof Carbon
+                    ? $at->copy()->utc()
+                    : Carbon::parse((string) $at)->utc();
+
+                $scheduled += $this->batchUpdate($project, [$id], [
+                    'scheduled_publish_at' => $carbon,
+                    'publish_queue_status' => ContentProjectPublishQueueStatus::None->value,
+                    'last_publish_error' => null,
+                ], onlyStatuses: [
+                    ContentProjectPublishQueueStatus::None->value,
+                    ContentProjectPublishQueueStatus::Waiting->value,
+                    ContentProjectPublishQueueStatus::Retrying->value,
+                    ContentProjectPublishQueueStatus::Failed->value,
+                    ContentProjectPublishQueueStatus::Cancelled->value,
+                    ContentProjectPublishQueueStatus::Skipped->value,
+                ]);
+            }
+        });
+
+        return $scheduled;
+    }
+
+    /**
+     * Plan schedule time. Always execution none — Publishing chỉ sau runner claim + dispatch.
+     * Past/now at vẫn none; runner due query lấy cả none|waiting|retrying. Không gọi WordPress.
      *
      * @param  list<int>  $taskIds
      * @return int affected
@@ -42,17 +92,22 @@ final class ContentProjectPublishingQueueService
             return 0;
         }
 
-        $this->assertTasksCan($project, $ids, ContentProjectItemAction::Schedule);
+        $this->assertTasksCanScheduleOrReschedule($project, $ids);
         $this->ensureInPublishingQueue($project, $ids);
 
-        $executionStatus = $at->lte(now())
-            ? ContentProjectPublishQueueStatus::Waiting->value
-            : ContentProjectPublishQueueStatus::None->value;
+        $utc = $at->copy()->utc();
 
         return $this->batchUpdate($project, $ids, [
-            'scheduled_publish_at' => $at,
-            'publish_queue_status' => $executionStatus,
+            'scheduled_publish_at' => $utc,
+            'publish_queue_status' => ContentProjectPublishQueueStatus::None->value,
             'last_publish_error' => null,
+        ], onlyStatuses: [
+            ContentProjectPublishQueueStatus::None->value,
+            ContentProjectPublishQueueStatus::Waiting->value,
+            ContentProjectPublishQueueStatus::Retrying->value,
+            ContentProjectPublishQueueStatus::Failed->value,
+            ContentProjectPublishQueueStatus::Cancelled->value,
+            ContentProjectPublishQueueStatus::Skipped->value,
         ]);
     }
 
@@ -263,6 +318,9 @@ final class ContentProjectPublishingQueueService
     }
 
     /**
+     * Cancel Scheduled/Failed only — không dùng cho Publishing (processing) đang chạy.
+     * Stuck processing → recoverStuckPublishing().
+     *
      * @param  list<int>  $taskIds
      */
     public function cancelPublish(SeoProject $project, array $taskIds): int
@@ -273,6 +331,22 @@ final class ContentProjectPublishingQueueService
             return 0;
         }
 
+        $tasks = SeoProjectTask::query()
+            ->where('project_id', (int) $project->getKey())
+            ->whereIn('id', $ids)
+            ->whereNull('archived_at')
+            ->get();
+
+        foreach ($tasks as $task) {
+            $from = ContentProjectPublishQueueStatus::tryFrom((string) ($task->publish_queue_status ?? ''))
+                ?? ContentProjectPublishQueueStatus::None;
+            if ($from === ContentProjectPublishQueueStatus::Processing) {
+                throw new RuntimeException(
+                    'publishing.busy_cannot_reschedule: Bài đang được xuất bản nên không thể đổi lịch.',
+                );
+            }
+        }
+
         $this->assertTasksCan($project, $ids, ContentProjectItemAction::CancelPublish);
         $this->assertTransitionForTasks($project, $ids, ContentProjectPublishQueueStatus::Cancelled);
 
@@ -280,10 +354,91 @@ final class ContentProjectPublishingQueueService
             'scheduled_publish_at' => null,
             'publish_queue_status' => ContentProjectPublishQueueStatus::Cancelled->value,
             'last_publish_error' => null,
-        ], onlyStatuses: array_merge(
-            ContentProjectPublishQueueStatus::activeValues(),
-            [ContentProjectPublishQueueStatus::Failed->value],
-        ));
+        ], onlyStatuses: [
+            ContentProjectPublishQueueStatus::Waiting->value,
+            ContentProjectPublishQueueStatus::Retrying->value,
+            ContentProjectPublishQueueStatus::Failed->value,
+            ContentProjectPublishQueueStatus::None->value,
+        ]);
+    }
+
+    /**
+     * Recover stuck Publishing without WordPress and without normal Cancel transition.
+     *
+     * @param  list<int>  $taskIds
+     * @param  'scheduled'|'unscheduled'|'failed'  $target
+     */
+    public function recoverStuckPublishing(
+        SeoProject $project,
+        array $taskIds,
+        string $target,
+        ?Carbon $rescheduleAt = null,
+    ): int {
+        $this->assertProjectActive($project);
+        $ids = $this->normalizeIds($taskIds);
+        if ($ids === []) {
+            return 0;
+        }
+
+        $target = strtolower(trim($target));
+        if (! in_array($target, ['scheduled', 'unscheduled', 'failed'], true)) {
+            throw new RuntimeException('Invalid stuck recovery target.');
+        }
+
+        $tasks = SeoProjectTask::query()
+            ->where('project_id', (int) $project->getKey())
+            ->whereIn('id', $ids)
+            ->whereNull('archived_at')
+            ->get();
+
+        $affected = 0;
+        foreach ($tasks as $task) {
+            $id = (int) $task->getKey();
+            if ((string) ($task->publish_queue_status ?? '') !== ContentProjectPublishQueueStatus::Processing->value) {
+                continue;
+            }
+
+            $payload = match ($target) {
+                'scheduled' => [
+                    'scheduled_publish_at' => $rescheduleAt ?? (
+                        $task->scheduled_publish_at !== null && $task->scheduled_publish_at->gt(now())
+                            ? $task->scheduled_publish_at
+                            : now()->addMinutes(5)
+                    ),
+                    'publish_queue_status' => ContentProjectPublishQueueStatus::None->value,
+                    'last_publish_error' => null,
+                    'last_publish_attempt_at' => null,
+                ],
+                'unscheduled' => [
+                    'scheduled_publish_at' => null,
+                    'publish_queue_status' => ContentProjectPublishQueueStatus::None->value,
+                    'last_publish_error' => null,
+                    'last_publish_attempt_at' => null,
+                ],
+                default => [
+                    'publish_queue_status' => ContentProjectPublishQueueStatus::Failed->value,
+                    'last_publish_error' => 'stale_processing: Tiến trình xuất bản đã quá hạn. Hãy khôi phục trạng thái trước.',
+                    'last_publish_attempt_at' => now(),
+                ],
+            };
+
+            $updated = SeoProjectTask::query()
+                ->whereKey((int) $task->getKey())
+                ->where('project_id', (int) $project->getKey())
+                ->where('publish_queue_status', ContentProjectPublishQueueStatus::Processing->value)
+                ->update($payload);
+
+            $affected += (int) $updated;
+        }
+
+        RuntimeLogger::info('content_project_publish_stuck_recovered', [
+            'project_id' => (int) $project->getKey(),
+            'target' => $target,
+            'affected' => $affected,
+            'task_ids' => $ids,
+        ]);
+
+        return $affected;
     }
 
     /**
@@ -304,6 +459,10 @@ final class ContentProjectPublishingQueueService
 
     public function markProcessing(SeoProjectTask $task): void
     {
+        $from = ContentProjectPublishQueueStatus::tryFrom((string) ($task->publish_queue_status ?? ''))
+            ?? ContentProjectPublishQueueStatus::None;
+        $this->transitionGuard->assertCanTransition($from, ContentProjectPublishQueueStatus::Processing);
+
         $task->forceFill([
             'publish_queue_status' => ContentProjectPublishQueueStatus::Processing->value,
             'last_publish_attempt_at' => now(),
@@ -353,6 +512,69 @@ final class ContentProjectPublishingQueueService
                 $task,
                 $task->relationLoaded('article') ? $task->article : null,
             );
+        }
+    }
+
+    /**
+     * Schedule (unscheduled) hoặc reschedule (đã có lịch, chưa processing/published).
+     *
+     * @param  list<int>  $taskIds
+     */
+    private function assertTasksCanScheduleOrReschedule(SeoProject $project, array $taskIds): void
+    {
+        $tasks = SeoProjectTask::query()
+            ->where('project_id', (int) $project->getKey())
+            ->whereIn('id', $taskIds)
+            ->with(['article'])
+            ->get();
+
+        foreach ($tasks as $task) {
+            $status = ContentProjectPublishQueueStatus::tryFrom((string) ($task->publish_queue_status ?? ''))
+                ?? ContentProjectPublishQueueStatus::None;
+
+            if ($status === ContentProjectPublishQueueStatus::Processing) {
+                throw new RuntimeException(
+                    'publishing.busy_cannot_reschedule: Bài đang được xuất bản nên không thể đổi lịch.',
+                );
+            }
+            if ($status === ContentProjectPublishQueueStatus::Published
+                || $task->publish_published_at !== null
+            ) {
+                throw new RuntimeException('publishing.already_published: Bài đã xuất bản — không đổi lịch.');
+            }
+
+            try {
+                $this->actionGuard->assertCan(
+                    ContentProjectItemAction::Schedule,
+                    $task,
+                    $task->relationLoaded('article') ? $task->article : null,
+                );
+            } catch (RuntimeException) {
+                // Reschedule path: Waiting/None with schedule — Unschedule allowed ⇒ may reschedule.
+                if ($task->scheduled_publish_at === null
+                    && ! in_array($status, [
+                        ContentProjectPublishQueueStatus::None,
+                        ContentProjectPublishQueueStatus::Failed,
+                        ContentProjectPublishQueueStatus::Cancelled,
+                        ContentProjectPublishQueueStatus::Skipped,
+                    ], true)
+                ) {
+                    throw new RuntimeException(
+                        'publishing.not_schedulable: Item không đủ điều kiện lên lịch.',
+                    );
+                }
+                if (in_array($status, [
+                    ContentProjectPublishQueueStatus::Waiting,
+                    ContentProjectPublishQueueStatus::Retrying,
+                    ContentProjectPublishQueueStatus::None,
+                    ContentProjectPublishQueueStatus::Failed,
+                ], true) || $task->scheduled_publish_at !== null) {
+                    continue;
+                }
+                throw new RuntimeException(
+                    'publishing.not_schedulable: Item không đủ điều kiện lên lịch.',
+                );
+            }
         }
     }
 

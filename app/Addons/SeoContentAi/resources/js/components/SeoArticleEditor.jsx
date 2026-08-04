@@ -46,9 +46,27 @@ import {
     unbindEditorCommandHost,
     executeEditorCommand,
 } from '../utils/editorCommands';
+import {
+    reorderBlockWithinSection,
+    withinSectionMoveAvailability,
+} from '../utils/articleEditorBlockReorder';
+import { EDITOR_COMMAND_CODES } from '../utils/editorCommands/editorCommandResult';
 
 import { collectContentImagesFromArticle } from '../utils/contentImageCounter';
+import {
+    buildUnifiedArticleImagesInventory,
+    unifiedInventorySlugFixCandidates,
+    unifiedInventoryToImageRows,
+} from '../utils/unifiedArticleImagesInventory';
 import { normalizeOrphanQuoteCharacters } from '../utils/orphanQuoteNormalizer';
+import {
+    TIPTAP_HTML_PARSE_OPTIONS,
+    hasInlineWhitespaceCorruption,
+    plainTextFromHtmlLoose,
+    INLINE_WHITESPACE_CORRUPTION_CODE,
+    countGluedInlineMarkBoundaries,
+    repairGluedInlineMarkBoundaryWhitespaceWithReport,
+} from '../utils/inlineWhitespaceGuard';
 import { SEO_EDITOR_LINK_CLASS } from '../utils/articleEditorTransientMarkup';
 import {
     filterSuggestedInternalLinks,
@@ -92,7 +110,7 @@ import {
     openPanel,
     subscribeEditorNavigation,
 } from '../editor/runtime/editorRuntimeNavigation';
-import { publishRuntimeWidgetHealth } from '../editor/runtime/composeRuntimeWidgetHealth';
+import { publishPartialRuntimeWidgetHealth } from '../editor/runtime/composeRuntimeWidgetHealth';
 import { installRuntimeHealthBadgeBridge } from '../editor/runtime/editorRuntimeHealthStore';
 import { SHELL_BOUNDARY_NAV_ITEMS } from '../editor/runtime/editorShellNavItems';
 import {
@@ -139,6 +157,7 @@ import {
     enrichWpRenamedWithRequestMeta,
     enrichBlocksWithPostImages,
     finalizeBlocksAfterWpRename,
+    buildLocalSlugRenameErrorNotify,
     mapArticleSlugFixReplacementsToLocalResults,
     omitFailedLocalSlugRenameQueueItems,
     reconcileSupplementalImagesWithBlocks,
@@ -150,7 +169,6 @@ import {
     shouldRenameSlugOnWordPress,
     syncProductAlbumUrlsFromBlockImages,
     slugFromUrl,
-    withWpPickerExcludeQuickFix,
 } from '../utils/articleImagesUtils';
 import {
     isBulkSlugRenameSafeMedia,
@@ -187,13 +205,20 @@ import {
     setDraftPersistenceEnabled,
     writeSyncedLocalSnapshot,
 } from '../utils/articleEditorStorage';
-import { saveCurrentArticleFromEditor } from '../utils/articleEditorSaveQueue';
+import {
+    saveArticleViaApiSingleFlight,
+    saveCurrentArticleFromEditor,
+    shouldSuppressServerAutosave,
+    cancelPendingServerAutosave,
+} from '../utils/articleEditorSaveQueue';
 import {
     buildArticleEditorApiPayload,
     getEditorConflictTokens,
     setEditorConflictTokens,
+    applyEditorDocumentAck,
+    logArticleEditorVersionDebug,
 } from '../utils/articleEditorApi';
-import { buildEditorDocumentEnvelope, blocksFromEditorDocumentEnvelope } from '../utils/articleEditorDocument';
+import { buildEditorDocumentEnvelope, blocksFromEditorDocumentEnvelope, isUsableTipTapDocument } from '../utils/articleEditorDocument';
 import {
     assertWritableEditorSession,
     canMutateEditor,
@@ -230,6 +255,7 @@ import {
     FAQ_SHORTCODE_HTML,
     flattenHtmlBodyNodes,
     isFaqPlaceholderHtml,
+    leadingHeadingLevel,
     normalizeSectionHeadingBlockHtml,
     persistBlockHtmlFromEditor,
     resetTipTapEditorHistory,
@@ -1566,11 +1592,13 @@ function ActiveBlockEditor({
     const [linkAnchor, setLinkAnchor] = useState(null);
     const [htmlInspectorOpen, setHtmlInspectorOpen] = useState(false);
     const [htmlInspectorSnapshot, setHtmlInspectorSnapshot] = useState('');
+    const [blockStyleTick, setBlockStyleTick] = useState(0);
     const editorContainerRef = useRef(null);
     const sourceHtml = displayContent ?? block.content;
     const isHydratingRef = useRef(false);
+    const acceptUpdatesRef = useRef(false);
     const initialEditorContent = useMemo(() => {
-        if (block.editorDocument && typeof block.editorDocument === 'object') {
+        if (isUsableTipTapDocument(block.editorDocument)) {
             return block.editorDocument;
         }
 
@@ -1580,7 +1608,7 @@ function ActiveBlockEditor({
 
     const pushHtml = useCallback(
         (html) => {
-            if (suppressBlockUpdate || isHydratingRef.current) return;
+            if (suppressBlockUpdate || isHydratingRef.current || !acceptUpdatesRef.current) return;
             onUpdate(persistBlockHtmlFromEditor(sourceHtml, html));
         },
         [suppressBlockUpdate, onUpdate, sourceHtml],
@@ -1600,7 +1628,24 @@ function ActiveBlockEditor({
         extensions: getDefaultArticleEditorRuntime().getDocumentExtensions(),
         content: initialEditorContent,
         editable: Boolean(editable),
-        onUpdate: ({ editor: ed }) => {
+        parseOptions: TIPTAP_HTML_PARSE_OPTIONS,
+        onCreate: () => {
+            // Initial content must not dirty / autosave. Enable after first paint.
+            acceptUpdatesRef.current = false;
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    acceptUpdatesRef.current = true;
+                });
+            });
+        },
+        onUpdate: ({ editor: ed, transaction }) => {
+            if (!acceptUpdatesRef.current || isHydratingRef.current) {
+                return;
+            }
+            if (transaction?.getMeta?.('preventUpdate')) {
+                return;
+            }
+            setBlockStyleTick((n) => n + 1);
             pushHtml(ed.getHTML());
             captureEditorInsertionContext({
                 sectionId,
@@ -1609,6 +1654,7 @@ function ActiveBlockEditor({
             });
         },
         onSelectionUpdate: ({ editor: ed }) => {
+            setBlockStyleTick((n) => n + 1);
             captureEditorInsertionContext({
                 sectionId,
                 blockId: block.id,
@@ -1672,7 +1718,7 @@ function ActiveBlockEditor({
     useEffect(() => {
         if (!editor) return;
 
-        if (block.editorDocument && typeof block.editorDocument === 'object') {
+        if (isUsableTipTapDocument(block.editorDocument)) {
             // JSON hydrate once per block mount; avoid HTML re-parse remount.
             return;
         }
@@ -1687,11 +1733,16 @@ function ActiveBlockEditor({
         }
 
         isHydratingRef.current = true;
+        acceptUpdatesRef.current = false;
         editor.commands.setContent(nextHtml, {
             emitUpdate: false,
+            parseOptions: TIPTAP_HTML_PARSE_OPTIONS,
         });
         resetTipTapEditorHistory(editor);
         isHydratingRef.current = false;
+        requestAnimationFrame(() => {
+            acceptUpdatesRef.current = true;
+        });
     }, [editor, block.id, sourceHtml]);
 
     useEffect(() => {
@@ -1801,8 +1852,28 @@ function ActiveBlockEditor({
 
     return (
         <div className="block-editor-active" ref={editorContainerRef}>
-            <span className="block-editor-badge">
-                {suppressBlockUpdate ? t('editor_temp_merge') : block.isWp ? 'WP Block' : t('editor_paragraph')}
+            <span className="block-editor-badge" data-style-tick={blockStyleTick}>
+                {suppressBlockUpdate
+                    ? t('editor_temp_merge')
+                    : block.isWp
+                        ? 'WP Block'
+                        : (() => {
+                            if (editor) {
+                                for (let level = 1; level <= 6; level += 1) {
+                                    if (editor.isActive('heading', { level })) {
+                                        return t(`style_heading_${level}`);
+                                    }
+                                }
+                                if (editor.isActive('codeBlock')) {
+                                    return t('style_preformatted');
+                                }
+                            }
+                            const level = leadingHeadingLevel(sourceHtml);
+                            if (level) {
+                                return t(`style_heading_${level}`);
+                            }
+                            return t('editor_paragraph');
+                        })()}
             </span>
             <BlockFormatToolbar
                 editor={editor}
@@ -1858,7 +1929,10 @@ function ActiveBlockEditor({
                     }
                     try {
                         const normalized = normalizeInlineLinks(String(nextHtml ?? ''));
-                        editor.commands.setContent(normalized || '<p></p>', { emitUpdate: true });
+                        editor.commands.setContent(normalized || '<p></p>', {
+                            emitUpdate: true,
+                            parseOptions: TIPTAP_HTML_PARSE_OPTIONS,
+                        });
                         setHtmlInspectorSnapshot(editor.getHTML());
                         return { ok: true };
                     } catch (error) {
@@ -2442,13 +2516,7 @@ export default function SeoArticleEditor({
                             }),
                         );
                     }
-                    if (Array.isArray(meta.supplemental_images)) {
-                        window.dispatchEvent(
-                            new CustomEvent('seo-editor-meta-loaded', {
-                                detail: meta,
-                            }),
-                        );
-                    }
+
                 }
             } catch (error) {
                 if (isAbortError(error) || controller.signal.aborted) {
@@ -2761,11 +2829,6 @@ export default function SeoArticleEditor({
             if (supportsProductGallery && articleId) {
                 if (items.length === 0) {
                     clearFeaturedImageStorage(articleId);
-                    window.dispatchEvent(
-                        new CustomEvent('seo-featured-image-cleared', {
-                            detail: { articleId: Number(articleId) },
-                        }),
-                    );
                 } else {
                     const first = items[0];
                     saveFeaturedImage(articleId, {
@@ -2890,9 +2953,7 @@ export default function SeoArticleEditor({
                 }
                 if (settingsRes.response.ok && settingsRes.data?.success !== false) {
                     const settingsData = settingsRes.data?.data ?? {};
-                    window.dispatchEvent(
-                        new CustomEvent('seo-editor-settings-loaded', { detail: settingsData }),
-                    );
+
                 }
                 if (!seoRes.response.ok || seoRes.data?.success === false) {
                     settled = true;
@@ -3218,7 +3279,27 @@ export default function SeoArticleEditor({
         () => collectContentImagesFromArticle(blocks),
         [blocks],
     );
-    const imageTabCount = contentImageCensus.valid_content_image_count;
+    const unifiedImagesInventory = useMemo(
+        () => buildUnifiedArticleImagesInventory({
+            contentImages: contentImageCensus.rows,
+            featuredImage: featuredHealthSnapshot ?? featuredFromSnapshot(articleId),
+            galleryImages: productGalleryItems,
+            supplementalImages,
+        }),
+        [
+            contentImageCensus.rows,
+            featuredHealthSnapshot,
+            articleId,
+            productGalleryItems,
+            supplementalImages,
+        ],
+    );
+    const unifiedImageRows = useMemo(
+        () => unifiedInventoryToImageRows(unifiedImagesInventory),
+        [unifiedImagesInventory],
+    );
+    // Images chip count = unique inventory assets (not content-only, not issue count).
+    const imageTabCount = unifiedImageRows.length;
 
     const tempMergeRef = useRef(tempMerge);
     tempMergeRef.current = tempMerge;
@@ -3297,26 +3378,49 @@ export default function SeoArticleEditor({
     const seoFailedCount = seoFailedItems.length;
 
     useEffect(() => {
+        // Content widgets only — typing (blocks) must not rebuild featured/gallery health.
         const locale = String(document?.documentElement?.lang ?? 'vi').startsWith('en') ? 'en' : 'vi';
         const contentImages = collectContentImagesFromArticle(blocks);
-        const imageRows = contentImages.rows;
+        const imageRows = unifiedImageRows;
         const keyword = String(focusKeyword ?? '').trim();
         const fromAnalysis = analysis?.metrics?.image_ratio ?? {};
         const useSnap = fromAnalysis.count_source === 'media_snapshot'
             && Number.isFinite(Number(fromAnalysis.valid_image_count));
+        // Ratio current = body content occurrences only — never unified inventory total.
         const validCount = useSnap
             ? Math.max(0, Number(fromAnalysis.valid_image_count) || 0)
             : contentImages.valid_content_image_count;
-        const recommended = Number(fromAnalysis.recommended_image_count) || 0;
+        const wordCount = Math.max(
+            0,
+            Number(fromAnalysis.current_word_count)
+            || Number(analysis?.metrics?.word_count)
+            || Number(analysis?.metrics?.eligible_word_count)
+            || 0,
+        );
+        const wordsPerImage = Math.max(
+            1,
+            Number(fromAnalysis.target_words_per_image)
+            || Number(fromAnalysis.words_per_image)
+            || 200,
+        );
+        const recommendedFromWords = wordCount > 0
+            ? Math.max(1, Math.ceil(wordCount / wordsPerImage))
+            : 0;
+        const recommended = Number(fromAnalysis.recommended_image_count) > 0
+            ? Number(fromAnalysis.recommended_image_count)
+            : recommendedFromWords;
         const imageRatioMetrics = {
             ...fromAnalysis,
+            current_word_count: wordCount || Number(fromAnalysis.current_word_count) || 0,
             current_image_count: validCount,
             valid_image_count: validCount,
             recommended_image_count: recommended,
             missing_image_count: Math.max(0, recommended - validCount),
+            target_words_per_image: wordsPerImage,
+            words_per_image: wordsPerImage,
         };
         const runtime = getDefaultArticleEditorRuntime();
-        publishRuntimeWidgetHealth(runtime, {
+        publishPartialRuntimeWidgetHealth(runtime, {
             seo: {
                 focusKeyword: keyword,
                 violations: analysis?.violations ?? [],
@@ -3334,6 +3438,31 @@ export default function SeoArticleEditor({
                 extractedLinks: analysis?.extracted_links ?? extractedLinks,
                 locale,
             },
+        }, {
+            reviewsBadge: showReviewsTab && isProductPost ? virtualReviews.length : null,
+        });
+    }, [
+        analysis,
+        blocks,
+        unifiedImageRows,
+        supplementalImages,
+        focusKeyword,
+        seoFailedItems,
+        scoringMessages,
+        extractedLinks,
+        showReviewsTab,
+        isProductPost,
+        virtualReviews.length,
+        imageTabCount,
+        mediaHealthTick,
+    ]);
+
+    useEffect(() => {
+        // Media snapshot widgets — independent of TipTap typing / blocks.
+        const locale = String(document?.documentElement?.lang ?? 'vi').startsWith('en') ? 'en' : 'vi';
+        const keyword = String(focusKeyword ?? '').trim();
+        const runtime = getDefaultArticleEditorRuntime();
+        publishPartialRuntimeWidgetHealth(runtime, {
             featured: {
                 articleId,
                 featuredImage: featuredHealthSnapshot ?? featuredFromSnapshot(articleId),
@@ -3350,26 +3479,15 @@ export default function SeoArticleEditor({
                 keyword,
                 locale,
             },
-        }, {
-            reviewsBadge: showReviewsTab && isProductPost ? virtualReviews.length : null,
         });
     }, [
-        analysis,
-        blocks,
-        supplementalImages,
-        focusKeyword,
-        seoFailedItems,
-        scoringMessages,
-        extractedLinks,
         articleId,
+        focusKeyword,
         supportsProductGallery,
         isProductPost,
         productGalleryItems,
-        showReviewsTab,
-        virtualReviews.length,
-        imageTabCount,
-        mediaHealthTick,
         featuredHealthSnapshot,
+        mediaHealthTick,
     ]);
 
     // Phase 6C.3 — Featured/Gallery health from media snapshot (no Alpine tick / LS).
@@ -3418,16 +3536,6 @@ export default function SeoArticleEditor({
         });
         setAnalyzing(false);
 
-        window.dispatchEvent(
-            new CustomEvent('seo-editor-seo-analysis-updated', {
-                detail: {
-                    violations,
-                    score,
-                    seo_score: score,
-                    extracted_links: payload?.extracted_links ?? { internal: [], external: [] },
-                },
-            }),
-        );
 
         if (payload.extracted_links) {
             setSuggestedInternalLinks((prevSuggested) => {
@@ -3680,9 +3788,41 @@ export default function SeoArticleEditor({
     const serverAutosaveInFlightRef = useRef(false);
     const serverAutosaveDirtyRef = useRef(false);
     const serverAutosaveSeqRef = useRef(0);
+    const serverAutosaveNeedsRetryRef = useRef(false);
+    const lastAutosaveHashRef = useRef('');
+    /** Canonical body plain text from bootstrap — used to block hydrate-origin space corruption saves. */
+    const bootstrapBodyPlainRef = useRef(plainTextFromHtmlLoose(initialHtml));
+    const whitespaceCorruptionLockedRef = useRef(false);
+
+    const assertWritableDocumentNotWhitespaceCorrupted = useCallback((html) => {
+        const base = String(bootstrapBodyPlainRef.current ?? '').trim();
+        if (base === '') {
+            return true;
+        }
+        const candidate = plainTextFromHtmlLoose(html);
+        if (!hasInlineWhitespaceCorruption(base, candidate)) {
+            whitespaceCorruptionLockedRef.current = false;
+            return true;
+        }
+        if (!whitespaceCorruptionLockedRef.current) {
+            whitespaceCorruptionLockedRef.current = true;
+            window.dispatchEvent(new CustomEvent('seo-article-editor-notify', {
+                detail: {
+                    title: t('editor_inline_whitespace_corruption_title'),
+                    body: t('editor_inline_whitespace_corruption_body'),
+                    status: 'danger',
+                    code: INLINE_WHITESPACE_CORRUPTION_CODE,
+                },
+            }));
+        }
+        return false;
+    }, []);
 
     const scheduleServerAutosave = useCallback(() => {
         if (sessionReadOnly || window.__SEO_EDITOR_READ_ONLY__) {
+            return;
+        }
+        if (!assertWritableDocumentNotWhitespaceCorrupted(getExportHtml())) {
             return;
         }
         const client = window.__seoEditorSessionClient;
@@ -3694,7 +3834,7 @@ export default function SeoArticleEditor({
             return;
         }
 
-        window.clearTimeout(window.__seoServerAutosaveTimer);
+        cancelPendingServerAutosave();
         window.__seoServerAutosaveTimer = window.setTimeout(async () => {
             if (!serverAutosaveDirtyRef.current) {
                 return;
@@ -3702,26 +3842,72 @@ export default function SeoArticleEditor({
             if (sessionReadOnly || window.__SEO_EDITOR_READ_ONLY__ || window.__SEO_EDITOR_EXITING__) {
                 return;
             }
+            if (shouldSuppressServerAutosave()) {
+                // Explicit Save owns write queue — re-check after suppress window.
+                serverAutosaveDirtyRef.current = true;
+                window.__seoServerAutosaveTimer = window.setTimeout(() => {
+                    if (serverAutosaveDirtyRef.current) {
+                        scheduleServerAutosave();
+                    }
+                }, 1000);
+                return;
+            }
             const activeClient = window.__seoEditorSessionClient;
             if (!activeClient || activeClient.readOnly || !activeClient.sessionId) {
+                return;
+            }
+
+            const htmlAtSend = getExportHtml();
+            const currentBodyHash = hashContent(htmlAtSend);
+            const tokens = getEditorConflictTokens();
+            const ackBodyHash = String(tokens.expected_content_hash || '').trim();
+            const ackDocHash = String(window.__SEO_EDITOR_DOCUMENT_HASH__ || '').trim();
+            // Client unchanged-skip: same ACK body hash, no failed write pending retry.
+            // Do not clear editor dirty UI — only skip network PUT.
+            if (
+                !serverAutosaveNeedsRetryRef.current
+                && currentBodyHash !== ''
+                && ackBodyHash !== ''
+                && currentBodyHash === ackBodyHash
+                && lastAutosaveHashRef.current === currentBodyHash
+            ) {
+                serverAutosaveDirtyRef.current = false;
+                return;
+            }
+            // First ACK after load: lastAutosaveHash empty — still skip if body matches ACK
+            // and we already have document hash from bootstrap (idle open).
+            if (
+                !serverAutosaveNeedsRetryRef.current
+                && currentBodyHash !== ''
+                && ackBodyHash !== ''
+                && currentBodyHash === ackBodyHash
+                && ackDocHash !== ''
+                && lastAutosaveHashRef.current === ''
+            ) {
+                lastAutosaveHashRef.current = currentBodyHash;
+                serverAutosaveDirtyRef.current = false;
                 return;
             }
 
             serverAutosaveDirtyRef.current = false;
             serverAutosaveInFlightRef.current = true;
             const seq = ++serverAutosaveSeqRef.current;
-            const htmlAtSend = getExportHtml();
             try {
-                const payload = buildArticleEditorApiPayload({
-                    articleId,
-                    html: htmlAtSend,
-                    editor_document: buildEditorDocumentEnvelope(blocksRef.current, blockEditorsRef.current),
-                    expected_editor_document_hash: window.__SEO_EDITOR_DOCUMENT_HASH__ || null,
-                    seoAnalysis: null,
-                }, null);
-                payload.save_mode = 'autosave';
-                const result = await activeClient.saveDocument(payload, 'autosave');
-                if (!result.ok) {
+                const result = await saveArticleViaApiSingleFlight(articleId, async () => {
+                    const editorDocument = buildEditorDocumentEnvelope(blocksRef.current, blockEditorsRef.current);
+                    const payload = buildArticleEditorApiPayload({
+                        articleId,
+                        html: getExportHtml() || htmlAtSend,
+                        editor_document: editorDocument,
+                        expected_editor_document_hash: window.__SEO_EDITOR_DOCUMENT_HASH__ || null,
+                        client_document_hash: currentBodyHash,
+                        seoAnalysis: null,
+                    }, null);
+                    payload.save_mode = 'autosave';
+                    payload.client_document_hash = currentBodyHash;
+                    return payload;
+                }, { priority: 'autosave' });
+                if (result?.suppressed_autosave) {
                     serverAutosaveDirtyRef.current = true;
                     return;
                 }
@@ -3729,22 +3915,22 @@ export default function SeoArticleEditor({
                 if (seq !== serverAutosaveSeqRef.current) {
                     return;
                 }
-                if (result.data?.document_version != null) {
-                    window.__SEO_EDITOR_DOCUMENT_VERSION__ = Number(result.data.document_version);
-                    activeClient.setDocumentVersion(result.data.document_version);
+                logArticleEditorVersionDebug('autosave_ack', {
+                    noop: Boolean(result?.noop),
+                    reconciled: Boolean(result?.reconciled),
+                    document_version: result?.document_version ?? null,
+                    content_hash: String(result?.content_hash || '').slice(0, 12) || null,
+                });
+                applyEditorDocumentAck(result);
+                if (result?.content_hash) {
+                    lastAutosaveHashRef.current = String(result.content_hash);
+                } else if (currentBodyHash) {
+                    lastAutosaveHashRef.current = currentBodyHash;
                 }
-                if (result.data?.editor_document_hash) {
-                    window.__SEO_EDITOR_DOCUMENT_HASH__ = String(result.data.editor_document_hash);
-                }
-                if (result.data?.content_hash) {
-                    const tokens = getEditorConflictTokens();
-                    setEditorConflictTokens({
-                        expected_updated_at: result.data.saved_at || tokens.expected_updated_at,
-                        expected_content_hash: result.data.content_hash,
-                    });
-                }
+                serverAutosaveNeedsRetryRef.current = false;
             } catch {
                 serverAutosaveDirtyRef.current = true;
+                serverAutosaveNeedsRetryRef.current = true;
             } finally {
                 serverAutosaveInFlightRef.current = false;
                 if (serverAutosaveDirtyRef.current) {
@@ -3752,16 +3938,18 @@ export default function SeoArticleEditor({
                 }
             }
         }, serverAutosaveDebounceMs);
-    }, [articleId, serverAutosaveDebounceMs, sessionReadOnly]);
+    }, [articleId, assertWritableDocumentNotWhitespaceCorrupted, getExportHtml, serverAutosaveDebounceMs, sessionReadOnly]);
 
     const { debounced: debouncedLocalSave, cancel: cancelLocalDraftSave } = useDebouncedCallback(() => {
         if (!articleId || draftSaveDisabled) return;
         if (!isDraftPersistenceEnabled() || window.__SEO_EDITOR_EXITING__) return;
         if (isArticleAutosaveLocked()) return;
+        const html = getExportHtml();
+        if (!assertWritableDocumentNotWhitespaceCorrupted(html)) return;
         setSaveStatus('saving');
         const tokens = getEditorConflictTokens();
         saveDraft(articleId, connectionHashRef.current, withDraftSite({
-            content: getExportHtml(),
+            content: html,
             editor_document: buildEditorDocumentEnvelope(blocksRef.current, blockEditorsRef.current),
             editor_document_schema_version: 1,
             base_editor_document_hash: window.__SEO_EDITOR_DOCUMENT_HASH__ || null,
@@ -3783,9 +3971,12 @@ export default function SeoArticleEditor({
         if (!isDraftPersistenceEnabled() || isArticleAutosaveLocked()) {
             return;
         }
+        if (!assertWritableDocumentNotWhitespaceCorrupted(getExportHtml())) {
+            return;
+        }
         setSaveStatus('pending');
         debouncedLocalSave();
-    }, [debouncedLocalSave, draftSaveDisabled]);
+    }, [assertWritableDocumentNotWhitespaceCorrupted, debouncedLocalSave, draftSaveDisabled, getExportHtml]);
 
     scheduleAutosaveRef.current = scheduleAutosave;
 
@@ -3912,20 +4103,39 @@ export default function SeoArticleEditor({
         loadedArticleIdRef.current = articleId;
         dismissedEditorImageMediaIdsRef.current = new Set();
         skipNextAutosave.current = true;
+        whitespaceCorruptionLockedRef.current = false;
         clearTempMerge();
 
         const connHash = connectionHashRef.current;
         const scope = draftScope();
         const draft = loadDraft(articleId, connHash, scope);
-        const serverBodyHash = hashContent(initialHtml);
+
+        // Absolute recovery: DB may already have glued mark boundaries (saved after old bug).
+        const serverHtmlRepair = repairGluedInlineMarkBoundaryWhitespaceWithReport(initialHtml);
+        let effectiveInitialHtml = serverHtmlRepair.html;
+        if (serverHtmlRepair.repaired) {
+            window.dispatchEvent(new CustomEvent('seo-article-editor-notify', {
+                detail: {
+                    title: t('editor_inline_whitespace_repaired_title'),
+                    body: t('editor_inline_whitespace_repaired_body'),
+                    status: 'warning',
+                },
+            }));
+        }
+        bootstrapBodyPlainRef.current = plainTextFromHtmlLoose(effectiveInitialHtml);
+
+        const serverBodyHash = hashContent(effectiveInitialHtml);
         const serverContentHash = String(expectedContentHash ?? '').trim() || serverBodyHash;
-        const serverBlocksFromJson = blocksFromEditorDocumentEnvelope(initialEditorDocument);
+        // Prefer HTML when server HTML was repaired — corrupted JSON must not win.
+        const serverBlocksFromJson = serverHtmlRepair.repaired
+            ? null
+            : blocksFromEditorDocumentEnvelope(initialEditorDocument, effectiveInitialHtml);
         const serverBlocks = enrichBlocksWithPostImages(
             serverBlocksFromJson
-                ?? parseHtmlToBlocks(stripLeadingH1FromHtml(initialHtml)),
+                ?? parseHtmlToBlocks(stripLeadingH1FromHtml(effectiveInitialHtml)),
             postImagesRef.current,
         );
-        if (initialEditorDocumentHash) {
+        if (initialEditorDocumentHash && !serverHtmlRepair.repaired) {
             window.__SEO_EDITOR_DOCUMENT_HASH__ = String(initialEditorDocumentHash);
         }
 
@@ -3936,7 +4146,7 @@ export default function SeoArticleEditor({
             expected_content_hash: serverContentHash,
             site_id: scope.siteId,
             updated_at: expectedUpdatedAt || null,
-            content: initialHtml,
+            content: effectiveInitialHtml,
             version: serverContentHash,
         };
         const decision = resolveLocalDraftDecision(draft, serverState);
@@ -3959,9 +4169,27 @@ export default function SeoArticleEditor({
             return;
         }
 
-        if (decision === 'restore_local' && draft) {
+        const draftContentRaw = String(draft?.content ?? '');
+        const draftGlue = draft ? countGluedInlineMarkBoundaries(draftContentRaw) : 0;
+        const serverGlue = countGluedInlineMarkBoundaries(effectiveInitialHtml);
+        const preferServerOverGluedDraft = Boolean(draft)
+            && decision === 'restore_local'
+            && draftGlue > serverGlue;
+
+        if (decision === 'restore_local' && draft && !preferServerOverGluedDraft) {
+            const draftRepair = repairGluedInlineMarkBoundaryWhitespaceWithReport(draftContentRaw);
+            if (draftRepair.repaired) {
+                window.dispatchEvent(new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('editor_inline_whitespace_repaired_title'),
+                        body: t('editor_inline_whitespace_repaired_body'),
+                        status: 'warning',
+                    },
+                }));
+            }
+            bootstrapBodyPlainRef.current = plainTextFromHtmlLoose(draftRepair.html);
             const restoredBlocks = enrichBlocksWithPostImages(
-                parseHtmlToBlocks(stripLeadingH1FromHtml(String(draft.content ?? ''))),
+                parseHtmlToBlocks(stripLeadingH1FromHtml(draftRepair.html)),
                 postImagesRef.current,
             );
             setBlocks(restoredBlocks);
@@ -3979,7 +4207,10 @@ export default function SeoArticleEditor({
             setBlocks(serverBlocks);
             cancelLocalDraftSave();
             window.__seoCancelArticleDraftAutosave?.();
-            clearDraft(articleId, connHash, scope);
+            // Keep a glued draft only when it is healthier than server; otherwise clear so F5 recovers.
+            if (!draft || draftGlue >= serverGlue) {
+                clearDraft(articleId, connHash, scope);
+            }
             writeSyncedLocalSnapshot(articleId, connHash, withDraftSite({
                 content: exportBlocksToHtml(serverBlocks),
                 base_updated_at: expectedUpdatedAt || null,
@@ -3995,7 +4226,7 @@ export default function SeoArticleEditor({
             );
         }
 
-        if (canManualChoose && draft) {
+        if (canManualChoose && draft && !preferServerOverGluedDraft) {
             setDraftRestoreOffer({ draft, serverBlocks });
             setDraftChoiceModalOpen(false);
         } else {
@@ -4023,7 +4254,7 @@ export default function SeoArticleEditor({
         }
         const serverBodyHash = hashContent(initialHtml);
         const serverContentHash = String(expectedContentHash ?? '').trim() || serverBodyHash;
-        const serverBlocksFromJson = blocksFromEditorDocumentEnvelope(initialEditorDocument);
+        const serverBlocksFromJson = blocksFromEditorDocumentEnvelope(initialEditorDocument, initialHtml);
         const serverBlocks = enrichBlocksWithPostImages(
             serverBlocksFromJson
                 ?? parseHtmlToBlocks(stripLeadingH1FromHtml(initialHtml)),
@@ -4473,17 +4704,6 @@ export default function SeoArticleEditor({
         );
     }, [supportsProductGallery, supplementalImages, articleId, commitActiveBlock, requestAnalyze, scheduleAutosave]);
 
-    useEffect(() => {
-        const onDistributeGallery = () => {
-            distributeProductGalleryImages();
-        };
-
-        window.addEventListener('seo-editor-distribute-product-gallery', onDistributeGallery);
-
-        return () => {
-            window.removeEventListener('seo-editor-distribute-product-gallery', onDistributeGallery);
-        };
-    }, [distributeProductGalleryImages]);
 
     const patchImageInBlocks = useCallback(
         (blockId, patch, withoutHistory = false) => {
@@ -4551,6 +4771,16 @@ export default function SeoArticleEditor({
             }),
         );
     }, []);
+
+    const notifyLocalSlugRenameErrors = useCallback((errors, attemptedCount) => {
+        const detail = buildLocalSlugRenameErrorNotify(errors, attemptedCount);
+        if (!detail) {
+            return;
+        }
+        const body = detail.body
+            || (detail.bodyKey ? t(detail.bodyKey, detail.bodyParams) : t('editor_try_again_later'));
+        notifyEditor(t(detail.titleKey), body, detail.status);
+    }, [notifyEditor]);
 
     const pushAltTitleMetaToStores = useCallback(
         (row, altTitle) => {
@@ -4786,15 +5016,7 @@ export default function SeoArticleEditor({
                             pendingLocalRenameQueueRef.current,
                             results.errors,
                         );
-                        window.dispatchEvent(
-                            new CustomEvent('seo-article-editor-notify', {
-                                detail: {
-                                    title: t('editor_local_slug_rename_skipped_title'),
-                                    body: t('editor_local_slug_rename_skipped_body', { count: skipped }),
-                                    status: 'warning',
-                                },
-                            }),
-                        );
+                        notifyLocalSlugRenameErrors(results.errors, uniqueLocalRenames.length);
                     }
                 } catch (error) {
                     window.dispatchEvent(
@@ -4811,7 +5033,7 @@ export default function SeoArticleEditor({
                 setImagesReloadKey((k) => k + 1);
             })();
         },
-        [renameLocalMediaByUrl],
+        [notifyLocalSlugRenameErrors, renameLocalMediaByUrl],
     );
 
     const buildQuickFixContext = useCallback(
@@ -4821,7 +5043,10 @@ export default function SeoArticleEditor({
                 return null;
             }
 
-            const baseRows = (Array.isArray(imageRows) ? imageRows : supplementalImages ?? []).filter(
+            const inventoryRows = Array.isArray(imageRows) && imageRows.length > 0
+                ? imageRows
+                : unifiedImageRows;
+            const baseRows = (Array.isArray(inventoryRows) ? inventoryRows : []).filter(
                 (row) => !row?.excludeQuickFix,
             );
             const sourceRows = [];
@@ -4832,9 +5057,10 @@ export default function SeoArticleEditor({
                 }
 
                 const key =
-                    normalizeImageSrcKey(row?.src) ||
-                    String(row?.blockId ?? row?.block_id ?? '').trim() ||
-                    `row:${sourceRows.length}`;
+                    String(row?.identity_key ?? '').trim()
+                    || normalizeImageSrcKey(row?.src)
+                    || String(row?.blockId ?? row?.block_id ?? '').trim()
+                    || `row:${sourceRows.length}`;
                 if (!key || seenRows.has(key)) {
                     return;
                 }
@@ -4844,9 +5070,9 @@ export default function SeoArticleEditor({
             };
 
             baseRows.forEach(appendSourceRow);
-            if (!Array.isArray(imageRows)) {
-                buildGallerySupplementalRows(supplementalImages ?? [], null, articleId).forEach(appendSourceRow);
-            }
+
+            // Ensure local Featured/Gallery slug-fix candidates are present even if panel filter omitted them.
+            unifiedInventorySlugFixCandidates(unifiedImagesInventory).forEach(appendSourceRow);
 
             const indexedRows = assignInArticleQuickFixIndices(
                 filterSupplementalDuplicatesOfBlockRows(sourceRows),
@@ -4859,7 +5085,7 @@ export default function SeoArticleEditor({
 
             return { keyword, sourceRows: indexedRows, indexByBlockId, supplementalOnlyRows };
         },
-        [focusKeyword, articleTitle, supplementalImages, articleId],
+        [focusKeyword, articleTitle, unifiedImageRows, unifiedImagesInventory],
     );
 
     const applyQuickFixSlugPreview = useCallback(
@@ -4938,16 +5164,9 @@ export default function SeoArticleEditor({
                                 pendingLocalRenameQueueRef.current,
                                 allErrors,
                             );
-                            window.dispatchEvent(
-                                new CustomEvent('seo-article-editor-notify', {
-                                    detail: {
-                                        title: t('editor_local_slug_rename_skipped_title'),
-                                        body: t('editor_local_slug_rename_skipped_body', {
-                                            count: allErrors.length,
-                                        }),
-                                        status: 'warning',
-                                    },
-                                }),
+                            notifyLocalSlugRenameErrors(
+                                allErrors,
+                                blockRenames.length + supplementalRenames.length,
                             );
                         }
 
@@ -4961,7 +5180,7 @@ export default function SeoArticleEditor({
 
             return tasks.length > 0 ? Promise.all(tasks) : Promise.resolve();
         },
-        [renameLocalMediaByUrl, requestWordPressRenames],
+        [notifyLocalSlugRenameErrors, renameLocalMediaByUrl, requestWordPressRenames],
     );
 
     const applySlugRenameFinished = useCallback((detail) => {
@@ -5004,7 +5223,10 @@ export default function SeoArticleEditor({
             }
             const nextHtml = String(block.content ?? '').trim() || '<p></p>';
             try {
-                editor.commands.setContent(nextHtml, { emitUpdate: false });
+                editor.commands.setContent(nextHtml, {
+                    emitUpdate: false,
+                    parseOptions: TIPTAP_HTML_PARSE_OPTIONS,
+                });
             } catch {
                 // ignore destroyed/race
             }
@@ -5071,11 +5293,6 @@ export default function SeoArticleEditor({
                 });
             } else {
                 clearFeaturedImageStorage(articleId);
-                window.dispatchEvent(
-                    new CustomEvent('seo-featured-image-cleared', {
-                        detail: { articleId: Number(articleId) },
-                    }),
-                );
             }
         }
 
@@ -5181,15 +5398,7 @@ export default function SeoArticleEditor({
 
             const skipped = localResults.errors?.length ?? 0;
             if (skipped > 0) {
-                window.dispatchEvent(
-                    new CustomEvent('seo-article-editor-notify', {
-                        detail: {
-                            title: t('editor_local_slug_rename_skipped_title'),
-                            body: t('editor_local_slug_rename_skipped_body', { count: skipped }),
-                            status: 'warning',
-                        },
-                    }),
-                );
+                notifyLocalSlugRenameErrors(localResults.errors, uniqueLocalRenames.length);
             }
 
             return localResults.length > 0 || skipped > 0;
@@ -5210,6 +5419,7 @@ export default function SeoArticleEditor({
     }, [
         buildQuickFixContext,
         finalizeSlugRenameSideEffects,
+        notifyLocalSlugRenameErrors,
         quickFixSlugAllBusy,
         renameLocalMediaByUrl,
     ]);
@@ -5302,13 +5512,28 @@ export default function SeoArticleEditor({
 
             const totalWpRenames = 0;
             const totalLocalRenames = (mergedPreview.localRenameQueue ?? []).length;
+            const skippedAlreadyValid = Number(preview.skippedAlreadyValid ?? 0) || 0;
+            const eligibleCount = Number(preview.eligibleCount ?? 0) || blockEligibleCount;
 
             if (totalLocalRenames === 0) {
+                let body = t('editor_quick_fix_slug_all_noop_body');
+                if (skippedWordPress > 0 && skippedAlreadyValid > 0) {
+                    body = t('editor_quick_fix_slug_all_noop_mixed', {
+                        wp: skippedWordPress,
+                        valid: skippedAlreadyValid,
+                    });
+                } else if (skippedWordPress > 0) {
+                    body = t('editor_quick_fix_slug_all_wp_skipped_only', { count: skippedWordPress });
+                } else if (skippedAlreadyValid > 0 || eligibleCount > 0) {
+                    body = t('editor_quick_fix_slug_all_noop_already_valid', {
+                        count: skippedAlreadyValid || eligibleCount,
+                    });
+                } else {
+                    body = t('editor_quick_fix_slug_all_noop_no_local');
+                }
                 notifyEditor(
                     t('editor_quick_fix_slug_all_noop_title'),
-                    skippedWordPress > 0
-                        ? t('editor_quick_fix_slug_all_wp_skipped_only', { count: skippedWordPress })
-                        : t('editor_quick_fix_slug_all_noop_body'),
+                    body,
                     'warning',
                 );
                 return;
@@ -5374,6 +5599,36 @@ export default function SeoArticleEditor({
                         : Math.max(0, totalLocalRenames - localSkipped);
                 }
 
+                // Sync session version after server body rewrite — prevents false Version conflict
+                // when after_fix_slug_all save runs against bumped document_version.
+                const syncVersionAfterSlugFix = (payload) => {
+                    const nextVersion = Number(payload?.document_version ?? 0) || 0;
+                    if (nextVersion > 0) {
+                        window.__SEO_EDITOR_DOCUMENT_VERSION__ = nextVersion;
+                        window.__seoEditorSessionClient?.setDocumentVersion?.(nextVersion);
+                        try {
+                            const livewireId = String(window.__SEO_EDIT_ARTICLE_LIVEWIRE_ID__ ?? '');
+                            const component = livewireId && window.Livewire?.find?.(livewireId);
+                            component?.set?.('expectedDocumentVersion', nextVersion);
+                        } catch {
+                            // ignore
+                        }
+                    }
+                    if (payload?.editor_document_hash) {
+                        window.__SEO_EDITOR_DOCUMENT_HASH__ = String(payload.editor_document_hash);
+                    }
+                    if (payload?.updated_at || payload?.content_hash) {
+                        const tokens = getEditorConflictTokens();
+                        setEditorConflictTokens({
+                            expected_updated_at: payload.updated_at || tokens.expected_updated_at,
+                            expected_content_hash: payload.content_hash
+                                ? String(payload.content_hash)
+                                : tokens.expected_content_hash,
+                        });
+                    }
+                };
+                syncVersionAfterSlugFix(localFixResult);
+
                 // Patch editor document/state từ exact rename map — không đoán URL / không chỉ sửa DOM.
                 skipNextAutosave.current = true;
                 pendingLocalRenameQueueRef.current = [...(mergedPreview.localRenameQueue ?? [])];
@@ -5396,18 +5651,15 @@ export default function SeoArticleEditor({
                 cancelLocalDraftSave();
                 window.__seoCancelArticleDraftAutosave?.();
                 const htmlAfterFix = getExportHtml();
-                const hashAfterFix = hashContent(htmlAfterFix);
-                const tokens = getEditorConflictTokens();
-                setEditorConflictTokens({
-                    expected_updated_at: tokens.expected_updated_at,
-                    expected_content_hash: hashAfterFix,
-                });
+                const tokensAfterFix = getEditorConflictTokens();
+                // Keep server content_hash from slug-fix ACK — TipTap export hash must not
+                // poison expected_content_hash before the following persist.
                 clearDraft(articleId, connectionHashRef.current, draftScope());
                 writeSyncedLocalSnapshot(articleId, connectionHashRef.current, withDraftSite({
                     content: htmlAfterFix,
-                    base_updated_at: tokens.expected_updated_at || null,
-                    base_content_hash: hashAfterFix,
-                    version: hashAfterFix,
+                    base_updated_at: tokensAfterFix.expected_updated_at || null,
+                    base_content_hash: tokensAfterFix.expected_content_hash || null,
+                    version: tokensAfterFix.expected_content_hash || hashContent(htmlAfterFix),
                 }));
 
                 // Persist URL mới lần nữa — tránh save sau đó ghi đè body server bằng state cũ.
@@ -5420,20 +5672,52 @@ export default function SeoArticleEditor({
                         silentNotification: true,
                     });
                 } catch (afterSaveError) {
-                    notifyEditor(
-                        t('editor_quick_fix_slug_all_failed_title'),
-                        String(afterSaveError?.message ?? t('editor_try_again_later')),
-                        'warning',
-                    );
+                    const conflictPayload = afterSaveError?.data ?? afterSaveError?.sessionError?.data ?? null;
+                    const isVersionConflict = afterSaveError?.conflict === true
+                        || String(afterSaveError?.code ?? '').includes('document_version')
+                        || String(afterSaveError?.code ?? '').includes('content_hash');
+                    if (isVersionConflict && conflictPayload) {
+                        syncVersionAfterSlugFix({
+                            document_version: conflictPayload?.conflict?.actual_document_version
+                                ?? conflictPayload?.document_version,
+                            content_hash: conflictPayload?.conflict?.actual_content_hash
+                                ?? conflictPayload?.content_hash,
+                            updated_at: conflictPayload?.conflict?.actual_updated_at
+                                ?? conflictPayload?.updated_at,
+                            editor_document_hash: conflictPayload?.editor_document_hash,
+                        });
+                        // Do not replace ACK content_hash with TipTap export hash.
+                        try {
+                            await saveCurrentArticleFromEditor({
+                                reason: 'after_fix_slug_all_retry',
+                                siteId: Number(siteIdRef.current ?? 0) || 0,
+                                keepOverlay: true,
+                                silentNotification: true,
+                            });
+                        } catch (retryError) {
+                            notifyEditor(
+                                t('editor_quick_fix_slug_all_failed_title'),
+                                String(retryError?.message ?? t('editor_try_again_later')),
+                                'warning',
+                            );
+                        }
+                    } else {
+                        notifyEditor(
+                            t('editor_quick_fix_slug_all_failed_title'),
+                            String(afterSaveError?.message ?? t('editor_try_again_later')),
+                            'warning',
+                        );
+                    }
                 }
 
                 const totalDone = localFixed;
 
                 if (localSkipped > 0) {
-                    notifyEditor(
-                        t('editor_local_slug_rename_skipped_title'),
-                        t('editor_local_slug_rename_skipped_body', { count: localSkipped }),
-                        'warning',
+                    notifyLocalSlugRenameErrors(
+                        Array.from({ length: localSkipped }, () => ({
+                            message: '',
+                        })),
+                        Math.max(localSkipped, totalLocalRenames || localSkipped),
                     );
                 }
 
@@ -5477,6 +5761,7 @@ export default function SeoArticleEditor({
             finalizeSlugRenameSideEffects,
             getExportHtml,
             notifyEditor,
+            notifyLocalSlugRenameErrors,
             patchSupplementalImageRow,
             quickFixSlugAllBusy,
             requestWordPressRenames,
@@ -6336,7 +6621,10 @@ export default function SeoArticleEditor({
                 if (activeId === blockId) {
                     const editor = blockEditorsRef.current.get(blockId);
                     if (editor && !editor.isDestroyed) {
-                        editor.commands.setContent(nextHtml, { emitUpdate: false });
+                        editor.commands.setContent(nextHtml, {
+                            emitUpdate: false,
+                            parseOptions: TIPTAP_HTML_PARSE_OPTIONS,
+                        });
                     }
                 }
 
@@ -6500,7 +6788,10 @@ export default function SeoArticleEditor({
                 const activeEditor = blockEditorsRef.current.get(activeId);
                 const activeBlock = nextBlocks.find((block) => block.id === activeId);
                 if (activeEditor && !activeEditor.isDestroyed && activeBlock?.content) {
-                    activeEditor.commands.setContent(activeBlock.content, { emitUpdate: false });
+                    activeEditor.commands.setContent(activeBlock.content, {
+                        emitUpdate: false,
+                        parseOptions: TIPTAP_HTML_PARSE_OPTIONS,
+                    });
                 }
             }
 
@@ -6632,17 +6923,7 @@ export default function SeoArticleEditor({
                     scrollElementIntoViewIfNeeded(slot, { behavior: 'smooth', block: 'nearest' });
                 }
                 // Dirty/analyze/autosave emitted once by command layer document-changed.
-                window.dispatchEvent(
-                    new CustomEvent('seo-editor-cta-link-inserted', {
-                        detail: {
-                            text,
-                            href,
-                            type,
-                            blockId: preferredBlockId,
-                            mode: isCtaSentence ? 'cta_sentence' : 'contact_value',
-                        },
-                    }),
-                );
+
                 window.dispatchEvent(
                     new CustomEvent('seo-article-editor-notify', {
                         detail: {
@@ -6736,18 +7017,7 @@ export default function SeoArticleEditor({
             clearFrozenEditorInsertionContext();
             updateBlockContent(targetBlock.id, nextHtml);
             requestAnalyze();
-            window.dispatchEvent(
-                new CustomEvent('seo-editor-cta-link-inserted', {
-                    detail: {
-                        text,
-                        href,
-                        type,
-                        blockId: targetBlock.id,
-                        mode: isCtaSentence ? 'cta_sentence' : 'contact_value',
-                        fallback: true,
-                    },
-                }),
-            );
+
             window.dispatchEvent(
                 new CustomEvent('seo-article-editor-notify', {
                     detail: {
@@ -6895,6 +7165,8 @@ export default function SeoArticleEditor({
 
             if (
                 code === 'image_slug_not_fixed'
+                || code === 'image_slug_unresolved'
+                || code === 'image_alt_missing'
                 || code === 'image_ratio_low'
                 || code === 'image_reference_invalid'
                 || panel === 'images'
@@ -7053,18 +7325,6 @@ export default function SeoArticleEditor({
         [activeBlockId, articleId, commitActiveBlock, clearTempMerge, releaseImageBlockMediaTracking],
     );
 
-    structureMutationRef.current = (name, payload) => {
-        if (name === 'delete_block') {
-            deleteBlock(payload.blockId, { skipConfirm: Boolean(payload.skipConfirm) });
-            return true;
-        }
-        if (name === 'replace_article_document' && Array.isArray(payload.blocks)) {
-            setBlocks(payload.blocks);
-            return true;
-        }
-        return false;
-    };
-
     const removeImageBlock = useCallback(
         (row) => {
             const target = resolveArticleImageRemoveTarget(
@@ -7175,19 +7435,9 @@ export default function SeoArticleEditor({
                 removeProductAlbumItem(articleId, src);
                 if (loadProductAlbum(articleId).length === 0) {
                     clearFeaturedImageStorage(articleId);
-                    window.dispatchEvent(
-                        new CustomEvent('seo-featured-image-cleared', {
-                            detail: { articleId: Number(articleId) },
-                        }),
-                    );
                 }
             } else if (origin === 'featured') {
                 clearFeaturedImageStorage(articleId);
-                window.dispatchEvent(
-                    new CustomEvent('seo-featured-image-cleared', {
-                        detail: { articleId: Number(articleId) },
-                    }),
-                );
             }
 
             setImagesReloadKey((key) => key + 1);
@@ -8540,6 +8790,158 @@ export default function SeoArticleEditor({
         [editorSections, notifyIntroNoImages, outlineHasSavedHeadings, sectionHeadingBlockIds],
     );
 
+    const applyMoveBlockWithinSectionMutation = (payload = {}) => {
+        const command = 'move_block_within_section';
+        const blockId = String(payload.blockId ?? '').trim();
+        const direction = String(payload.direction ?? '').trim().toLowerCase();
+        let sectionId = String(payload.sectionId ?? payload.section_id ?? '').trim();
+
+        const fail = (code, meta = {}) => ({
+            ok: false,
+            code,
+            command,
+            editor_id: blockId || null,
+            transaction_applied: false,
+            document_changed: false,
+            selection_changed: false,
+            new_selection: null,
+            history_step: false,
+            error: { code, message_key: `editor_command.${code}` },
+            meta,
+        });
+
+        if (tempMergeRef.current) {
+            return fail(EDITOR_COMMAND_CODES.NO_CHANGE);
+        }
+        if (!blockId) {
+            return fail(EDITOR_COMMAND_CODES.TARGET_MISSING);
+        }
+        if (direction !== 'up' && direction !== 'down') {
+            return fail(EDITOR_COMMAND_CODES.SELECTION_INVALID, { direction });
+        }
+
+        const sections = buildEditorSections(blocksRef.current);
+        const section = sectionId
+            ? sections.find((row) => row.id === sectionId)
+            : sections.find((row) => (row.blockIds ?? []).includes(blockId));
+        if (!section) {
+            return fail('section_missing', { blockId, sectionId: sectionId || null });
+        }
+        if (sectionId && section.id !== sectionId) {
+            return fail(EDITOR_COMMAND_CODES.SECTION_MISMATCH, { blockId, sectionId });
+        }
+        if (!(section.blockIds ?? []).includes(blockId)) {
+            return fail(EDITOR_COMMAND_CODES.SECTION_MISMATCH, { blockId, sectionId: section.id });
+        }
+        sectionId = section.id;
+
+        setInsertMenu(null);
+
+        const activeId = activeBlockIdRef.current;
+        let flushedHtml = null;
+        const activeEditor = activeId ? blockEditorsRef.current.get(activeId) : null;
+        if (activeEditor && !activeEditor.isDestroyed) {
+            const sourceHtml = blocksRef.current.find((block) => block.id === activeId)?.content ?? '';
+            flushedHtml = persistBlockHtmlFromEditor(sourceHtml, activeEditor.getHTML());
+        } else {
+            blockFlushRef.current?.();
+        }
+
+        let working = blocksRef.current;
+        if (flushedHtml != null && activeId) {
+            working = working.map((block) =>
+                block.id === activeId ? { ...block, content: flushedHtml } : block,
+            );
+        }
+
+        // Re-resolve section ids against flushed working set (same ids, same ownership).
+        const liveSections = buildEditorSections(working);
+        const liveSection = liveSections.find((row) => row.id === sectionId)
+            ?? liveSections.find((row) => (row.blockIds ?? []).includes(blockId));
+        if (!liveSection) {
+            return fail('section_missing', { blockId, sectionId });
+        }
+
+        const result = reorderBlockWithinSection(working, {
+            blockId,
+            direction,
+            sectionBlockIds: liveSection.blockIds,
+            sectionId: liveSection.id,
+        });
+
+        if (!result.ok) {
+            return fail(result.code, {
+                sectionId: liveSection.id,
+                fromIndex: result.fromIndex,
+                toIndex: result.toIndex,
+            });
+        }
+
+        // One setBlocks → one history step. Do not normalizeBlocks (avoids new image ids).
+        blocksRef.current = result.blocks;
+        setBlocks(result.blocks);
+        setActiveBlockId(blockId);
+        setGlobalEditor(null);
+
+        return {
+            ok: true,
+            code: EDITOR_COMMAND_CODES.MOVED,
+            command,
+            editor_id: blockId,
+            transaction_applied: true,
+            document_changed: true,
+            selection_changed: false,
+            new_selection: null,
+            history_step: true,
+            error: null,
+            meta: {
+                sectionId: liveSection.id,
+                fromIndex: result.fromIndex,
+                toIndex: result.toIndex,
+            },
+        };
+    };
+
+    structureMutationRef.current = (name, payload) => {
+        if (name === 'delete_block') {
+            deleteBlock(payload.blockId, { skipConfirm: Boolean(payload.skipConfirm) });
+            return true;
+        }
+        if (name === 'replace_article_document' && Array.isArray(payload.blocks)) {
+            setBlocks(payload.blocks);
+            return true;
+        }
+        if (name === 'move_block_within_section') {
+            return applyMoveBlockWithinSectionMutation(payload);
+        }
+        if (name === 'move_block_to_adjacent_section') {
+            const direction = payload.direction === 'prev' || payload.direction === 'next'
+                ? payload.direction
+                : null;
+            if (!direction) {
+                return {
+                    ok: false,
+                    code: EDITOR_COMMAND_CODES.SELECTION_INVALID,
+                    command: name,
+                    editor_id: payload.blockId ?? null,
+                    transaction_applied: false,
+                    document_changed: false,
+                    selection_changed: false,
+                    new_selection: null,
+                    history_step: false,
+                    error: {
+                        code: EDITOR_COMMAND_CODES.SELECTION_INVALID,
+                        message_key: 'editor_command.selection_invalid',
+                    },
+                    meta: {},
+                };
+            }
+            moveBlockToSection(payload.blockId, direction);
+            return true;
+        }
+        return false;
+    };
+
     const moveSection = useCallback(
         (sectionId, direction) => {
             if (tempMergeRef.current) {
@@ -9362,19 +9764,15 @@ export default function SeoArticleEditor({
             if (seoMediaId > 0) {
                 dismissedEditorImageMediaIdsRef.current.delete(seoMediaId);
             }
-            const image = withWpPickerExcludeQuickFix(
-                withDefaultImageInsertAlign({
-                    src: url,
-                    alt,
-                    title: alt,
-                    wpAttachmentId: attachmentId > 0 ? attachmentId : undefined,
-                    seoMediaId: seoMediaId > 0 ? seoMediaId : undefined,
-                    slug: slug || undefined,
-                    wpSrc: url,
-                }),
-                event.detail?.pickerTab,
-                attachmentId,
-            );
+            const image = withDefaultImageInsertAlign({
+                src: url,
+                alt,
+                title: alt,
+                wpAttachmentId: attachmentId > 0 ? attachmentId : undefined,
+                seoMediaId: seoMediaId > 0 ? seoMediaId : undefined,
+                slug: slug || undefined,
+                wpSrc: url,
+            });
             const html = renderImageFigure(image);
             persistSelectedMediaBlock(blockId, html, image, 'image');
             syncWpPickerSelectionToImagesTab(event.detail?.pickerTab);
@@ -9715,6 +10113,11 @@ export default function SeoArticleEditor({
                     : null;
 
             const exportHtml = getExportHtml();
+            if (!assertWritableDocumentNotWhitespaceCorrupted(exportHtml)) {
+                const err = new Error(t('editor_inline_whitespace_corruption_body'));
+                err.code = INLINE_WHITESPACE_CORRUPTION_CODE;
+                throw err;
+            }
             const editorDocument = buildEditorDocumentEnvelope(
                 blocksRef.current,
                 blockEditorsRef.current,
@@ -9731,11 +10134,17 @@ export default function SeoArticleEditor({
             };
         };
 
+        window.__seoAssertEditorWhitespaceSafe = (html) => (
+            assertWritableDocumentNotWhitespaceCorrupted(html)
+        );
+
         return () => {
             delete window.__seoCollectEditorHeavyBundle;
+            delete window.__seoAssertEditorWhitespaceSafe;
         };
     }, [
         articleId,
+        assertWritableDocumentNotWhitespaceCorrupted,
         clearTempMerge,
         getExportHtml,
         prepareImageSlugsBeforeWpSync,
@@ -9970,7 +10379,10 @@ export default function SeoArticleEditor({
         if (replacedBlockId && nextHtml !== '') {
             const activeEditor = blockEditorsRef.current.get(replacedBlockId);
             if (activeEditor && !activeEditor.isDestroyed) {
-                activeEditor.commands.setContent(nextHtml, { emitUpdate: false });
+                activeEditor.commands.setContent(nextHtml, {
+                    emitUpdate: false,
+                    parseOptions: TIPTAP_HTML_PARSE_OPTIONS,
+                });
             }
         }
 
@@ -11082,7 +11494,10 @@ export default function SeoArticleEditor({
         images: {
             reloadKey: imagesReloadKey,
             blocks,
-            extraImages: supplementalImages,
+            extraImages: unifiedImageRows,
+            featuredImage: featuredHealthSnapshot ?? featuredFromSnapshot(articleId),
+            galleryImages: productGalleryItems,
+            useUnifiedInventory: true,
             siteId,
             articleId,
             jumpTarget: imagesTabJumpTarget,
@@ -11132,6 +11547,9 @@ export default function SeoArticleEditor({
         canGenerateFeaturedSnippet,
         imagesReloadKey,
         blocks,
+        unifiedImageRows,
+        featuredHealthSnapshot,
+        productGalleryItems,
         supplementalImages,
         siteId,
         articleId,
@@ -11605,8 +12023,28 @@ export default function SeoArticleEditor({
                                                     const showMoveButtons = showInsert && !isOutlineLockedHeadingBlock;
                                                     const canMovePrevSection = sectionIndex > 0;
                                                     const canMoveNextSection = sectionIndex < editorSections.length - 1;
+                                                    const editorWritable = !sessionReadOnly
+                                                        && !window.__SEO_EDITOR_READ_ONLY__
+                                                        && canMutateEditor();
+                                                    const withinMove = withinSectionMoveAvailability(visibleBlockIds, block.id);
+                                                    const canMoveUpWithinSection = editorWritable && withinMove.canMoveUp;
+                                                    const canMoveDownWithinSection = editorWritable && withinMove.canMoveDown;
                                                     const handleMovePrevSection = () => moveBlockToSection(block.id, 'prev');
                                                     const handleMoveNextSection = () => moveBlockToSection(block.id, 'next');
+                                                    const handleMoveUpWithinSection = () => {
+                                                        executeEditorCommand('move_block_within_section', {
+                                                            sectionId: section.id,
+                                                            blockId: block.id,
+                                                            direction: 'up',
+                                                        }, { notifyOnFailure: false });
+                                                    };
+                                                    const handleMoveDownWithinSection = () => {
+                                                        executeEditorCommand('move_block_within_section', {
+                                                            sectionId: section.id,
+                                                            blockId: block.id,
+                                                            direction: 'down',
+                                                        }, { notifyOnFailure: false });
+                                                    };
 
                                                     return (
                                                         <div
@@ -11626,8 +12064,12 @@ export default function SeoArticleEditor({
                                                                         showMoveButtons={showMoveButtons}
                                                                         canMovePrevSection={canMovePrevSection}
                                                                         canMoveNextSection={canMoveNextSection}
+                                                                        canMoveUpWithinSection={canMoveUpWithinSection}
+                                                                        canMoveDownWithinSection={canMoveDownWithinSection}
                                                                         onMovePrevSection={handleMovePrevSection}
                                                                         onMoveNextSection={handleMoveNextSection}
+                                                                        onMoveUpWithinSection={handleMoveUpWithinSection}
+                                                                        onMoveDownWithinSection={handleMoveDownWithinSection}
                                                                     />
                                                                     {insertMenu?.blockId === block.id &&
                                                                     insertMenu?.position === 'before' ? (
@@ -11714,8 +12156,12 @@ export default function SeoArticleEditor({
                                                                         showMoveButtons={showMoveButtons}
                                                                         canMovePrevSection={canMovePrevSection}
                                                                         canMoveNextSection={canMoveNextSection}
+                                                                        canMoveUpWithinSection={canMoveUpWithinSection}
+                                                                        canMoveDownWithinSection={canMoveDownWithinSection}
                                                                         onMovePrevSection={handleMovePrevSection}
                                                                         onMoveNextSection={handleMoveNextSection}
+                                                                        onMoveUpWithinSection={handleMoveUpWithinSection}
+                                                                        onMoveDownWithinSection={handleMoveDownWithinSection}
                                                                     />
                                                                     {insertMenu?.blockId === block.id &&
                                                                     insertMenu?.position === 'after' ? (

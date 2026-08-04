@@ -86,7 +86,8 @@ final class ArticleEditorDocumentHtmlIngest
     {
         if ($node instanceof DOMText) {
             $text = (string) $node->textContent;
-            if (trim($text) === '') {
+            // Keep whitespace-only text when non-empty — do not trim() (inline boundaries).
+            if ($text === '') {
                 return null;
             }
 
@@ -179,7 +180,7 @@ final class ArticleEditorDocumentHtmlIngest
         }
 
         if ($tag === 'table') {
-            return ['type' => 'table', 'content' => [], 'attrs' => ['htmlPreview' => true]];
+            return $this->convertTable($node);
         }
 
         if (in_array($tag, ['div', 'section', 'article'], true)) {
@@ -281,6 +282,72 @@ final class ArticleEditorDocumentHtmlIngest
         }
 
         return $content;
+    }
+
+    /**
+     * @return array{type: string, content: list<array<string, mixed>>}
+     */
+    private function convertTable(DOMElement $table): array
+    {
+        $rows = [];
+        foreach ($table->getElementsByTagName('tr') as $tr) {
+            if (! $tr instanceof DOMElement) {
+                continue;
+            }
+            // Skip nested tables' rows belonging to descendant tables.
+            $parentTable = $tr->parentNode;
+            while ($parentTable instanceof DOMNode && ! $parentTable instanceof DOMElement) {
+                $parentTable = $parentTable->parentNode;
+            }
+            if ($parentTable instanceof DOMElement) {
+                $parentTag = strtolower($parentTable->tagName);
+                if (in_array($parentTag, ['thead', 'tbody', 'tfoot'], true)) {
+                    $parentTable = $parentTable->parentNode;
+                }
+            }
+            if ($parentTable !== $table) {
+                continue;
+            }
+
+            $cells = [];
+            foreach ($tr->childNodes as $cell) {
+                if (! $cell instanceof DOMElement) {
+                    continue;
+                }
+                $cellTag = strtolower($cell->tagName);
+                if (! in_array($cellTag, ['td', 'th'], true)) {
+                    continue;
+                }
+                $attrs = [];
+                $colspan = (int) $cell->getAttribute('colspan');
+                $rowspan = (int) $cell->getAttribute('rowspan');
+                if ($colspan > 1) {
+                    $attrs['colspan'] = $colspan;
+                }
+                if ($rowspan > 1) {
+                    $attrs['rowspan'] = $rowspan;
+                }
+                $inline = $this->convertInlineChildren($cell);
+                $cells[] = [
+                    'type' => $cellTag === 'th' ? 'tableHeader' : 'tableCell',
+                    'attrs' => $attrs === [] ? null : $attrs,
+                    'content' => [[
+                        'type' => 'paragraph',
+                        'content' => $inline === []
+                            ? [['type' => 'text', 'text' => '']]
+                            : $inline,
+                    ]],
+                ];
+            }
+            if ($cells !== []) {
+                $rows[] = ['type' => 'tableRow', 'content' => $cells];
+            }
+        }
+
+        return [
+            'type' => 'table',
+            'content' => $rows,
+        ];
     }
 
     /**

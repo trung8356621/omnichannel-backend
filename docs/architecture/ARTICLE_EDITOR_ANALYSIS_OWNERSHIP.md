@@ -58,3 +58,7 @@ Save API may emit `seo-editor-analyze-result` → React **recomputes locally** (
 - Full TipTap-JSON-only parser (no dual HTML/DOM paths)
 - Browser E2E caret proof
 - Optional: drop save-patch analyze nudge if redundant with local idle analyze
+
+## Legacy cleanup
+
+Orphan seo-editor-seo-analysis-updated producer removed. Analysis ownership unchanged. See [ARTICLE_EDITOR_LEGACY_CLEANUP.md](ARTICLE_EDITOR_LEGACY_CLEANUP.md).

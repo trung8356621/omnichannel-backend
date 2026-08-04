@@ -95,6 +95,15 @@ final class ViewSeoProject extends Page
     /** Livewire public — must live on component, not trait. */
     public bool $bulkRunning = false;
 
+    /** @var list<int> */
+    public array $pendingTaskIds = [];
+
+    public ?string $pendingOp = null;
+
+    public ?string $pendingPhase = null;
+
+    public ?string $pendingOperationId = null;
+
     public string $autoMode = 'interval';
 
     public string $autoStartAt = '';

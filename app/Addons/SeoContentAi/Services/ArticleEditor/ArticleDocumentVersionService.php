@@ -36,8 +36,36 @@ final class ArticleDocumentVersionService
             return;
         }
 
-        $current = max(1, (int) ($article->getOriginal('document_version') ?? $article->document_version ?? 1));
-        $article->document_version = $current + 1;
+        $before = max(1, (int) ($article->getOriginal('document_version') ?? $article->document_version ?? 1));
+        // Already advanced in this write cycle (writer set version) — do not double-bump.
+        if ($article->isDirty('document_version')
+            && (int) ($article->document_version ?? 0) > $before) {
+            if (config('app.debug')) {
+                RuntimeLogger::info('seo.editor.version_debug', [
+                    'event' => 'bump_skipped_already_advanced',
+                    'article_id' => (int) ($article->getKey() ?? 0),
+                    'before_version' => $before,
+                    'after_version' => (int) $article->document_version,
+                    'dirty_fields' => array_values(array_keys($article->getDirty())),
+                    'bump_source' => 'observer_skip',
+                ]);
+            }
+
+            return;
+        }
+
+        $article->document_version = $before + 1;
+
+        if (config('app.debug')) {
+            RuntimeLogger::info('seo.editor.version_debug', [
+                'event' => 'bump_if_body_changing',
+                'article_id' => (int) ($article->getKey() ?? 0),
+                'before_version' => $before,
+                'after_version' => (int) $article->document_version,
+                'dirty_fields' => array_values(array_keys($article->getDirty())),
+                'bump_source' => 'observer',
+            ]);
+        }
     }
 
     public function ensureDefaultOnCreate(SeoArticle $article): void

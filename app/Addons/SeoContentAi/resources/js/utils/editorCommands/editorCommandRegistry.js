@@ -6,7 +6,6 @@ import {
     insertContactCtaCommand,
     insertContactValueCommand,
     insertContentFragmentCommand,
-    insertFaqPlaceholderCommand as insertFaqPlaceholderFromInsertion,
     insertHtmlCompatCommand,
     insertLinkCommand,
     insertTextCommand,
@@ -54,6 +53,8 @@ import {
     deleteBlockCommand,
     duplicateBlockCommand,
     moveBlockCommand,
+    moveBlockToAdjacentSectionCommand,
+    moveBlockWithinSectionCommand,
     outlineJumpCommand,
     setTextSelectionCommand,
     splitBlockCommand,
@@ -126,8 +127,6 @@ mut('insert_link', insertLinkCommand, { requiresInsertionContext: true });
 mut('insert_html_compat', insertHtmlCompatCommand, { requiresInsertionContext: true });
 mut('insert_content_fragment', insertContentFragmentCommand, { requiresInsertionContext: true });
 mut('insert_faq_placeholder', insertFaqPlaceholderCommand, { requiresInsertionContext: true });
-// alias path kept for insertion module export parity
-void insertFaqPlaceholderFromInsertion;
 
 // Links
 mut('create_link', createLinkCommand);
@@ -171,6 +170,8 @@ mut('remove_faq_placeholder', removeFaqPlaceholderCommand);
 mut('delete_block', deleteBlockCommand);
 mut('duplicate_block', duplicateBlockCommand);
 mut('move_block', moveBlockCommand);
+mut('move_block_within_section', moveBlockWithinSectionCommand);
+mut('move_block_to_adjacent_section', moveBlockToAdjacentSectionCommand);
 mut('split_block', splitBlockCommand);
 nav('outline_jump', outlineJumpCommand);
 nav('set_text_selection', setTextSelectionCommand);

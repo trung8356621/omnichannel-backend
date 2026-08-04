@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Http\Controllers;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionException;
+use App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionService;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Services\SeoMediaArticleSlugFixService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -17,6 +20,7 @@ final class ArticleEditorOperationController extends Controller
     public function __construct(
         private readonly ArticleWpSyncQueueService $syncQueue,
         private readonly SeoMediaArticleSlugFixService $slugFix,
+        private readonly ArticleEditorSessionService $sessions,
     ) {}
 
     public function status(SeoArticle $article): JsonResponse
@@ -62,12 +66,54 @@ final class ArticleEditorOperationController extends Controller
             'items.*.src' => ['nullable', 'string', 'max:2048'],
             'items.*.new_slug' => ['required', 'string', 'regex:/^[a-z0-9\-]+$/i', 'max:200'],
             'items.*.old_slug' => ['nullable', 'string', 'max:200'],
+            'editor_session_id' => ['nullable', 'string', 'max:64'],
         ]);
+
+        $user = $request->user();
+        abort_unless($user instanceof User, 403);
+
+        $sessionId = trim((string) (
+            $validated['editor_session_id']
+            ?? $request->header('X-Editor-Session-Id')
+            ?? ''
+        ));
+
+        try {
+            // Owning editor session required while a session is active — never treat owner as foreign lock.
+            $this->sessions->assertOwningActiveSessionForMediaMutation(
+                $article,
+                $user,
+                $sessionId !== '' ? $sessionId : null,
+                'fix_media_slugs',
+            );
+        } catch (ArticleEditorSessionException $exception) {
+            return response()->json([
+                'success' => false,
+                'error' => $exception->errorCode,
+                'code' => $exception->errorCode,
+                'message' => $exception->getMessage(),
+                'lock' => $exception->context['lock'] ?? null,
+            ], $exception->httpStatus);
+        }
 
         // Luôn đọc bản article mới nhất (sau save trước Fix slug) — không dùng body stale.
         $article->refresh();
 
-        $result = $this->slugFix->fixSlugs($article, $validated['items']);
+        try {
+            $result = $this->slugFix->fixSlugs($article, $validated['items'], [
+                'editor_session_id' => $sessionId,
+                'user' => $user,
+            ]);
+        } catch (ArticleEditorSessionException $exception) {
+            return response()->json([
+                'success' => false,
+                'error' => $exception->errorCode,
+                'code' => $exception->errorCode,
+                'message' => $exception->getMessage(),
+                'lock' => $exception->context['lock'] ?? null,
+            ], $exception->httpStatus);
+        }
+
         $status = ($result['success'] ?? false) ? 200 : 422;
 
         return response()->json($result, $status);

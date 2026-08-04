@@ -47,7 +47,8 @@ final class ArticleEditorRuntimeUiCutoverPhase6bTest extends TestCase
     {
         $source = (string) file_get_contents($this->js('components/SeoArticleEditor.jsx'));
         self::assertStringContainsString('EditorSidebarPortalHost', $source);
-        self::assertStringContainsString('publishRuntimeWidgetHealth', $source);
+        // Phase-1 perf: typing path uses partial health (content widgets only).
+        self::assertStringContainsString('publishPartialRuntimeWidgetHealth', $source);
         self::assertStringContainsString('installEditorShellCompatibilityBridge', $source);
         self::assertStringContainsString('subscribeEditorNavigation', $source);
         self::assertStringNotContainsString("lazy(() => import('../modules/SeoModule'))", $source);

@@ -45,6 +45,30 @@ export function setRuntimeWidgetHealth(health, extras = {}) {
 }
 
 /**
+ * Merge widget health entries without wiping unrelated widgets.
+ * Used so typing (blocks) can refresh images/seo/links without rebuilding featured/gallery.
+ *
+ * @param {Record<string, object>} partial
+ * @param {{ reviewsBadge?: number|null }} [extras]
+ */
+export function patchRuntimeWidgetHealth(partial, extras = {}) {
+    if (!partial || typeof partial !== 'object') {
+        return;
+    }
+    healthByWidgetId = {
+        ...healthByWidgetId,
+        ...partial,
+    };
+    if (Object.prototype.hasOwnProperty.call(extras, 'reviewsBadge')) {
+        navigatorBadges = {
+            ...navigatorBadges,
+            reviews: extras.reviewsBadge,
+        };
+    }
+    emit();
+}
+
+/**
  * Partial badge patch (Links/CTA counts during 6C.2 transition).
  * @param {Record<string, number|string|null|undefined>} partial
  */

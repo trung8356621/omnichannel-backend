@@ -11,30 +11,69 @@ function resolveWpAttachmentId(row) {
 }
 
 function resolveSeoMediaId(row) {
-    return Math.max(0, Number(row?.seoMediaId ?? row?.seo_media_id ?? 0) || 0);
+    return Math.max(0, Number(row?.seoMediaId ?? row?.seo_media_id ?? row?.media_id ?? 0) || 0);
 }
 
-function isLocalSeoMediaSrc(src) {
+/**
+ * Laravel SEO media path evidence (relative or absolute https host/storage/...).
+ *
+ * @param {unknown} src
+ * @returns {boolean}
+ */
+export function isLocalSeoMediaSrc(src) {
     const value = String(src ?? '').trim();
     if (value === '') {
         return false;
     }
-
-    return /\/storage\/seo\//i.test(value)
-        || /\/seo-media\//i.test(value)
-        || value.startsWith('blob:')
-        || /^\/?storage\//i.test(value);
-}
-
-function hasTrustedWordPressUrl(row) {
-    const wpSrc = String(row?.wpSrc ?? row?.wp_url ?? '').trim();
-    const src = String(row?.src ?? row?.url ?? '').trim();
-    const candidate = wpSrc || src;
-    if (candidate === '' || isLocalSeoMediaSrc(candidate)) {
+    if (value.startsWith('blob:')) {
+        return true;
+    }
+    // Never treat WP uploads as local.
+    if (/\/wp-content\/uploads\//i.test(value)) {
         return false;
     }
 
-    return /\/wp-content\/uploads\//i.test(candidate) || /^https?:\/\//i.test(candidate);
+    return /\/storage\/uploads\/seo_media\//i.test(value)
+        || /\/storage\/seo\//i.test(value)
+        || /\/seo-media\//i.test(value)
+        || /\/storage\//i.test(value)
+        || /^\/?storage\//i.test(value);
+}
+
+/**
+ * WordPress URL evidence only — never treat bare https:// as WP
+ * (Laravel absolute media URLs would otherwise all look “protected”).
+ *
+ * @param {Record<string, unknown>|null|undefined} row
+ * @returns {boolean}
+ */
+function hasTrustedWordPressUrl(row) {
+    const candidates = [
+        row?.wpSrc,
+        row?.wp_url,
+        row?.src,
+        row?.url,
+        row?.localSrc,
+        row?.local_src,
+    ];
+    for (const candidate of candidates) {
+        const value = String(candidate ?? '').trim();
+        if (value !== '' && /\/wp-content\/uploads\//i.test(value)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function resolveExplicitSourceType(row) {
+    return String(
+        row?.source_type
+        ?? row?.sourceType
+        ?? row?.source
+        ?? row?.kind
+        ?? '',
+    ).trim().toLowerCase();
 }
 
 /**
@@ -46,8 +85,14 @@ export function classifyMediaSource(row) {
         return 'unknown';
     }
 
-    const sourceType = String(row.source_type ?? row.sourceType ?? row.kind ?? '').trim().toLowerCase();
+    const sourceType = resolveExplicitSourceType(row);
     if (sourceType === 'wordpress' || sourceType === 'wp') {
+        // Explicit WP label still loses to pure Laravel storage URL without WP uploads path
+        // when a stale attachment id was written into featured meta (seo media PK).
+        if (!hasTrustedWordPressUrl(row) && hasLocalLaravelEvidence(row)) {
+            return classifyLocalKind(row);
+        }
+
         return 'wordpress';
     }
     if (sourceType === 'generated' || sourceType === 'ai') {
@@ -60,26 +105,50 @@ export function classifyMediaSource(row) {
         return 'local';
     }
 
-    const wpAttachmentId = resolveWpAttachmentId(row);
-    if (wpAttachmentId > 0 || hasTrustedWordPressUrl(row)) {
+    const trustedWpUrl = hasTrustedWordPressUrl(row);
+    if (trustedWpUrl) {
         return 'wordpress';
     }
 
-    const src = String(row.src ?? row.url ?? row.localSrc ?? row.local_src ?? '').trim();
-    const seoMediaId = resolveSeoMediaId(row);
-    if (isLocalSeoMediaSrc(src) || seoMediaId > 0) {
-        if (String(row.generation_status ?? row.ai_job_id ?? '').trim() !== '') {
-            return 'generated';
-        }
-
-        return seoMediaId > 0 ? 'local' : 'uploaded';
+    // Local Laravel file evidence wins over bare/stale wp_attachment_id
+    // (featured meta often stores SeoMedia PK in wp_featured_attachment_id before WP sync).
+    if (hasLocalLaravelEvidence(row)) {
+        return classifyLocalKind(row);
     }
 
-    if (/\/wp-content\/uploads\//i.test(src)) {
+    const wpAttachmentId = resolveWpAttachmentId(row);
+    if (wpAttachmentId > 0) {
         return 'wordpress';
     }
 
     return 'unknown';
+}
+
+/**
+ * @param {Record<string, unknown>} row
+ * @returns {boolean}
+ */
+function hasLocalLaravelEvidence(row) {
+    const seoMediaId = resolveSeoMediaId(row);
+    const src = String(row.src ?? row.url ?? '').trim();
+    const localSrc = String(row.localSrc ?? row.local_src ?? '').trim();
+
+    return isLocalSeoMediaSrc(src)
+        || isLocalSeoMediaSrc(localSrc)
+        || seoMediaId > 0;
+}
+
+/**
+ * @param {Record<string, unknown>} row
+ * @returns {'local'|'generated'|'uploaded'}
+ */
+function classifyLocalKind(row) {
+    if (String(row.generation_status ?? row.ai_job_id ?? '').trim() !== '') {
+        return 'generated';
+    }
+    const seoMediaId = resolveSeoMediaId(row);
+
+    return seoMediaId > 0 ? 'local' : 'uploaded';
 }
 
 /**

@@ -3792,10 +3792,37 @@ class EditArticle extends SeoEditRecord
         $conflictGuard = app(ArticleContentConflictGuard::class);
         $projectRunRevision = (string) $metaMap->get('content_project_run', '');
         $aiHistoryPending = $this->resolveAiHistoryPendingBootstrap();
+        $editorDocBoot = app(\App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter::class)
+            ->resolveForBootstrap($this->record);
+        // Prefer repaired body from bootstrap resolver when inline mark spaces were glued in DB.
+        if (
+            ($editorDocBoot['inline_whitespace_repaired'] ?? false) === true
+            && is_string($editorDocBoot['body_html'] ?? null)
+            && trim((string) $editorDocBoot['body_html']) !== ''
+        ) {
+            $this->bootstrapEditorHtml = app(ArticleCtaPlaceholderService::class)->highlightBlankPlaceholdersInHtml(
+                (string) $editorDocBoot['body_html'],
+                (int) ($this->record->site_id ?? 0) > 0 ? (int) $this->record->site_id : null,
+            );
+        } else {
+            $boundary = app(\App\Addons\SeoContentAi\Services\ArticleEditor\Document\InlineMarkBoundaryWhitespace::class);
+            $contentRepair = $boundary->repairWithReport($this->bootstrapEditorHtml);
+            if ($contentRepair['repaired'] === true) {
+                $this->bootstrapEditorHtml = $contentRepair['html'];
+                $editorDocBoot['document'] = null;
+                $editorDocBoot['source'] = 'body_html_repaired';
+                $editorDocBoot['inline_whitespace_repaired'] = true;
+            }
+        }
         $bodyHash = $conflictGuard->contentHash($this->bootstrapEditorHtml);
         $contentRevisionSource = $projectRunRevision."\0".$bodyHash;
         $articleId = (int) $this->record->id;
         $this->record->loadMissing('site');
+
+        $analysisPolicy = app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorAnalysisPolicyService::class)
+            ->forArticle($this->record);
+        $externalFacts = app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorAnalysisPolicyService::class)
+            ->externalFacts($this->record);
 
         $payload = [
             'articleId' => $articleId,
@@ -3817,12 +3844,13 @@ class EditArticle extends SeoEditRecord
             'expectedUpdatedAt' => $this->record->updated_at?->copy()->utc()->toIso8601String(),
             'expectedContentHash' => $bodyHash,
             'documentVersion' => max(1, (int) ($this->record->document_version ?? 1)),
-            'editorDocument' => ($editorDocBoot = app(\App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter::class)
-                ->resolveForBootstrap($this->record))['document'],
+            'editorDocument' => $editorDocBoot['document'] ?? null,
             'editorDocumentSource' => $editorDocBoot['source'] ?? 'body_html',
             'editorDocumentHash' => $editorDocBoot['hash'] ?? null,
             'editorDocumentSchemaVersion' => $editorDocBoot['schema_version'] ?? null,
             'editorDocumentStatus' => $editorDocBoot['status'] ?? null,
+            'inlineWhitespaceRepaired' => (bool) ($editorDocBoot['inline_whitespace_repaired'] ?? false),
+            // Deprecated: exclusive lock UI ignores takeover; field retained for payload compat until product ACK.
             'canTakeoverEditorSession' => app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionService::class)
                 ->userCanTakeover(auth()->user() instanceof \App\Models\User ? auth()->user() : null),
             'editorSession' => [
@@ -3831,16 +3859,15 @@ class EditArticle extends SeoEditRecord
                 'serverAutosaveDebounceMs' => (int) config('seo-content-ai.article_editor.server_autosave_debounce_ms', 4000),
                 'endpoints' => [
                     'acquire' => route('seo.articles.editor-sessions.store', ['article' => $articleId]),
+                    // Deprecated: no editor UI caller; route/service retained pending product/ops approval.
                     'takeover' => route('seo.articles.editor-sessions.takeover', ['article' => $articleId]),
                 ],
             ],
             'featuredImageUrl' => $this->featuredImageUrl,
             'mediaSnapshot' => app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorMediaSnapshotService::class)
-                ->build($this->record, auth()->user() instanceof \App\Models\User ? auth()->user() : null),
-            'analysisPolicy' => app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorAnalysisPolicyService::class)
-                ->forArticle($this->record),
-            'externalFacts' => app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorAnalysisPolicyService::class)
-                ->externalFacts($this->record),
+                ->build($this->record, auth()->user() instanceof \App\Models\User ? auth()->user() : null, false),
+            'analysisPolicy' => $analysisPolicy,
+            'externalFacts' => $externalFacts,
             'supportsProductGallery' => $this->supportsProductGallery(),
             'isCanaryProduct' => in_array(strtolower(trim((string) $metaMap->get('is_canary', ''))), ['1', 'true', 'yes'], true)
                 || strtolower(trim((string) $metaMap->get('canary_type', ''))) === 'product_gallery',
@@ -3872,7 +3899,7 @@ class EditArticle extends SeoEditRecord
                 'mediaGallery' => route('seo.articles.editor.media.gallery.replace', ['article' => $articleId]),
             ],
             'faqCount' => (int) $this->record->faqs()->count(),
-            'settings' => $this->getEditorCoreSettingsPayload(),
+            'settings' => $this->getEditorCoreSettingsPayload($analysisPolicy, $externalFacts),
             'aiHistoryPendingApply' => $aiHistoryPending,
         ];
 
@@ -3934,11 +3961,14 @@ class EditArticle extends SeoEditRecord
      * permission flags). No `seo_scoring_rules` / `seo_rule_messages` / messages —
      * those load with the SEO summary / settings lazy endpoint (Phase 2).
      *
+     * @param  array<string, mixed>|null  $analysisPolicy
+     * @param  array<string, mixed>|null  $externalFacts
      * @return array<string, mixed>
      */
-    private function getEditorCoreSettingsPayload(): array
+    private function getEditorCoreSettingsPayload(?array $analysisPolicy = null, ?array $externalFacts = null): array
     {
         $editorSettings = app(ArticleEditorHistoryService::class)->getSettings();
+        $policyService = app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorAnalysisPolicyService::class);
 
         return [
             'history_step' => $editorSettings['history_step'] ?? 20,
@@ -3954,10 +3984,8 @@ class EditArticle extends SeoEditRecord
             'can_generate_faq' => app(SeoCreateArticleSettingsService::class)->getRenewFaqPromptId() !== null,
             'prompt_hooks' => $this->getPromptHooksEditorPayload(),
             'perf_debug' => (bool) config('seo-content-ai.article_editor_perf_debug', false),
-            'analysis_policy' => app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorAnalysisPolicyService::class)
-                ->forArticle($this->record),
-            'external_facts' => app(\App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorAnalysisPolicyService::class)
-                ->externalFacts($this->record),
+            'analysis_policy' => $analysisPolicy ?? $policyService->forArticle($this->record),
+            'external_facts' => $externalFacts ?? $policyService->externalFacts($this->record),
         ];
     }
 
@@ -3982,11 +4010,6 @@ class EditArticle extends SeoEditRecord
         $perf->logSummary('editor_seo_bootstrap', ['article_id' => (int) $this->record->getKey()]);
 
         return $payload;
-    }
-
-    public function analyzeSeoDraft(string $html): void
-    {
-        // Preview SEO chấm điểm thuần JS trong editor — giữ method để tương thích Livewire cũ.
     }
 
     public function updatedSeoTitle(): void

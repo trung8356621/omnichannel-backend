@@ -38,16 +38,6 @@ export function isWordPressOriginalPickerTab(pickerTab) {
     return String(pickerTab ?? '').trim() === 'original';
 }
 
-/** @deprecated Except removed — WP media protected by source classification, not Except flag. */
-export function shouldAutoExcludeQuickFixFromWpPicker(_pickerTab, _wpAttachmentId = 0) {
-    return false;
-}
-
-/** @deprecated Except removed — returns image unchanged. */
-export function withWpPickerExcludeQuickFix(image, _pickerTab, _wpAttachmentId = 0) {
-    return image;
-}
-
 export function replaceUrlSlug(src, newSlug) {
     if (!src || !newSlug) return src;
     try {
@@ -278,7 +268,7 @@ export function filterSupplementalDuplicatesOfBlockRows(rows) {
     });
 }
 
-/** Slug -1, -2… chỉ theo thứ tự ảnh trong bài (block), bỏ qua ảnh Except. */
+/** Slug -1, -2… theo thứ tự ảnh trong bài (block). */
 export function assignInArticleQuickFixIndices(rows) {
     let ordinal = 0;
 
@@ -890,7 +880,7 @@ export function computeQuickFixAltTitleSupplementalOutcome(row, keyword) {
 }
 
 /**
- * Số thứ tự slug (1..n) theo vị trí ảnh trong bài (thứ tự block), không đếm lại khi có Except.
+ * Số thứ tự slug (1..n) theo vị trí ảnh trong bài (thứ tự block).
  */
 export function quickFixSlugIndexForBlock(images, blockId) {
     const targetId = String(blockId ?? '').trim();
@@ -1160,15 +1150,25 @@ export function applyQuickFixSlugToBlocks(
     const skippedWordPress = images.filter((row) => isWordPressProtectedMedia(row)).length;
     const eligible = images.filter((row) => isBulkSlugRenameSafeMedia(row));
     if (!eligible.length) {
-        return { blocks, applied: 0, renameQueue: [], localRenameQueue: [], skippedWordPress };
+        return {
+            blocks,
+            applied: 0,
+            renameQueue: [],
+            localRenameQueue: [],
+            skippedWordPress,
+            skippedAlreadyValid: 0,
+            eligibleCount: 0,
+        };
     }
 
     let result = blocks;
     const renameQueue = [];
     const localRenameQueue = [];
     const localRenameSeen = new Set();
+    let skippedAlreadyValid = 0;
 
     eligible.forEach((row) => {
+        const beforeLen = localRenameQueue.length;
         const slug = buildSlugRenameQueuesForRow(
             row,
             images,
@@ -1179,18 +1179,19 @@ export function applyQuickFixSlugToBlocks(
             localRenameSeen,
             { wpOnly, includeWordPressRenames: false },
         );
-        if (!slug) {
-            return;
+        if (!slug || localRenameQueue.length === beforeLen) {
+            skippedAlreadyValid += 1;
         }
-
     });
 
     return {
         blocks: result,
-        applied: eligible.length,
+        applied: localRenameQueue.length,
         renameQueue: [],
         localRenameQueue,
         skippedWordPress,
+        skippedAlreadyValid,
+        eligibleCount: eligible.length,
     };
 }
 
@@ -1930,6 +1931,59 @@ export function omitFailedLocalSlugRenameQueueItems(queue, errors = []) {
 
         return !itemKeys.some((key) => failedKeys.has(key));
     });
+}
+
+/**
+ * Toast payload for local slug rename failures.
+ * Single-item must not use bulk "skipped…continued with the rest" copy.
+ *
+ * @param {Array<{ message?: string }>|null|undefined} errors
+ * @param {number} attemptedCount
+ * @returns {{
+ *   titleKey: string,
+ *   bodyKey: string|null,
+ *   body: string|null,
+ *   bodyParams: Record<string, number>,
+ *   status: 'danger'|'warning',
+ * }|null}
+ */
+export function buildLocalSlugRenameErrorNotify(errors, attemptedCount = 0) {
+    const list = Array.isArray(errors) ? errors : [];
+    const failed = list.length;
+    if (failed === 0) {
+        return null;
+    }
+
+    const attempted = Math.max(failed, Math.max(0, Number(attemptedCount) || 0));
+    const firstMessage = String(list[0]?.message ?? '').trim();
+
+    if (attempted <= 1) {
+        return {
+            titleKey: 'editor_cannot_rename_image_slug',
+            bodyKey: firstMessage ? null : 'editor_local_slug_rename_single_failed_body',
+            body: firstMessage || null,
+            bodyParams: {},
+            status: 'danger',
+        };
+    }
+
+    if (failed >= attempted) {
+        return {
+            titleKey: 'editor_local_slug_rename_all_failed_title',
+            bodyKey: 'editor_local_slug_rename_all_failed_body',
+            body: null,
+            bodyParams: { count: failed },
+            status: 'danger',
+        };
+    }
+
+    return {
+        titleKey: 'editor_local_slug_rename_skipped_title',
+        bodyKey: 'editor_local_slug_rename_skipped_body',
+        body: null,
+        bodyParams: { count: failed },
+        status: 'warning',
+    };
 }
 
 /**

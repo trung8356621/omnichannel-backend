@@ -21,6 +21,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use PDOException;
 use RuntimeException;
+use Throwable;
 
 final class SeoDatabaseConnectionService
 {
@@ -59,23 +60,140 @@ final class SeoDatabaseConnectionService
         return $connection;
     }
 
-    public function bootstrapFromConnection(SeoDatabaseConnection $connection): void
+    /**
+     * Canonical runtime bootstrap used by HTTP (`bootstrapByHash`) and console runners.
+     *
+     * @param  bool  $forceReconnect  true for multi-connection console loops (always purge/reconnect)
+     */
+    public function bootstrapFromConnection(SeoDatabaseConnection $connection, bool $forceReconnect = false): void
     {
         $config = $this->resolveConnectionArrayFromModel($connection);
-        $fingerprint = md5(json_encode($config));
+        $fingerprint = md5((string) json_encode($config));
         $hash = (string) $connection->hash_id;
+        $name = $this->connectionName();
 
-        if ((self::$bootstrappedHashes[$hash] ?? null) === $fingerprint) {
+        // Always write runtime config (same path as HTTP). Skip purge only when
+        // fingerprint unchanged and caller does not force reconnect.
+        Config::set('database.connections.'.$name, $config);
+
+        if (! $forceReconnect && (self::$bootstrappedHashes[$hash] ?? null) === $fingerprint) {
             SeoConnectionContext::set($connection);
 
             return;
         }
 
-        Config::set('database.connections.'.$this->connectionName(), $config);
-        DB::purge($this->connectionName());
+        DB::purge($name);
 
         self::$bootstrappedHashes[$hash] = $fingerprint;
         SeoConnectionContext::set($connection);
+    }
+
+    /**
+     * Bootstrap + verify PDO/database — required before Publishing Queue schema/due scans.
+     *
+     * @return array{
+     *     connection_id: int,
+     *     hash_id: string,
+     *     connection_name: string,
+     *     database: string,
+     *     host: string,
+     *     type: string,
+     *     resolver: string,
+     *     runtime_database: string|null
+     * }
+     */
+    public function bootstrapAndVerifyFromConnection(
+        SeoDatabaseConnection $connection,
+        bool $forceReconnect = true,
+    ): array {
+        try {
+            $this->bootstrapFromConnection($connection, $forceReconnect);
+            $meta = $this->verifyBootstrappedConnection($connection);
+        } catch (Throwable $e) {
+            $this->forgetBootstrappedHash((string) $connection->hash_id);
+            DB::purge($this->connectionName());
+
+            throw $e;
+        }
+
+        return $meta;
+    }
+
+    /**
+     * @return array{
+     *     connection_id: int,
+     *     hash_id: string,
+     *     connection_name: string,
+     *     database: string,
+     *     host: string,
+     *     type: string,
+     *     resolver: string,
+     *     runtime_database: string|null
+     * }
+     */
+    public function verifyBootstrappedConnection(SeoDatabaseConnection $connection): array
+    {
+        $name = $this->connectionName();
+        $config = Config::get('database.connections.'.$name, []);
+        if (! is_array($config) || $config === []) {
+            throw new RuntimeException('Runtime SEO connection config missing after bootstrap.');
+        }
+
+        try {
+            $pdo = DB::connection($name)->getPdo();
+            $runtimeDatabase = DB::connection($name)->selectOne('select database() as db');
+            $runtimeDbName = is_object($runtimeDatabase)
+                ? (string) ($runtimeDatabase->db ?? '')
+                : (is_array($runtimeDatabase) ? (string) ($runtimeDatabase['db'] ?? '') : '');
+        } catch (PDOException $exception) {
+            throw new RuntimeException(
+                'Không kết nối được tới database SEO: '.$exception->getMessage(),
+                previous: $exception,
+            );
+        }
+
+        $expectedDb = (string) ($config['database'] ?? '');
+        if ($runtimeDbName !== '' && $expectedDb !== '' && $runtimeDbName !== $expectedDb) {
+            throw new RuntimeException(sprintf(
+                'SEO runtime database mismatch: expected [%s], got [%s].',
+                $expectedDb,
+                $runtimeDbName,
+            ));
+        }
+
+        // Touch PDO so static analysers / GC keep reference intent clear.
+        unset($pdo);
+
+        return [
+            'connection_id' => (int) $connection->getKey(),
+            'hash_id' => (string) $connection->hash_id,
+            'connection_name' => $name,
+            'database' => $expectedDb,
+            'host' => (string) ($config['host'] ?? ''),
+            'type' => (string) ($connection->type ?? ''),
+            'resolver' => 'SeoDatabaseConnectionService',
+            'runtime_database' => $runtimeDbName !== '' ? $runtimeDbName : null,
+        ];
+    }
+
+    public function forgetBootstrappedHash(string $hashId): void
+    {
+        unset(self::$bootstrappedHashes[$hashId]);
+    }
+
+    public function clearBootstrappedHashes(): void
+    {
+        self::$bootstrappedHashes = [];
+    }
+
+    /**
+     * Decrypted password via Eloquent cast accessor only — never raw attribute ciphertext.
+     */
+    public function plainPasswordFromModel(SeoDatabaseConnection $connection): string
+    {
+        $value = $connection->getAttribute('password');
+
+        return is_string($value) ? $value : '';
     }
 
     public function bootstrapBySiteId(int $siteId): ?SeoDatabaseConnection
@@ -178,11 +296,29 @@ final class SeoDatabaseConnectionService
             return null;
         }
 
-        return SeoDatabaseConnection::query()
+        $candidates = SeoDatabaseConnection::query()
             ->where('is_active', true)
-            ->orderByRaw("CASE WHEN type = 'manual' THEN 0 ELSE 1 END")
+            ->withCount('users')
+            ->orderByRaw("CASE WHEN `database` = 'omi_seo_ai' THEN 0 WHEN `type` = 'auto' THEN 1 ELSE 2 END")
             ->orderBy('id')
-            ->first();
+            ->get();
+
+        $resolver = app(\App\Addons\SeoContentAi\Services\ContentProject\PublishingConnectionCandidateResolver::class);
+        foreach ($candidates as $candidate) {
+            if ($resolver->isEligible($candidate) === null) {
+                return $candidate;
+            }
+        }
+
+        // Legacy fallback: first active non-demo row (hosting manual may lack users in tests/early tenant).
+        foreach ($candidates as $candidate) {
+            $database = strtolower(trim((string) ($candidate->database ?? '')));
+            if ($database !== '' && ! $resolver->looksLikeDemoOrLegacyOrphanDatabase($database)) {
+                return $candidate;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -573,7 +709,7 @@ final class SeoDatabaseConnectionService
             'port' => filled($connection->port) ? (string) $connection->port : '3306',
             'database' => $database,
             'username' => $username,
-            'password' => (string) ($connection->password ?? ''),
+            'password' => $this->plainPasswordFromModel($connection),
         ]);
     }
 

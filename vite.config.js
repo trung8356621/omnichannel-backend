@@ -39,6 +39,7 @@ export default defineConfig({
                 'app/Addons/SeoContentAi/resources/css/agent-workspace.css',
                 'app/Addons/SeoContentAi/resources/js/agent/command-catalog.js',
                 'app/Addons/SeoContentAi/resources/js/performance-hub-gsc-chart.js',
+                'app/Addons/SeoContentAi/resources/js/utils/systemDateTime.js',
             ],
             refresh: true,
         }),

@@ -39,6 +39,10 @@
                     <span wire:loading wire:target="bulkPublishNow" class="inline-flex items-center gap-1"><x-filament::loading-indicator class="h-4 w-4" />…</span>
                 </button>
                 <button type="button" wire:click="bulkRetryPublish" class="fi-btn fi-btn-color-warning fi-size-sm">Retry selected</button>
+                {{-- Processing/stuck: Retry bị chặn — Recover mở Alpine modal (parent recoverOpen). --}}
+                <button type="button" @click="recoverOpen = true" class="fi-btn fi-btn-color-warning fi-size-sm">
+                    Recover stuck
+                </button>
             </div>
 
             <div class="flex flex-wrap gap-2">

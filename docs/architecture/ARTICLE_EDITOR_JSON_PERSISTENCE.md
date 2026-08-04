@@ -94,3 +94,7 @@ Editor loads TipTap schema via internal runtime registry wrapping the same `arti
 ## Services
 
 `Services/ArticleEditor/Document/*` — Schema, Renderer, Ingest, Writer, RoundTrip, NodeRegistry.
+
+## Legacy cleanup
+
+All JSON persistence flags **retained** (no flag deletion in cleanup). See [ARTICLE_EDITOR_LEGACY_CLEANUP.md](ARTICLE_EDITOR_LEGACY_CLEANUP.md).

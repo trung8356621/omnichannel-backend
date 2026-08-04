@@ -68,6 +68,20 @@ final class AutomationPhase4MigrationTest extends TestCase
         self::assertSame('conflict_content_hash', $fail->error['code'] ?? null);
     }
 
+    public function test_content_conflict_guard_version_match_ignores_stale_content_hash(): void
+    {
+        $guard = new ArticleContentConflictGuard;
+        $article = new SeoArticle;
+        $article->body = 'alpha';
+        $article->document_version = 4;
+        $article->updated_at = Carbon::parse('2026-07-01T10:00:00+00:00');
+
+        self::assertNull($guard->assertCompatible($article, [
+            'expected_document_version' => 4,
+            'expected_content_hash' => $guard->contentHash('beta'),
+        ]));
+    }
+
     public function test_content_conflict_guard_updated_at_mismatch(): void
     {
         $guard = new ArticleContentConflictGuard;

@@ -4,7 +4,6 @@
  */
 
 import {
-    computeQuickFixSlugSupplementalOutcome,
     resolveImageRefIds,
 } from './articleImagesUtils';
 import { isWordPressProtectedMedia, isBulkSlugRenameSafeMedia } from './mediaSourceClassification';
@@ -170,7 +169,7 @@ export function analyzeImageRowsHealth(rows, keyword = '') {
             }
             reasons.push({
                 code: 'image_alt_missing',
-                message: 'Thiếu ALT hoặc ALT placeholder',
+                message: 'Ảnh chưa có ALT.',
                 target_id: targetId,
                 target: 'images',
                 severity: 'warning',
@@ -179,19 +178,21 @@ export function analyzeImageRowsHealth(rows, keyword = '') {
             });
         }
 
-        // Local/new only — WP filename ≠ keyword is NOT a warning.
-        if (rowHasLocalPlaceholderSlug(row)) {
-            warningCount += 1;
-            if (!firstWarningTarget) {
-                firstWarningTarget = targetId;
+        // Local/new only — WP filename ≠ keyword is NOT a hard error for bulk.
+        if (rowHasLocalPlaceholderSlug(row) || row?.requires_slug_fix === true) {
+            errorCount += 1;
+            if (!firstErrorTarget) {
+                firstErrorTarget = targetId;
             }
             reasons.push({
-                code: 'local_slug_placeholder',
-                message: 'Filename/slug local còn placeholder',
+                code: 'image_slug_unresolved',
+                message: 'Ảnh nội bộ chưa được chuẩn hóa slug.',
                 target_id: targetId,
                 target: 'images',
-                severity: 'warning',
+                severity: 'error',
                 action: 'fix_local_slug',
+                requires_slug_fix: true,
+                slug_fix_eligible: row?.slug_fix_eligible !== false,
                 protected_from_bulk_rename: false,
             });
         }
@@ -201,21 +202,39 @@ export function analyzeImageRowsHealth(rows, keyword = '') {
     const errorReasons = reasons.filter((r) => r.severity === 'error');
     const warningReasons = reasons.filter((r) => r.severity === 'warning');
     const summaryReasons = [];
-    if (errorCount > 0) {
+    const slugCount = errorReasons.filter((r) => r.code === 'image_slug_unresolved').length;
+    const integrityCount = errorReasons.filter((r) => (
+        r.code === 'image_upload_incomplete' || r.code === 'image_reference_invalid'
+    )).length;
+
+    if (integrityCount > 0) {
         summaryReasons.push({
             code: 'image_integrity_issues',
-            message: errorCount === 1
+            message: integrityCount === 1
                 ? '1 ảnh có lỗi media (trống / placeholder / hỏng)'
-                : `${errorCount} ảnh có lỗi media`,
+                : `${integrityCount} ảnh có lỗi media`,
             target_id: firstErrorTarget,
             target: 'images',
             severity: 'error',
             action: 'focus_image',
         });
     }
+    if (slugCount > 0) {
+        summaryReasons.push({
+            code: 'image_slug_unresolved',
+            message: slugCount === 1
+                ? '1 ảnh local cần chuẩn hóa slug'
+                : `${slugCount} ảnh local cần chuẩn hóa slug`,
+            target_id: firstErrorTarget,
+            target: 'images',
+            severity: 'error',
+            action: 'fix_local_slug',
+            requires_slug_fix: true,
+            slug_fix_eligible: true,
+        });
+    }
     if (warningCount > 0) {
         const altCount = warningReasons.filter((r) => r.code === 'image_alt_missing').length;
-        const slugCount = warningReasons.filter((r) => r.code === 'local_slug_placeholder').length;
         if (altCount > 0) {
             summaryReasons.push({
                 code: 'image_alt_missing',
@@ -226,18 +245,6 @@ export function analyzeImageRowsHealth(rows, keyword = '') {
                 action: 'focus_alt',
             });
         }
-        if (slugCount > 0) {
-            summaryReasons.push({
-                code: 'local_slug_placeholder',
-                message: slugCount === 1
-                    ? '1 ảnh local còn filename placeholder'
-                    : `${slugCount} ảnh local còn filename placeholder`,
-                target_id: firstWarningTarget,
-                target: 'images',
-                severity: 'warning',
-                action: 'fix_local_slug',
-            });
-        }
     }
 
     return {
@@ -246,8 +253,8 @@ export function analyzeImageRowsHealth(rows, keyword = '') {
         warningCount,
         reasons: summaryReasons.length > 0 ? summaryReasons : errorReasons.concat(warningReasons),
         detailReasons: reasons,
-        slugIssues: warningReasons.filter((r) => r.code === 'local_slug_placeholder').length,
-        invalidIssues: errorCount,
+        slugIssues: slugCount,
+        invalidIssues: integrityCount,
         issueCount: errorCount + warningCount,
     };
 }
@@ -477,48 +484,23 @@ export function buildFeaturedWidgetHealth({
             });
         }
 
-        const alt = String(item.alt ?? '').trim();
-        if (alt === '') {
-            reasons.push({
-                code: 'featured_alt_missing',
-                message: locale === 'en' ? 'Featured image ALT is missing' : 'Ảnh đại diện thiếu ALT',
-                target: 'featured',
-                severity: 'warning',
-            });
-        }
-
-        // Local featured placeholder slug only — never keyword-N for WP.
-        if (!isWordPressProtectedMedia(row) && rowHasLocalPlaceholderSlug(row) && keyword) {
-            const outcome = computeQuickFixSlugSupplementalOutcome(
-                { ...row, quickFixIndex: 1 },
-                keyword,
-                { wpOnly: false },
-            );
-            if (outcome.localRename || outcome.patch?.slug) {
-                reasons.push({
-                    code: 'featured_slug_not_fixed',
-                    message: locale === 'en' ? 'Featured local slug placeholder' : 'Slug ảnh đại diện local còn placeholder',
-                    target: 'featured',
-                    severity: 'warning',
-                });
-            }
-        }
+        // ALT / local slug integrity belong to Images unified inventory — not Featured chip.
+        // Featured stays green when thumbnail URL/reference is valid (even if ratio/ALT/slug soft).
+        void altMandatory;
+        void keyword;
+        void row;
     }
 
     const hardErrors = reasons.filter((r) => (
         r.code === 'featured_missing'
         || r.code === 'featured_upload_incomplete'
-        || (r.code === 'featured_alt_missing' && altMandatory)
+        || r.code === 'featured_url_invalid'
+        || r.code === 'featured_reference_broken'
     ));
-    const onlySoftWarnings = reasons.length > 0
-        && hardErrors.length === 0
-        && reasons.every((r) => r.severity === 'warning');
 
     let status = 'success';
     if (hardErrors.length > 0) {
         status = 'error';
-    } else if (onlySoftWarnings) {
-        status = 'warning';
     } else if (url) {
         status = 'success';
     }
@@ -528,9 +510,9 @@ export function buildFeaturedWidgetHealth({
         item_count: url ? 1 : 0,
         issue_count: hardErrors.length,
         error_count: hardErrors.length,
-        warning_count: reasons.filter((r) => r.severity === 'warning').length,
+        warning_count: 0,
         status,
-        reasons,
+        reasons: hardErrors,
     };
 }
 
@@ -588,10 +570,6 @@ export function buildGalleryWidgetHealth({
     };
 }
 
-export function dispatchAssistantWidgetHealth(detail) {
-    window.dispatchEvent(new CustomEvent('seo-assistant-widget-health', { detail }));
-}
-
 export function buildNavigatorBadgesFromWidgetHealth(health) {
     const badges = {};
     if (health?.seo) {
@@ -599,9 +577,4 @@ export function buildNavigatorBadgesFromWidgetHealth(health) {
     }
 
     return badges;
-}
-
-/** @deprecated use rowHasLocalPlaceholderSlug */
-export function rowHasUnresolvedMediaSlug(row) {
-    return rowHasLocalPlaceholderSlug(row);
 }

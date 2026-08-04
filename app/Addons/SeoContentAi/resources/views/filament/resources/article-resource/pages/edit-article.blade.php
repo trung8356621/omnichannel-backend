@@ -340,9 +340,7 @@
         x-data="{
             syncPageLocked: false,
             heavyPageAction: null,
-            mediaModalOpen: false,
             articleId: @js((int) $record->getKey()),
-            featuredImageDraft: null, // Phase 6C.3: React media snapshot SoT — no Alpine draft
             init() {
                 /* Phase 6C.4: no Alpine media picker bootstrap */
                 if (window.__SEO_EDITOR_EXITING__) {
@@ -361,10 +359,6 @@
                 }
                 window.__seoArticleOperationTracker?.bootstrap?.(this.articleId);
             },
-            syncFeaturedImageDraft() { /* Phase 6C.3: no Alpine media shadow */ },
-            onMediaSnapshotChanged(/* event */) { /* Phase 6C.3: React owns snapshot */ },
-            onFeaturedImageUpdated(/* event */) { this.featuredImageDraft = null; },
-            onFeaturedImageCleared(/* event */) { this.featuredImageDraft = null; },
             lockPageForHeavyAction(action = 'sync') {
                 if (this.syncPageLocked || document.getElementById('seo-article-heavy-action-overlay')) {
                     return false;
@@ -396,7 +390,7 @@
                 this.heavyPageAction = null;
             },
             async openArticleMediaModal(mode, blockId = null) {
-                // Phase 6C.3: Shared Media Picker (React). No Alpine modal / draft.
+                // Shared Media Picker (React). Alpine only forwards open events.
                 if (typeof window.__seoOpenSharedMediaPicker === 'function') {
                     window.__seoOpenSharedMediaPicker({
                         mode: mode === 'editor-block' ? 'content_image' : mode,
@@ -404,10 +398,8 @@
                         articleId: this.articleId,
                     });
                 }
-                this.mediaModalOpen = false;
             },
             closeArticleMediaModal() {
-                this.mediaModalOpen = false;
                 window.__seoArticleAutosaveLock?.set('media-picker-modal', false);
             },
 

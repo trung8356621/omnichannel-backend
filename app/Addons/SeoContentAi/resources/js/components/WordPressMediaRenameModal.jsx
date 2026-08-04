@@ -166,6 +166,8 @@ export default function WordPressMediaRenameModal() {
             if (!response.ok || data?.success === false) {
                 throw new Error(String(data?.message ?? 'Rename failed'));
             }
+            // Deprecated zero-listener bus; keep for potential non-editor adapters.
+            // Canonical refresh: seo-assistant-widget-health-refresh (host listens).
             window.dispatchEvent(new CustomEvent('seo-wordpress-media-renamed', { detail: data }));
             window.dispatchEvent(new CustomEvent('seo-assistant-widget-health-refresh'));
             close();

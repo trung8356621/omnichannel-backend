@@ -2,10 +2,11 @@
 
 > Status: Canonical  
 > Owner: SeoContentAi (+ core ops)  
-> Last verified: 2026-08-01  
+> Last verified: 2026-08-03  
 > Supersedes: `docs/archive/operations/CONTENT_PROJECT_ENGINE_PRODUCTION.md` (durable deploy checklist only — not phase rollout narrative)
 
-Short production checklist. Deep semantics: module docs + `SCHEDULER_AND_WORKERS.md`.
+Short production checklist. Deep semantics: [SCHEDULER_AND_WORKERS.md](SCHEDULER_AND_WORKERS.md).  
+**aaPanel workers + Final smoke test:** [AAPANEL_QUEUE_RUNTIME.md](AAPANEL_QUEUE_RUNTIME.md).
 
 ## 1. Code + cache
 
@@ -13,6 +14,7 @@ Use the **same PHP binary** as queue/cron (do not guess `/usr/bin/php`).
 
 ```text
 {PHP_BIN} artisan config:clear
+{PHP_BIN} artisan config:cache
 {PHP_BIN} artisan optimize:clear
 {PHP_BIN} artisan queue:restart
 ```
@@ -21,19 +23,55 @@ Use the **same PHP binary** as queue/cron (do not guess `/usr/bin/php`).
 - OPcache: reload PHP-FPM when `validate_timestamps=0`.  
 - SEO DB: bootstrap `omi_seo_ai` from Admin → SEO Database Connections before addon migrate.
 
-## 2. Workers (minimum queues)
+`composer dump-autoload -o` is **not** required on every deploy. Use it only when troubleshooting a new class that runtime does not see (stale Composer classmap).
 
-| Queue | Why |
-|-------|-----|
-| `seo` | Site Sync steps/inbound, manual WP sync, many SEO jobs |
-| `seo-content-run` | Content Project article jobs (`timeout` ≥ 900) |
-| `media_generation` | Image pipeline when used |
-| `automation-critical` | Business Hook rule execution |
-| `automation-external` | WP action nodes from Automation |
+## 2. Content Project queue post-deploy gate
 
-Cron: `* * * * * {PHP_BIN} artisan schedule:run` every minute.
+```bash
+cd /www/wwwroot/seo.teamviahe.com
 
-## 3. Content Project engine
+/usr/local/lsws/lsphp83/bin/php artisan optimize:clear
+/usr/local/lsws/lsphp83/bin/php artisan config:cache
+/usr/local/lsws/lsphp83/bin/php artisan seo:queue-runtime-check
+```
+
+`seo:queue-runtime-check` must exit **0 (PASS)** before relying on Content Project generation.
+
+### Checklist
+
+- [ ] `seo:queue-runtime-check` exists in Artisan
+- [ ] Runtime safety command **PASS**
+- [ ] Effective queue connection = `database`
+- [ ] Effective `retry_after` = **1200**
+- [ ] Effective Content Project queue = `seo-content-run`
+- [ ] Dedicated aaPanel worker enabled
+- [ ] Shared worker excludes `seo-content-run`
+- [ ] Generate đúng một smoke-test item
+- [ ] Kiểm tra `failed_jobs`
+- [ ] Chỉ đóng audit sau smoke PASS
+
+**Rule:** Code dispatch thành công **không** đồng nghĩa job đã được worker consume.
+
+Smoke procedure (SoT): [AAPANEL_QUEUE_RUNTIME.md](AAPANEL_QUEUE_RUNTIME.md) §5 Operator smoke checklist.  
+Worker ownership: [SCHEDULER_AND_WORKERS.md](SCHEDULER_AND_WORKERS.md).
+
+## 3. Workers (minimum queues)
+
+| Queue | Worker | Why |
+|-------|--------|-----|
+| `automation-critical` | Shared | Business Hook rule execution |
+| `automation` | Shared | Automation node default queue |
+| `automation-external` | Shared | WP / external action nodes |
+| `seo` | Shared | Site Sync steps/inbound, manual WP sync, many SEO jobs |
+| `media_generation` | Shared | Image pipeline when used |
+| `default` | Shared | Jobs without `onQueue()` |
+| `seo-content-run` | **Dedicated** CP worker | `RunContentProjectArticleJob` (`$timeout=900`, `$tries=1`). **Do not** add to shared worker. |
+
+Scheduler cron: every minute `schedule:run` (see [AAPANEL_QUEUE_RUNTIME.md](AAPANEL_QUEUE_RUNTIME.md)).
+
+Production history: `retry_after` was **90** → effective **1200** (host-verified PASS).
+
+## 4. Content Project engine
 
 Prefer per-run checkbox or `CONTENT_PROJECT_PHP_ENGINE_PROJECT_IDS` before global `CONTENT_PROJECT_PHP_ENGINE=true`.
 
@@ -50,19 +88,21 @@ Health (read-only):
 
 Heartbeat stale = warning only (no auto-resume). Release stale dispatch when TTL expired **and** heartbeat dead.
 
-## 4. Post-deploy smoke
+## 5. Post-deploy smoke (general)
 
-1. `schedule:run` list includes Site Sync reconcile, publish-scheduled, automation dispatch, stale-gen recover, agent automations.  
-2. Worker process listens required queues (verify `ps` / supervisor).  
+1. `schedule:list` matches canonical registrations (no duplicate publish/Site Sync schedules).  
+2. Shared worker listens shared queues only; dedicated CP worker listens `seo-content-run` only.  
 3. Operation Center system health green enough to work.  
 4. HTTP errors land in `web-app-*.log`, not Permission denied on `laravel.log`.  
-5. Site Sync / WP bridge: ping + one reconcile or status command as needed.
+5. Site Sync / WP bridge: ping + one reconcile or status command as needed.  
+6. CP generation smoke: follow [AAPANEL_QUEUE_RUNTIME.md](AAPANEL_QUEUE_RUNTIME.md) §5 only (one item).
 
-## 5. Related documents
+## 6. Related documents
 
-- `docs/operations/SCHEDULER_AND_WORKERS.md`
-- `docs/operations/TROUBLESHOOTING.md`
-- `docs/operations/TESTING.md`
-- `docs/modules/OPERATIONS_AND_OBSERVABILITY.md`
-- `docs/contracts/QUEUE_SCHEDULER_AND_IDEMPOTENCY.md`
-
+- [AAPANEL_QUEUE_RUNTIME.md](AAPANEL_QUEUE_RUNTIME.md)
+- [SCHEDULER_AND_WORKERS.md](SCHEDULER_AND_WORKERS.md)
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+- [TESTING.md](TESTING.md)
+- [../modules/OPERATIONS_AND_OBSERVABILITY.md](../modules/OPERATIONS_AND_OBSERVABILITY.md)
+- [../contracts/QUEUE_SCHEDULER_AND_IDEMPOTENCY.md](../contracts/QUEUE_SCHEDULER_AND_IDEMPOTENCY.md)
+- [../audits/BACKEND_RUNTIME_PERFORMANCE_AUDIT.md](../audits/BACKEND_RUNTIME_PERFORMANCE_AUDIT.md)

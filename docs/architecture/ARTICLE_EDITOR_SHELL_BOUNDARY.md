@@ -64,3 +64,7 @@ Not allowed for shell:
 - Remove deprecated shell events after zero external consumers
 - Broader host API split / toolbar cleanup
 - Full internal CustomEvent cleanup outside Links/FAQ/CTA
+
+## Legacy cleanup
+
+Internal orphan CustomEvents removed; shell bridge events retained. See [ARTICLE_EDITOR_LEGACY_CLEANUP.md](ARTICLE_EDITOR_LEGACY_CLEANUP.md).

@@ -39,6 +39,35 @@ export function normalizeSeoMediaUrl(url) {
     return trimmed;
 }
 
+/**
+ * Attach owning editor session so media rename can rewrite article body.
+ *
+ * @param {Record<string, unknown>} payload
+ * @returns {{ headers: Record<string, string>, body: Record<string, unknown> }}
+ */
+function withEditorSessionRequest(payload = {}) {
+    const sessionClient = typeof window !== 'undefined' ? window.__seoEditorSessionClient : null;
+    const editorSessionId = String(
+        sessionClient?.sessionId
+        ?? (typeof window !== 'undefined' ? window.__SEO_EDITOR_SESSION_ID__ : '')
+        ?? '',
+    ).trim();
+
+    const body = { ...payload };
+    const headers = {
+        'Content-Type': 'application/json',
+        'X-CSRF-TOKEN': csrfToken(),
+        Accept: 'application/json',
+    };
+
+    if (editorSessionId !== '') {
+        headers['X-Editor-Session-Id'] = editorSessionId;
+        body.editor_session_id = editorSessionId;
+    }
+
+    return { headers, body };
+}
+
 export async function fetchSplitterSource({
     siteId = null,
     seoMediaId = null,
@@ -459,18 +488,22 @@ export async function renameSeoMedia(mediaId, newSlug, { articleId = null } = {}
     if (Number.isFinite(resolvedArticleId) && resolvedArticleId > 0) {
         payload.article_id = resolvedArticleId;
     }
+    const { headers, body } = withEditorSessionRequest(payload);
     const response = await fetch(url, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-TOKEN': csrfToken(),
-            Accept: 'application/json',
-        },
+        headers,
         credentials: 'same-origin',
-        body: JSON.stringify(payload),
+        body: JSON.stringify(body),
     });
 
     const data = await response.json().catch(() => ({}));
+
+    if (response.status === 423 || data?.code === 'article_editor_locked' || data?.error === 'article_editor_locked') {
+        const err = new Error(String(data.message ?? 'Article is locked by another editor session.'));
+        err.code = 'article_editor_locked';
+        err.lock = data.lock ?? null;
+        throw err;
+    }
 
     if (!response.ok || !data.success) {
         const message = data.message ?? data.errors?.new_slug?.[0] ?? 'Không thể đổi tên ảnh.';
@@ -495,18 +528,34 @@ export async function fixArticleMediaSlugs(articleId, items) {
         throw new Error('Invalid article id');
     }
 
+    const sessionClient = typeof window !== 'undefined' ? window.__seoEditorSessionClient : null;
+    const editorSessionId = String(sessionClient?.sessionId ?? window.__SEO_EDITOR_SESSION_ID__ ?? '').trim();
+    const headers = {
+        'Content-Type': 'application/json',
+        'X-CSRF-TOKEN': csrfToken(),
+        Accept: 'application/json',
+    };
+    if (editorSessionId) {
+        headers['X-Editor-Session-Id'] = editorSessionId;
+    }
+
     const response = await fetch(FIX_MEDIA_SLUGS_TEMPLATE.replace('{id}', String(id)), {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-TOKEN': csrfToken(),
-            Accept: 'application/json',
-        },
+        headers,
         credentials: 'same-origin',
-        body: JSON.stringify({ items: Array.isArray(items) ? items : [] }),
+        body: JSON.stringify({
+            items: Array.isArray(items) ? items : [],
+            editor_session_id: editorSessionId || undefined,
+        }),
     });
 
     const data = await response.json().catch(() => ({}));
+    if (response.status === 423 || data?.code === 'article_editor_locked' || data?.error === 'article_editor_locked') {
+        const err = new Error(String(data.message ?? 'Article is locked by another editor session.'));
+        err.code = 'article_editor_locked';
+        err.lock = data.lock ?? null;
+        throw err;
+    }
     if (!response.ok || !data.success) {
         throw new Error(String(data.message ?? 'Không thể đổi slug ảnh.'));
     }
@@ -532,18 +581,22 @@ export async function renameSeoMediaByUrl(mediaUrl, newSlug, { siteId = null, ar
         payload.seo_media_id = resolvedSeoMediaId;
     }
 
+    const { headers, body } = withEditorSessionRequest(payload);
     const response = await fetch(RENAME_BY_URL, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-TOKEN': csrfToken(),
-            Accept: 'application/json',
-        },
+        headers,
         credentials: 'same-origin',
-        body: JSON.stringify(payload),
+        body: JSON.stringify(body),
     });
 
     const data = await response.json().catch(() => ({}));
+
+    if (response.status === 423 || data?.code === 'article_editor_locked' || data?.error === 'article_editor_locked') {
+        const err = new Error(String(data.message ?? 'Article is locked by another editor session.'));
+        err.code = 'article_editor_locked';
+        err.lock = data.lock ?? null;
+        throw err;
+    }
 
     if (!response.ok || !data.success) {
         const message = data.message ?? data.errors?.new_slug?.[0] ?? data.errors?.url?.[0] ?? 'Không thể đổi tên ảnh.';

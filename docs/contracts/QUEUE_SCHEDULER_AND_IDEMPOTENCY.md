@@ -127,9 +127,12 @@ Confirmation stale/expired codes remain authoritative even if an old idempotency
 **One** named schedule: `seo-content-ai:publish-scheduled-articles` → `PublishScheduledArticlesCommand` → `ScheduledArticlePublishRunner`.
 
 - CP branch: `ContentProjectPublishingQueueRunner::dispatchDue()` → `ProcessScheduledProjectItemPublishCommand` (`ActorContext::queue`).
+- Claim order: due Scheduled → lock → publisher dispatch → **then** `processing` (Publishing). Dispatch fail → Failed, không giữ Publishing.
 - Legacy branch: non-project scheduled articles → business hook emit.
 - `withoutOverlapping()` on the schedule event.
 - Do **not** add a parallel schedule for the runner or Process command.
+- Stuck Publishing recovery: `content_project.recover_stuck_publishing` (không Cancel thường; `processing → cancelled` invalid).
+- Auto/Quick không cần selection; exclude Publishing/Published.
 
 ### Stale generation scheduler
 

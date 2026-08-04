@@ -10,7 +10,9 @@
 Durable ops surfaces for Content Project, Agent telemetry, logging channels, health, and daily report.  
 **No** business logic ownership change: Observation ≠ CommandBus; metrics are side-channel.
 
-Project workspace (`ViewSeoProject`): content production only — Draft / Pending / Needs Review / In Review / Failed. Schedule/Publish live on **Publishing Queue** page (`publishing_queued_at` handoff). Summary ≡ List via classifiers. Save/Sync never equals Publish.
+Project workspace (`ViewSeoProject`): content production only — Draft / Pending / Needs Review / In Review / Failed. Schedule/Publish live on **Publishing Queue** page (`publishing_queued_at` handoff). Summary ≡ List via classifiers. Save/Sync never equals Publish. Queue health strip: runner last-run + Stuck Publishing count; recover via `content_project.recover_stuck_publishing`.
+
+**Datetime observability**: user-facing timestamps format qua `SystemDateTime` (System timezone + preset). Machine/API/locks/TTL/queue compare = UTC. Settings: SEO Settings → Date & Time.
 
 ## 2. Canonical routes
 

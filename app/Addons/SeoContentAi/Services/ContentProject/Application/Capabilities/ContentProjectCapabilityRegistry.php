@@ -11,6 +11,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\Archive
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AutoScheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CancelProjectItemPublishingCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RecoverStuckPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CreateContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\GenerateProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\MoveProjectItemScheduleCommand;
@@ -515,6 +516,25 @@ final class ContentProjectCapabilityRegistry
                     ContentProjectLifecyclePhase::Approved->value,
                 ],
                 confirmation: true,
+            ),
+            $this->cap(
+                'content_project.recover_stuck_publishing',
+                'Recover stuck Publishing items (no WordPress, no normal cancel transition)',
+                RecoverStuckPublishingCommand::class,
+                'content_project.recover_stuck_publishing',
+                riskLevel: 'destructive',
+                idempotencySupport: true,
+                dryRunSupport: true,
+                inputSchema: [
+                    'project_ref' => ['type' => 'string', 'required' => true],
+                    'item_refs' => ['type' => 'array', 'required' => true],
+                    'target' => ['type' => 'string', 'required' => true],
+                    'dry_run' => ['type' => 'boolean', 'required' => false],
+                ],
+                phases: [
+                    ContentProjectLifecyclePhase::WaitingPublish->value,
+                ],
+                confirmation: false,
             ),
             $this->cap(
                 'content_project.send_to_publishing_queue',

@@ -134,7 +134,7 @@ final class ArticleEditorRuntimeCompletionPhase6c4Test extends TestCase
         self::assertStringNotContainsString('pickerLoading:', $blade);
         self::assertStringNotContainsString('class="seo-article-media-modal"', $blade);
         self::assertStringContainsString('__seoOpenSharedMediaPicker', $blade);
-        self::assertStringContainsString('featuredImageDraft: null', $blade);
+        self::assertStringNotContainsString('featuredImageDraft', $blade);
         self::assertStringContainsString('seo-article-ai-chat-root', $blade);
     }
 

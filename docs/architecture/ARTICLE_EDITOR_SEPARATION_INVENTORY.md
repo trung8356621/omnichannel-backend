@@ -64,7 +64,7 @@ GET /seo/{connection_hash}/articles/{record}/edit
        ├─ #seo-article-editor-root [wire:ignore]
        ├─ portal roots [wire:ignore] (seo/images/reviews/links/faq/ai)
        └─ @vite article-editor.jsx
-            → createRoot → SeoArticleEditor + ArticleEditorModuleHost + portals
+            → createRoot → SeoArticleEditor + EditorSidebarPortalHost + portals
                  → TipTap per text block + assistant widgets
 ```
 
@@ -96,7 +96,7 @@ GET /seo/{connection_hash}/articles/{record}/edit
 |------|----------------|-----------|----------------|-------------|---------------|
 | Editor entry | `article-editor.jsx` | React | Mount/remount, Livewire bridge, heavy save helpers | roots, globals | Livewire, Vite |
 | Editor root | `SeoArticleEditor.jsx` | React | Blocks, TipTap map, draft autosave, analyze schedule | blocks, dirty, analysis | TipTap, storage, API |
-| Module host | `ArticleEditorModuleHost.jsx` | React | Lazy FAQ/Links/AI chat portals | module open | CustomEvents |
+| Module host | ~~`ArticleEditorModuleHost`~~ → `EditorSidebarPortalHost` | React | Runtime sidebar portals | openPanel | shell bridge |
 | Outline | `ArticleOutlineTab.jsx` | React | Outline rail | outline UI | outline API |
 | TipTap extensions | `utils/editorExtensions.js` | React/TipTap | StarterKit + custom nodes/marks | schema | ProseMirror |
 | Image node | `utils/articleImageExtension.js`, `extensions/imageMarkerExtension.js` | TipTap | Image markers | attrs | — |
@@ -570,7 +570,7 @@ Goal: React must not scrape Livewire public properties for SoT.
 ### Phase 6C.2 — Links/FAQ/CTA runtime modules (done)
 - Links/FAQ `host: editor` panels; CTA chip aliases Links; insert via command host actions.
 - FAQ extract REST `faq-snapshot/extract`; toolbar `runFaqExtractFromToolbar`.
-- ModuleHost retains AI Chat only.
+- ModuleHost removed; AI Chat via runtime module.
 - Gate: `ArticleEditorRuntimeModulesPhase6c2Test`.
 
 ### Phase 6C.3 — Featured/Gallery + Shared Media Picker (done)
@@ -621,3 +621,7 @@ Goal: React must not scrape Livewire public properties for SoT.
 - `docs/modules/WORDPRESS_BRIDGE.md`
 - `docs/modules/PROMPTS_AND_AI.md`
 - Archive only: `docs/archive/maps/MAP_SEO_EDITOR.md`
+
+## Legacy cleanup
+
+See [ARTICLE_EDITOR_LEGACY_CLEANUP.md](ARTICLE_EDITOR_LEGACY_CLEANUP.md) for deleted/kept/deprecated paths after runtime cutover.

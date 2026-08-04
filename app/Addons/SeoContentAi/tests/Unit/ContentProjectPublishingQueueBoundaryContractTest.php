@@ -61,7 +61,9 @@ final class ContentProjectPublishingQueueBoundaryContractTest extends TestCase
         );
         self::assertStringContainsString("'project_month'", $src);
         self::assertStringContainsString("'quick'", $src);
+        self::assertStringContainsString("'in_day'", $src);
         self::assertStringContainsString('Quick Mode', $src);
+        self::assertStringContainsString('resolveEligible', $src);
         self::assertStringNotContainsString('Dev Mode', $src);
     }
 

@@ -16,6 +16,7 @@ import {
 } from './utils/articleMediaPickerCache';
 import { clearArticleLocalState } from './utils/articleLocalState';
 import { loadFaqDraft, saveOutline, clearDraft } from './utils/articleEditorStorage';
+import { isUsableEditorDocumentEnvelope } from './utils/articleEditorDocument';
 import { registerFilamentHeaderActionsPersistence } from './utils/articleEditorHeaderActions';
 import { installArticleEditorStickyHeaderBridge } from './utils/articleEditorStickyHeader';
 import { normalizeArticleSlug } from './utils/articleSlugUtils';
@@ -31,7 +32,12 @@ import {
     syncArticleToWordPressViaApi,
 } from './utils/articleEditorApi';
 import { seoArticleApiFetch } from './utils/seoArticleApi';
-import { saveArticleViaApiSingleFlight } from './utils/articleEditorSaveQueue';
+import {
+    beginExplicitEditorSave,
+    endExplicitEditorSave,
+    isArticleSaveInFlight,
+    saveArticleViaApiSingleFlight,
+} from './utils/articleEditorSaveQueue';
 import { EditorSessionClient } from './utils/editorSessionClient';
 import {
     ARTICLE_EDITOR_SESSION_STATE_EVENT,
@@ -205,6 +211,14 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
         if (!html) {
             throw new Error('Không thu thập được nội dung bài viết.');
         }
+        if (
+            typeof window.__seoAssertEditorWhitespaceSafe === 'function'
+            && window.__seoAssertEditorWhitespaceSafe(html) === false
+        ) {
+            throw new Error(
+                'Khoảng trắng quanh in đậm/nghiêng/link bị hỏng — Save bị chặn. Reload hoặc khôi phục draft đúng.',
+            );
+        }
 
         const articleId = Number(editorBundle?.articleId ?? 0);
         if (!Number.isFinite(articleId) || articleId <= 0) {
@@ -256,13 +270,25 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
 
             let result;
             if (normalizedAction === 'save-close') {
-                const payload = await buildPayload();
-                result = await closeArticleViaSessionApi(articleId, payload, 'save_and_close');
+                beginExplicitEditorSave();
+                window.__seoMarkIntentionalEditorClose?.();
+                // Wait for any in-flight autosave/explicit save before close write.
+                let waitGuard = 0;
+                while (isArticleSaveInFlight() && waitGuard < 50) {
+                    waitGuard += 1;
+                    await new Promise((resolve) => setTimeout(resolve, 100));
+                }
+                try {
+                    const payload = await buildPayload();
+                    result = await closeArticleViaSessionApi(articleId, payload, 'save_and_close');
+                } finally {
+                    endExplicitEditorSave();
+                }
                 finishArticleSaveFromApi(result, {
                     articleId,
                     siteId,
                     connectionHash: window.__SEO_EDITOR_CONNECTION_HASH__ ?? '',
-                    savedHtml: String(window.__SEO_EDITOR_LAST_SAVE_HTML__ ?? payload.html ?? editorBundle.html ?? ''),
+                    savedHtml: String(window.__SEO_EDITOR_LAST_SAVE_HTML__ ?? result?.html ?? editorBundle.html ?? ''),
                     keepOverlay: true,
                 });
                 window.__seoResetPublishTabPrimed?.();
@@ -278,7 +304,7 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
                 window.__seoArticleHeavyActionOverlay?.hide?.();
                 closeEditorAfterProjectLocalSave(projectUrl);
             } else {
-                result = await saveArticleViaApiSingleFlight(articleId, buildPayload);
+                result = await saveArticleViaApiSingleFlight(articleId, buildPayload, { priority: 'explicit' });
                 finishArticleSaveFromApi(result, {
                     articleId,
                     siteId,
@@ -375,7 +401,7 @@ async function runArticleEditorApiAction(action, wire, editorDetail = {}) {
                         },
                         wire,
                     );
-                });
+                }, { priority: 'explicit' });
                 finishArticleSaveFromApi(result, {
                     articleId,
                     siteId,
@@ -600,11 +626,9 @@ function getOrCreateReactRoot(element) {
     return element.__seoArticleReactRoot;
 }
 
-function EditorSessionLockBanner({
+function ExclusiveLockScreen({
     lockInfo,
-    canTakeover,
     onRetry,
-    onTakeover,
     onBack = null,
     reasonCode = null,
     status = null,
@@ -616,12 +640,6 @@ function EditorSessionLockBanner({
     const code = String(reasonCode ?? '').trim();
     const archived = code === 'content_project_archived' || code === 'article_not_editable';
     const conflict = status === 'conflict' || code.includes('conflict');
-    const locked = !archived && !conflict && (
-        status === 'locked'
-        || code === 'article_editor_locked'
-        || code === 'locked'
-        || Boolean(lockInfo)
-    );
     const name = String(lockInfo?.editor_name ?? '').trim() || t('editor_locked_other_user');
 
     let title = t('editor_locked_title');
@@ -635,72 +653,43 @@ function EditorSessionLockBanner({
     }
 
     const showRetry = typeof onRetry === 'function' && !archived && !conflict;
-    const showTakeover = !archived && !conflict && Boolean(canTakeover || lockInfo?.can_takeover);
     const showBack = typeof onBack === 'function';
-    const metaBits = !archived && !conflict
-        ? [
-            lockInfo?.acquired_at ? `Bắt đầu: ${lockInfo.acquired_at}` : null,
-            lockInfo?.heartbeat_at ? `Hoạt động gần nhất: ${lockInfo.heartbeat_at}` : null,
-            lockInfo?.expires_at ? `Hết hạn dự kiến: ${lockInfo.expires_at}` : null,
-        ].filter(Boolean)
-        : [];
 
     return (
         <div
-            className={`seo-editor-hard-lock-bar${archived ? ' is-archived' : ''}${conflict ? ' is-conflict' : ''}${locked ? ' is-locked' : ''}`}
+            className={`seo-editor-exclusive-lock-screen${archived ? ' is-archived' : ''}${conflict ? ' is-conflict' : ''}`}
             role="alert"
+            data-seo-editor-exclusive-lock="1"
             data-seo-editor-lock-banner="1"
-            data-seo-editor-hard-readonly="1"
             data-reason-code={code || undefined}
             data-session-status={status || undefined}
         >
-            <div className="seo-editor-hard-lock-bar__main">
-                <span className="seo-editor-hard-lock-bar__badge" aria-hidden="true">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                    </svg>
-                    {t('editor_locked_badge')}
-                </span>
-                <div className="seo-editor-hard-lock-bar__copy">
-                    <div className="seo-editor-hard-lock-bar__title">{title}</div>
-                    <div className="seo-editor-hard-lock-bar__body">{body}</div>
-                    {metaBits.length > 0 ? (
-                        <div className="seo-editor-hard-lock-bar__meta">{metaBits.join(' · ')}</div>
-                    ) : null}
-                </div>
+            <div className="seo-editor-exclusive-lock-screen__notice">
+                <h2 className="seo-editor-exclusive-lock-screen__title">{title}</h2>
+                <p className="seo-editor-exclusive-lock-screen__body">{body}</p>
+                {(showRetry || showBack) ? (
+                    <div className="seo-editor-exclusive-lock-screen__actions">
+                        {showRetry ? (
+                            <button
+                                type="button"
+                                className="seo-editor-exclusive-lock-screen__btn"
+                                onClick={onRetry}
+                            >
+                                {t('editor_locked_retry')}
+                            </button>
+                        ) : null}
+                        {showBack ? (
+                            <button
+                                type="button"
+                                className="seo-editor-exclusive-lock-screen__btn seo-editor-exclusive-lock-screen__btn--muted"
+                                onClick={onBack}
+                            >
+                                {t('editor_locked_back')}
+                            </button>
+                        ) : null}
+                    </div>
+                ) : null}
             </div>
-            {(showRetry || showTakeover || showBack) ? (
-                <div className="seo-editor-hard-lock-bar__actions">
-                    {showRetry ? (
-                        <button
-                            type="button"
-                            className="seo-editor-hard-lock-bar__btn seo-editor-hard-lock-bar__btn--retry"
-                            onClick={onRetry}
-                        >
-                            {t('editor_locked_retry')}
-                        </button>
-                    ) : null}
-                    {showTakeover ? (
-                        <button
-                            type="button"
-                            className="seo-editor-hard-lock-bar__btn seo-editor-hard-lock-bar__btn--takeover"
-                            onClick={onTakeover}
-                        >
-                            {t('editor_locked_takeover')}
-                        </button>
-                    ) : null}
-                    {showBack ? (
-                        <button
-                            type="button"
-                            className="seo-editor-hard-lock-bar__btn seo-editor-hard-lock-bar__btn--back"
-                            onClick={onBack}
-                        >
-                            {t('editor_locked_back')}
-                        </button>
-                    ) : null}
-                </div>
-            ) : null}
         </div>
     );
 }
@@ -710,8 +699,9 @@ function ArticleEditorWithSession(props) {
         articleId,
         documentVersion = 1,
         currentUserId = null,
-        canTakeoverEditorSession = false,
         editorSessionConfig = null,
+        // Deprecated exclusive-lock presentation: takeover ignored (backend route retained).
+        canTakeoverEditorSession: _canTakeoverIgnored = false,
         ...editorProps
     } = props;
 
@@ -724,6 +714,7 @@ function ArticleEditorWithSession(props) {
     const clientRef = React.useRef(null);
     const editorMountedRef = React.useRef(false);
     const acquireGenerationRef = React.useRef(0);
+    const intentionalEditorCloseRef = React.useRef(false);
     const heartbeatSeconds = Math.max(
         10,
         Number(
@@ -735,6 +726,8 @@ function ArticleEditorWithSession(props) {
 
     const applyClientState = React.useCallback((client, reasonCode = null) => {
         window.__seoEditorSessionClient = client;
+        window.__SEO_EDITOR_SESSION_ID__ = client.sessionId || null;
+        window.__SEO_EDITOR_DOCUMENT_VERSION__ = Math.max(1, Number(client.documentVersion) || 1);
         const writable = !Boolean(client.readOnly);
         const status = resolveSessionStatusFromClient(
             reasonCode || client.lockStatus,
@@ -754,7 +747,7 @@ function ArticleEditorWithSession(props) {
         setSessionStatus(status);
         setSessionReasonCode(reasonCode || client.lockStatus || null);
         setSessionReady(true);
-        editorMountedRef.current = true;
+        editorMountedRef.current = writable;
 
         try {
             const livewireId = String(window.__SEO_EDIT_ARTICLE_LIVEWIRE_ID__ ?? '');
@@ -849,32 +842,64 @@ function ArticleEditorWithSession(props) {
             if (window.__seoEditorSessionClient === client) {
                 delete window.__seoEditorSessionClient;
             }
+            delete window.__SEO_EDITOR_SESSION_ID__;
             window.__SEO_EDITOR_READ_ONLY__ = false;
         };
     }, [currentUserId, runAcquire]);
 
-    const onTakeover = React.useCallback(async () => {
-        const confirmed = window.confirm(
-            'Phiên chỉnh sửa hiện tại sẽ bị thu hồi. Những thay đổi chưa được lưu của người đang sửa có thể bị mất.',
-        );
-        if (!confirmed) {
-            return;
-        }
+    React.useEffect(() => {
+        const onBeforeUnload = (event) => {
+            if (intentionalEditorCloseRef.current) {
+                return undefined;
+            }
+            if (sessionReadOnly || window.__SEO_EDITOR_READ_ONLY__) {
+                return undefined;
+            }
+            const client = clientRef.current;
+            if (!client?.sessionId || client.readOnly) {
+                return undefined;
+            }
+            event.preventDefault();
+            event.returnValue = '';
+            return '';
+        };
+        window.addEventListener('beforeunload', onBeforeUnload);
+        window.__seoMarkIntentionalEditorClose = () => {
+            intentionalEditorCloseRef.current = true;
+        };
+        return () => {
+            window.removeEventListener('beforeunload', onBeforeUnload);
+            delete window.__seoMarkIntentionalEditorClose;
+        };
+    }, [sessionReadOnly]);
 
-        const client = clientRef.current;
-        if (!client) {
-            return;
-        }
-
-        const result = await client.takeover(documentVersion);
-        if (!result.ok) {
-            setAcquireError(result.error);
-            return;
-        }
-
-        setAcquireError(null);
-        applyClientState(client);
-    }, [applyClientState, documentVersion]);
+    React.useEffect(() => {
+        const onPageHide = () => {
+            if (intentionalEditorCloseRef.current) {
+                return;
+            }
+            const client = clientRef.current;
+            if (!client?.sessionId || client.readOnly) {
+                return;
+            }
+            if (window.__SEO_EDITOR_DIRTY__ || window.__seoEditorSaveInFlight) {
+                return;
+            }
+            try {
+                const url = `/api/seo/articles/${articleId}/editor-sessions/${encodeURIComponent(client.sessionId)}`;
+                if (typeof navigator.sendBeacon === 'function') {
+                    const blob = new Blob([JSON.stringify({ _method: 'DELETE' })], { type: 'application/json' });
+                    navigator.sendBeacon(url, blob);
+                } else {
+                    void fetch(url, { method: 'DELETE', keepalive: true, credentials: 'same-origin' });
+                }
+            } catch {
+                // best-effort
+            }
+        };
+        window.addEventListener('pagehide', onPageHide);
+        return () => window.removeEventListener('pagehide', onPageHide);
+    }, [articleId]);
 
     const onBack = React.useCallback(() => {
         if (typeof window.history !== 'undefined' && window.history.length > 1) {
@@ -892,31 +917,43 @@ function ArticleEditorWithSession(props) {
         );
     }
 
-    const hardReadonly = Boolean(sessionReadOnly);
+    const blocked = (
+        String(sessionReasonCode || acquireError?.code || '') === 'article_editor_locked'
+        || String(sessionReasonCode || '') === 'content_project_archived'
+        || String(sessionReasonCode || '') === 'article_not_editable'
+    ) && Boolean(sessionReadOnly);
 
-    return (
-        <div
-            className={`seo-editor-session-shell${hardReadonly ? ' seo-editor-session-shell--hard-readonly' : ''}`}
-            data-seo-editor-session-shell="1"
-            data-seo-editor-hard-readonly={hardReadonly ? '1' : '0'}
-            data-session-status={sessionStatus || undefined}
-            data-session-writable={hardReadonly ? '0' : '1'}
-        >
-            {hardReadonly ? (
-                <EditorSessionLockBanner
+    if (blocked) {
+        return (
+            <div
+                className="seo-editor-session-shell seo-editor-session-shell--exclusive-lock"
+                data-seo-editor-session-shell="1"
+                data-seo-editor-exclusive-lock="1"
+                data-session-status={sessionStatus || undefined}
+                data-session-writable="0"
+            >
+                <ExclusiveLockScreen
                     lockInfo={lockInfo || acquireError?.lock}
-                    canTakeover={canTakeoverEditorSession || Boolean(lockInfo?.can_takeover || acquireError?.lock?.can_takeover)}
                     reasonCode={sessionReasonCode || acquireError?.code || null}
                     status={sessionStatus}
                     onRetry={() => { void runAcquire(); }}
-                    onTakeover={() => { void onTakeover(); }}
                     onBack={onBack}
                 />
-            ) : null}
+            </div>
+        );
+    }
+
+    return (
+        <div
+            className="seo-editor-session-shell"
+            data-seo-editor-session-shell="1"
+            data-session-status={sessionStatus || undefined}
+            data-session-writable="1"
+        >
             <SeoArticleEditor
                 {...editorProps}
                 articleId={articleId}
-                sessionReadOnly={sessionReadOnly}
+                sessionReadOnly={false}
                 documentVersion={documentVersion}
             />
         </div>
@@ -941,7 +978,6 @@ function readArticleEditorBootstrap() {
     let expectedContentHash = '';
     let documentVersion = 1;
     let currentUserId = null;
-    let canTakeoverEditorSession = false;
     let editorSessionConfig = null;
     let supportsProductGallery = false;
     let isCanaryProduct = false;
@@ -972,7 +1008,6 @@ function readArticleEditorBootstrap() {
             expectedContentHash = String(core?.expectedContentHash ?? core?.expected_content_hash ?? '').trim();
             documentVersion = Math.max(1, Number(core?.documentVersion ?? core?.document_version ?? 1) || 1);
             currentUserId = core?.currentUserId ?? core?.current_user_id ?? null;
-            canTakeoverEditorSession = Boolean(core?.canTakeoverEditorSession ?? core?.can_takeover_editor_session);
             editorSessionConfig = core?.editorSession && typeof core.editorSession === 'object'
                 ? core.editorSession
                 : null;
@@ -983,6 +1018,14 @@ function readArticleEditorBootstrap() {
                 initialEditorDocument = core.editorDocument;
             } else if (core?.editor_document && typeof core.editor_document === 'object') {
                 initialEditorDocument = core.editor_document;
+            }
+            // Hollow JSON (images + empty text) must not suppress HTML hydrate.
+            if (!isUsableEditorDocumentEnvelope(initialEditorDocument, initialHtml)) {
+                initialEditorDocument = null;
+            }
+            // Server already repaired glued mark spaces — do not hydrate corrupted JSON.
+            if (core?.inlineWhitespaceRepaired === true || core?.inline_whitespace_repaired === true) {
+                initialEditorDocument = null;
             }
             initialEditorDocumentHash = core?.editorDocumentHash
                 ?? core?.editor_document_hash
@@ -1152,7 +1195,6 @@ function readArticleEditorBootstrap() {
         expectedContentHash,
         documentVersion,
         currentUserId,
-        canTakeoverEditorSession,
         editorSessionConfig,
         supportsProductGallery,
         isCanaryProduct,
@@ -1220,7 +1262,6 @@ function mountArticleEditorPage() {
         expectedContentHash,
         documentVersion,
         currentUserId,
-        canTakeoverEditorSession,
         editorSessionConfig,
         supportsProductGallery,
         isCanaryProduct,
@@ -1309,7 +1350,6 @@ function mountArticleEditorPage() {
                 siteId={siteId}
                 documentVersion={documentVersion}
                 currentUserId={currentUserId}
-                canTakeoverEditorSession={canTakeoverEditorSession}
                 editorSessionConfig={editorSessionConfig}
                 initialHtml={initialHtml}
                 initialEditorDocument={initialEditorDocument}
@@ -1416,9 +1456,6 @@ function mountArticleEditorPage() {
                         if (settingsData.external_facts && typeof settingsData.external_facts === 'object') {
                             setExternalFacts(settingsData.external_facts);
                         }
-                        window.dispatchEvent(
-                            new CustomEvent('seo-editor-settings-loaded', { detail: settingsData }),
-                        );
                     }
                     if (seoRes.response.ok && seoRes.data?.success !== false) {
                         window.dispatchEvent(

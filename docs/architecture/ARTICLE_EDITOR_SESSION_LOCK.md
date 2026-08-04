@@ -30,7 +30,7 @@
 - `PUT .../editor-sessions/{session}/document` — save/autosave
 - `POST .../editor-sessions/{session}/close` — atomic save + release
 - `DELETE .../editor-sessions/{session}` — release after ACK only
-- `POST .../editor-sessions/takeover` — manager+ with confirmation
+- `POST .../editor-sessions/takeover` — **deprecated** (manager+ with confirmation). Exclusive UI does not call; keep until product/ops ACK. See [`ARTICLE_EDITOR_LEGACY_CLEANUP.md`](ARTICLE_EDITOR_LEGACY_CLEANUP.md).
 
 ### Atomic close
 
@@ -68,16 +68,15 @@ System writers (`article.content.update` from automation/sync) still go through 
 
 ## Frontend
 
-- `EditorSessionClient` (`resources/js/utils/editorSessionClient.js`)
+- `EditorSessionClient` (`resources/js/utils/editorSessionClient.js`) — `client_instance_id` in **sessionStorage** (per-tab)
 - Session state event: `article-editor-session-state-changed` (`editorSessionState.js`)
-- Mount gate `ArticleEditorWithSession` in `article-editor.jsx` (acquire-first; after mount, TipTap stays mounted)
-- TipTap `setEditable(false|true)` hard wire from `sessionReadOnly`
+- Mount gate `ArticleEditorWithSession` in `article-editor.jsx`: acquire-first; if locked/archived/not_editable → **ExclusiveLockScreen** only (404-style title + body; no TipTap / no takeover UI)
+- Mid-session `document_version` / content-hash conflict: sync actual version from payload; **keep writable** (toast); do not unmount ExclusiveLockScreen
 - Mutation guard: `canMutateEditor` / `assertWritableEditorSession` / `runEditorMutation`
-- Shell Alpine consumes session-state event (Save disabled reactive)
+- Shell Alpine consumes session-state event (Save disabled reactive); chrome hidden while exclusive-lock mounted
 - Livewire `EditArticle` body writes require `editorSessionId` + `expectedDocumentVersion` and delegate `ArticleEditorPersistService`
 - FAQ body apply from editor requires owning session; without session while locked → fail
-- External revision restore / AI apply / media rewrite blocked while active editor session exists
-- Document version conflict: stop autosave, read-only, keep local draft, message for recovery — no auto-merge
+- Owner unload: `beforeunload` warn when dirty; `pagehide` + sendBeacon release when clean; Save & Close sets `__seoMarkIntentionalEditorClose`
 - Server autosave debounced (~4s) with single in-flight + stale ACK guard
 - Draft key: `seo-editor:draft:{hash}:{site}:{userId}:{articleId}`
 
@@ -86,7 +85,7 @@ System writers (`article.content.update` from automation/sync) still go through 
 - React owns session state; shell only consumes.
 - User-facing Livewire body path is session-aware (no direct `$record->update(['body'=>...])` in persist).
 - Bootstrap hydrate from WP cache skips when any active session exists.
-- Media URL rewrite: **block** if active editor session (`assertBodyRewriteAllowed`).
+- Media URL rewrite: other sessions blocked; **owning** active session allowed via `assertOwningActiveSessionForMediaMutation` + `editor_session_id` (Fix Slug All).
 - System writers still bump `document_version` via observer; conflict surfaces on next heartbeat/save.
 - Phase later: Featured/Gallery localStorage SoT cleanup.
 

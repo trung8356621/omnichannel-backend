@@ -23,38 +23,51 @@ final class ArticleEditorMediaSnapshotService
 
     public const SCHEMA_VERSION = 1;
 
+    /** @var array<string, SeoMedia|null>|null Request-local lookup for one build() call */
+    private ?array $seoMediaByKey = null;
+
     public function __construct(
         private readonly ArticleMediaLocalService $mediaLocal,
         private readonly ArticlePostImagesService $postImages,
     ) {}
 
     /**
+     * @param  bool  $refresh  When false (bootstrap read), skip article->refresh() + meta reload.
      * @return array<string, mixed>
      */
-    public function build(SeoArticle $article, ?User $viewer = null): array
+    public function build(SeoArticle $article, ?User $viewer = null, bool $refresh = true): array
     {
         $article->loadMissing(['articleMetas', 'site']);
-        $article->refresh();
-        $article->unsetRelation('articleMetas');
-        $article->load('articleMetas');
+        if ($refresh) {
+            $article->refresh();
+            $article->unsetRelation('articleMetas');
+            $article->load('articleMetas');
+        }
 
         $supportsGallery = $this->supportsProductGallery($article);
-        $featured = $this->buildFeatured($article, $supportsGallery);
-        $gallery = $this->buildGallery($article, $supportsGallery, $featured);
-        $contentImages = $this->buildContentImagesSummary($article);
-        $version = $this->currentVersion($article);
+        $siteId = (int) ($article->site_id ?? 0);
+        $this->primeSeoMediaLookup($article, $supportsGallery, $siteId);
 
-        return [
-            'version' => self::SCHEMA_VERSION,
-            'snapshot_version' => $version,
-            'article_id' => (int) $article->getKey(),
-            'document_version' => max(1, (int) ($article->document_version ?? 1)),
-            'generated_at' => now()->utc()->toIso8601String(),
-            'featured' => $featured,
-            'content_images' => $contentImages,
-            'gallery' => $gallery,
-            'capabilities' => $this->capabilities($article, $viewer, $supportsGallery),
-        ];
+        try {
+            $featured = $this->buildFeatured($article, $supportsGallery);
+            $gallery = $this->buildGallery($article, $supportsGallery, $featured);
+            $contentImages = $this->buildContentImagesSummary($article);
+            $version = $this->currentVersion($article);
+
+            return [
+                'version' => self::SCHEMA_VERSION,
+                'snapshot_version' => $version,
+                'article_id' => (int) $article->getKey(),
+                'document_version' => max(1, (int) ($article->document_version ?? 1)),
+                'generated_at' => now()->utc()->toIso8601String(),
+                'featured' => $featured,
+                'content_images' => $contentImages,
+                'gallery' => $gallery,
+                'capabilities' => $this->capabilities($article, $viewer, $supportsGallery),
+            ];
+        } finally {
+            $this->seoMediaByKey = null;
+        }
     }
 
     public function currentVersion(SeoArticle $article): int
@@ -224,6 +237,15 @@ final class ArticleEditorMediaSnapshotService
         $seoMedia = $this->findSeoMedia($siteId, $wpId, $url);
 
         $mediaId = $seoMedia instanceof SeoMedia ? (int) $seoMedia->getKey() : null;
+        // Featured/gallery meta may store SeoMedia PK in "attachment id" before WP sync.
+        // Never emit that as wp_attachment_id for pure Laravel storage URLs.
+        if ($seoMedia instanceof SeoMedia) {
+            $realWp = (int) ($seoMedia->wp_attachment_id ?? 0);
+            $wpId = $realWp > 0 ? $realWp : 0;
+        } elseif ($this->isLocalLaravelMediaUrl($url)) {
+            $wpId = 0;
+        }
+
         $alt = trim((string) ($seoMedia?->alt_text ?? $seoMedia?->alt ?? $base['alt'] ?? ''));
         $title = trim((string) ($seoMedia?->title ?? $base['title'] ?? ''));
         $filename = $this->filenameFromUrl($url);
@@ -269,6 +291,30 @@ final class ArticleEditorMediaSnapshotService
             return null;
         }
 
+        if ($this->seoMediaByKey !== null) {
+            if ($wpAttachmentId > 0) {
+                $wpKey = 'wp:'.$siteId.':'.$wpAttachmentId;
+                if (array_key_exists($wpKey, $this->seoMediaByKey) && $this->seoMediaByKey[$wpKey] instanceof SeoMedia) {
+                    return $this->seoMediaByKey[$wpKey];
+                }
+            }
+            if ($url !== '') {
+                $urlKey = 'url:'.$siteId.':'.$url;
+                if (array_key_exists($urlKey, $this->seoMediaByKey) && $this->seoMediaByKey[$urlKey] instanceof SeoMedia) {
+                    return $this->seoMediaByKey[$urlKey];
+                }
+                $path = (string) parse_url($url, PHP_URL_PATH);
+                if ($path !== '') {
+                    $pathKey = 'url:'.$siteId.':'.$path;
+                    if (array_key_exists($pathKey, $this->seoMediaByKey) && $this->seoMediaByKey[$pathKey] instanceof SeoMedia) {
+                        return $this->seoMediaByKey[$pathKey];
+                    }
+                }
+            }
+
+            return null;
+        }
+
         if ($wpAttachmentId > 0) {
             $byWp = SeoMedia::query()
                 ->where('site_id', $siteId)
@@ -308,6 +354,114 @@ final class ArticleEditorMediaSnapshotService
         return $byUrl instanceof SeoMedia ? $byUrl : null;
     }
 
+    /**
+     * Batch-load SeoMedia for featured + gallery refs (kills N+1 per enrichMediaItem).
+     */
+    private function primeSeoMediaLookup(SeoArticle $article, bool $supportsGallery, int $siteId): void
+    {
+        $this->seoMediaByKey = [];
+        if ($siteId <= 0) {
+            return;
+        }
+
+        $wpIds = [];
+        $urls = [];
+
+        $featuredUrl = trim((string) ($article->articleMetas
+            ->firstWhere('meta_key', ArticleMediaLocalService::META_FEATURED_URL)?->meta_value ?? ''));
+        $featuredWp = (int) ($article->articleMetas
+            ->firstWhere('meta_key', ArticleMediaLocalService::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0);
+        if ($featuredWp > 0) {
+            $wpIds[] = $featuredWp;
+        }
+        if ($featuredUrl !== '') {
+            $urls[] = $featuredUrl;
+        }
+
+        if ($supportsGallery) {
+            foreach ($this->mediaLocal->resolveProductAlbum($article) as $row) {
+                if (! is_array($row)) {
+                    continue;
+                }
+                $wp = (int) ($row['id'] ?? 0);
+                $url = trim((string) ($row['url'] ?? ''));
+                if ($wp > 0) {
+                    $wpIds[] = $wp;
+                }
+                if ($url !== '') {
+                    $urls[] = $url;
+                }
+            }
+        }
+
+        $wpIds = array_values(array_unique(array_filter($wpIds, static fn (int $id): bool => $id > 0)));
+        $urls = array_values(array_unique(array_filter($urls, static fn (string $u): bool => $u !== '')));
+
+        if ($wpIds !== []) {
+            $byWp = SeoMedia::query()
+                ->where('site_id', $siteId)
+                ->whereIn('wp_attachment_id', $wpIds)
+                ->orderByDesc('id')
+                ->get();
+            foreach ($byWp as $media) {
+                if (! $media instanceof SeoMedia) {
+                    continue;
+                }
+                $key = 'wp:'.$siteId.':'.(int) $media->wp_attachment_id;
+                if (! isset($this->seoMediaByKey[$key])) {
+                    $this->seoMediaByKey[$key] = $media;
+                }
+            }
+        }
+
+        if ($urls === []) {
+            return;
+        }
+
+        $paths = [];
+        $relativePaths = [];
+        foreach ($urls as $url) {
+            $path = (string) parse_url($url, PHP_URL_PATH);
+            if ($path !== '') {
+                $paths[] = $path;
+            }
+            if (str_starts_with($path, '/storage/')) {
+                $relativePaths[] = ltrim(substr($path, strlen('/storage/')), '/');
+            }
+        }
+        $paths = array_values(array_unique(array_filter($paths)));
+        $relativePaths = array_values(array_unique(array_filter($relativePaths)));
+
+        $byUrl = SeoMedia::query()
+            ->where('site_id', $siteId)
+            ->where(function ($q) use ($urls, $paths, $relativePaths): void {
+                $q->whereIn('url', $urls);
+                if ($paths !== []) {
+                    $q->orWhereIn('url', $paths);
+                }
+                if ($relativePaths !== []) {
+                    $q->orWhereIn('path', $relativePaths);
+                }
+            })
+            ->orderByDesc('id')
+            ->get();
+
+        foreach ($byUrl as $media) {
+            if (! $media instanceof SeoMedia) {
+                continue;
+            }
+            $mediaUrl = trim((string) ($media->url ?? ''));
+            if ($mediaUrl !== '') {
+                $this->seoMediaByKey['url:'.$siteId.':'.$mediaUrl] ??= $media;
+            }
+            $mediaPath = trim((string) ($media->path ?? ''));
+            if ($mediaPath !== '') {
+                $this->seoMediaByKey['url:'.$siteId.':/storage/'.$mediaPath] ??= $media;
+                $this->seoMediaByKey['url:'.$siteId.':'.$mediaPath] ??= $media;
+            }
+        }
+    }
+
     private function classifySource(?SeoMedia $media, int $wpAttachmentId, string $url): string
     {
         if ($media instanceof SeoMedia) {
@@ -325,14 +479,28 @@ final class ArticleEditorMediaSnapshotService
             return 'local';
         }
 
-        if ($wpAttachmentId > 0 || str_contains($url, '/wp-content/uploads/')) {
-            return 'wordpress';
-        }
-        if (str_contains($url, '/storage/seo/') || str_contains($url, '/seo-media/')) {
+        if ($this->isLocalLaravelMediaUrl($url)) {
             return 'local';
         }
 
+        if ($wpAttachmentId > 0 || str_contains($url, '/wp-content/uploads/')) {
+            return 'wordpress';
+        }
+
         return $url !== '' ? 'uploaded' : 'unknown';
+    }
+
+    private function isLocalLaravelMediaUrl(string $url): bool
+    {
+        $value = trim($url);
+        if ($value === '' || str_contains($value, '/wp-content/uploads/')) {
+            return false;
+        }
+
+        return str_contains($value, '/storage/uploads/seo_media/')
+            || str_contains($value, '/storage/seo/')
+            || str_contains($value, '/seo-media/')
+            || str_contains($value, '/storage/');
     }
 
     private function filenameFromUrl(string $url): string

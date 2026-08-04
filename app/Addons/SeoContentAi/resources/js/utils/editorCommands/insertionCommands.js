@@ -1,8 +1,7 @@
 /**
- * Phase 4 — insertion commands (CTA / contact / text / link / FAQ placeholder / HTML compat).
+ * Phase 4 — insertion commands (CTA / contact / text / link / HTML compat).
  */
 
-import { FAQ_SHORTCODE_HTML } from '../editorHtmlUtils';
 import {
     insertContactCtaAtBookmark,
     insertContactValueAtBookmark,
@@ -132,22 +131,6 @@ export function insertHtmlCompatCommand(context, payload = {}) {
     });
 }
 
-export function insertFaqPlaceholderCommand(context, payload = {}) {
-    return withResolvedEditor(context, payload, 'insert_faq_placeholder', (editor, editorId) => {
-        const html = String(payload.html ?? FAQ_SHORTCODE_HTML).trim() || FAQ_SHORTCODE_HTML;
-        const bookmark = resolveBookmark(context, payload);
-        return runEditorTransaction({
-            editor,
-            editorId,
-            command: 'insert_faq_placeholder',
-            context,
-            historyPolicy: 'add',
-            successCode: EDITOR_COMMAND_CODES.INSERTED,
-            build: () => insertHtmlInEditor(editor, html, bookmark),
-        });
-    });
-}
-
 export function insertContentFragmentCommand(context, payload = {}) {
     return withResolvedEditor(context, payload, 'insert_content_fragment', (editor, editorId) => {
         const content = payload.content;
@@ -172,6 +155,5 @@ export default {
     insertTextCommand,
     insertLinkCommand,
     insertHtmlCompatCommand,
-    insertFaqPlaceholderCommand,
     insertContentFragmentCommand,
 };

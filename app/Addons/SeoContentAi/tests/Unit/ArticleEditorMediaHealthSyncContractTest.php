@@ -30,7 +30,8 @@ final class ArticleEditorMediaHealthSyncContractTest extends TestCase
             'export function buildImagesWidgetHealth({',
         );
 
-        self::assertStringContainsString('rowHasUnresolvedMediaSlug', $source);
+        self::assertStringContainsString('rowHasLocalPlaceholderSlug', $source);
+        self::assertStringNotContainsString('rowHasUnresolvedMediaSlug', $source);
         self::assertStringContainsString('error_count', $imagesFn);
         self::assertStringContainsString('warning_count', $imagesFn);
         self::assertStringContainsString('info_count', $imagesFn);
@@ -45,10 +46,10 @@ final class ArticleEditorMediaHealthSyncContractTest extends TestCase
             $source,
         );
         self::assertStringContainsString(
-            'WP filename ≠ keyword is NOT a warning',
+            'WP filename ≠ keyword is NOT a hard error',
             $analyzeFn,
         );
-        self::assertStringContainsString('local_slug_placeholder', $analyzeFn);
+        self::assertStringContainsString('image_slug_unresolved', $analyzeFn);
         self::assertStringContainsString('isWordPressProtectedMedia', $analyzeFn);
         self::assertStringContainsString('image_reference_invalid', $analyzeFn);
         self::assertStringNotContainsString('isImageReadyForWpSlugFix', $source);
@@ -69,8 +70,10 @@ final class ArticleEditorMediaHealthSyncContractTest extends TestCase
         self::assertStringContainsString('featured_missing', $fn);
         self::assertStringContainsString('hardErrors', $fn);
         self::assertStringContainsString('issue_count: hardErrors.length', $fn);
-        self::assertStringContainsString('onlySoftWarnings', $fn);
-        self::assertStringContainsString("status = 'warning'", $fn);
+        self::assertStringNotContainsString('featured_alt_missing', $fn);
+        self::assertStringNotContainsString('featured_slug_not_fixed', $fn);
+        self::assertStringNotContainsString('image_ratio_low', $fn);
+        self::assertStringContainsString("status = 'success'", $fn);
     }
 
     public function test_slug_and_featured_mutations_bump_media_health_tick(): void
@@ -81,9 +84,13 @@ final class ArticleEditorMediaHealthSyncContractTest extends TestCase
 
         self::assertStringContainsString('setMediaHealthTick', $editor);
         self::assertStringContainsString('seo-assistant-widget-health-refresh', $editor);
-        self::assertStringContainsString('seo-featured-image-updated', $editor);
+        self::assertStringContainsString('article-editor-media-snapshot-changed', $editor);
         self::assertStringContainsString('finalizeSlugRenameSideEffects', $editor);
         self::assertStringContainsString('setFeaturedHealthSnapshot(loadFeaturedImage(articleId))', $editor);
+        // Phase-1 perf: typing must not rebuild featured/gallery health builders.
+        self::assertStringContainsString('publishPartialRuntimeWidgetHealth', $editor);
+        self::assertStringContainsString('Content widgets only', $editor);
+        self::assertStringContainsString('Media snapshot widgets', $editor);
     }
 
     public function test_manual_sync_api_blocked_for_content_project(): void

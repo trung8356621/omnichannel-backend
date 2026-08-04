@@ -9,10 +9,19 @@ use App\Addons\SeoContentAi\Automation\Data\ActionResult;
 use App\Addons\SeoContentAi\Automation\Data\EventEnvelope;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 
 final class ActionSupport
 {
+    /**
+     * Same-process reentrancy depth for article write mutex.
+     * SessionService wraps persist → UpdateArticleContentAction must not re-acquire.
+     *
+     * @var array<int, int>
+     */
+    private static array $articleWriteDepth = [];
+
     public static function assertMutable(ActionContext $context): ?ActionResult
     {
         if (self::isSystemOrigin($context)) {
@@ -73,22 +82,51 @@ final class ActionSupport
     }
 
     /**
+     * Short request-serialization mutex for canonical article writes.
+     * Key: article-write:{id} — NOT editor session lock, NOT automation/job lock.
+     *
+     * Reentrant in the same PHP process so SessionService → Action nested calls work.
+     *
      * @template T
      * @param  callable(): T  $callback
      * @return T
      */
-    public static function withArticleLock(int $articleId, callable $callback): mixed
+    public static function withArticleLock(int $articleId, callable $callback, int $waitSeconds = 5): mixed
     {
-        $lock = Cache::lock('automation-article-'.$articleId, 30);
-
-        if (! $lock->get()) {
-            throw new \RuntimeException('Could not acquire article automation lock.');
+        if ($articleId <= 0) {
+            return $callback();
         }
+
+        if ((self::$articleWriteDepth[$articleId] ?? 0) > 0) {
+            self::$articleWriteDepth[$articleId]++;
+            try {
+                return $callback();
+            } finally {
+                self::$articleWriteDepth[$articleId]--;
+                if (self::$articleWriteDepth[$articleId] <= 0) {
+                    unset(self::$articleWriteDepth[$articleId]);
+                }
+            }
+        }
+
+        $lock = Cache::lock(self::articleWriteLockKey($articleId), 30);
 
         try {
-            return $callback();
-        } finally {
-            $lock->release();
+            return $lock->block(max(1, $waitSeconds), function () use ($articleId, $callback): mixed {
+                self::$articleWriteDepth[$articleId] = 1;
+                try {
+                    return $callback();
+                } finally {
+                    unset(self::$articleWriteDepth[$articleId]);
+                }
+            });
+        } catch (LockTimeoutException $exception) {
+            throw new \RuntimeException('article_write_busy', 0, $exception);
         }
+    }
+
+    public static function articleWriteLockKey(int $articleId): string
+    {
+        return 'article-write:'.$articleId;
     }
 }

@@ -140,8 +140,6 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
             );
         }
 
-        $this->queue->markProcessing($task);
-
         $attemptRef = $attemptRef ?? PublishAttemptRefs::newAttemptRef();
         $externalRef = PublishAttemptRefs::forArticle((int) $article->id);
         $payload = new ArticlePublishPayload(
@@ -177,6 +175,7 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
             );
         }
 
+        // Claim Publishing chỉ sau khi publisher dispatch thành công (delivery hoặc sync).
         if ($publishResult->alreadyPublished && $publishResult->wpPostId !== null && $publishResult->wpPostId > 0) {
             $this->queue->markPublished($task->fresh() ?? $task);
             $this->health->rememberSuccess(1);
@@ -215,7 +214,9 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
         }
 
         if ($publishResult->deliveryRequested) {
-            $this->emitter->emit(BusinessEventName::ArticlePublishRequested, $article, [
+            // Delivery requested only — claim Processing after publisher accept.
+            // Do NOT markPublished here (prevents false Published before WP evidence).
+            $emitResult = $this->emitter->emitWithOutcome(BusinessEventName::ArticlePublishRequested, $article, [
                 'article_id' => (int) $article->id,
                 'site_id' => (int) ($article->site_id ?? 0) ?: null,
                 'wp_post_id' => (int) ($article->wp_post_id ?? 0) ?: null,
@@ -228,6 +229,57 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
                 'external_reference' => $externalRef,
             ]);
 
+            if ($emitResult->isSkippedNoRule()) {
+                $message = 'Thiếu automation rule article.publish_requested → wordpress.article.sync '
+                    .'(code dispatch-publish-request). Chạy: php artisan automation:seed-rules '
+                    .'rồi bật/publish rule; đảm bảo queue worker chạy.';
+                $this->queue->markFailed($task->fresh() ?? $task, $message);
+                $this->health->rememberFailure($message);
+                $this->domainEvents->dispatchAfterCommit(new ArticlePublishFailed(
+                    projectId: $projectId,
+                    itemId: $itemId,
+                    articleId: (int) $article->id,
+                    error: $message,
+                ));
+
+                return ContentProjectActionResult::fail(
+                    ContentProjectActionCodes::FAILED,
+                    $message,
+                    $projectId,
+                    affectedItemIds: [$itemId],
+                    metadata: [
+                        'automation_skip_code' => $emitResult->errorCode,
+                        'attempt_ref' => $attemptRef,
+                    ],
+                );
+            }
+
+            if ($emitResult->isRejectedOrInvalid()) {
+                $message = 'Không dispatch được article.publish_requested: '
+                    .($emitResult->message ?? $emitResult->errorCode ?? 'unknown');
+                $this->queue->markFailed($task->fresh() ?? $task, $message);
+                $this->health->rememberFailure($message);
+                $this->domainEvents->dispatchAfterCommit(new ArticlePublishFailed(
+                    projectId: $projectId,
+                    itemId: $itemId,
+                    articleId: (int) $article->id,
+                    error: $message,
+                ));
+
+                return ContentProjectActionResult::fail(
+                    ContentProjectActionCodes::FAILED,
+                    $message,
+                    $projectId,
+                    affectedItemIds: [$itemId],
+                    metadata: [
+                        'automation_skip_code' => $emitResult->errorCode,
+                        'attempt_ref' => $attemptRef,
+                    ],
+                );
+            }
+
+            $this->queue->markProcessing($task->fresh() ?? $task);
+
             $this->domainEvents->dispatchAfterCommit(new ArticlePublishRequested(
                 projectId: $projectId,
                 itemId: $itemId,
@@ -235,16 +287,17 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
                 attemptRef: $attemptRef,
             ));
 
-            // Delivery requested only — keep Processing until WordPress sync confirms success.
-            // Do NOT markPublished here (prevents false Published before WP evidence).
-            $this->queue->markProcessing($task->fresh() ?? $task);
-
             return ContentProjectActionResult::ok(
                 ContentProjectActionCodes::ITEMS_PUBLISH_QUEUED,
                 'Publish delivery requested.',
                 $projectId,
                 [$itemId],
-                metadata: ['attempt_ref' => $attemptRef, 'delivery_requested' => true],
+                metadata: [
+                    'attempt_ref' => $attemptRef,
+                    'delivery_requested' => true,
+                    'automation_outcome' => $emitResult->outcome->value,
+                    'matched_rules' => $emitResult->matchedRules,
+                ],
             );
         }
 

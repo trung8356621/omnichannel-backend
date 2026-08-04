@@ -8,10 +8,15 @@ use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Concerns\InteractsWithContentProjectPublishingActions;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AutoScheduleProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RecoverStuckPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ReturnToContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ScheduleProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectAutoScheduleService;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueReadModel;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectQueueHealthService;
+use App\Addons\SeoContentAi\Support\PublishingQueue\PublishingQueueStuckPublishingDefinition;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SystemDateTime;
 use Carbon\Carbon;
 use Filament\Actions;
 use Illuminate\Contracts\Support\Htmlable;
@@ -19,10 +24,6 @@ use Livewire\Attributes\Url;
 
 /**
  * Independent Publishing Queue hub — top-level page (not nested under a Content Project).
- * Optional `projectId` query param scopes to one project; without it, lists across
- * every accessible project (cross-project view, actions disabled per row).
- *
- * The nested `content-projects/{id}/publishing-queue` resource route redirects here (compat).
  */
 final class PublishingQueueHub extends SeoPanelPage
 {
@@ -50,6 +51,18 @@ final class PublishingQueueHub extends SeoPanelPage
 
     public bool $bulkRunning = false;
 
+    /** @var list<int> Presentation-only pending row ids */
+    public array $pendingTaskIds = [];
+
+    public ?string $pendingOp = null;
+
+    /** updating | accepted | null — presentation only, not DB enum */
+    public ?string $pendingPhase = null;
+
+    public ?string $pendingOperationId = null;
+
+    public bool $selectAllMatching = false;
+
     public string $autoMode = 'project_month';
 
     public string $autoStartAt = '';
@@ -66,6 +79,13 @@ final class PublishingQueueHub extends SeoPanelPage
 
     public string $quickStartTime = '08:00';
 
+    /** quick submode: in_day | n_days */
+    public string $quickSubmode = 'n_days';
+
+    public int $inDayIntervalMinutes = 15;
+
+    public string $recoverTarget = 'scheduled';
+
     public static function getNavigationLabel(): string
     {
         return __('seo-content-ai::filament.projects.publishing_queue_nav_label');
@@ -81,7 +101,9 @@ final class PublishingQueueHub extends SeoPanelPage
         abort_unless(SeoAccessControl::canManageContentProjectWorkflow(), 403);
         $this->resolveProject();
         if ($this->autoStartAt === '') {
-            $this->autoStartAt = now()->addHour()->format('Y-m-d\TH:i');
+            $this->autoStartAt = SystemDateTime::formatForInput(
+                SystemDateTime::currentSystemTime()->addHour()
+            ) ?? '';
         }
     }
 
@@ -96,6 +118,18 @@ final class PublishingQueueHub extends SeoPanelPage
     {
         $this->resolveProject();
         $this->clearFilters();
+    }
+
+    public function updatedSearch(): void
+    {
+        $this->selectedTaskIds = [];
+        $this->selectAllMatching = false;
+    }
+
+    public function updatedStateFilter(): void
+    {
+        $this->selectedTaskIds = [];
+        $this->selectAllMatching = false;
     }
 
     private function resolveProject(): void
@@ -141,9 +175,126 @@ final class PublishingQueueHub extends SeoPanelPage
         );
     }
 
+    /**
+     * @return array<string, mixed>
+     */
+    public function getQueueHealthProperty(): array
+    {
+        $siteIds = null;
+        if ($this->project instanceof SeoProject) {
+            $siteIds = [(int) ($this->project->site_id ?? 0)];
+        }
+
+        $connectionId = null;
+        $current = \App\Addons\SeoContentAi\Support\SeoConnectionContext::current();
+        if ($current instanceof \App\Models\SeoDatabaseConnection) {
+            $connectionId = (int) $current->getKey();
+        }
+
+        return app(ContentProjectQueueHealthService::class)->snapshot($siteIds, $connectionId);
+    }
+
+    public function getTimezoneLabelProperty(): string
+    {
+        return SystemDateTime::timezoneChip();
+    }
+
+    public function getTimezoneNameProperty(): string
+    {
+        return SystemDateTime::timezone();
+    }
+
+    public function getDateTimeSettingsUrlProperty(): ?string
+    {
+        if (! \App\Addons\SeoContentAi\Filament\Pages\SeoSettingsDateTime::canAccess()) {
+            return null;
+        }
+
+        return \App\Addons\SeoContentAi\Filament\Pages\SeoSettingsDateTime::getUrl();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getAutoPreviewProperty(): array
+    {
+        if (! $this->project instanceof SeoProject) {
+            return [
+                'eligible_ids' => [],
+                'excluded' => [],
+                'slots' => [],
+                'first_publish_at' => null,
+                'last_publish_at' => null,
+                'timezone' => SystemDateTime::timezone(),
+                'blocked' => null,
+            ];
+        }
+
+        return app(ContentProjectAutoScheduleService::class)->preview(
+            $this->project,
+            [],
+            [
+                'mode' => 'project_month',
+                'day_start' => $this->autoDayStart,
+                'day_end' => $this->autoDayEnd,
+                'allow_reschedule' => true,
+            ],
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getQuickPreviewProperty(): array
+    {
+        if (! $this->project instanceof SeoProject) {
+            return [
+                'eligible_ids' => [],
+                'excluded' => [],
+                'slots' => [],
+                'first_publish_at' => null,
+                'last_publish_at' => null,
+                'timezone' => SystemDateTime::timezone(),
+                'blocked' => null,
+                'suggested_max_interval' => null,
+            ];
+        }
+
+        $options = $this->quickSubmode === 'in_day'
+            ? [
+                'mode' => 'in_day',
+                'interval_minutes' => max(5, $this->inDayIntervalMinutes),
+                'allow_reschedule' => true,
+            ]
+            : [
+                'mode' => 'quick',
+                'days' => max(1, $this->quickDays),
+                'start_time' => $this->quickStartTime,
+                'end_time' => $this->autoDayEnd,
+                'allow_reschedule' => true,
+            ];
+
+        return app(ContentProjectAutoScheduleService::class)->preview($this->project, [], $options);
+    }
+
+    public function getStuckPublishingIdsProperty(): array
+    {
+        $ids = [];
+        foreach ($this->queuePayload['rows'] ?? [] as $row) {
+            if (! PublishingQueueStuckPublishingDefinition::matches($row)) {
+                continue;
+            }
+            $ids[] = (int) ($row['task_id'] ?? 0);
+        }
+
+        return array_values(array_filter($ids, static fn (int $id): bool => $id > 0));
+    }
+
     public function applyStateFilter(string $state): void
     {
         $this->stateFilter = $state === $this->stateFilter ? '' : $state;
+        $this->selectedTaskIds = [];
+        $this->selectAllMatching = false;
     }
 
     public function clearFilters(): void
@@ -151,28 +302,59 @@ final class PublishingQueueHub extends SeoPanelPage
         $this->search = '';
         $this->stateFilter = '';
         $this->selectedTaskIds = [];
+        $this->selectAllMatching = false;
     }
 
     public function clearSelection(): void
     {
         $this->selectedTaskIds = [];
+        $this->selectAllMatching = false;
     }
 
     public function selectPage(): void
     {
-        $ids = array_values(array_filter(array_map(
-            static fn (mixed $id): int => (int) $id,
-            $this->selectedTaskIds,
-        ), static fn (int $id): bool => $id > 0));
-
+        $ids = [];
         foreach ($this->queuePayload['rows'] ?? [] as $row) {
             $id = (int) ($row['task_id'] ?? 0);
-            if ($id > 0 && ! in_array($id, $ids, true)) {
+            if ($id > 0) {
                 $ids[] = $id;
             }
         }
 
-        $this->selectedTaskIds = $ids;
+        $this->selectedTaskIds = array_values(array_unique($ids));
+        $this->selectAllMatching = false;
+    }
+
+    public function selectAllMatchingResults(): void
+    {
+        $this->selectPage();
+        $this->selectAllMatching = true;
+    }
+
+    public function togglePageSelection(): void
+    {
+        $pageIds = [];
+        foreach ($this->queuePayload['rows'] ?? [] as $row) {
+            $id = (int) ($row['task_id'] ?? 0);
+            if ($id > 0) {
+                $pageIds[] = $id;
+            }
+        }
+
+        if ($pageIds === []) {
+            return;
+        }
+
+        $selected = $this->selectedItemIds();
+        $allSelected = count(array_diff($pageIds, $selected)) === 0;
+        if ($allSelected) {
+            $this->selectedTaskIds = array_values(array_diff($selected, $pageIds));
+            $this->selectAllMatching = false;
+
+            return;
+        }
+
+        $this->selectedTaskIds = array_values(array_unique(array_merge($selected, $pageIds)));
     }
 
     /**
@@ -207,7 +389,16 @@ final class PublishingQueueHub extends SeoPanelPage
         $this->dispatchPublishingCommand(new ScheduleProjectItemsCommand(
             (int) $this->requireProject()->getKey(),
             [$taskId],
-            Carbon::parse($at),
+            Carbon::parse($at, SystemDateTime::timezone())->utc(),
+        ), 'schedule');
+    }
+
+    public function scheduleOne(int $taskId): void
+    {
+        $this->dispatchPublishingCommand(new ScheduleProjectItemsCommand(
+            (int) $this->requireProject()->getKey(),
+            [$taskId],
+            SystemDateTime::currentSystemTime()->addHour()->utc(),
         ), 'schedule');
     }
 
@@ -215,27 +406,57 @@ final class PublishingQueueHub extends SeoPanelPage
     {
         $this->dispatchPublishingCommand(new AutoScheduleProjectItemsCommand(
             (int) $this->requireProject()->getKey(),
-            $this->selectedItemIds(),
+            [],
             [
                 'mode' => 'project_month',
                 'day_start' => $this->autoDayStart,
                 'day_end' => $this->autoDayEnd,
+                'allow_reschedule' => true,
             ],
         ), 'auto_schedule');
     }
 
     public function runQuickSchedule(): void
     {
-        $this->dispatchPublishingCommand(new AutoScheduleProjectItemsCommand(
-            (int) $this->requireProject()->getKey(),
-            $this->selectedItemIds(),
-            [
+        $options = $this->quickSubmode === 'in_day'
+            ? [
+                'mode' => 'in_day',
+                'interval_minutes' => max(5, $this->inDayIntervalMinutes),
+                'allow_reschedule' => true,
+            ]
+            : [
                 'mode' => 'quick',
                 'days' => max(1, $this->quickDays),
                 'start_time' => $this->quickStartTime,
                 'end_time' => $this->autoDayEnd,
-            ],
+                'allow_reschedule' => true,
+            ];
+
+        $this->dispatchPublishingCommand(new AutoScheduleProjectItemsCommand(
+            (int) $this->requireProject()->getKey(),
+            [],
+            $options,
         ), 'auto_schedule');
+    }
+
+    public function recoverStuckSelected(): void
+    {
+        $ids = $this->selectedItemIds();
+        if ($ids === []) {
+            $ids = $this->stuckPublishingIds;
+        }
+
+        $this->dispatchPublishingCommand(new RecoverStuckPublishingCommand(
+            (int) $this->requireProject()->getKey(),
+            $ids,
+            $this->recoverTarget,
+        ), 'recover_stuck');
+    }
+
+    public function refreshQueueHealth(): void
+    {
+        // Livewire recomputes computed props on next render.
+        unset($this->queueHealth, $this->queuePayload);
     }
 
     protected function getHeaderActions(): array

@@ -51,16 +51,6 @@ export function saveFeaturedImage(articleId, item) {
         console.warn('Featured persist failed', error);
     });
 
-    window.dispatchEvent(
-        new CustomEvent('seo-featured-image-updated', {
-            detail: {
-                articleId: id,
-                item: normalized,
-                pending: true,
-            },
-        }),
-    );
-
     return normalized;
 }
 
@@ -88,12 +78,6 @@ export function clearFeaturedImageStorage(articleId) {
     void clearFeaturedViaApi(id).catch((error) => {
         console.warn('Featured clear failed', error);
     });
-
-    window.dispatchEvent(
-        new CustomEvent('seo-featured-image-cleared', {
-            detail: { articleId: id, pending: true },
-        }),
-    );
 }
 
 export function featuredPresent(articleId) {

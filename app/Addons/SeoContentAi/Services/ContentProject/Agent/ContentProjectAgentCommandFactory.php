@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\Archive
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AutoScheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CancelProjectItemPublishingCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RecoverStuckPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CreateContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\GenerateProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\MoveProjectItemScheduleCommand;
@@ -165,6 +166,15 @@ final class ContentProjectAgentCommandFactory
                 $this->itemRefs($input),
                 (bool) ($input['dry_run'] ?? false),
                 isset($input['confirmation_token']) ? (string) $input['confirmation_token'] : null,
+            ),
+            'content_project.recover_stuck_publishing' => new RecoverStuckPublishingCommand(
+                $this->projectRef($input),
+                $this->itemRefs($input),
+                (string) ($input['target'] ?? 'scheduled'),
+                isset($input['reschedule_at'])
+                    ? Carbon::parse((string) $input['reschedule_at'])
+                    : null,
+                (bool) ($input['dry_run'] ?? false),
             ),
             'content_project.send_to_publishing_queue' => new SendToPublishingQueueCommand(
                 $this->projectRef($input),

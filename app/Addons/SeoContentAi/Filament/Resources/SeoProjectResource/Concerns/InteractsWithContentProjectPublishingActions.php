@@ -19,18 +19,21 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectAc
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResultNotifier;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SystemDateTime;
 use App\Support\RuntimeLogger;
-use Carbon\Carbon;
 use Throwable;
 
 /**
- * Publishing bulk/item actions — shared by canonical project page (ex-Publishing Queue).
+ * Publishing bulk/item actions — shared by Publishing Queue hub / CP ops.
  *
  * Host component MUST declare:
  * - public bool $bulkRunning
+ * - public array $pendingTaskIds
+ * - public ?string $pendingOp
+ * - public ?string $pendingPhase  updating|accepted|null
+ * - public ?string $pendingOperationId
  * - public string $autoMode, $autoStartAt, $autoDayStart, $autoDayEnd
  * - public int $autoIntervalMinutes, $autoPerDay
- * (Livewire không luôn expose property khai báo trong trait.)
  */
 trait InteractsWithContentProjectPublishingActions
 {
@@ -41,11 +44,16 @@ trait InteractsWithContentProjectPublishingActions
 
     abstract public function clearSelection(): void;
 
+    public function isTaskPending(int $taskId): bool
+    {
+        return in_array($taskId, $this->pendingTaskIds ?? [], true);
+    }
+
     public function bulkSchedule(?string $at = null): void
     {
         $when = $at !== null && $at !== ''
-            ? Carbon::parse($at)
-            : now()->addHour();
+            ? SystemDateTime::parseSystemInputToUtc($at)
+            : SystemDateTime::currentSystemTime()->addHour()->utc();
 
         $this->dispatchPublishingCommand(new ScheduleProjectItemsCommand(
             (int) $this->requireProject()->getKey(),
@@ -83,7 +91,7 @@ trait InteractsWithContentProjectPublishingActions
         $this->dispatchPublishingCommand(new MoveProjectItemScheduleCommand(
             (int) $this->requireProject()->getKey(),
             $this->selectedItemIds(),
-            Carbon::parse($at),
+            SystemDateTime::parseSystemInputToUtc($at),
         ), 'move_time');
     }
 
@@ -156,7 +164,7 @@ trait InteractsWithContentProjectPublishingActions
         $this->dispatchPublishingCommand(new ScheduleProjectItemsCommand(
             (int) $this->requireProject()->getKey(),
             [$taskId],
-            now()->addHour(),
+            SystemDateTime::currentSystemTime()->addHour()->utc(),
         ), 'schedule');
     }
 
@@ -196,6 +204,10 @@ trait InteractsWithContentProjectPublishingActions
     {
         abort_unless(SeoAccessControl::canManageContentProjectWorkflow(), 403);
 
+        if (($this->bulkRunning ?? false) === true) {
+            return;
+        }
+
         $embedded = property_exists($command, 'itemRefs') && is_array($command->itemRefs)
             ? array_values(array_filter(array_map(
                 static fn (mixed $id): int => (int) $id,
@@ -203,7 +215,9 @@ trait InteractsWithContentProjectPublishingActions
             ), static fn (int $id): bool => $id > 0))
             : [];
 
-        if ($embedded === []) {
+        $allowsEmptySelection = in_array($op, ['auto_schedule'], true);
+
+        if ($embedded === [] && ! $allowsEmptySelection) {
             app(ContentProjectActionResultNotifier::class)->send(
                 ContentProjectActionResult::fail(
                     'validation.failed',
@@ -213,6 +227,27 @@ trait InteractsWithContentProjectPublishingActions
             );
 
             return;
+        }
+
+        $operationId = bin2hex(random_bytes(8));
+        $this->pendingOperationId = $operationId;
+        $this->pendingOp = $op;
+        $this->pendingPhase = 'updating';
+        $this->pendingTaskIds = $embedded;
+
+        // Auto/Quick: resolve eligible ids for row-level pending before dispatch.
+        if ($embedded === [] && $allowsEmptySelection && $op === 'auto_schedule') {
+            try {
+                $preview = app(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectAutoScheduleService::class)
+                    ->preview(
+                        $this->requireProject(),
+                        [],
+                        property_exists($command, 'options') && is_array($command->options) ? $command->options : [],
+                    );
+                $this->pendingTaskIds = array_values(array_map('intval', $preview['eligible_ids'] ?? []));
+            } catch (Throwable) {
+                $this->pendingTaskIds = [];
+            }
         }
 
         $this->bulkRunning = true;
@@ -226,15 +261,36 @@ trait InteractsWithContentProjectPublishingActions
                 ),
             );
 
-            if (! ($result->success && $op === 'send_to_publishing_queue')) {
-                app(ContentProjectActionResultNotifier::class)->send($result);
+            if ($this->pendingOperationId !== $operationId) {
+                return;
             }
 
-            if ($result->success) {
-                $this->clearSelection();
-                if (method_exists($this, 'afterPublishingCommandSuccess')) {
-                    $this->afterPublishingCommandSuccess($op, $embedded, $result);
-                }
+            // Không success toast — chỉ danger/warning khi fail / confirm.
+            if (! $result->success) {
+                app(ContentProjectActionResultNotifier::class)->send($result);
+                $this->clearPendingPresentation();
+
+                return;
+            }
+
+            // Publish Now / Retry: command accepted ≠ WordPress Published.
+            if (in_array($op, ['publish_now', 'retry'], true)) {
+                $this->pendingPhase = 'accepted';
+            }
+
+            $this->clearSelection();
+            if (method_exists($this, 'afterPublishingCommandSuccess')) {
+                $this->afterPublishingCommandSuccess($op, $embedded, $result);
+            }
+
+            // Keep brief accepted flash for publish_now; otherwise clear pending so
+            // canonical state from re-render takes over.
+            if (! in_array($op, ['publish_now', 'retry'], true)) {
+                $this->clearPendingPresentation();
+            } else {
+                $this->bulkRunning = false;
+                // Leave pendingPhase=accepted until next refresh paints Publishing.
+                $this->js('setTimeout(() => $wire.clearPendingPresentation(), 1200)');
             }
         } catch (Throwable $e) {
             RuntimeLogger::report($e, [
@@ -248,8 +304,20 @@ trait InteractsWithContentProjectPublishingActions
                     (int) $this->requireProject()->getKey(),
                 ),
             );
+            $this->clearPendingPresentation();
         } finally {
-            $this->bulkRunning = false;
+            if (($this->pendingPhase ?? null) !== 'accepted') {
+                $this->bulkRunning = false;
+            }
         }
+    }
+
+    public function clearPendingPresentation(): void
+    {
+        $this->pendingTaskIds = [];
+        $this->pendingOp = null;
+        $this->pendingPhase = null;
+        $this->pendingOperationId = null;
+        $this->bulkRunning = false;
     }
 }

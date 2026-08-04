@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers;
 
 use App\Addons\SeoContentAi\Models\SeoProject;
-use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AutoScheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionCodes;
@@ -44,7 +43,12 @@ final class AutoScheduleProjectItemsHandler extends AbstractPublishingHandler
                 $this->tenantGuard->assertTasksBelongToProject($project, $itemIds);
             }
 
-            $resolvedItemIds = $this->resolveAutoScheduleItemIds($project, $itemIds);
+            $allowReschedule = (bool) ($command->options['allow_reschedule'] ?? true);
+            $preview = $this->autoScheduleService->preview($project, $itemIds, $command->options + [
+                'allow_reschedule' => $allowReschedule,
+            ]);
+            $resolvedItemIds = $preview['eligible_ids'];
+
             $fingerprint = $this->buildFingerprint($command->name(), $projectId, [
                 'item_ids' => $resolvedItemIds,
                 'options' => $command->options,
@@ -59,15 +63,50 @@ final class AutoScheduleProjectItemsHandler extends AbstractPublishingHandler
                         'action' => 'auto_schedule',
                         'options' => $command->options,
                         'item_count' => count($resolvedItemIds),
+                        'excluded_count' => count($preview['excluded']),
+                        'excluded' => $preview['excluded'],
+                        'first_publish_at' => $preview['first_publish_at'],
+                        'last_publish_at' => $preview['last_publish_at'],
+                        'timezone' => $preview['timezone'],
+                        'blocked' => $preview['blocked'],
+                        'suggested_max_interval' => $preview['suggested_max_interval'],
+                        'slots' => $preview['slots'],
+                        'item_schedule_map' => $preview['item_schedule_map'] ?? [],
                     ],
                     requiresConfirmation: false,
                 );
             }
 
+            if ($resolvedItemIds === []) {
+                return ContentProjectActionResult::fail(
+                    ContentProjectActionCodes::VALIDATION_FAILED,
+                    'Không có bài chưa lên lịch phù hợp.',
+                    $projectId,
+                    metadata: [
+                        'excluded' => $preview['excluded'],
+                        'timezone' => $preview['timezone'],
+                    ],
+                );
+            }
+
+            if (! empty($preview['blocked'])) {
+                return ContentProjectActionResult::fail(
+                    ContentProjectActionCodes::VALIDATION_FAILED,
+                    (string) $preview['blocked'],
+                    $projectId,
+                    metadata: [
+                        'suggested_max_interval' => $preview['suggested_max_interval'],
+                        'timezone' => $preview['timezone'],
+                        'eligible_ids' => $resolvedItemIds,
+                    ],
+                    affectedItemIds: $resolvedItemIds,
+                );
+            }
+
             return $this->businessLock->withLock(
                 $this->businessLock->projectSchedule($projectId),
-                function () use ($project, $projectId, $itemIds, $command, $resolvedItemIds): ContentProjectActionResult {
-                    $result = $this->autoScheduleService->schedule($project, $itemIds, $command->options);
+                function () use ($project, $projectId, $resolvedItemIds, $command): ContentProjectActionResult {
+                    $result = $this->autoScheduleService->schedule($project, $resolvedItemIds, $command->options);
 
                     return ContentProjectActionResult::ok(
                         ContentProjectActionCodes::ITEMS_SCHEDULED,
@@ -77,35 +116,16 @@ final class AutoScheduleProjectItemsHandler extends AbstractPublishingHandler
                         metadata: [
                             'affected_count' => (int) $result['scheduled'],
                             'slots' => $result['slots'],
+                            'item_schedule_map' => $result['item_schedule_map'] ?? [],
+                            'excluded' => $result['excluded'],
+                            'first_publish_at' => $result['first_publish_at'],
+                            'last_publish_at' => $result['last_publish_at'],
+                            'timezone' => $result['timezone'],
+                            'wordpress_called' => false,
                         ],
                     );
                 },
             );
         });
-    }
-
-    /**
-     * @param  list<int>  $itemIds
-     * @return list<int>
-     */
-    private function resolveAutoScheduleItemIds(SeoProject $project, array $itemIds): array
-    {
-        if ($itemIds !== []) {
-            return $itemIds;
-        }
-
-        return SeoProjectTask::query()
-            ->where('project_id', (int) $project->getKey())
-            ->active()
-            ->where('article_id', '>', 0)
-            ->where(function ($q): void {
-                $q->whereNull('publish_queue_status')
-                    ->orWhereIn('publish_queue_status', ['none', 'failed', 'cancelled', 'skipped']);
-            })
-            ->whereNull('scheduled_publish_at')
-            ->orderBy('id')
-            ->pluck('id')
-            ->map(static fn ($id): int => (int) $id)
-            ->all();
     }
 }

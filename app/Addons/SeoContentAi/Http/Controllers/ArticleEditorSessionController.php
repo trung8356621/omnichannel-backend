@@ -97,6 +97,21 @@ final class ArticleEditorSessionController extends Controller
             return $this->errorResponse($exception);
         }
 
+        // Same-content ACK: skip bundle side-effects + heavy save patch rebuild.
+        if (($payload['noop'] ?? false) === true) {
+            return response()->json([
+                ...$payload,
+                'patch' => [
+                    'article' => [
+                        'document_version' => $payload['document_version'] ?? null,
+                        'updated_at' => $payload['saved_at'] ?? null,
+                        'content_hash' => $payload['content_hash'] ?? null,
+                        'editor_document_hash' => $payload['editor_document_hash'] ?? null,
+                    ],
+                ],
+            ]);
+        }
+
         $savedArticle = $article->fresh() ?? $article;
         $context = ArticleEditorSaveContext::fromBundle($savedArticle, $bundle);
         $this->bundleApply->apply($savedArticle, $bundle, $context);
@@ -160,6 +175,9 @@ final class ArticleEditorSessionController extends Controller
         return response()->json(['released' => true]);
     }
 
+    /**
+     * @deprecated Exclusive lock UI has no takeover path. Keep for API/admin escape hatch until product/ops ACK.
+     */
     public function takeover(Request $request, SeoArticle $article): JsonResponse
     {
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
@@ -212,6 +230,7 @@ final class ArticleEditorSessionController extends Controller
             return [
                 'success' => false,
                 'message' => (string) ($result->error['message'] ?? 'Persist failed.'),
+                'code' => $code !== '' ? $code : 'persist_rejected',
             ];
         }
 

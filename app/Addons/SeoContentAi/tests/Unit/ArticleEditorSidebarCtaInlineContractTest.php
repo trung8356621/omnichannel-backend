@@ -7,7 +7,7 @@ namespace App\Addons\SeoContentAi\Tests\Unit;
 use PHPUnit\Framework\TestCase;
 
 /**
- * 3G — sidebar keeps editor bookmark; contact UI inserts CTA only (no raw value).
+ * 3G — sidebar keeps editor bookmark; CTA primary = value, dropdown = sentence.
  */
 final class ArticleEditorSidebarCtaInlineContractTest extends TestCase
 {
@@ -34,32 +34,41 @@ final class ArticleEditorSidebarCtaInlineContractTest extends TestCase
         self::assertStringContainsString('isAssistantFocusStealTarget(related)', $editor);
     }
 
-    public function test_contact_ui_only_exposes_cta_insert(): void
+    public function test_contact_ui_exposes_value_and_sentence_insert(): void
     {
         $cta = $this->readAddon('resources/js/components/CtaContactInsertList.jsx');
         $links = $this->readAddon('resources/js/components/ArticleLinksSidebar.jsx');
         $domain = $this->readAddon('resources/js/components/ArticleDomainWidgetsSidebar.jsx');
 
-        self::assertStringContainsString('cta_widget_insert_cta', $cta);
+        self::assertStringContainsString('cta_widget_insert_sentence_tooltip', $cta);
+        self::assertStringContainsString('cta_widget_insert_${type === \'hotline\' ? \'phone\' : type}_tooltip', $cta);
         self::assertStringContainsString('onInsertQuickCta', $cta);
         self::assertStringNotContainsString('onInsertValue', $cta);
         self::assertStringNotContainsString('onInsertValue=', $links);
         self::assertStringNotContainsString('onInsertValue=', $domain);
         self::assertStringContainsString("effectiveMode = mode === 'value' ? 'value' : 'sentence'", $cta);
         self::assertStringContainsString("data-cta-action=\"insert_contact_value\"", $cta);
+        self::assertStringContainsString("data-cta-action=\"insert_contact_cta\"", $cta);
         self::assertStringContainsString("onInsertQuickCta(item, itemKey, null, 'value')", $cta);
+        self::assertStringContainsString("onInsertQuickCta(item, itemKey, null, 'sentence')", $cta);
     }
 
     public function test_canonical_cta_command_is_insert_contact_cta_at_bookmark(): void
     {
         $selection = $this->readAddon('resources/js/utils/editorSelectionUtils.js');
         $editor = $this->readAddon('resources/js/components/SeoArticleEditor.jsx');
+        $registry = $this->readAddon('resources/js/utils/editorCommands/editorCommandRegistry.js');
 
         self::assertStringContainsString('insertContactCtaAtBookmark', $selection);
-        self::assertStringContainsString('insertContactCtaAtBookmark', $editor);
         self::assertStringContainsString("class: 'article-cta'", $selection);
         self::assertStringContainsString('article-cta__value', $selection);
+        self::assertStringContainsString('resolveInsertionAfterEnclosingBlock', $selection);
         self::assertStringNotContainsString('commands.lift()', $selection);
         self::assertStringNotContainsString('setTextSelection(docSize)', $selection);
+
+        // Host routes via command layer (not direct util import in SeoArticleEditor).
+        self::assertStringContainsString("isCtaSentence ? 'insert_contact_cta' : 'insert_contact_value'", $editor);
+        self::assertStringContainsString("mut('insert_contact_cta'", $registry);
+        self::assertStringContainsString("mut('insert_contact_value'", $registry);
     }
 }

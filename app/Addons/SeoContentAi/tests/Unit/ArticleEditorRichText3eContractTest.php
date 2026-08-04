@@ -74,7 +74,7 @@ final class ArticleEditorRichText3eContractTest extends TestCase
 
         self::assertStringContainsString('Presence wins', $health);
         self::assertStringContainsString('featuredHealthSnapshot', $editor);
-        self::assertStringContainsString('seo-featured-image-updated', $editor);
+        self::assertStringContainsString('article-editor-media-snapshot-changed', $editor);
         self::assertStringContainsString('setMediaHealthTick', $editor);
     }
 

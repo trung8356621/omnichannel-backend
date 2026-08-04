@@ -36,10 +36,12 @@ export {
 export {
     composeRuntimeWidgetHealth,
     publishRuntimeWidgetHealth,
+    publishPartialRuntimeWidgetHealth,
     listRuntimeHealthBuilderKeys,
 } from './composeRuntimeWidgetHealth';
 export {
     setRuntimeWidgetHealth,
+    patchRuntimeWidgetHealth,
     subscribeRuntimeWidgetHealth,
     installRuntimeHealthBadgeBridge,
     publishEditorShellHealthSummary,

@@ -350,28 +350,6 @@ export function insertContactCtaAtBookmark(editor, opts = {}) {
         .run();
 }
 
-/** @deprecated Use insertContactCtaAtBookmark */
-export function insertCtaInlineAtBookmark(editor, opts = {}) {
-    return insertContactCtaAtBookmark(editor, opts);
-}
-
-/**
- * @deprecated Raw value kept for non-sidebar consumers only.
- */
-export function insertCtaInEditor(editor, label, href, type = '', bookmark = null) {
-    return insertContactValueAtBookmark(editor, label, href, type, bookmark);
-}
-
-/** @deprecated Use insertContactCtaAtBookmark */
-export function insertCtaBlockAtBookmark(editor, opts = {}) {
-    return insertContactCtaAtBookmark(editor, opts);
-}
-
-/** @deprecated Use insertContactCtaAtBookmark */
-export function insertCtaBlockInEditor(editor, opts = {}) {
-    return insertContactCtaAtBookmark(editor, opts);
-}
-
 /**
  * @param {import('@tiptap/core').Editor|null|undefined} editor
  * @param {string} text
@@ -438,18 +416,4 @@ export function insertHtmlInEditor(editor, html, bookmark = null) {
     return chainCollapseCaretAfterInsert(
         chain.insertContent(inlineHtml || value),
     ).run();
-}
-
-/** @deprecated Use insertLinkInEditor */
-export function insertLinkReplacingEditorSelection(editor, label, href) {
-    if (!editor?.state || editor.isDestroyed) {
-        return false;
-    }
-
-    const { empty, to, from } = editor.state.selection;
-    if (empty || to <= from) {
-        return false;
-    }
-
-    return insertLinkInEditor(editor, label, href);
 }

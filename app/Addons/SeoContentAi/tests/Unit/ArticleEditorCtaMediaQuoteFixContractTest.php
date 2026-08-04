@@ -51,19 +51,15 @@ final class ArticleEditorCtaMediaQuoteFixContractTest extends TestCase
         self::assertStringContainsString('editor_cta_block_inserted', $editor);
     }
 
-    public function test_raw_insert_does_not_delegate_to_cta_block(): void
+    public function test_raw_insert_uses_contact_value_bookmark_helper(): void
     {
         $selection = $this->readAddon('resources/js/utils/editorSelectionUtils.js');
 
-        // Scope to function signature+body start — avoid matching later insertCtaBlockAtBookmark.
-        self::assertMatchesRegularExpression(
-            '/export function insertCtaInEditor\s*\([^)]*\)\s*\{\s*return insertContactValueAtBookmark\s*\(/',
-            $selection,
-        );
-        self::assertDoesNotMatchRegularExpression(
-            '/export function insertCtaInEditor\s*\([^)]*\)\s*\{\s*return insertCtaBlockInEditor\s*\(/',
-            $selection,
-        );
+        self::assertStringContainsString('export function insertContactValueAtBookmark', $selection);
+        self::assertStringContainsString('export function insertContactCtaAtBookmark', $selection);
+        self::assertStringNotContainsString('export function insertCtaInEditor', $selection);
+        self::assertStringNotContainsString('export function insertCtaBlockAtBookmark', $selection);
+        self::assertStringNotContainsString('export function insertLinkReplacingEditorSelection', $selection);
     }
 
     public function test_content_image_counter_scans_inline_html_not_only_image_blocks(): void

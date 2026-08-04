@@ -43,11 +43,14 @@ final class PublishScheduledArticlesCommand extends Command
         }
 
         $this->line(sprintf(
-            'processed=%d published=%d failed=%d skipped=%d',
+            'processed=%d published=%d failed=%d skipped=%d bootstrap_failed=%d connections_attempted=%d connections_skipped=%d',
             $stats['processed'],
             $stats['published'],
             $stats['failed'],
             $stats['skipped'] ?? 0,
+            $stats['bootstrap_failed'] ?? 0,
+            $stats['connections_attempted'] ?? 0,
+            $stats['connections_skipped'] ?? 0,
         ));
 
         return self::SUCCESS;

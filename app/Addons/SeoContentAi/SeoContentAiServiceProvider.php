@@ -8,6 +8,8 @@ use App\Addons\SeoContentAi\Console\BackfillPromptResultLinksCommand;
 use App\Addons\SeoContentAi\Console\CleanCtaKeywordsCommand;
 use App\Addons\SeoContentAi\Console\ExtractOldArticleTocsCommand;
 use App\Addons\SeoContentAi\Console\PublishScheduledArticlesCommand;
+use App\Addons\SeoContentAi\Console\AuditSeoDatabaseConnectionsCommand;
+use App\Addons\SeoContentAi\Console\QueueRuntimeCheckCommand;
 use App\Addons\SeoContentAi\Http\Middleware\SetDynamicSeoDatabase;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
@@ -649,6 +651,7 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 CleanCtaKeywordsCommand::class,
                 ExtractOldArticleTocsCommand::class,
                 PublishScheduledArticlesCommand::class,
+                AuditSeoDatabaseConnectionsCommand::class,
                 \App\Addons\SeoContentAi\Console\RunSiteSyncCommand::class,
                 \App\Addons\SeoContentAi\Console\ReconcileSiteSyncCommand::class,
                 \App\Addons\SeoContentAi\Console\BackfillSiteSyncV2Command::class,
@@ -661,6 +664,7 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 \App\Addons\SeoContentAi\Console\DiagnoseContentProjectSyncCommand::class,
                 \App\Addons\SeoContentAi\Console\DiagnoseContentProjectCommand::class,
                 \App\Addons\SeoContentAi\Console\ContentProjectRunStatusCommand::class,
+                QueueRuntimeCheckCommand::class,
                 \App\Addons\SeoContentAi\Console\ContentProjectRunRecoverCommand::class,
                 \App\Addons\SeoContentAi\Console\RepairContentProjectActiveExecutionsCommand::class,
                 \App\Addons\SeoContentAi\Console\RecoverContentProjectStaleGenerationCommand::class,

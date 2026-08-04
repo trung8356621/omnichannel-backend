@@ -29,8 +29,14 @@ final class ContentProjectQueueHealthWidget extends StatsOverviewWidget
     protected function getStats(): array
     {
         $siteIds = SeoAccessControl::accessibleSiteIds();
+        $connectionId = null;
+        $current = \App\Addons\SeoContentAi\Support\SeoConnectionContext::current();
+        if ($current instanceof \App\Models\SeoDatabaseConnection) {
+            $connectionId = (int) $current->getKey();
+        }
         $health = app(ContentProjectQueueHealthService::class)->snapshot(
             $siteIds !== [] ? $siteIds : null,
+            $connectionId,
         );
 
         return [

@@ -11,6 +11,7 @@ use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectStatusBadgePresenter;
 use App\Addons\SeoContentAi\Support\PublishingQueue\PublishingQueueStateClassifier;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SystemDateTime;
 use Illuminate\Support\Collection;
 
 /**
@@ -103,12 +104,12 @@ final class ContentProjectPublishingQueueReadModel
             }
 
             $queuedAt = $task->publishing_queued_at;
-            $lastActivity = $task->scheduled_publish_at?->diffForHumans()
-                ?? $queuedAt?->diffForHumans()
-                ?? '—';
-            $lastActivityFull = $task->scheduled_publish_at?->toDateTimeString()
-                ?? $queuedAt?->toDateTimeString()
-                ?? '';
+            $activityAt = $task->scheduled_publish_at ?? $queuedAt;
+            $lastActivity = SystemDateTime::formatRelative($activityAt) ?? '—';
+            $lastActivityFull = SystemDateTime::formatDateTime($activityAt) ?? '';
+            $scheduleParts = SystemDateTime::formatScheduleParts($task->scheduled_publish_at);
+            $scheduledAtDisplay = $scheduleParts['display'] ?? '—';
+            $scheduledUtcDebug = SystemDateTime::formatUtcDebug($task->scheduled_publish_at);
 
             $row = [
                 'task_id' => (int) $task->getKey(),
@@ -122,7 +123,10 @@ final class ContentProjectPublishingQueueReadModel
                 'has_featured_image' => $thumbnailUrl !== null,
                 'scheduled_publish_at' => $task->scheduled_publish_at,
                 'scheduled_raw' => $task->scheduled_publish_at?->toIso8601String(),
-                'scheduled_at' => $task->scheduled_publish_at?->format('d/m/Y H:i') ?? '—',
+                'scheduled_at' => $scheduledAtDisplay,
+                'scheduled_at_date' => $scheduleParts['date'] ?? null,
+                'scheduled_at_time' => $scheduleParts['time'] ?? null,
+                'scheduled_utc_debug' => $scheduledUtcDebug,
                 'publish_queue_status' => $queue,
                 'queue_status' => $queue,
                 'publish_published_at' => $task->publish_published_at?->toIso8601String(),
@@ -130,6 +134,7 @@ final class ContentProjectPublishingQueueReadModel
                 'last_publish_error' => (string) ($task->last_publish_error ?? ''),
                 'message' => (string) ($task->last_publish_error ?? ''),
                 'publishing_queued_at' => $queuedAt?->toIso8601String(),
+                'last_publish_attempt_at' => $task->last_publish_attempt_at?->toIso8601String(),
                 'last_activity' => $lastActivity,
                 'last_activity_full' => $lastActivityFull,
                 'is_recently_completed' => false,

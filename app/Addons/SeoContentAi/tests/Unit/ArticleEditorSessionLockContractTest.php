@@ -193,14 +193,15 @@ final class ArticleEditorSessionLockContractTest extends TestCase
         self::assertStringContainsString('ArticleEditorWithSession', $entry);
         self::assertStringContainsString('EditorSessionClient', $entry);
         self::assertStringContainsString('closeArticleViaSessionApi', $entry);
-        self::assertStringContainsString("t('editor_locked_takeover')", $entry);
-        self::assertStringContainsString('EditorSessionLockBanner', $entry);
-
-        $i18n = (string) file_get_contents(
+        self::assertStringContainsString('ExclusiveLockScreen', $entry);
+        self::assertStringNotContainsString('EditorSessionLockBanner', $entry);
+        self::assertStringNotContainsString("t('editor_locked_takeover')", $entry);
+        self::assertStringNotContainsString('editor_locked_takeover:', $i18n = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/js/utils/i18n.js',
-        );
-        self::assertStringContainsString('editor_locked_takeover', $i18n);
-        self::assertStringContainsString('Chiếm quyền chỉnh sửa', $i18n);
+        ));
+
+        self::assertStringContainsString('editor_locked_retry', $i18n);
+        self::assertStringContainsString('Bài viết đang được chỉnh sửa', $i18n);
 
         $api = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/js/utils/articleEditorApi.js',

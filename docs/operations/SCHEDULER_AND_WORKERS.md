@@ -2,10 +2,12 @@
 
 > Status: Canonical  
 > Owner: SeoContentAi (+ core schedule)  
-> Last verified: 2026-08-01  
+> Last verified: 2026-08-03  
 > Supersedes: scattered schedule notes in archived Site Sync / WordPress MAP docs; automation cron/queue notes from `docs/archive/automation/AUTOMATION_SERVICE_INVENTORY.md` (durable ownership only)
 
 Runtime expectation: host cron runs `php artisan schedule:run` every minute; queue workers process named queues below.
+
+**aaPanel production runbook (shared + dedicated workers, flock, `retry_after` gate):** [AAPANEL_QUEUE_RUNTIME.md](AAPANEL_QUEUE_RUNTIME.md).
 
 ## Site Sync
 
@@ -52,13 +54,46 @@ Details: [../modules/WORDPRESS_BRIDGE.md](../modules/WORDPRESS_BRIDGE.md).
 
 ## Content Project
 
-| Schedule / queue | Role |
-|------------------|------|
-| Queue `seo-content-run` | `RunContentProjectArticleJob` (`uniqueFor`/`timeout` 900, `tries` 1) |
+| Schedule / queue | Runtime worker / role |
+|------------------|------------------------|
+| Queue `seo-content-run` | **Dedicated Content Project Queue Worker** — `RunContentProjectArticleJob` (`$timeout`/`$uniqueFor` 900, `$tries` 1; no `$backoff`). Confirmed active prod queue. Shared worker must **not** list this queue. |
 | `seo-content-ai:publish-scheduled-articles` | Named schedule → `PublishScheduledArticlesCommand` (CP + legacy branches) |
 | `seo-content-ai:content-project-recover-stale-generation` | Every 10 min → `seo:content-project:recover-stale-generation --apply` |
 
-Contract: [../contracts/QUEUE_SCHEDULER_AND_IDEMPOTENCY.md](../contracts/QUEUE_SCHEDULER_AND_IDEMPOTENCY.md).
+### Production status (2026-08-03)
+
+| Gate | Status |
+|------|--------|
+| Runtime safety gate (`seo:queue-runtime-check`) | **VERIFIED PASS** |
+| Dedicated worker | **CONFIGURED** |
+| Generation smoke test | **PENDING** |
+
+### Database queue safety (production)
+
+| Setting | Value |
+|---------|-------|
+| `RunContentProjectArticleJob` timeout | **900** |
+| Database queue `retry_after` | **1200** (`DB_QUEUE_RETRY_AFTER`) |
+| Contract | `retry_after` must remain **greater than** the longest effective job timeout (1200 > 900) |
+
+Preflight: `php artisan seo:queue-runtime-check` → must PASS before generation smoke.
+
+**Invariant:** Long-running Content Project generation must **not** share the shared aaPanel worker flock.
+
+Contract: [../contracts/QUEUE_SCHEDULER_AND_IDEMPOTENCY.md](../contracts/QUEUE_SCHEDULER_AND_IDEMPOTENCY.md).  
+aaPanel tasks + Final smoke test: [AAPANEL_QUEUE_RUNTIME.md](AAPANEL_QUEUE_RUNTIME.md) (§5 Operator smoke checklist).
+
+### Queue → worker ownership
+
+| Queue | Runtime worker |
+|-------|----------------|
+| `seo-content-run` | Dedicated Content Project Queue Worker |
+| `automation-critical` | Shared Queue Worker |
+| `automation` | Shared Queue Worker |
+| `automation-external` | Shared Queue Worker |
+| `seo` | Shared Queue Worker |
+| `media_generation` | Shared Queue Worker |
+| `default` | Shared Queue Worker |
 
 ## Automation (three owners)
 
@@ -99,6 +134,7 @@ After env/mode changes for prompt hooks: `optimize:clear`, `seo:prompt-hooks:cle
 
 ## Related documents
 
+- [AAPANEL_QUEUE_RUNTIME.md](AAPANEL_QUEUE_RUNTIME.md)
 - [../modules/SITE_SYNC.md](../modules/SITE_SYNC.md)
 - [../modules/WORDPRESS_BRIDGE.md](../modules/WORDPRESS_BRIDGE.md)
 - [../modules/AUTOMATION.md](../modules/AUTOMATION.md)
@@ -107,4 +143,5 @@ After env/mode changes for prompt hooks: `optimize:clear`, `seo:prompt-hooks:cle
 - [DEPLOYMENT.md](DEPLOYMENT.md)
 - [TESTING.md](TESTING.md)
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+- [../audits/BACKEND_RUNTIME_PERFORMANCE_AUDIT.md](../audits/BACKEND_RUNTIME_PERFORMANCE_AUDIT.md)
 

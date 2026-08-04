@@ -44,7 +44,8 @@ final class ArticleEditorRuntimeMediaPhase6c3Test extends TestCase
         self::assertStringNotContainsString('wp-featured-image-picker', $blade);
         self::assertStringNotContainsString('seoProductAlbumBoxData', $blade);
         self::assertStringNotContainsString('x-show="mediaModalOpen"', $blade);
-        self::assertStringContainsString('featuredImageDraft: null', $blade);
+        self::assertStringNotContainsString('featuredImageDraft', $blade);
+        self::assertStringNotContainsString('mediaModalOpen', $blade);
         self::assertStringContainsString('__seoOpenSharedMediaPicker', $blade);
     }
 

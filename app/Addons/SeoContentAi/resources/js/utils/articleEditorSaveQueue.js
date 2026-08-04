@@ -4,40 +4,134 @@ import {
     saveArticleViaApi,
 } from './articleEditorApi';
 
+/** @typedef {'autosave' | 'explicit' | 'save-close'} SavePriority */
+
+const PRIORITY_RANK = {
+    autosave: 1,
+    explicit: 2,
+    'save-close': 3,
+};
+
 /**
- * Single-flight save — at most one active request; further calls queue one final round
- * with the latest payloadFactory result.
+ * Single write queue for autosave / explicit save / save-close.
+ * At most one in-flight request; coalesce pending round to highest priority + latest payload.
  */
 let activeSavePromise = null;
 let pendingRoundPromise = null;
 /** @type {null | (() => Record<string, unknown> | Promise<Record<string, unknown>>)} */
 let latestPayloadFactory = null;
 let latestArticleId = null;
+/** @type {SavePriority} */
+let latestPriority = 'autosave';
+let suppressAutosaveUntil = 0;
+
+/**
+ * Cancel pending debounce timer + suppress new autosave briefly while explicit save runs.
+ */
+export function cancelPendingServerAutosave() {
+    if (typeof window !== 'undefined') {
+        window.clearTimeout(window.__seoServerAutosaveTimer);
+        window.__seoServerAutosaveTimer = null;
+    }
+}
+
+export function beginExplicitEditorSave() {
+    cancelPendingServerAutosave();
+    suppressAutosaveUntil = Date.now() + 15_000;
+}
+
+export function endExplicitEditorSave() {
+    suppressAutosaveUntil = 0;
+}
+
+export function shouldSuppressServerAutosave() {
+    return Date.now() < suppressAutosaveUntil || isArticleSaveInFlight();
+}
 
 async function runSingleFlightSave() {
     const articleId = latestArticleId;
     const factory = latestPayloadFactory;
+    const priority = latestPriority;
     const payload = typeof factory === 'function' ? await factory() : {};
 
     if (typeof window !== 'undefined' && payload?.html) {
         window.__SEO_EDITOR_LAST_SAVE_HTML__ = String(payload.html);
     }
 
-    activeSavePromise = saveArticleViaApi(articleId, payload).finally(() => {
+    if (priority !== 'autosave' && payload && typeof payload === 'object') {
+        payload.save_mode = payload.save_mode === 'autosave' ? 'explicit' : (payload.save_mode || 'explicit');
+    }
+
+    activeSavePromise = saveArticleViaApiWithBusyRetry(articleId, payload).finally(() => {
         activeSavePromise = null;
+        if (typeof window !== 'undefined') {
+            window.__seoEditorSaveInFlight = pendingRoundPromise != null;
+        }
     });
+    if (typeof window !== 'undefined') {
+        window.__seoEditorSaveInFlight = true;
+    }
 
     return activeSavePromise;
 }
 
 /**
  * @param {number} articleId
+ * @param {Record<string, unknown>} payload
+ */
+async function saveArticleViaApiWithBusyRetry(articleId, payload) {
+    try {
+        return await saveArticleViaApi(articleId, payload);
+    } catch (error) {
+        const code = String(error?.sessionError?.code ?? error?.data?.code ?? error?.code ?? '');
+        const message = String(error?.message ?? '');
+        const busy = code === 'article_write_busy'
+            || message.includes('article_write_busy')
+            || message.includes('được lưu bởi request khác');
+        if (!busy) {
+            throw error;
+        }
+        // One short retry — do not loop forever.
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        return saveArticleViaApi(articleId, payload);
+    }
+}
+
+/**
+ * @param {number} articleId
  * @param {() => Record<string, unknown> | Promise<Record<string, unknown>>} payloadFactory
+ * @param {{ priority?: SavePriority }} [options]
  * @returns {Promise<Record<string, unknown>>}
  */
-export function saveArticleViaApiSingleFlight(articleId, payloadFactory) {
-    latestArticleId = articleId;
-    latestPayloadFactory = payloadFactory;
+export function saveArticleViaApiSingleFlight(articleId, payloadFactory, options = {}) {
+    const priority = /** @type {SavePriority} */ (options.priority || 'explicit');
+
+    if (priority === 'autosave' && shouldSuppressServerAutosave() && activeSavePromise) {
+        // Explicit save owns the queue — drop autosave coalesce onto current flight result.
+        return activeSavePromise.catch(() => null).then(() => ({ success: true, suppressed_autosave: true }));
+    }
+
+    const incomingRank = PRIORITY_RANK[priority] ?? 1;
+    const currentPendingRank = PRIORITY_RANK[latestPriority] ?? 1;
+
+    if (!activeSavePromise || incomingRank >= currentPendingRank || !latestPayloadFactory) {
+        latestArticleId = articleId;
+        latestPayloadFactory = payloadFactory;
+        latestPriority = priority;
+    } else if (incomingRank > currentPendingRank) {
+        latestArticleId = articleId;
+        latestPayloadFactory = payloadFactory;
+        latestPriority = priority;
+    } else if (incomingRank === currentPendingRank) {
+        latestArticleId = articleId;
+        latestPayloadFactory = payloadFactory;
+        latestPriority = priority;
+    }
+    // Lower priority while higher pending: keep higher priority factory.
+
+    if (priority !== 'autosave') {
+        beginExplicitEditorSave();
+    }
 
     if (activeSavePromise) {
         if (!pendingRoundPromise) {
@@ -45,15 +139,26 @@ export function saveArticleViaApiSingleFlight(articleId, payloadFactory) {
                 .catch(() => null)
                 .then(() => {
                     pendingRoundPromise = null;
-
                     return runSingleFlightSave();
+                })
+                .finally(() => {
+                    if (priority !== 'autosave') {
+                        endExplicitEditorSave();
+                    }
                 });
         }
 
         return pendingRoundPromise;
     }
 
-    return runSingleFlightSave();
+    const promise = runSingleFlightSave();
+    if (priority !== 'autosave') {
+        return promise.finally(() => {
+            endExplicitEditorSave();
+        });
+    }
+
+    return promise;
 }
 
 /** True nếu có request save đang chạy (round hiện tại hoặc round kế đã xếp hàng). */
@@ -108,7 +213,7 @@ export async function saveCurrentArticleFromEditor(options = {}) {
         }
 
         return buildArticleEditorApiPayload(bundle, options.wire ?? null);
-    });
+    }, { priority: 'explicit' });
 
     finishArticleSaveFromApi(result, {
         articleId,

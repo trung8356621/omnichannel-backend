@@ -14,7 +14,8 @@ SEO media library, upload/optimize/watermark pipeline, image editors, and WordPr
 - Editor gallery / featured / product album consume these APIs — rename/slug contracts owned with Article Editor.
 - **Article Editor Phase 2A:** Featured/Gallery canonical SoT = Laravel `media_snapshot` ([`ARTICLE_EDITOR_MEDIA_SNAPSHOT.md`](../architecture/ARTICLE_EDITOR_MEDIA_SNAPSHOT.md)). Mutations persist immediately; no localStorage shadow SoT.
 - **Article Editor Phase 2B:** Image ratio / widget health consume `media_snapshot.content_images` + analysis policy (`words_per_image`); ratio is **info**, not Images hard error. See [`ARTICLE_EDITOR_ANALYSIS_OWNERSHIP.md`](../architecture/ARTICLE_EDITOR_ANALYSIS_OWNERSHIP.md).
-- **Article Editor Phase 6C.3:** React owns Featured/Gallery sidebar UI + one Shared Media Picker (`mode`: `content_image` | `featured` | `gallery`). Alpine modal/drafts removed. WP Fix Slug All still skips WP attachments; picker selection never renames.
+- **Article Editor Phase 6C.3:** React owns Featured/Gallery sidebar UI + one Shared Media Picker (`mode`: `content_image` | `featured` | `gallery`). Alpine modal/drafts removed. WP Fix Slug All still skips WP attachments; picker selection never renames. Dead Alpine picker partial / featured CustomEvents cleaned — see [`ARTICLE_EDITOR_LEGACY_CLEANUP.md`](../architecture/ARTICLE_EDITOR_LEGACY_CLEANUP.md).
+- **Images unified inventory:** editor Images panel/health consume `unifiedArticleImagesInventory.js` (content+Featured+Gallery). Local Laravel Featured must not be flagged WP-protected via stale `wp_featured_attachment_id` (SeoMedia PK) — `mediaSourceClassification.js` + snapshot `enrichMediaItem` clear false WP ids when URL is `/storage/…`.
 
 ## 2. Canonical routes
 
@@ -68,6 +69,8 @@ Middleware: Authenticate + role checks + `SetDynamicSeoDatabase` / connection co
 | Model | `SeoMedia` + `SeoMediaBuilder` (meta-field routing) |
 | Library actions | `SeoMediaLibraryImageActionService` |
 | Article slug fix | `SeoMediaArticleSlugFixService` |
+| Media source classify (editor) | `resources/js/utils/mediaSourceClassification.js` + snapshot `isLocalLaravelMediaUrl` |
+| Unified images inventory | `resources/js/utils/unifiedArticleImagesInventory.js` |
 | URL rewrite | `SeoMediaUrlReplacementService` |
 | WP sync media | `WordPressLocalMediaSyncService` |
 | WP media browse capability | `WordPressMediaCapabilityResolver` (site-level; used by article media picker) |

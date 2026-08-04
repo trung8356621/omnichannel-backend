@@ -159,6 +159,24 @@
                 transform: none;
             }
         }
+        .cp-ops-row--pending {
+            opacity: 0.78;
+            transition: opacity .18s ease;
+        }
+        .cp-ops-status-cell,
+        .cp-ops-schedule-cell {
+            transition: opacity .18s ease;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .cp-ops-row--pending,
+            .cp-ops-status-cell,
+            .cp-ops-schedule-cell {
+                transition: none;
+            }
+            .cp-ops-row--pending .animate-spin {
+                animation: none;
+            }
+        }
         .cp-ops-row--highlight {
             background: rgb(239 246 255) !important;
             transition: background-color .14s ease;

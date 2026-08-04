@@ -109,6 +109,8 @@ export function prettyPrintHtml(html) {
                 return;
             }
             if (text.trim() === '' && text.length > 0) {
+                // Preserve whitespace-only text nodes (spaces around inline marks).
+                lines.push(pad + text);
                 return;
             }
             if (text !== '') {

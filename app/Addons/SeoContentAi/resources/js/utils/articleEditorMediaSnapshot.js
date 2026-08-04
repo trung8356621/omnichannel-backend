@@ -147,26 +147,6 @@ export function applyMediaSnapshot(articleId, snapshot, { force = false } = {}) 
         },
     }));
 
-    // Compat one-way notify for legacy Alpine/React listeners (no LS write).
-    if (featuredPresent) {
-        window.dispatchEvent(new CustomEvent('seo-featured-image-updated', {
-            detail: {
-                articleId: id,
-                item: {
-                    url: next.featured.url,
-                    wp_attachment_id: next.featured.wp_attachment_id || 0,
-                    seo_media_id: next.featured.media_id || 0,
-                    alt: next.featured.alt || '',
-                },
-                from_snapshot: true,
-            },
-        }));
-    } else {
-        window.dispatchEvent(new CustomEvent('seo-featured-image-cleared', {
-            detail: { articleId: id, from_snapshot: true },
-        }));
-    }
-
     window.dispatchEvent(new CustomEvent('seo-product-gallery-updated', {
         detail: {
             article_id: id,

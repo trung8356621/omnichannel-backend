@@ -48,10 +48,13 @@ final class ArticleEditorPhase3ModuleHostTest extends TestCase
         self::assertStringContainsString('EditorInspectorBubbleHost', $source);
     }
 
-    public function test_module_reexport_files_exist(): void
+    public function test_legacy_module_shims_removed_transitional_modules_kept(): void
     {
         $base = dirname(__DIR__, 2).'/resources/js/modules';
-        foreach (['LinksModule.jsx', 'FaqModule.jsx', 'AiChatModule.jsx', 'ImagesModule.jsx', 'ReviewsModule.jsx', 'SeoModule.jsx'] as $file) {
+        foreach (['LinksModule.jsx', 'FaqModule.jsx', 'AiChatModule.jsx'] as $file) {
+            self::assertFileDoesNotExist($base.'/'.$file, $file);
+        }
+        foreach (['ImagesModule.jsx', 'ReviewsModule.jsx', 'SeoModule.jsx'] as $file) {
             self::assertFileExists($base.'/'.$file, $file);
         }
     }

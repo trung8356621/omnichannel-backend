@@ -14,6 +14,7 @@ use App\Addons\SeoContentAi\Services\SeoImageSplitterService;
 use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
 use App\Addons\SeoContentAi\Services\SeoMediaStorageService;
+use App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionException;
 use App\Addons\SeoContentAi\Services\SeoMediaArticleSlugFixService;
 use App\Addons\SeoContentAi\Services\SeoMediaUrlImportResolverService;
 use App\Addons\SeoContentAi\Services\SeoWpMediaEditedPendingService;
@@ -21,6 +22,7 @@ use App\Addons\SeoContentAi\Services\WordPressAttachmentMetaUpdateService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
 use App\Models\Site;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -156,6 +158,7 @@ class SeoMediaController extends Controller
         $validated = $request->validate([
             'new_slug' => ['required', 'string', 'regex:/^[a-z0-9\-]+$/i', 'max:200'],
             'article_id' => ['nullable', 'integer', 'min:1'],
+            'editor_session_id' => ['nullable', 'string', 'max:64'],
         ]);
 
         $article = null;
@@ -169,8 +172,15 @@ class SeoMediaController extends Controller
         }
 
         try {
-            $result = $this->slugFix->renameOne($record, (string) $validated['new_slug'], $article);
+            $result = $this->slugFix->renameOne(
+                $record,
+                (string) $validated['new_slug'],
+                $article,
+                $this->editorSessionContext($request, $validated),
+            );
             $record = $result['media'];
+        } catch (ArticleEditorSessionException $e) {
+            return $this->editorSessionLockedResponse($e);
         } catch (\InvalidArgumentException $e) {
             throw ValidationException::withMessages(['new_slug' => $e->getMessage()]);
         } catch (\RuntimeException $e) {
@@ -271,6 +281,7 @@ class SeoMediaController extends Controller
             'site_id' => ['nullable', 'integer'],
             'article_id' => ['nullable', 'integer'],
             'seo_media_id' => ['nullable', 'integer', 'min:1'],
+            'editor_session_id' => ['nullable', 'string', 'max:64'],
         ]);
 
         $url = trim((string) $validated['url']);
@@ -346,8 +357,15 @@ class SeoMediaController extends Controller
         }
 
         try {
-            $result = $this->slugFix->renameOne($media, (string) $validated['new_slug'], $articleForRewrite);
+            $result = $this->slugFix->renameOne(
+                $media,
+                (string) $validated['new_slug'],
+                $articleForRewrite,
+                $this->editorSessionContext($request, $validated),
+            );
             $media = $result['media'];
+        } catch (ArticleEditorSessionException $e) {
+            return $this->editorSessionLockedResponse($e);
         } catch (\InvalidArgumentException $e) {
             throw ValidationException::withMessages(['new_slug' => $e->getMessage()]);
         } catch (\RuntimeException $e) {
@@ -916,6 +934,37 @@ class SeoMediaController extends Controller
         }
 
         return $filenameQuery->orderByDesc('id')->first();
+    }
+
+    /**
+     * @param  array<string, mixed>  $validated
+     * @return array{editor_session_id: string|null, user: User|null}
+     */
+    private function editorSessionContext(Request $request, array $validated = []): array
+    {
+        $sessionId = trim((string) (
+            $validated['editor_session_id']
+            ?? $request->input('editor_session_id')
+            ?? $request->header('X-Editor-Session-Id')
+            ?? ''
+        ));
+        $user = $request->user();
+
+        return [
+            'editor_session_id' => $sessionId !== '' ? $sessionId : null,
+            'user' => $user instanceof User ? $user : null,
+        ];
+    }
+
+    private function editorSessionLockedResponse(ArticleEditorSessionException $exception): JsonResponse
+    {
+        return response()->json([
+            'success' => false,
+            'error' => $exception->errorCode,
+            'code' => $exception->errorCode,
+            'message' => $exception->getMessage(),
+            'lock' => $exception->context['lock'] ?? null,
+        ], $exception->httpStatus);
     }
 
     private function canAccessMedia(SeoMedia $media): bool

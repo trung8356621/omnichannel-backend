@@ -35,6 +35,8 @@ final class ContentProjectActionCodes
 
     public const ITEMS_PUBLISH_CANCELLED = 'items.publish_cancelled';
 
+    public const ITEMS_PUBLISH_RECOVERED = 'items.publish_recovered';
+
     public const ITEMS_SENT_TO_PUBLISHING_QUEUE = 'items.sent_to_publishing_queue';
 
     public const ITEMS_RETURNED_TO_CONTENT_PROJECT = 'items.returned_to_content_project';

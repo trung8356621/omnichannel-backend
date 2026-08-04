@@ -21,7 +21,7 @@ Layers (must stay separate):
 
 Unassigned Prompt (no Hook, no binding, no Task ref) is valid storage — does **not** auto-run.
 
-**Article Editor (Phase 6C.4):** in-editor AI Chat (image/video generate + selection) is React runtime module `article-editor.ai`. Prompt configuration, AI history, billing/audit stay Filament/Laravel shell. See [`ARTICLE_EDITOR_RUNTIME_COMPLETION.md`](../architecture/ARTICLE_EDITOR_RUNTIME_COMPLETION.md).
+**Article Editor (Phase 6C.4):** in-editor AI Chat (image/video generate + selection) is React runtime module `article-editor.ai`. Prompt configuration, AI history, billing/audit stay Filament/Laravel shell. See [`ARTICLE_EDITOR_RUNTIME_COMPLETION.md`](../architecture/ARTICLE_EDITOR_RUNTIME_COMPLETION.md). Legacy ModuleHost cleanup: [`ARTICLE_EDITOR_LEGACY_CLEANUP.md`](../architecture/ARTICLE_EDITOR_LEGACY_CLEANUP.md).
 
 ## 2. Canonical routes
 

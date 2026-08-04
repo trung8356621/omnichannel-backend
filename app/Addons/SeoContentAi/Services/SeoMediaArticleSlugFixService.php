@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Automation\Support\ArticleContentConflictGuard;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Support\RuntimeLogger;
@@ -27,6 +28,7 @@ final class SeoMediaArticleSlugFixService
 
     /**
      * @param  list<array{seo_media_id?: int|null, url?: string|null, new_slug: string, old_slug?: string|null}>  $items
+     * @param  array{editor_session_id?: string|null, user?: \App\Models\User|null}  $context
      * @return array{
      *     success: bool,
      *     message: string,
@@ -40,7 +42,7 @@ final class SeoMediaArticleSlugFixService
      *     remaining_old_refs?: list<string>
      * }
      */
-    public function fixSlugs(SeoArticle $article, array $items): array
+    public function fixSlugs(SeoArticle $article, array $items, array $context = []): array
     {
         // Request mới sau save: refresh để rewrite đúng body/meta mới nhất.
         $article->refresh();
@@ -57,6 +59,8 @@ final class SeoMediaArticleSlugFixService
                 'media_updated' => false,
                 'skipped_count' => 0,
                 'skipped' => [],
+                'eligible_count' => 0,
+                'renamed_count' => 0,
             ];
         }
 
@@ -69,6 +73,7 @@ final class SeoMediaArticleSlugFixService
             DB::connection('omi_seo_ai')->transaction(function () use (
                 $article,
                 $queue,
+                $context,
                 &$replacements,
                 &$urlMap,
                 &$pendingDeletes,
@@ -181,7 +186,7 @@ final class SeoMediaArticleSlugFixService
                     return;
                 }
 
-                $rewrite = $this->urlReplacement->rewriteArticleReferences($article, $urlMap);
+                $rewrite = $this->urlReplacement->rewriteArticleReferences($article, $urlMap, $context);
                 if ($rewrite['remaining_old_refs'] !== []) {
                     throw new \RuntimeException(
                         'Article vẫn còn URL ảnh cũ sau khi đổi slug: '
@@ -190,6 +195,10 @@ final class SeoMediaArticleSlugFixService
                 }
             });
         } catch (Throwable $e) {
+            if ($e instanceof \App\Addons\SeoContentAi\Services\ArticleEditor\ArticleEditorSessionException) {
+                throw $e;
+            }
+
             RuntimeLogger::error('seo_media_article_slug_fix.failed', [
                 'article_id' => (int) $article->id,
                 'site_id' => (int) ($article->site_id ?? 0),
@@ -211,6 +220,8 @@ final class SeoMediaArticleSlugFixService
                 'media_updated' => false,
                 'skipped_count' => count($skipped),
                 'skipped' => $skipped,
+                'eligible_count' => count($queue),
+                'renamed_count' => 0,
             ];
         }
 
@@ -263,19 +274,28 @@ final class SeoMediaArticleSlugFixService
             'failed' => $skipped,
             'replacements' => $replacements,
             'article_updated' => $urlMap !== [],
-            'media_updated' => $replacements !== [],
+            'media_updated' => $urlMap !== [],
             'skipped_count' => $skippedCount,
             'skipped' => $skipped,
+            'eligible_count' => count($queue),
+            'renamed_count' => count($renamed),
+            'failed_count' => $skippedCount,
             'remaining_old_refs' => $remaining,
+            'document_version' => max(1, (int) ($fresh->document_version ?? 1)),
+            'content_hash' => app(ArticleContentConflictGuard::class)
+                ->contentHash((string) ($fresh->body ?? '')),
+            'editor_document_hash' => (string) ($fresh->editor_document_hash ?? ''),
+            'updated_at' => $fresh->updated_at?->toIso8601String(),
         ];
     }
 
     /**
      * Rename one media and rewrite references for a single article when provided.
      *
+     * @param  array{editor_session_id?: string|null, user?: \App\Models\User|null}  $context
      * @return array{media: SeoMedia, replacement: array<string, mixed>, article_updated: bool}
      */
-    public function renameOne(SeoMedia $media, string $newSlug, ?SeoArticle $article = null): array
+    public function renameOne(SeoMedia $media, string $newSlug, ?SeoArticle $article = null, array $context = []): array
     {
         $oldUrl = $media->publicUrl();
         $oldPath = ltrim(str_replace('\\', '/', (string) $media->path), '/');
@@ -304,7 +324,7 @@ final class SeoMediaArticleSlugFixService
                 $oldUrl => $newUrl,
                 '/storage/'.$oldPath => '/storage/'.$newPath,
             ];
-            $rewrite = $this->urlReplacement->rewriteArticleReferences($article, $urlMap);
+            $rewrite = $this->urlReplacement->rewriteArticleReferences($article, $urlMap, $context);
             $articleUpdated = $rewrite['article_updated'];
             if ($rewrite['remaining_old_refs'] !== []) {
                 throw new \RuntimeException(

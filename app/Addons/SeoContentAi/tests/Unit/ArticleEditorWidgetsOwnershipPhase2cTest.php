@@ -78,14 +78,20 @@ final class ArticleEditorWidgetsOwnershipPhase2cTest extends TestCase
         );
         self::assertStringContainsString('/api/seo/domain-cta/quick-templates', $cta);
         self::assertStringContainsString('server canonical', $cta);
-        self::assertStringContainsString("effectiveMode = mode === 'value' ? 'sentence' : mode", $cta);
+        self::assertStringContainsString("effectiveMode = mode === 'value' ? 'value' : 'sentence'", $cta);
 
         $commands = (string) file_get_contents(
-            dirname(__DIR__, 2).'/resources/js/utils/editorInsertionCommands.js',
+            dirname(__DIR__, 2).'/resources/js/utils/editorCommands/insertionCommands.js',
         );
         self::assertStringContainsString('insertContactValueCommand', $commands);
         self::assertStringContainsString('insertContactCtaCommand', $commands);
-        self::assertStringContainsString('assertWritableInsertionContext', $commands);
+        $ctx = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/utils/editorCommands/editorCommandContext.js',
+        );
+        self::assertStringContainsString('assertWritableCommandContext', $ctx);
+        self::assertFileDoesNotExist(
+            dirname(__DIR__, 2).'/resources/js/utils/editorInsertionCommands.js',
+        );
 
         $storage = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/js/utils/articleEditorStorage.js',

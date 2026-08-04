@@ -193,43 +193,6 @@ export default function ArticleDomainWidgetsSidebar({
             );
         };
 
-        const onSeoPayload = (event) => {
-            const detail = event.detail ?? {};
-            if (Array.isArray(detail.domain_link_list_catalog)) {
-                allDomainLinksRef.current = detail.domain_link_list_catalog;
-                setDomainLinkCatalogCount(detail.domain_link_list_catalog.length);
-            } else if (Array.isArray(detail.domain_link_list)) {
-                allDomainLinksRef.current = detail.domain_link_list;
-                setDomainLinkCatalogCount(detail.domain_link_list.length);
-            }
-            if (
-                Array.isArray(detail.domain_link_list_catalog) ||
-                Array.isArray(detail.domain_link_list)
-            ) {
-                const internal = Array.isArray(detail.extracted_links?.internal)
-                    ? detail.extracted_links.internal
-                    : [];
-                const external = Array.isArray(detail.extracted_links?.external)
-                    ? detail.extracted_links.external
-                    : [];
-                const articlePlainText = String(detail.article_plain_text ?? '');
-                setDomainLinks(
-                    applyDomainLinkFilters(
-                        allDomainLinksRef.current,
-                        articlePlainText,
-                        internal,
-                        external,
-                    ),
-                );
-            }
-            if (Array.isArray(detail.domain_cta_list)) {
-                setDomainCtas(detail.domain_cta_list);
-            }
-            if (detail.cta_quick_templates && typeof detail.cta_quick_templates === 'object') {
-                setServerCtaTemplates(detail.cta_quick_templates);
-            }
-        };
-
         const onInserted = (event) => {
             const text = normalizeLinkLabel(event.detail?.text);
             const hrefKey = normalizeHrefForCompare(event.detail?.href);
@@ -252,12 +215,10 @@ export default function ArticleDomainWidgetsSidebar({
         };
 
         window.addEventListener('seo-editor-links-updated', onLinksUpdate);
-        window.addEventListener('seo-editor-seo-payload-updated', onSeoPayload);
         window.addEventListener('seo-editor-suggested-link-inserted', onInserted);
 
         return () => {
             window.removeEventListener('seo-editor-links-updated', onLinksUpdate);
-            window.removeEventListener('seo-editor-seo-payload-updated', onSeoPayload);
             window.removeEventListener('seo-editor-suggested-link-inserted', onInserted);
         };
     }, []);

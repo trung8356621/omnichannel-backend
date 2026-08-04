@@ -12,6 +12,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\Archive
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AutoScheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CancelProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\DebugOverrideProjectItemLifecycleCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RecoverStuckPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CreateContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\GenerateProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\MoveProjectItemScheduleCommand;
@@ -41,6 +42,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\Archive
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\AutoScheduleProjectItemsHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\CancelProjectItemPublishingHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\CreateContentProjectHandler;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\RecoverStuckPublishingHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\DebugOverrideProjectItemLifecycleHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\GenerateProjectItemsHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\MoveProjectItemScheduleHandler;
@@ -160,6 +162,7 @@ final class ContentProjectCommandBusRegistrar
             RetryProjectItemPublishingCommand::class => RetryProjectItemPublishingHandler::class,
             SkipProjectItemPublishingCommand::class => SkipProjectItemPublishingHandler::class,
             CancelProjectItemPublishingCommand::class => CancelProjectItemPublishingHandler::class,
+            RecoverStuckPublishingCommand::class => RecoverStuckPublishingHandler::class,
             DebugOverrideProjectItemLifecycleCommand::class => DebugOverrideProjectItemLifecycleHandler::class,
             ArchiveContentProjectCommand::class => ArchiveContentProjectHandler::class,
             ArchiveProjectItemsCommand::class => ArchiveProjectItemsHandler::class,

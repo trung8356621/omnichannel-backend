@@ -48,12 +48,17 @@ final class ArticleEditorCoreBootstrapContractTest extends TestCase
         self::assertStringNotContainsString('getEditorFaqsPayload', $body);
         self::assertStringNotContainsString('getEditorMetaPayload', $body);
         self::assertStringNotContainsString('getArticleMediaPickerPayload', $body);
-        self::assertStringNotContainsString('forArticle(', $body);
+        // Phase 2: analysisPolicy/externalFacts computed once and reused into settings.
+        self::assertStringContainsString('$analysisPolicy', $body);
+        self::assertStringContainsString('$externalFacts', $body);
+        self::assertStringContainsString('getEditorCoreSettingsPayload($analysisPolicy, $externalFacts)', $body);
+        self::assertSame(1, substr_count($body, '->forArticle($this->record)'));
+        self::assertSame(1, substr_count($body, '->externalFacts($this->record)'));
     }
 
     public function test_core_settings_payload_excludes_scoring_rules_and_messages(): void
     {
-        $body = $this->methodBody('private function getEditorCoreSettingsPayload(): array');
+        $body = $this->methodBody('private function getEditorCoreSettingsPayload(?array $analysisPolicy = null, ?array $externalFacts = null): array');
         self::assertNotSame('', $body);
 
         self::assertStringNotContainsString('seo_scoring_rules', $body);

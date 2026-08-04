@@ -66,11 +66,18 @@ final class ArticleEditorSessionLockEnforcementTest extends TestCase
         self::assertStringContainsString('revision_restore', $source);
     }
 
-    public function test_media_rewrite_requires_no_active_editor_session(): void
+    public function test_media_rewrite_allows_owning_editor_session(): void
     {
         $source = $this->methodSource(new ReflectionMethod(SeoMediaUrlReplacementService::class, 'rewriteArticleReferences'));
         self::assertStringContainsString('assertBodyRewriteAllowed', $source);
         self::assertStringContainsString('media_url_rewrite', $source);
+        self::assertStringContainsString('editor_session_id', $source);
+
+        $sessions = (string) file_get_contents(
+            (new ReflectionClass(ArticleEditorSessionService::class))->getFileName(),
+        );
+        self::assertStringContainsString('assertOwningActiveSessionForMediaMutation', $sessions);
+        self::assertStringContainsString('Owning active session → allow', $sessions);
     }
 
     public function test_ai_apply_blocked_when_editor_locked(): void

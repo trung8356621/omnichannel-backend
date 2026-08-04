@@ -110,9 +110,8 @@ final class ArticleEditorContextPreservationContractTest extends TestCase
 
         self::assertStringContainsString('CtaContactInsertList', $links);
         self::assertStringContainsString('filterUsableCtaContacts', $links);
-        // Phase 2C sidebar: insert CTA sentence (value mode remaps to sentence).
-        self::assertStringContainsString('cta_widget_insert_cta_short', $shared);
-        self::assertStringContainsString('wp-article-links-insert-btn--text', $shared);
+        self::assertStringContainsString('wp-article-links-insert-btn--contact', $shared);
+        self::assertStringContainsString('wp-article-links-insert-btn--sentence', $shared);
         self::assertStringContainsString('filterUsableCtaContacts', $shared);
         self::assertStringContainsString('CtaContactUsability::isUnresolvedPlaceholder', $domainService);
         self::assertStringNotContainsString("'is_blank' => true", $domainService);

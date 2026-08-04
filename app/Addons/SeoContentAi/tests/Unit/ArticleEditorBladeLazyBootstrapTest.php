@@ -41,12 +41,15 @@ final class ArticleEditorBladeLazyBootstrapTest extends TestCase
         self::assertStringNotContainsString('$this->getEditorSettingsPayload()', $source);
         self::assertStringContainsString('getArticleMediaPickerMinimalPayload', $source);
 
-        // Compat FAQ activate lives in ModuleHost (not Blade).
-        $host = (string) file_get_contents(
+        // Compat FAQ/module-open events live in shell compatibility bridge (ModuleHost removed).
+        $bridge = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/editor/runtime/editorShellCompatibilityBridge.js',
+        );
+        self::assertStringContainsString('article-editor:module-open', $bridge);
+        self::assertStringContainsString('seo-assistant-switch-panel', $bridge);
+        self::assertFileDoesNotExist(
             dirname(__DIR__, 2).'/resources/js/components/ArticleEditorModuleHost.jsx',
         );
-        self::assertStringContainsString('seo-faq-panel-activate', $host);
-        self::assertStringContainsString('article-editor:module-open', $host);
     }
 
     private function bladeSource(): string

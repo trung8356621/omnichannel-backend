@@ -14,6 +14,9 @@ export function ImagesSidebarPanel() {
                 key={images.reloadKey}
                 blocks={images.blocks}
                 extraImages={images.extraImages}
+                featuredImage={images.featuredImage}
+                galleryImages={images.galleryImages}
+                useUnifiedInventory={images.useUnifiedInventory === true}
                 siteId={images.siteId}
                 articleId={images.articleId}
                 jumpTarget={images.jumpTarget}

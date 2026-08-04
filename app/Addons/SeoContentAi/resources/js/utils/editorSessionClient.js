@@ -117,9 +117,14 @@ export function normalizeSessionError(data, status) {
     };
 }
 
+const RECOVERABLE_SESSION_LOSS = new Set([
+    EDITOR_SESSION_ERROR.SESSION_EXPIRED,
+    EDITOR_SESSION_ERROR.SESSION_NOT_FOUND,
+]);
+
 export class EditorSessionClient {
     /**
-     * @param {{ articleId: number|string, heartbeatSeconds?: number }} options
+     * @param {{ articleId: number|string, heartbeatSeconds?: number, onStateChange?: Function }} options
      */
     constructor(options) {
         this.articleId = Number(options.articleId) || 0;
@@ -134,6 +139,9 @@ export class EditorSessionClient {
         this.offline = false;
         this.onStateChange = typeof options.onStateChange === 'function' ? options.onStateChange : null;
         this.destroyed = false;
+        this.recovering = false;
+        this._visibilityHandler = null;
+        this.bindVisibility();
     }
 
     emit() {
@@ -238,6 +246,7 @@ export class EditorSessionClient {
     }
 
     async takeover(knownDocumentVersion = null) {
+        // @deprecated Exclusive lock UI does not call takeover; keep for admin/API escape hatch.
         const { response, data } = await seoArticleApiFetch(
             `/api/seo/articles/${this.articleId}/editor-sessions/takeover`,
             {
@@ -269,42 +278,47 @@ export class EditorSessionClient {
         return { ok: true, data };
     }
 
+    bindVisibility() {
+        if (typeof document === 'undefined' || this._visibilityHandler) {
+            return;
+        }
+        this._visibilityHandler = () => {
+            if (this.destroyed || document.visibilityState !== 'visible') {
+                return;
+            }
+            // Tab trở lại: thử heartbeat ngay, hoặc reclaim nếu session đã mất recoverable.
+            if (this.readOnly && RECOVERABLE_SESSION_LOSS.has(String(this.lockStatus || ''))) {
+                void this.recoverSession();
+                return;
+            }
+            if (!this.readOnly && this.sessionId) {
+                void this.heartbeatOnce();
+            }
+        };
+        document.addEventListener('visibilitychange', this._visibilityHandler);
+    }
+
+    unbindVisibility() {
+        if (typeof document === 'undefined' || !this._visibilityHandler) {
+            return;
+        }
+        document.removeEventListener('visibilitychange', this._visibilityHandler);
+        this._visibilityHandler = null;
+    }
+
     startHeartbeat() {
         this.stopHeartbeat();
         if (this.readOnly || !this.sessionId || this.destroyed) {
             return;
         }
 
-        const tick = async () => {
-            if (this.destroyed || this.readOnly || !this.sessionId || this.offline) {
-                return;
-            }
-            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-                return;
-            }
-
-            try {
-                const { response, data } = await seoArticleApiFetch(
-                    `/api/seo/articles/${this.articleId}/editor-sessions/${this.sessionId}/heartbeat`,
-                    { method: 'PUT', body: JSON.stringify({}) },
-                );
-
-                if (!response.ok) {
-                    const error = normalizeSessionError(data, response.status);
-                    this.handleLostSession(error);
-                    return;
-                }
-
-                if (data?.document_version != null) {
-                    this.setDocumentVersion(data.document_version);
-                }
-                this.offline = false;
-            } catch {
-                this.offline = true;
-                this.emit();
-            }
+        // Keep lock alive even when tab hidden / briefly offline — skipping TTL expiry
+        // was locking Save for solo editors after ~2 minutes in background.
+        const tick = () => {
+            void this.heartbeatOnce();
         };
 
+        void this.heartbeatOnce();
         this.heartbeatTimer = window.setInterval(tick, this.heartbeatSeconds * 1000);
     }
 
@@ -315,6 +329,38 @@ export class EditorSessionClient {
         }
     }
 
+    async heartbeatOnce() {
+        if (this.destroyed || this.readOnly || !this.sessionId) {
+            return;
+        }
+
+        try {
+            const { response, data } = await seoArticleApiFetch(
+                `/api/seo/articles/${this.articleId}/editor-sessions/${this.sessionId}/heartbeat`,
+                { method: 'PUT', body: JSON.stringify({}) },
+            );
+
+            if (!response.ok) {
+                const error = normalizeSessionError(data, response.status);
+                this.handleLostSession(error);
+                return;
+            }
+
+            if (data?.document_version != null) {
+                this.setDocumentVersion(data.document_version);
+            }
+            const wasOffline = this.offline;
+            this.offline = false;
+            if (wasOffline) {
+                this.emit();
+            }
+        } catch {
+            // Network blip: keep sessionId, retry on next interval (do not permanent-skip).
+            this.offline = true;
+            this.emit();
+        }
+    }
+
     handleLostSession(error) {
         this.stopHeartbeat();
         this.sessionId = null;
@@ -322,6 +368,25 @@ export class EditorSessionClient {
         this.lockStatus = error?.code || 'lost';
         this.lockInfo = error?.lock ?? this.lockInfo;
         this.emit();
+
+        if (RECOVERABLE_SESSION_LOSS.has(String(error?.code || ''))) {
+            void this.recoverSession();
+        }
+    }
+
+    /**
+     * Re-acquire after recoverable expiry/not-found. Foreign lock stays read-only.
+     */
+    async recoverSession() {
+        if (this.destroyed || this.recovering) {
+            return { ok: false, skipped: true };
+        }
+        this.recovering = true;
+        try {
+            return await this.acquire(this.documentVersion);
+        } finally {
+            this.recovering = false;
+        }
     }
 
     /**
@@ -371,8 +436,31 @@ export class EditorSessionClient {
                 EDITOR_SESSION_ERROR.DOCUMENT_VERSION_CONFLICT,
                 EDITOR_SESSION_ERROR.CONTENT_HASH_CONFLICT,
             ].includes(error.code)) {
-                this.readOnly = true;
-                this.lockStatus = 'conflict';
+                // Owning session still holds the lock — sync version/hash from conflict
+                // payload when present so Fix Slug / autosave can recover without
+                // unmounting the editor into ExclusiveLockScreen.
+                const actualVersion = Number(
+                    data?.conflict?.actual_document_version
+                    ?? data?.document_version
+                    ?? 0,
+                );
+                if (Number.isFinite(actualVersion) && actualVersion > 0) {
+                    this.setDocumentVersion(actualVersion);
+                }
+                const actualHash = String(
+                    data?.conflict?.actual_content_hash
+                    ?? data?.content_hash
+                    ?? '',
+                ).trim();
+                if (actualHash !== '' && typeof window !== 'undefined') {
+                    const tokens = window.__SEO_EDITOR_CONFLICT__ || {};
+                    window.__SEO_EDITOR_CONFLICT__ = {
+                        ...tokens,
+                        expected_content_hash: actualHash,
+                    };
+                }
+                this.lockStatus = 'owned';
+                this.readOnly = false;
                 this.emit();
                 window.dispatchEvent(new CustomEvent('seo-article-editor-notify', {
                     detail: {
@@ -388,6 +476,27 @@ export class EditorSessionClient {
 
         if (data?.document_version != null) {
             this.setDocumentVersion(data.document_version);
+        }
+        if (typeof window !== 'undefined') {
+            if (data?.document_version != null) {
+                window.__SEO_EDITOR_DOCUMENT_VERSION__ = Math.max(
+                    1,
+                    Number(data.document_version) || this.documentVersion,
+                );
+            }
+            const ackHash = String(data?.content_hash ?? '').trim();
+            if (ackHash !== '') {
+                const tokens = window.__SEO_EDITOR_CONFLICT__ || {};
+                window.__SEO_EDITOR_CONFLICT__ = {
+                    ...tokens,
+                    expected_content_hash: ackHash,
+                    expected_updated_at: data?.saved_at || tokens.expected_updated_at || null,
+                };
+            }
+            const editorHash = String(data?.editor_document_hash ?? '').trim();
+            if (editorHash !== '') {
+                window.__SEO_EDITOR_DOCUMENT_HASH__ = editorHash;
+            }
         }
 
         return { ok: true, data, response };
@@ -469,7 +578,9 @@ export class EditorSessionClient {
 
     destroy() {
         this.destroyed = true;
+        this.recovering = false;
         this.stopHeartbeat();
+        this.unbindVisibility();
     }
 }
 

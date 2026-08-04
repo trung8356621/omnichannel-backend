@@ -30,6 +30,90 @@ export function setEditorConflictTokens(tokens) {
 }
 
 /**
+ * Dev-only version/hash timeline (no body/token). Enable:
+ * window.__SEO_EDITOR_VERSION_DEBUG__ = true
+ *
+ * @param {string} event
+ * @param {Record<string, unknown>} [fields]
+ */
+export function logArticleEditorVersionDebug(event, fields = {}) {
+    if (typeof window === 'undefined') {
+        return;
+    }
+    if (!window.__SEO_EDITOR_VERSION_DEBUG__ && !window.__SEO_APP_DEBUG__) {
+        return;
+    }
+    const sessionId = String(window.__seoEditorSessionClient?.sessionId ?? '').slice(0, 8);
+    // eslint-disable-next-line no-console
+    console.debug('[article-editor-version]', event, {
+        session: sessionId || null,
+        document_version: window.__SEO_EDITOR_DOCUMENT_VERSION__
+            ?? window.__seoEditorSessionClient?.documentVersion
+            ?? null,
+        editor_document_hash: String(window.__SEO_EDITOR_DOCUMENT_HASH__ || '').slice(0, 12) || null,
+        content_hash: String(getEditorConflictTokens().expected_content_hash || '').slice(0, 12) || null,
+        ...fields,
+    });
+}
+
+/**
+ * Atomically ACK document version + hashes after session save/noop.
+ * Must run before single-flight waiters rebuild the next payload.
+ *
+ * @param {Record<string, unknown>|null|undefined} ack
+ */
+export function applyEditorDocumentAck(ack) {
+    if (!ack || typeof ack !== 'object') {
+        return;
+    }
+
+    const version = Number(ack.document_version ?? ack.patch?.article?.document_version ?? 0);
+    if (Number.isFinite(version) && version > 0) {
+        window.__SEO_EDITOR_DOCUMENT_VERSION__ = version;
+        window.__seoEditorSessionClient?.setDocumentVersion?.(version);
+    }
+
+    const editorHash = String(
+        ack.editor_document_hash
+        ?? ack.patch?.article?.editor_document_hash
+        ?? '',
+    ).trim();
+    if (editorHash !== '') {
+        window.__SEO_EDITOR_DOCUMENT_HASH__ = editorHash;
+    }
+
+    const contentHash = String(
+        ack.content_hash
+        ?? ack.patch?.article?.content_hash
+        ?? '',
+    ).trim();
+    const updatedAt = ack.saved_at
+        ?? ack.patch?.article?.updated_at
+        ?? getEditorConflictTokens().expected_updated_at
+        ?? null;
+    if (contentHash !== '') {
+        setEditorConflictTokens({
+            expected_updated_at: updatedAt,
+            expected_content_hash: contentHash,
+        });
+    } else if (updatedAt) {
+        const tokens = getEditorConflictTokens();
+        setEditorConflictTokens({
+            expected_updated_at: updatedAt,
+            expected_content_hash: tokens.expected_content_hash,
+        });
+    }
+
+    logArticleEditorVersionDebug('ack', {
+        noop: Boolean(ack.noop),
+        reconciled: Boolean(ack.reconciled),
+        document_version: version || null,
+        editor_document_hash: editorHash.slice(0, 12) || null,
+        content_hash: contentHash.slice(0, 12) || null,
+    });
+}
+
+/**
  * @param {object|null|undefined} wire Livewire snapshot (read-only properties, không gọi method)
  * @return {{ title: string, slug: string, seo_meta_description: string, focus_keyword: string }}
  */
@@ -161,12 +245,16 @@ export async function saveArticleViaApi(articleId, payload) {
             ].includes(String(saveResult.error?.code ?? ''));
             error.data = saveResult.data;
             error.sessionError = saveResult.error;
+            error.code = String(saveResult.error?.code ?? '');
+            logArticleEditorVersionDebug('save_conflict', {
+                code: error.code,
+                expected: payload?.expected_document_version ?? null,
+            });
             throw error;
         }
 
-        if (saveResult.data?.document_version != null) {
-            window.__SEO_EDITOR_DOCUMENT_VERSION__ = Number(saveResult.data.document_version) || window.__SEO_EDITOR_DOCUMENT_VERSION__;
-        }
+        // ACK before callers/waiters read tokens — closes autosave→explicit race.
+        applyEditorDocumentAck(saveResult.data);
 
         return {
             success: true,
@@ -633,19 +721,6 @@ export function applyArticleEditorSavePatch(patch) {
         document.querySelectorAll('[data-seo-article-score]').forEach((el) => {
             el.textContent = String(article.seo_score);
         });
-        window.dispatchEvent(
-            new CustomEvent('seo-article-score-patched', {
-                detail: { score: Number(article.seo_score) },
-            }),
-        );
-    }
-
-    if (patch.flags && typeof patch.flags === 'object') {
-        window.dispatchEvent(
-            new CustomEvent('article-editor-flags-patched', {
-                detail: patch.flags,
-            }),
-        );
     }
 
     if (patch.seo_analysis && typeof patch.seo_analysis === 'object') {
@@ -718,19 +793,25 @@ export function finishArticleSaveFromApi(result, context = {}) {
 
     const { articleId, connectionHash, savedHtml } = context;
         if (typeof savedHtml === 'string') {
-        const savedContentHash = hashContent(savedHtml);
+        // Prefer server ACK hash — client TipTap export can differ after table/whitespace guards.
+        const serverContentHash = String(
+            result?.content_hash
+            ?? result?.patch?.article?.content_hash
+            ?? '',
+        ).trim();
+        const savedContentHash = serverContentHash || hashContent(savedHtml);
         const nextUpdatedAt = result.patch?.article?.updated_at
+            ?? result?.saved_at
             ?? getEditorConflictTokens().expected_updated_at;
-        setEditorConflictTokens({
-            expected_updated_at: nextUpdatedAt,
-            expected_content_hash: savedContentHash,
+        applyEditorDocumentAck({
+            document_version: result.document_version ?? result.patch?.article?.document_version,
+            content_hash: savedContentHash,
+            editor_document_hash: result.editor_document_hash
+                ?? result.patch?.article?.editor_document_hash,
+            saved_at: nextUpdatedAt,
+            noop: result.noop,
+            reconciled: result.reconciled,
         });
-        if (result.document_version != null) {
-            window.__SEO_EDITOR_DOCUMENT_VERSION__ = Number(result.document_version) || window.__SEO_EDITOR_DOCUMENT_VERSION__;
-            if (window.__seoEditorSessionClient) {
-                window.__seoEditorSessionClient.setDocumentVersion(result.document_version);
-            }
-        }
 
         if (articleId) {
             window.__seoCancelArticleDraftAutosave?.();

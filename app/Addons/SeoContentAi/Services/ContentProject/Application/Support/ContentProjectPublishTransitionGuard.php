@@ -14,36 +14,43 @@ use RuntimeException;
  */
 final class ContentProjectPublishTransitionGuard
 {
-    /** @var array<string, list<ContentProjectPublishQueueStatus>> */
     private const ALLOWED = [
         'none' => [
             ContentProjectPublishQueueStatus::Waiting,
+            // Runner claim due Scheduled (execution none) → Publishing.
+            ContentProjectPublishQueueStatus::Processing,
         ],
         'waiting' => [
             ContentProjectPublishQueueStatus::Processing,
             ContentProjectPublishQueueStatus::Cancelled,
             ContentProjectPublishQueueStatus::Skipped,
+            ContentProjectPublishQueueStatus::None, // reschedule / recover plan
         ],
         'processing' => [
             ContentProjectPublishQueueStatus::Published,
             ContentProjectPublishQueueStatus::Failed,
+            // Normal Cancel KHÔNG được — dùng recoverStuckPublishing.
         ],
         'failed' => [
             ContentProjectPublishQueueStatus::Retrying,
             ContentProjectPublishQueueStatus::Waiting,
             ContentProjectPublishQueueStatus::Cancelled,
             ContentProjectPublishQueueStatus::Skipped,
+            ContentProjectPublishQueueStatus::None,
         ],
         'retrying' => [
             ContentProjectPublishQueueStatus::Waiting,
             ContentProjectPublishQueueStatus::Processing,
             ContentProjectPublishQueueStatus::Cancelled,
+            ContentProjectPublishQueueStatus::None,
         ],
         'cancelled' => [
             ContentProjectPublishQueueStatus::Waiting,
+            ContentProjectPublishQueueStatus::None,
         ],
         'skipped' => [
             ContentProjectPublishQueueStatus::Waiting,
+            ContentProjectPublishQueueStatus::None,
         ],
         'published' => [
             // Republish / update existing WordPress post after local edits.

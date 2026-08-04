@@ -38,6 +38,38 @@ final class BusinessHookEmitter
     }
 
     /**
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $context
+     */
+    public function emitWithOutcome(
+        BusinessEventName|string $event,
+        ?Model $subject = null,
+        array $payload = [],
+        array $context = [],
+        ?string $eventUuid = null,
+    ): \App\Addons\SeoContentAi\Automation\BusinessHook\Data\AutomationEventDispatchResult {
+        $name = $event instanceof BusinessEventName ? $event->value : $event;
+
+        try {
+            return $this->dispatcher->dispatchWithOutcome(
+                eventName: $name,
+                subject: $subject,
+                payload: $payload,
+                context: $context,
+                eventUuid: $eventUuid,
+            );
+        } catch (\Throwable $e) {
+            report($e);
+
+            return new \App\Addons\SeoContentAi\Automation\BusinessHook\Data\AutomationEventDispatchResult(
+                outcome: \App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationEventDispatchOutcome::FailedToDispatch,
+                message: $e->getMessage(),
+                errorCode: 'AUTOMATION_DISPATCH_EXCEPTION',
+            );
+        }
+    }
+
+    /**
      * Best-effort outcome/domain event. SKIPPED_NO_RULE / dispatcher lỗi không lan ra caller.
      *
      * @param  array<string, mixed>  $payload
@@ -51,35 +83,18 @@ final class BusinessHookEmitter
         ?string $eventUuid = null,
     ): void {
         $name = $event instanceof BusinessEventName ? $event->value : $event;
+        $result = $this->emitWithOutcome($event, $subject, $payload, $context, $eventUuid);
 
-        try {
-            $result = $this->dispatcher->dispatchWithOutcome(
-                eventName: $name,
-                subject: $subject,
-                payload: $payload,
-                context: $context,
-                eventUuid: $eventUuid,
-            );
+        if ($result->isSkippedNoRule()) {
+            return;
+        }
 
-            if ($result->isSkippedNoRule()) {
-                return;
-            }
-
-            if ($result->isRejectedOrInvalid()) {
-                Log::warning('automation.outcome_event_dispatch_failed', [
-                    'event_name' => $name,
-                    'outcome' => $result->outcome->value,
-                    'error_code' => $result->errorCode,
-                    'message' => $result->message,
-                ]);
-            }
-        } catch (\Throwable $e) {
-            report($e);
-
+        if ($result->isRejectedOrInvalid()) {
             Log::warning('automation.outcome_event_dispatch_failed', [
                 'event_name' => $name,
-                'exception' => $e::class,
-                'message' => $e->getMessage(),
+                'outcome' => $result->outcome->value,
+                'error_code' => $result->errorCode,
+                'message' => $result->message,
             ]);
         }
     }

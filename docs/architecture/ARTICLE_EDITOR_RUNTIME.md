@@ -59,7 +59,7 @@ executeEditorCommand (Phase 4) + TipTap (cached extensions)
 - Shared picker: `openMediaPicker({ mode: content_image|featured|gallery })` via `useEditorMediaPicker` / `editorMediaPickerStore`.
 - Modes: `content_image` → `insert_image` / block apply; `featured` → PUT Featured; `gallery` → gallery API. No body insert for featured/gallery.
 - WP tab not disabled for article sync state; picker never renames; Fix Slug All still skips WP attachments.
-- Alpine: mount roots only; `featuredImageDraft: null`; `openArticleMediaModal` → `__seoOpenSharedMediaPicker` compatibility bridge.
+- Alpine: mount roots + thin open forwarders (`openArticleMediaModal` → `__seoOpenSharedMediaPicker`). No `featuredImageDraft` / `mediaModalOpen` SoT.
 - Snapshot apply ignores stale `snapshot_version`; mutations send `expected_snapshot_version`.
 
 ## Paths

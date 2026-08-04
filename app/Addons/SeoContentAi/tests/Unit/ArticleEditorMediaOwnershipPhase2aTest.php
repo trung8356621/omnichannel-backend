@@ -118,13 +118,20 @@ final class ArticleEditorMediaOwnershipPhase2aTest extends TestCase
         self::assertStringContainsString('mediaSnapshot', $entry);
     }
 
-    public function test_alpine_consumes_snapshot_event(): void
+    public function test_alpine_no_longer_owns_media_snapshot_shadow(): void
     {
         $blade = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/views/filament/resources/article-resource/pages/edit-article.blade.php',
         );
-        self::assertStringContainsString('article-editor-media-snapshot-changed.window', $blade);
-        self::assertStringContainsString('onMediaSnapshotChanged', $blade);
+        // Phase 6C.3+ / legacy cleanup: React media snapshot SoT; Alpine stubs removed.
+        self::assertStringNotContainsString('article-editor-media-snapshot-changed.window', $blade);
+        self::assertStringNotContainsString('onMediaSnapshotChanged', $blade);
+        self::assertStringNotContainsString('featuredImageDraft', $blade);
+
+        $editor = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/components/SeoArticleEditor.jsx',
+        );
+        self::assertStringContainsString('article-editor-media-snapshot-changed', $editor);
     }
 
     public function test_images_utils_no_longer_write_featured_localstorage(): void

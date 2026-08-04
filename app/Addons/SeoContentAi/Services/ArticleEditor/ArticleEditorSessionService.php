@@ -11,6 +11,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoArticleEditorSession;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectArticleMembership;
+use App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter;
 use App\Addons\SeoContentAi\Support\ArticleEditorSessionErrorCode;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\User;
@@ -20,7 +21,8 @@ use Illuminate\Support\Str;
 
 /**
  * Server-authoritative Article Editor session lock.
- * Cache lock via ActionSupport::withArticleLock only serializes acquire/release races.
+ * Cache mutex via ActionSupport::withArticleLock (article-write:{id}) serializes writers.
+ * Reentrant in-process so persist → UpdateArticleContentAction does not deadlock.
  */
 final class ArticleEditorSessionService
 {
@@ -28,6 +30,7 @@ final class ArticleEditorSessionService
         private readonly ArticleDocumentVersionService $documentVersions,
         private readonly ArticleContentConflictGuard $conflictGuard,
         private readonly ContentProjectArticleMembership $membership,
+        private readonly ArticleEditorDocumentWriter $documentWriter,
     ) {}
 
     public function lockTtlSeconds(): int
@@ -84,7 +87,25 @@ final class ArticleEditorSessionService
                         return $this->ownedAcquirePayload($fresh, $active->fresh() ?? $active, $knownDocumentVersion);
                     }
 
-                    throw ArticleEditorSessionException::locked($this->publicLockPayload($active, $user));
+                    // Same user, different tab/client: reclaim only when own heartbeat is stale
+                    // (crash / tab killed without release). Fresh heartbeat from another tab stays exclusive.
+                    if (
+                        (int) $active->user_id === (int) $user->getKey()
+                        && $this->isOwnSessionHeartbeatStale($active)
+                    ) {
+                        $active->status = ArticleEditorSessionStatus::Released;
+                        $active->released_at = now();
+                        $active->save();
+
+                        RuntimeLogger::info('seo.editor.session_reclaimed_stale_own', [
+                            'article_id' => (int) $fresh->getKey(),
+                            'old_session_id' => (string) $active->id,
+                            'user_id' => (int) $user->getKey(),
+                            'new_client_instance_id' => $clientInstanceId,
+                        ]);
+                    } else {
+                        throw ArticleEditorSessionException::locked($this->publicLockPayload($active, $user));
+                    }
                 }
 
                 $now = now();
@@ -175,16 +196,38 @@ final class ArticleEditorSessionService
                 }
 
                 $freshArticle = SeoArticle::query()->lockForUpdate()->findOrFail((int) $article->getKey());
+
+                // Same-content short-circuit (duplicate autosave / lost ACK) before persist.
+                $noop = $this->tryDocumentNoopAck(
+                    $freshArticle,
+                    $document,
+                    $expectedDocumentVersion,
+                    $saveMode,
+                );
+                if ($noop !== null) {
+                    $this->touchHeartbeat($freshSession);
+                    RuntimeLogger::info('seo.editor.session_document_noop', [
+                        'article_id' => (int) $freshArticle->getKey(),
+                        'session_id' => (string) $freshSession->id,
+                        'save_mode' => $saveMode,
+                        'document_version' => $noop['document_version'],
+                    ]);
+
+                    return $noop;
+                }
+
                 $this->documentVersions->assertExpected($freshArticle, $expectedDocumentVersion);
-                $this->assertContentHash($freshArticle, $expectedContentHash);
+                $this->assertContentHash($freshArticle, $expectedContentHash, $expectedDocumentVersion);
 
                 $result = $persist($freshArticle, $document);
                 if (! ($result['success'] ?? false)) {
+                    $persistCode = (string) ($result['code'] ?? 'persist_rejected');
+                    $http = $persistCode === 'article_write_busy' ? 409 : 422;
                     throw ArticleEditorSessionException::make(
-                        'persist_rejected',
+                        $persistCode,
                         (string) ($result['message'] ?? 'Persist failed.'),
-                        [],
-                        422,
+                        ['code' => $persistCode],
+                        $http,
                     );
                 }
 
@@ -200,6 +243,7 @@ final class ArticleEditorSessionService
 
                 $payload = [
                     'saved' => true,
+                    'noop' => false,
                     'document_version' => $this->documentVersions->current($saved),
                     'content_hash' => (string) ($result['content_hash']
                         ?? $this->conflictGuard->contentHash((string) ($saved->body ?? ''))),
@@ -263,15 +307,17 @@ final class ArticleEditorSessionService
 
                 $freshArticle = SeoArticle::query()->lockForUpdate()->findOrFail((int) $article->getKey());
                 $this->documentVersions->assertExpected($freshArticle, $expectedDocumentVersion);
-                $this->assertContentHash($freshArticle, $expectedContentHash);
+                $this->assertContentHash($freshArticle, $expectedContentHash, $expectedDocumentVersion);
 
                 $result = $persist($freshArticle, $document);
                 if (! ($result['success'] ?? false)) {
+                    $persistCode = (string) ($result['code'] ?? 'persist_rejected');
+                    $http = $persistCode === 'article_write_busy' ? 409 : 422;
                     throw ArticleEditorSessionException::make(
-                        'persist_rejected',
+                        $persistCode,
                         (string) ($result['message'] ?? 'Persist failed.'),
-                        [],
-                        422,
+                        ['code' => $persistCode],
+                        $http,
                     );
                 }
 
@@ -334,6 +380,8 @@ final class ArticleEditorSessionService
 
     /**
      * @return array{session: array<string, mixed>, article: array<string, mixed>, lock: array<string, mixed>}
+    /**
+     * @deprecated Exclusive lock UI has no takeover path. Keep for API/admin escape hatch until product/ops ACK.
      *
      * @throws ArticleEditorSessionException
      */
@@ -552,6 +600,92 @@ final class ArticleEditorSessionService
     }
 
     /**
+     * Media/body rewrite from owning editor (Fix Slug All, URL rewrite).
+     * - No active session → allow (returns null).
+     * - Owning active session → allow.
+     * - Foreign active session → 423.
+     *
+     * @throws ArticleEditorSessionException
+     */
+    public function assertOwningActiveSessionForMediaMutation(
+        SeoArticle $article,
+        User $user,
+        ?string $sessionId,
+        string $operation = 'media_url_rewrite',
+    ): ?SeoArticleEditorSession {
+        $this->assertArticleEditable($article);
+        $this->expireStaleSessionsForArticle($article);
+
+        $active = $this->findActiveSession($article);
+        if (! $active instanceof SeoArticleEditorSession) {
+            return null;
+        }
+
+        $sessionId = trim((string) $sessionId);
+        if (
+            $sessionId !== ''
+            && (string) $active->id === $sessionId
+            && (int) $active->user_id === (int) $user->getKey()
+            && $active->isActiveLock()
+        ) {
+            return $active;
+        }
+
+        RuntimeLogger::warning('seo.editor.media_mutation_blocked_by_session', [
+            'article_id' => (int) $article->getKey(),
+            'session_id' => (string) $active->id,
+            'operation' => $operation,
+            'provided_session_id' => $sessionId !== '' ? $sessionId : null,
+        ]);
+
+        throw ArticleEditorSessionException::locked($this->publicLockPayload($active, $user));
+    }
+
+    /**
+     * Media/body rewrite policy:
+     * - no active session → allow (CLI/job/legacy paths);
+     * - owning session id + user → allow;
+     * - other active session → locked.
+     *
+     * @throws ArticleEditorSessionException
+     */
+    public function assertBodyRewriteAllowed(
+        SeoArticle $article,
+        string $operation = 'media_url_rewrite',
+        ?string $editorSessionId = null,
+        ?User $user = null,
+    ): void {
+        $active = $this->findActiveSession($article);
+        if (! $active instanceof SeoArticleEditorSession) {
+            return;
+        }
+
+        $sessionId = trim((string) $editorSessionId);
+        $actor = $user instanceof User
+            ? $user
+            : (auth()->user() instanceof User ? auth()->user() : null);
+
+        if (
+            $sessionId !== ''
+            && $actor instanceof User
+            && (string) $active->id === $sessionId
+            && (int) $active->user_id === (int) $actor->getKey()
+            && $active->isActiveLock()
+        ) {
+            return;
+        }
+
+        RuntimeLogger::warning('seo.editor.media_rewrite_blocked_by_session', [
+            'article_id' => (int) $article->getKey(),
+            'session_id' => (string) $active->id,
+            'operation' => $operation,
+            'provided_session_id' => $sessionId !== '' ? $sessionId : null,
+        ]);
+
+        throw ArticleEditorSessionException::locked($this->publicLockPayload($active, $actor));
+    }
+
+    /**
      * External user-facing body mutation (revision restore, AI apply outside owning session).
      *
      * @throws ArticleEditorSessionException
@@ -573,16 +707,6 @@ final class ArticleEditorSessionService
             $active,
             auth()->user() instanceof User ? auth()->user() : null,
         ));
-    }
-
-    /**
-     * Media/body rewrite policy: block when any active editor session exists.
-     *
-     * @throws ArticleEditorSessionException
-     */
-    public function assertBodyRewriteAllowed(SeoArticle $article, string $operation = 'media_url_rewrite'): void
-    {
-        $this->assertNoActiveEditorSession($article, $operation);
     }
 
     /**
@@ -671,6 +795,22 @@ final class ArticleEditorSessionService
     }
 
     /**
+     * Own session from another client_instance_id is reclaimable when heartbeat stopped
+     * (browser crash / tab killed). Active tabs keep sending heartbeat → stay exclusive.
+     */
+    private function isOwnSessionHeartbeatStale(SeoArticleEditorSession $session): bool
+    {
+        $lastBeat = $session->heartbeat_at ?? $session->acquired_at;
+        if ($lastBeat === null) {
+            return true;
+        }
+
+        $staleAfterSeconds = max(30, $this->heartbeatIntervalSeconds() * 2);
+
+        return $lastBeat->lte(now()->subSeconds($staleAfterSeconds));
+    }
+
+    /**
      * @throws ArticleEditorSessionException
      */
     private function requireOwnedActiveSession(SeoArticle $article, string $sessionId, User $user): SeoArticleEditorSession
@@ -746,16 +886,127 @@ final class ArticleEditorSessionService
     }
 
     /**
+     * Same-content short-circuit after session ownership + row locks.
+     * Skips HTML render, article update, revision, and document-changed side effects.
+     *
+     * Policy:
+     * - expected version matches → noop when canonical hash matches;
+     * - expected version stale but same owning session + same hash → lost-ACK idempotent noop;
+     * - hash differs with version skew → fall through to assertExpected (conflict).
+     *
+     * @param  array<string, mixed>  $bundle
+     * @return array{
+     *     saved: bool,
+     *     noop: bool,
+     *     success: bool,
+     *     reconciled?: bool,
+     *     document_version: int,
+     *     content_hash: string,
+     *     body_hash: string,
+     *     editor_document_hash: string,
+     *     editor_document_schema_version: int,
+     *     saved_at: string|null
+     * }|null
+     */
+    private function tryDocumentNoopAck(
+        SeoArticle $article,
+        array $bundle,
+        int|string|null $expectedDocumentVersion,
+        string $saveMode,
+    ): ?array {
+        if (! in_array($saveMode, ['autosave', 'explicit'], true)) {
+            return null;
+        }
+
+        $currentBodyHash = $this->conflictGuard->contentHash((string) ($article->body ?? ''));
+        $currentEditorHash = trim((string) ($article->editor_document_hash ?? ''));
+        $currentVersion = $this->documentVersions->current($article);
+
+        $incomingDocument = is_array($bundle['editor_document'] ?? null)
+            ? $bundle['editor_document']
+            : null;
+
+        $matchedEditorHash = '';
+        if ($incomingDocument !== null) {
+            try {
+                $incomingHash = $this->documentWriter->canonicalHash($incomingDocument);
+            } catch (\Throwable) {
+                // Invalid document must reject via persist path — not silent noop.
+                return null;
+            }
+
+            if ($currentEditorHash !== '' && hash_equals($currentEditorHash, $incomingHash)) {
+                $matchedEditorHash = $currentEditorHash;
+            } else {
+                return null;
+            }
+        } else {
+            $html = (string) ($bundle['html'] ?? $bundle['document'] ?? '');
+            if ($html === '' || ! hash_equals($currentBodyHash, $this->conflictGuard->contentHash($html))) {
+                return null;
+            }
+            $matchedEditorHash = $currentEditorHash;
+        }
+
+        $expectedVersion = ($expectedDocumentVersion === null || $expectedDocumentVersion === '')
+            ? null
+            : (int) $expectedDocumentVersion;
+
+        $reconciled = false;
+        if ($expectedVersion !== null && $expectedVersion !== $currentVersion) {
+            // Lost ACK / same-session retry: client behind, content identical.
+            // Client ahead of server is unsafe — fall through to conflict assert.
+            if ($expectedVersion > $currentVersion) {
+                return null;
+            }
+            $reconciled = true;
+        }
+
+        if (config('app.debug')) {
+            RuntimeLogger::info('seo.editor.version_debug', [
+                'event' => 'document_noop_ack',
+                'article_id' => (int) $article->getKey(),
+                'expected_document_version' => $expectedVersion,
+                'document_version' => $currentVersion,
+                'editor_document_hash' => $matchedEditorHash !== ''
+                    ? substr($matchedEditorHash, 0, 12)
+                    : null,
+                'content_hash' => substr($currentBodyHash, 0, 12),
+                'reconciled' => $reconciled,
+                'save_mode' => $saveMode,
+            ]);
+        }
+
+        return [
+            'saved' => true,
+            'noop' => true,
+            'success' => true,
+            'reconciled' => $reconciled,
+            'document_version' => $currentVersion,
+            'content_hash' => $currentBodyHash,
+            'body_hash' => $currentBodyHash,
+            'editor_document_hash' => $matchedEditorHash,
+            'editor_document_schema_version' => (int) ($article->editor_document_schema_version ?? 0),
+            'saved_at' => $article->updated_at?->toIso8601String(),
+        ];
+    }
+
+    /**
      * @throws ArticleEditorSessionException
      */
-    private function assertContentHash(SeoArticle $article, ?string $expectedContentHash): void
-    {
+    private function assertContentHash(
+        SeoArticle $article,
+        ?string $expectedContentHash,
+        int|string|null $expectedDocumentVersion = null,
+    ): void {
         if (! is_string($expectedContentHash) || $expectedContentHash === '') {
             return;
         }
 
         $conflict = $this->conflictGuard->assertCompatible($article, [
             'expected_content_hash' => $expectedContentHash,
+            // Pass version so matching canonical lock does not let legacy hash veto.
+            'expected_document_version' => $expectedDocumentVersion,
         ]);
 
         if ($conflict !== null) {

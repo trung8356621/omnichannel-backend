@@ -9,7 +9,7 @@
 2. `docs/modules/*` — one canonical doc per module
 3. `docs/contracts/*` — public contracts / invariants
 4. `docs/operations/*` — deploy, workers, testing, troubleshooting
-5. `docs/audits/*` — current audits only (if any)
+5. `docs/audits/*` — current audits only (if any). Active: [`ARTICLE_EDITOR_PERFORMANCE_PHASE1.md`](audits/ARTICLE_EDITOR_PERFORMANCE_PHASE1.md)
 6. `docs/archive/*` — **historical only**, never SoT
 
 Root `/README.md` = repository landing.  
@@ -33,6 +33,7 @@ Root `/README.md` = repository landing.
 | [ARTICLE_EDITOR_COMMAND_LAYER.md](architecture/ARTICLE_EDITOR_COMMAND_LAYER.md) | Phase 4 Editor Command Layer + document-changed signal |
 | [ARTICLE_EDITOR_JSON_PERSISTENCE.md](architecture/ARTICLE_EDITOR_JSON_PERSISTENCE.md) | Phase 5A TipTap JSON persistence + derived HTML body |
 | [ARTICLE_EDITOR_RUNTIME.md](architecture/ARTICLE_EDITOR_RUNTIME.md) | Phase 6A internal editor runtime (built-in modules, not public SDK) |
+| [ARTICLE_EDITOR_LEGACY_CLEANUP.md](architecture/ARTICLE_EDITOR_LEGACY_CLEANUP.md) | Post-cutover dead-code cleanup inventory + deleted/kept paths |
 
 ## Modules
 
@@ -41,7 +42,7 @@ Root `/README.md` = repository landing.
 | Agent Workspace | [AGENT_WORKSPACE.md](modules/AGENT_WORKSPACE.md) |
 | Automation | [AUTOMATION.md](modules/AUTOMATION.md) |
 | Content Projects | [CONTENT_PROJECTS.md](modules/CONTENT_PROJECTS.md) |
-| Publishing | [PUBLISHING.md](modules/PUBLISHING.md) |
+| Publishing | [PUBLISHING.md](modules/PUBLISHING.md) — includes System Date & Time + queue pending UX |
 | Article Editor | [ARTICLE_EDITOR.md](modules/ARTICLE_EDITOR.md) |
 | Site Sync | [SITE_SYNC.md](modules/SITE_SYNC.md) |
 | WordPress Bridge | [WORDPRESS_BRIDGE.md](modules/WORDPRESS_BRIDGE.md) |
@@ -66,6 +67,7 @@ Root `/README.md` = repository landing.
 | Topic | Doc |
 |-------|-----|
 | Deployment | [DEPLOYMENT.md](operations/DEPLOYMENT.md) |
+| aaPanel queue runtime | [AAPANEL_QUEUE_RUNTIME.md](operations/AAPANEL_QUEUE_RUNTIME.md) |
 | Scheduler / Workers | [SCHEDULER_AND_WORKERS.md](operations/SCHEDULER_AND_WORKERS.md) |
 | Testing | [TESTING.md](operations/TESTING.md) |
 | Troubleshooting | [TROUBLESHOOTING.md](operations/TROUBLESHOOTING.md) |

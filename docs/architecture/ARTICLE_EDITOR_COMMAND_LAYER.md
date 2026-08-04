@@ -81,3 +81,7 @@ Server TipTap JSON persist, publishing refactor, collaborative editing, browser 
 ## Phase 6C.4 note
 
 AI Chat generate/insert uses host actions + existing insert_image / media pipeline; video generate remains Livewire shell endpoint. No new document schema.
+
+## Legacy cleanup
+
+Duplicate insert_faq_placeholder insertion-module handler removed; canonical aqCommands. Zero-caller structure/compat commands retained as deprecated registry surface. See [ARTICLE_EDITOR_LEGACY_CLEANUP.md](ARTICLE_EDITOR_LEGACY_CLEANUP.md).

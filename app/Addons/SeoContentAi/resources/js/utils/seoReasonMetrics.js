@@ -156,9 +156,9 @@ const DEFAULT_SEO_RULE_TEMPLATES = {
         image_ratio_poor: 'Thiếu khoảng :missing ảnh.',
         image_ratio_poor_label: 'Tỷ lệ hình ảnh còn kém',
         image_ratio_poor_detail: 'Bài viết :words từ hiện có :current ảnh; đề xuất khoảng :recommended ảnh.',
-        image_ratio_low: 'Thiếu khoảng :missing ảnh.',
-        image_ratio_low_label: 'Tỷ lệ hình ảnh còn thấp',
-        image_ratio_low_detail: 'Bài viết :words từ hiện có :current ảnh; đề xuất khoảng :recommended ảnh.',
+        image_ratio_low: 'Thiếu khoảng :missing ảnh trong nội dung.',
+        image_ratio_low_label: 'Bài viết nên bổ sung thêm ảnh',
+        image_ratio_low_detail: 'Bài viết có :words từ và :current ảnh nội dung; đề xuất khoảng :recommended ảnh.',
         image_ratio_suboptimal: 'Nên thêm khoảng :missing ảnh để đạt tỷ lệ lý tưởng.',
         image_ratio_suboptimal_label: 'Tỷ lệ hình ảnh chưa lý tưởng',
         image_ratio_suboptimal_detail: 'Bài viết :words từ hiện có :current ảnh; đề xuất khoảng :recommended ảnh.',
@@ -209,7 +209,7 @@ const DEFAULT_SEO_RULE_TEMPLATES = {
 const SAFE_FALLBACKS = {
     vi: {
         content_length_low: 'Nội dung chưa đạt độ dài đề xuất',
-        image_ratio_low: 'Tỷ lệ hình ảnh chưa đạt đề xuất',
+        image_ratio_low: 'Bài viết nên bổ sung thêm ảnh',
         image_ratio_poor: 'Tỷ lệ hình ảnh chưa đạt đề xuất',
         image_ratio_missing: 'Tỷ lệ hình ảnh chưa đạt đề xuất',
         image_ratio_suboptimal: 'Tỷ lệ hình ảnh chưa đạt đề xuất',

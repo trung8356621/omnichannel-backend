@@ -40,13 +40,38 @@ final class ArticleEditorDocumentWriter
 
     public function columnsReady(SeoArticle $article): bool
     {
+        static $cache = [];
+
         try {
             $connection = $article->getConnectionName() ?: 'omi_seo_ai';
+            $table = $article->getTable();
+            $key = $connection.'.'.$table.'.editor_document';
+            if (array_key_exists($key, $cache)) {
+                return $cache[$key];
+            }
 
-            return Schema::connection($connection)->hasColumn($article->getTable(), 'editor_document');
+            return $cache[$key] = Schema::connection($connection)->hasColumn($table, 'editor_document');
         } catch (\Throwable) {
             return false;
         }
+    }
+
+    /**
+     * Canonical document hash without HTML render (autosave no-op precheck).
+     *
+     * @param  array<string, mixed>  $document
+     */
+    public function canonicalHash(array $document): string
+    {
+        $validated = $this->schema->validate($document);
+        if (! ($validated['ok'] ?? false)) {
+            throw new ArticleEditorDocumentException(
+                (string) ($validated['code'] ?? ArticleEditorDocumentErrorCode::INVALID),
+                (string) ($validated['message'] ?? 'Invalid editor document.'),
+            );
+        }
+
+        return $this->schema->hash($this->schema->normalize($document));
     }
 
     /**
@@ -313,12 +338,35 @@ final class ArticleEditorDocumentWriter
     }
 
     /**
-     * @return array{source: string, document: array<string, mixed>|null, body_html: string, hash: string|null, schema_version: int|null, status: string|null}
+     * @return array{source: string, document: array<string, mixed>|null, body_html: string, hash: string|null, schema_version: int|null, status: string|null, inline_whitespace_repaired?: bool}
      */
     public function resolveForBootstrap(SeoArticle $article): array
     {
-        $bodyHtml = (string) ($article->body ?? '');
+        $rawBodyHtml = (string) ($article->body ?? '');
+        $boundary = new InlineMarkBoundaryWhitespace;
+        $bodyRepair = $boundary->repairWithReport($rawBodyHtml);
+        $bodyHtml = $bodyRepair['html'];
+        $bodyWasRepaired = $bodyRepair['repaired'] === true;
         $status = $article->editor_document_status ?? null;
+
+        // Already-persisted glue in body: force HTML path with repaired markup so client can recover.
+        if ($bodyWasRepaired) {
+            RuntimeLogger::info('seo.editor.bootstrap_inline_whitespace_repaired', [
+                'article_id' => (int) $article->getKey(),
+                'glued_before' => $bodyRepair['glued_before'],
+                'glued_after' => $bodyRepair['glued_after'],
+            ]);
+
+            return [
+                'source' => 'body_html_repaired',
+                'document' => null,
+                'body_html' => $bodyHtml,
+                'hash' => null,
+                'schema_version' => null,
+                'status' => is_string($status) ? $status : ArticleEditorDocumentSchema::STATUS_PENDING,
+                'inline_whitespace_repaired' => true,
+            ];
+        }
 
         if (
             $this->readPreferred()
@@ -329,15 +377,25 @@ final class ArticleEditorDocumentWriter
         ) {
             $document = $article->editor_document;
             $validated = $this->schema->validate($document);
-            if ($validated['ok'] ?? false) {
-                return [
-                    'source' => 'editor_document',
-                    'document' => $this->schema->normalize($document),
-                    'body_html' => $bodyHtml,
-                    'hash' => (string) ($article->editor_document_hash ?? $this->schema->hash($document)),
-                    'schema_version' => (int) ($article->editor_document_schema_version ?? ArticleEditorDocumentSchema::CURRENT_VERSION),
-                    'status' => (string) ($status ?? ArticleEditorDocumentSchema::STATUS_CURRENT),
-                ];
+            if (($validated['ok'] ?? false) === true) {
+                $normalized = $this->schema->normalize($document);
+                if ($this->isUsableBootstrapDocument($normalized, $bodyHtml)) {
+                    return [
+                        'source' => 'editor_document',
+                        'document' => $normalized,
+                        'body_html' => $bodyHtml,
+                        'hash' => (string) ($article->editor_document_hash ?? $this->schema->hash($normalized)),
+                        'schema_version' => (int) ($article->editor_document_schema_version ?? ArticleEditorDocumentSchema::CURRENT_VERSION),
+                        'status' => (string) ($status ?? ArticleEditorDocumentSchema::STATUS_CURRENT),
+                    ];
+                }
+
+                RuntimeLogger::info('seo.editor.bootstrap_json_rejected_fallback_html', [
+                    'article_id' => (int) $article->getKey(),
+                    'status' => is_string($status) ? $status : null,
+                    'block_count' => count($normalized['blocks'] ?? []),
+                    'body_length' => strlen($bodyHtml),
+                ]);
             }
         }
 
@@ -349,5 +407,195 @@ final class ArticleEditorDocumentWriter
             'schema_version' => null,
             'status' => is_string($status) ? $status : ArticleEditorDocumentSchema::STATUS_PENDING,
         ];
+    }
+
+    /**
+     * Bootstrap must not prefer a schema-valid but content-hollow JSON envelope
+     * (e.g. image blocks + empty TipTap docs) when body HTML still has text.
+     *
+     * @param  array<string, mixed>  $document  Normalized envelope
+     */
+    public function isUsableBootstrapDocument(array $document, string $bodyHtml = ''): bool
+    {
+        if (($document['type'] ?? '') !== ArticleEditorDocumentSchema::TYPE) {
+            return false;
+        }
+
+        $blocks = $document['blocks'] ?? null;
+        if (! is_array($blocks) || $blocks === []) {
+            return false;
+        }
+
+        $hasValidBlock = false;
+        $hasMeaningfulText = false;
+        $textBlockCount = 0;
+        $emptyTextBlockCount = 0;
+        $jsonPlainLength = 0;
+        $jsonPlainJoined = '';
+        $jsonHasTableContent = false;
+
+        foreach ($blocks as $block) {
+            if (! is_array($block)) {
+                continue;
+            }
+            $type = (string) ($block['type'] ?? 'text');
+            if ($type === 'image') {
+                $image = is_array($block['image'] ?? null) ? $block['image'] : [];
+                $src = trim((string) ($image['src'] ?? $image['url'] ?? ''));
+                if ($src !== '') {
+                    $hasValidBlock = true;
+                }
+                continue;
+            }
+
+            $tipTap = is_array($block['document'] ?? null) ? $block['document'] : null;
+            if ($tipTap === null) {
+                continue;
+            }
+            $hasValidBlock = true;
+            $textBlockCount++;
+            $plain = $this->tipTapPlainText($tipTap);
+            $jsonPlainLength += mb_strlen($plain);
+            if ($plain !== '') {
+                $hasMeaningfulText = true;
+                $jsonPlainJoined = trim($jsonPlainJoined.' '.$plain);
+            } else {
+                $emptyTextBlockCount++;
+            }
+            if ($this->tipTapHasTableContent($tipTap)) {
+                $jsonHasTableContent = true;
+            }
+        }
+
+        if (! $hasValidBlock) {
+            return false;
+        }
+
+        $bodyPlain = $this->htmlPlainText($bodyHtml);
+        $bodyPlainLength = mb_strlen($bodyPlain);
+        $bodyHasTable = preg_match('/<table\b/i', $bodyHtml) === 1;
+
+        // Body still has prose but JSON text nodes are empty → force HTML fallback.
+        if ($bodyPlainLength > 0 && ! $hasMeaningfulText) {
+            return false;
+        }
+
+        // Body still has real <table> but JSON dropped/emptied tables.
+        if ($bodyHasTable && ! $jsonHasTableContent) {
+            return false;
+        }
+
+        // Partial hollow JSON (1 intro + many empty TipTap blocks) while body keeps full article.
+        if (
+            $bodyPlainLength >= 80
+            && (
+                ($textBlockCount > 0 && $emptyTextBlockCount * 2 >= $textBlockCount)
+                || $jsonPlainLength * 2 < $bodyPlainLength
+                || ($bodyPlainLength - $jsonPlainLength) >= 120
+            )
+        ) {
+            return false;
+        }
+
+        // JSON lost inter-word spaces around inline marks vs body → prefer HTML fallback.
+        if ($bodyPlainLength > 0 && $this->hasInlineWhitespaceCorruption($bodyPlain, $jsonPlainJoined)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Same letters but lost multiple inter-word spaces → likely mark-boundary corruption.
+     */
+    public function hasInlineWhitespaceCorruption(string $basePlain, string $candidatePlain, int $minLostSpaces = 2): bool
+    {
+        $base = trim(preg_replace('/\s+/u', ' ', str_replace("\xc2\xa0", ' ', $basePlain)) ?? $basePlain);
+        $candidate = trim(preg_replace('/\s+/u', ' ', str_replace("\xc2\xa0", ' ', $candidatePlain)) ?? $candidatePlain);
+        if ($base === '' || $candidate === '' || $base === $candidate) {
+            return false;
+        }
+
+        $strip = static fn (string $value): string => preg_replace('/\s+/u', '', $value) ?? '';
+        if ($strip($base) !== $strip($candidate)) {
+            return false;
+        }
+
+        $count = static function (string $value): int {
+            return preg_match_all('/[\p{L}\p{N}]\s+[\p{L}\p{N}]/u', $value) ?: 0;
+        };
+
+        return ($count($base) - $count($candidate)) >= max(2, $minLostSpaces);
+    }
+
+    /**
+     * @param  array<string, mixed>  $node
+     */
+    private function tipTapHasTableContent(array $node): bool
+    {
+        $type = (string) ($node['type'] ?? '');
+        if ($type === 'table') {
+            $rows = is_array($node['content'] ?? null) ? $node['content'] : [];
+
+            return $rows !== [];
+        }
+
+        $content = $node['content'] ?? null;
+        if (! is_array($content)) {
+            return false;
+        }
+
+        foreach ($content as $child) {
+            if (is_array($child) && $this->tipTapHasTableContent($child)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $node
+     */
+    private function tipTapHasMeaningfulText(array $node): bool
+    {
+        return $this->tipTapPlainText($node) !== '';
+    }
+
+    /**
+     * @param  array<string, mixed>  $node
+     */
+    private function tipTapPlainText(array $node): string
+    {
+        // Keep interior spaces (mark boundaries); only trim the joined result.
+        $raw = (string) ($node['text'] ?? '');
+        $parts = $raw !== '' ? [$raw] : [];
+
+        $content = $node['content'] ?? null;
+        if (is_array($content)) {
+            foreach ($content as $child) {
+                if (is_array($child)) {
+                    $childText = $this->tipTapPlainText($child);
+                    if ($childText !== '') {
+                        $parts[] = $childText;
+                    }
+                }
+            }
+        }
+
+        return trim(preg_replace('/\s+/u', ' ', implode('', $parts)) ?? '');
+    }
+
+    private function htmlHasMeaningfulText(string $html): bool
+    {
+        return $this->htmlPlainText($html) !== '';
+    }
+
+    private function htmlPlainText(string $html): string
+    {
+        $plain = trim(html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        $plain = preg_replace('/\s+/u', ' ', $plain) ?? $plain;
+
+        return trim($plain);
     }
 }

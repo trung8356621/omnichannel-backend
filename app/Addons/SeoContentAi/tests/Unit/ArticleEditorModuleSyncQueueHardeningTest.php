@@ -62,14 +62,13 @@ final class ArticleEditorModuleSyncQueueHardeningTest extends TestCase
 
     public function test_error_boundary_logs_module_context(): void
     {
-        $source = $this->js('components/ArticleEditorModuleErrorBoundary.jsx');
+        $source = $this->js('editor/runtime/EditorModuleErrorBoundary.jsx');
 
-        self::assertStringContainsString('logModuleLoadError', $source);
-        self::assertStringContainsString('this.props.moduleName', $source);
-        self::assertStringContainsString('this.props.articleId', $source);
-        self::assertStringContainsString('this.props.endpoint', $source);
-        self::assertStringContainsString('autoRetryUsed', $source);
-        self::assertStringContainsString('reading', $source);
+        self::assertStringContainsString('module slot error', $source);
+        self::assertStringContainsString('this.props.moduleId', $source);
+        self::assertStringContainsString('this.props.slotName', $source);
+        self::assertStringContainsString('handleRetry', $source);
+        self::assertFileDoesNotExist($this->js('components/ArticleEditorModuleErrorBoundary.jsx'));
     }
 
     public function test_assistant_accordion_exclusive_by_default(): void

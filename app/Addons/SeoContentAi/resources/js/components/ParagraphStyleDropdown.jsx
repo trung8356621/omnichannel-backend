@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 import { executeEditorCommand } from '../utils/editorCommands';
 import { canMutateEditor } from '../utils/editorSessionState';
@@ -30,25 +31,111 @@ function applyStyle(editor, value) {
     executeEditorCommand('set_paragraph_style', { editor, value }, { notifyOnFailure: true });
 }
 
+/**
+ * Menu portals to document.body — parent toolbar uses overflow-x:auto which
+ * otherwise clips absolute dropdowns into a broken "tab" overflow.
+ */
 export default function ParagraphStyleDropdown({ editor }) {
     const [open, setOpen] = useState(false);
+    const [menuStyle, setMenuStyle] = useState(null);
     const rootRef = useRef(null);
+    const menuRef = useRef(null);
     const mutationLocked = !editor?.isEditable || !canMutateEditor();
     const lockTitle = t('editor_locked_mutation_tooltip');
 
     const activeValue = getActiveStyle(editor);
     const activeLabel = STYLES.find((s) => s.value === activeValue)?.label ?? t('style_paragraph');
 
-    useEffect(() => {
-        if (!open) return;
-        const onDocClick = (e) => {
-            if (rootRef.current && !rootRef.current.contains(e.target)) {
-                setOpen(false);
+    useLayoutEffect(() => {
+        if (!open || !rootRef.current) {
+            setMenuStyle(null);
+            return undefined;
+        }
+
+        const place = () => {
+            const trigger = rootRef.current?.querySelector('.seo-fmt-dropdown-trigger');
+            if (!trigger) {
+                return;
             }
+            const rect = trigger.getBoundingClientRect();
+            const menuHeight = menuRef.current?.offsetHeight || 280;
+            const gap = 4;
+            const spaceBelow = window.innerHeight - rect.bottom - gap;
+            const openUp = spaceBelow < menuHeight && rect.top > spaceBelow;
+            const top = openUp
+                ? Math.max(8, rect.top - menuHeight - gap)
+                : Math.min(window.innerHeight - menuHeight - 8, rect.bottom + gap);
+            const width = Math.max(260, rect.width);
+            let left = rect.left;
+            if (left + width > window.innerWidth - 8) {
+                left = Math.max(8, window.innerWidth - width - 8);
+            }
+
+            setMenuStyle({
+                position: 'fixed',
+                top: `${Math.round(top)}px`,
+                left: `${Math.round(left)}px`,
+                minWidth: `${Math.round(width)}px`,
+                zIndex: 10050,
+            });
+        };
+
+        place();
+        window.addEventListener('resize', place);
+        window.addEventListener('scroll', place, true);
+        return () => {
+            window.removeEventListener('resize', place);
+            window.removeEventListener('scroll', place, true);
+        };
+    }, [open]);
+
+    useEffect(() => {
+        if (!open) return undefined;
+        const onDocClick = (e) => {
+            if (rootRef.current?.contains(e.target) || menuRef.current?.contains(e.target)) {
+                return;
+            }
+            setOpen(false);
         };
         document.addEventListener('mousedown', onDocClick);
         return () => document.removeEventListener('mousedown', onDocClick);
     }, [open]);
+
+    const menu = open && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+                ref={menuRef}
+                className="seo-fmt-dropdown-menu seo-fmt-dropdown-menu--portal"
+                role="listbox"
+                style={menuStyle || {
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    visibility: 'hidden',
+                    pointerEvents: 'none',
+                    zIndex: 10050,
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+            >
+                {STYLES.map((style) => (
+                    <button
+                        key={style.value}
+                        type="button"
+                        role="option"
+                        aria-selected={activeValue === style.value}
+                        className={`seo-fmt-dropdown-item${activeValue === style.value ? ' is-active' : ''}`}
+                        onClick={() => {
+                            applyStyle(editor, style.value);
+                            setOpen(false);
+                        }}
+                    >
+                        <span className={style.previewClass}>{style.label}</span>
+                    </button>
+                ))}
+            </div>,
+            document.body,
+        )
+        : null;
 
     return (
         <div ref={rootRef} className={`seo-fmt-dropdown${mutationLocked ? ' is-disabled' : ''}`}>
@@ -68,25 +155,7 @@ export default function ParagraphStyleDropdown({ editor }) {
                 <span className="seo-fmt-dropdown-label">{activeLabel}</span>
                 <ChevronDown size={14} className={`seo-fmt-dropdown-chevron${open ? ' is-open' : ''}`} />
             </button>
-            {open ? (
-                <div className="seo-fmt-dropdown-menu" role="listbox">
-                    {STYLES.map((style) => (
-                        <button
-                            key={style.value}
-                            type="button"
-                            role="option"
-                            aria-selected={activeValue === style.value}
-                            className={`seo-fmt-dropdown-item${activeValue === style.value ? ' is-active' : ''}`}
-                            onClick={() => {
-                                applyStyle(editor, style.value);
-                                setOpen(false);
-                            }}
-                        >
-                            <span className={style.previewClass}>{style.label}</span>
-                        </button>
-                    ))}
-                </div>
-            ) : null}
+            {menu}
         </div>
     );
 }

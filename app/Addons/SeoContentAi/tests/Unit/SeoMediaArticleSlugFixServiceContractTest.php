@@ -80,6 +80,14 @@ final class SeoMediaArticleSlugFixServiceContractTest extends TestCase
         self::assertTrue($reflection->hasMethod('renameOne'));
         self::assertTrue($reflection->hasMethod('fixSlugs'));
 
+        $renameOne = $reflection->getMethod('renameOne');
+        self::assertGreaterThanOrEqual(3, $renameOne->getNumberOfParameters());
+        $source = (string) file_get_contents((string) $reflection->getFileName());
+        self::assertStringContainsString(
+            'rewriteArticleReferences($article, $urlMap, $context)',
+            $source,
+        );
+
         $storage = $this->createMock(SeoMediaStorageService::class);
         $urlReplacement = new SeoMediaUrlReplacementService();
         $service = new SeoMediaArticleSlugFixService($storage, $urlReplacement);

@@ -91,6 +91,9 @@ final class ArticleEditorPersistService
     ): string {
         $derivedFromJson = false;
 
+        $previousBody = (string) ($article->getOriginal('body') ?? $article->body ?? '');
+        $clientHtml = $html;
+
         if (
             $this->documentWriter->persistenceEnabled()
             && is_array($editorDocument)
@@ -104,6 +107,19 @@ final class ArticleEditorPersistService
                 );
                 $html = $prepared['html'];
                 $derivedFromJson = true;
+
+                // Empty-table JSON must not wipe real tables still present in client/body HTML.
+                if (
+                    $this->htmlHasTableCells($clientHtml)
+                    && ! $this->htmlHasTableCells($html)
+                ) {
+                    $html = $clientHtml;
+                } elseif (
+                    $this->htmlHasTableCells($previousBody)
+                    && ! $this->htmlHasTableCells($html)
+                ) {
+                    $html = $previousBody;
+                }
             } catch (ArticleEditorDocumentException $exception) {
                 throw $exception;
             }
@@ -209,6 +225,11 @@ final class ArticleEditorPersistService
         }
 
         return $html;
+    }
+
+    private function htmlHasTableCells(string $html): bool
+    {
+        return preg_match('/<table\b[^>]*>[\s\S]*?<(td|th)\b/i', $html) === 1;
     }
 
     private function articleHadSubstantialContent(SeoArticle $article): bool

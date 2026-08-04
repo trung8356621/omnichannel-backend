@@ -82,7 +82,9 @@ Module: `docs/modules/AGENT_WORKSPACE.md`.
 |---------|--------|
 | Run not advancing | Worker on `seo-content-run`; `seo:content-project-run:status`; stale dispatch TTL + dead heartbeat |
 | Double article processing | Engine invariant — should be 1 running; investigate duplicate workers |
-| Publish due not firing | `seo:publish-scheduled-articles` schedule; `withoutOverlapping` |
+| Publish due not firing | `seo:publish-scheduled-articles` schedule; `withoutOverlapping`; cron `schedule:run` mỗi phút; automation queue cho `article.publish_requested` → `wordpress.article.sync` |
+| UI “Publishing” nhưng chưa claim | Due schedule phải là **Scheduled**; Publishing chỉ `processing`. Dùng Recover stuck nếu TTL quá hạn |
+| `lifecycle.invalid_transition: processing → cancelled` | Auto/Quick không cancel Publishing; dùng Recover stuck; Cancel thường không cho processing |
 | Stale generation | `seo:content-project:recover-stale-generation --apply` |
 
 See `DEPLOYMENT.md` + `QUEUE_SCHEDULER_AND_IDEMPOTENCY.md`.

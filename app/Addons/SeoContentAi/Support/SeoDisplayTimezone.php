@@ -7,20 +7,18 @@ namespace App\Addons\SeoContentAi\Support;
 use Carbon\Carbon;
 
 /**
- * Múi giờ hiển thị / lên lịch publish trong panel SEO (khác app.timezone UTC).
+ * @deprecated Use SystemDateTime — kept as thin BC facade for existing callers.
  */
 final class SeoDisplayTimezone
 {
     public static function name(): string
     {
-        $configured = trim((string) config('seo-content-ai.display_timezone', 'Asia/Ho_Chi_Minh'));
-
-        return $configured !== '' ? $configured : 'Asia/Ho_Chi_Minh';
+        return SystemDateTime::timezone();
     }
 
     public static function now(): Carbon
     {
-        return now(self::name());
+        return SystemDateTime::currentSystemTime();
     }
 
     public static function parse(?string $value): ?Carbon
@@ -30,41 +28,29 @@ final class SeoDisplayTimezone
         }
 
         try {
-            return Carbon::parse($value)->timezone(self::name());
+            if (preg_match('/[Zz]$|[+-]\d{2}:?\d{2}$/', trim($value)) === 1) {
+                return SystemDateTime::toSystemTimezone($value);
+            }
+
+            return SystemDateTime::parseSystemInputToUtc($value)->timezone(self::name());
         } catch (\Throwable) {
-            return null;
+            return SystemDateTime::toSystemTimezone($value);
         }
     }
 
-    public static function format(?string $value, string $format = 'd/m/Y H:i'): ?string
+    public static function format(?string $value, string $format = ''): ?string
     {
-        $parsed = self::parse($value);
+        if ($format !== '' && $format !== 'd/m/Y H:i') {
+            $local = SystemDateTime::toSystemTimezone($value);
 
-        return $parsed?->format($format);
+            return $local?->format($format);
+        }
+
+        return SystemDateTime::formatDateTime($value);
     }
 
     public static function formatScheduleLabel(Carbon $dateTime): string
     {
-        $dt = $dateTime->copy()->timezone(self::name());
-        $weekdayMap = [
-            0 => 'CN',
-            1 => 'Th2',
-            2 => 'Th3',
-            3 => 'Th4',
-            4 => 'Th5',
-            5 => 'Th6',
-            6 => 'Th7',
-        ];
-
-        $weekday = $weekdayMap[(int) $dt->dayOfWeek] ?? 'Th';
-
-        return sprintf(
-            '%s %d, %d at %02d:%02d',
-            $weekday,
-            (int) $dt->day,
-            (int) $dt->year,
-            (int) $dt->hour,
-            (int) $dt->minute,
-        );
+        return SystemDateTime::formatScheduleLabel($dateTime);
     }
 }

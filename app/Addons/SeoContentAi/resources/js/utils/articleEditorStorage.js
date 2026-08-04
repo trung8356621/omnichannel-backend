@@ -659,6 +659,19 @@ export function resolveLocalDraftDecision(draft, server) {
         || String(server?.content_hash ?? '').trim()
         || String(server?.expected_content_hash ?? '').trim();
 
+    // Hollow local draft (Phase-2 empty TipTap export) must not win over richer server body.
+    const draftPlainLen = normalizeContentForHash(draftContent).length;
+    const serverPlainLen = normalizeContentForHash(serverContent).length;
+    if (
+        serverPlainLen >= 80
+        && (
+            draftPlainLen * 2 < serverPlainLen
+            || (serverPlainLen - draftPlainLen) >= 120
+        )
+    ) {
+        return 'use_server';
+    }
+
     // Case 1 / E: cùng nội dung (kể cả khác whitespace/null) → server + xóa draft.
     if (
         contentsMeaningfullyEqual(draftContent, serverContent)
@@ -834,37 +847,6 @@ export function saveOutline(articleId, markdown) {
         );
     } catch (e) {
         console.warn('Không lưu được dàn ý localStorage', e);
-    }
-}
-
-/**
- * @returns {Array<{id: number, role: 'user'|'assistant', content: string, quote?: string, ts: number}>}
- */
-export function loadChat(articleId) {
-    if (!articleId) return [];
-    try {
-        const raw = localStorage.getItem(chatKey(articleId));
-        if (!raw) return [];
-        const data = JSON.parse(raw);
-        return Array.isArray(data?.messages) ? data.messages : [];
-    } catch {
-        return [];
-    }
-}
-
-export function saveChat(articleId, messages) {
-    if (!articleId) return;
-    try {
-        setItemWithPrune(
-            chatKey(articleId),
-            JSON.stringify({
-                messages: messages ?? [],
-                updatedAt: Date.now(),
-            }),
-            'chat',
-        );
-    } catch (e) {
-        console.warn('Không lưu được chat localStorage', e);
     }
 }
 

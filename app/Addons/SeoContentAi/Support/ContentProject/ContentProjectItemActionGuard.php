@@ -119,18 +119,12 @@ final class ContentProjectItemActionGuard
             }
         }
 
-        // Waiting/Retrying: unschedule + cancel/skip (Processing: cancel/skip only).
+        // Waiting/Retrying: unschedule + cancel/skip. Processing: không Cancel thường —
+        // cần Recover stuck publishing (tránh lifecycle.invalid_transition processing→cancelled).
         if ($queue === ContentProjectPublishQueueStatus::Waiting
             || $queue === ContentProjectPublishQueueStatus::Retrying
         ) {
             $actions[] = ContentProjectItemAction::Unschedule;
-            $actions[] = ContentProjectItemAction::CancelPublish;
-            $actions[] = ContentProjectItemAction::SkipPublish;
-        }
-
-        if ($queue === ContentProjectPublishQueueStatus::Processing
-            || ($publish === ContentProjectItemPublishState::Queued && $queue === null)
-        ) {
             $actions[] = ContentProjectItemAction::CancelPublish;
             $actions[] = ContentProjectItemAction::SkipPublish;
         }
@@ -153,11 +147,22 @@ final class ContentProjectItemActionGuard
         $resolver ??= new ContentProjectItemStateResolver($this);
         $state = $resolver->resolve($task, $article, $hints);
         if (! in_array($action, $state->availableActions, true)) {
+            $blocking = $state->blockingReason ?? 'n/a';
+            if (
+                ($action === ContentProjectItemAction::RetryPublish
+                    || $action === ContentProjectItemAction::PublishNow)
+                && $blocking === 'Publish queue is active.'
+            ) {
+                throw new RuntimeException(
+                    'Item đang Publishing (queue processing). Retry/Publish now không dùng được — dùng Recover stuck publishing.',
+                );
+            }
+
             throw new RuntimeException(sprintf(
                 'Action %s not allowed in lifecycle=%s (blocking: %s).',
                 $action->value,
                 $state->lifecycleState->value,
-                $state->blockingReason ?? 'n/a',
+                $blocking,
             ));
         }
     }

@@ -180,6 +180,8 @@ Site Sync outbox/callback — see [SITE_SYNC.md](SITE_SYNC.md). Compat push stil
 | Scheduler | `seo:wordpress-sync-lease-watchdog` (stale lease recovery) |
 | WP | Outbox flush cron + optional missed-schedule fixer; WP-Cron may be disabled in favor of Laravel |
 
+**Timezone**: WordPress **không** sở hữu schedule timezone của SaaS. SaaS quyết định UTC schedule; WP nhận lệnh publish do runner/dispatch. System timezone chỉ dùng input/display trên Laravel (`SystemDateTime`).
+
 ## 11. Transactions and side effects
 
 - Manual sync: short local content TX then enqueue — editor closes/navigates to Sync Queue after enqueue (no Elapsed poll on Edit Article).

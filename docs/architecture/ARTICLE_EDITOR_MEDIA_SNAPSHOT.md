@@ -52,7 +52,7 @@ Response: `{ success, media_snapshot }`. React applies only if `snapshot_version
 ## Event
 
 One-way: `article-editor-media-snapshot-changed`  
-Compat: `seo-featured-image-updated/cleared`, `seo-product-gallery-updated` may still fire **from snapshot apply** (producer = snapshot module), not LS writers.
+Compat: `seo-product-gallery-updated` may still fire from snapshot apply. Featured `seo-featured-image-updated/cleared` **removed** (zero listeners); consumers use `article-editor-media-snapshot-changed`. See [`ARTICLE_EDITOR_LEGACY_CLEANUP.md`](ARTICLE_EDITOR_LEGACY_CLEANUP.md).
 
 ## Phase 6C.3 client
 

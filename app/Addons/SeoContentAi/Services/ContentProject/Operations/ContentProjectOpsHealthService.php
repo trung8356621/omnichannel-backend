@@ -136,7 +136,7 @@ final class ContentProjectOpsHealthService
      */
     private function checkQueue(): array
     {
-        $health = $this->queueHealth->snapshot();
+        $health = $this->scopedQueueHealth();
         $lastRun = $health['last_worker_run'];
         $ok = false;
 
@@ -160,7 +160,7 @@ final class ContentProjectOpsHealthService
      */
     private function checkWorker(): array
     {
-        $health = $this->queueHealth->snapshot();
+        $health = $this->scopedQueueHealth();
         $lastRun = $health['last_worker_run'];
         $ok = false;
 
@@ -278,7 +278,7 @@ final class ContentProjectOpsHealthService
      */
     private function checkScheduler(): array
     {
-        $health = $this->queueHealth->snapshot();
+        $health = $this->scopedQueueHealth();
         $lastRun = $health['last_worker_run'];
 
         return [
@@ -286,5 +286,19 @@ final class ContentProjectOpsHealthService
             'ok' => is_string($lastRun) && $lastRun !== '',
             'message' => $lastRun ?? 'no worker heartbeat',
         ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function scopedQueueHealth(): array
+    {
+        $connectionId = null;
+        $current = \App\Addons\SeoContentAi\Support\SeoConnectionContext::current();
+        if ($current instanceof \App\Models\SeoDatabaseConnection) {
+            $connectionId = (int) $current->getKey();
+        }
+
+        return $this->queueHealth->snapshot(null, $connectionId);
     }
 }

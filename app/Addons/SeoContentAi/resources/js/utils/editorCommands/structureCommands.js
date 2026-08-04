@@ -56,6 +56,54 @@ export function moveBlockCommand(context, payload = {}) {
     return runHostStructure(context, 'move_block', { ...payload, blockId });
 }
 
+/**
+ * Reorder one section-level block inside the same section.
+ * Never crosses section boundaries (unlike move_block_to_adjacent_section).
+ */
+export function moveBlockWithinSectionCommand(context, payload = {}) {
+    const blockId = String(payload.blockId ?? payload.id ?? '').trim();
+    const sectionId = String(payload.sectionId ?? payload.section_id ?? '').trim();
+    const direction = String(payload.direction ?? '').trim().toLowerCase();
+
+    if (!blockId) {
+        return failCommand('move_block_within_section', EDITOR_COMMAND_CODES.TARGET_MISSING);
+    }
+    if (direction !== 'up' && direction !== 'down') {
+        return failCommand('move_block_within_section', EDITOR_COMMAND_CODES.SELECTION_INVALID, {
+            message_key: 'editor_command.selection_invalid',
+            meta: { direction },
+        });
+    }
+
+    return runHostStructure(context, 'move_block_within_section', {
+        blockId,
+        sectionId: sectionId || null,
+        direction,
+    });
+}
+
+/**
+ * Move a section-level block into the previous/next section.
+ * Separate from within-section reorder — no shared boundary fallback.
+ */
+export function moveBlockToAdjacentSectionCommand(context, payload = {}) {
+    const blockId = String(payload.blockId ?? payload.id ?? '').trim();
+    const direction = String(payload.direction ?? '').trim().toLowerCase();
+    if (!blockId) {
+        return failCommand('move_block_to_adjacent_section', EDITOR_COMMAND_CODES.TARGET_MISSING);
+    }
+    if (direction !== 'prev' && direction !== 'next' && direction !== 'up' && direction !== 'down') {
+        return failCommand('move_block_to_adjacent_section', EDITOR_COMMAND_CODES.SELECTION_INVALID);
+    }
+    const normalized = direction === 'up' ? 'prev' : direction === 'down' ? 'next' : direction;
+
+    return runHostStructure(context, 'move_block_to_adjacent_section', {
+        ...payload,
+        blockId,
+        direction: normalized,
+    });
+}
+
 export function splitBlockCommand(context, payload = {}) {
     return runHostStructure(context, 'split_block', payload);
 }
@@ -104,6 +152,8 @@ export default {
     deleteBlockCommand,
     duplicateBlockCommand,
     moveBlockCommand,
+    moveBlockWithinSectionCommand,
+    moveBlockToAdjacentSectionCommand,
     splitBlockCommand,
     outlineJumpCommand,
     setTextSelectionCommand,

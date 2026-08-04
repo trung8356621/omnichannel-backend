@@ -22,6 +22,7 @@ export const EDITOR_COMMAND_CODES = Object.freeze({
     INSERTED: 'inserted',
     UPDATED: 'updated',
     REMOVED: 'removed',
+    MOVED: 'moved',
     NO_CHANGE: 'no_change',
     NAVIGATED: 'navigated',
     REPLACED: 'replaced',
@@ -39,6 +40,9 @@ export const EDITOR_COMMAND_CODES = Object.freeze({
     FAQ_INSERT_FAILED: 'faq_insert_failed',
     CONTENT_REPLACE_CONFLICT: 'content_replace_conflict',
     PERMISSION_DENIED: 'permission_denied',
+    BLOCK_ALREADY_FIRST: 'block_already_first',
+    BLOCK_ALREADY_LAST: 'block_already_last',
+    SECTION_MISMATCH: 'section_mismatch',
 });
 
 /**

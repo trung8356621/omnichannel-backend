@@ -133,6 +133,13 @@ final class UpdateArticleContentAction implements BusinessAction
         } catch (\App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentException $exception) {
             return ActionResult::failure($exception->errorCode, $exception->getMessage(), $exception->context);
         } catch (\Throwable $exception) {
+            if (trim($exception->getMessage()) === 'article_write_busy') {
+                return ActionResult::failure(
+                    'article_write_busy',
+                    'Bài đang được lưu bởi request khác. Thử lại sau giây lát.',
+                );
+            }
+
             return ActionResult::failure('persist_failed', $this->friendlyPersistError($exception));
         }
 
@@ -271,10 +278,15 @@ final class UpdateArticleContentAction implements BusinessAction
     private function friendlyPersistError(\Throwable $exception): string
     {
         if ($exception instanceof QueryException && $this->isLockWaitTimeout($exception)) {
-            return 'Bài đang bị khóa bởi thao tác khác (lưu/sync/queue). Đợi vài giây rồi thử lại.';
+            return 'Bài đang bị khóa bởi thao tác database khác. Đợi vài giây rồi thử lại.';
         }
 
-        return $exception->getMessage();
+        $message = trim($exception->getMessage());
+        if ($message === 'article_write_busy' || $message === 'Could not acquire article automation lock.') {
+            return 'Bài đang được lưu bởi request khác. Thử lại sau giây lát.';
+        }
+
+        return $message !== '' ? $message : 'Không lưu được bài viết.';
     }
 
     /**

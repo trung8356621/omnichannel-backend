@@ -20,6 +20,9 @@ final class ArticleEditorActionRequest extends FormRequest
     {
         return [
             'html' => ['required', 'string'],
+            'client_rendered_html' => ['nullable', 'string'],
+            'editor_document' => ['nullable', 'array'],
+            'expected_editor_document_hash' => ['nullable', 'string', 'max:128'],
             'seo_analysis' => ['nullable', 'array'],
             'publish_box' => ['nullable', 'array'],
             'publish_box.post_type' => ['nullable', 'string'],
@@ -47,6 +50,7 @@ final class ArticleEditorActionRequest extends FormRequest
             'featured_image' => ['nullable', 'array'],
             'product_album' => ['nullable', 'array'],
             'faqs' => ['nullable', 'array'],
+            'faqs_source' => ['nullable', 'string', 'max:32'],
         ];
     }
 
@@ -73,6 +77,20 @@ final class ArticleEditorActionRequest extends FormRequest
      */
     public function editorBundle(): array
     {
-        return $this->validated();
+        $bundle = $this->validated();
+
+        // TipTap JSON dual-write + hash fields (must survive validated()).
+        foreach (['editor_document', 'expected_editor_document_hash', 'client_rendered_html', 'faqs_source'] as $key) {
+            if ($this->exists($key) && ! array_key_exists($key, $bundle)) {
+                $bundle[$key] = $this->input($key);
+            }
+        }
+
+        // Persist path historically reads meta; client sends article_meta.
+        if (! isset($bundle['meta']) && isset($bundle['article_meta']) && is_array($bundle['article_meta'])) {
+            $bundle['meta'] = $bundle['article_meta'];
+        }
+
+        return $bundle;
     }
 }

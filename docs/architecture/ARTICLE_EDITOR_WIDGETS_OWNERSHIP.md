@@ -65,3 +65,7 @@ Runtime boundary (Phase 6A): FAQ/CTA/media/seo declare sidebar/health/command **
 Phase 6C.3: Featured/Gallery **UI** owned by React runtime modules + Shared Media Picker; Laravel remains snapshot/API SoT. Alpine no longer holds Featured/Gallery writable drafts.
 
 Phase 6C.4: AI Chat **UI** owned by `article-editor.ai`; generate/apply via host actions + command/media pipeline. AI history/prompts remain shell. `ArticleEditorModuleHost` removed.
+
+## Legacy cleanup
+
+CTA insert aliases + Phase2C editorInsertionCommands facade removed. See [ARTICLE_EDITOR_LEGACY_CLEANUP.md](ARTICLE_EDITOR_LEGACY_CLEANUP.md).

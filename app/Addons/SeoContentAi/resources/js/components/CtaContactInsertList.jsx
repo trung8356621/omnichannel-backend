@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
     ChevronDown,
+    Clock,
     Link2,
     Mail,
     MapPin,
@@ -57,6 +58,9 @@ function ctaTypeIcon(type) {
         case 'facebook':
         case 'website':
             return Link2;
+        case 'working_hours':
+        case 'hours':
+            return Clock;
         default:
             return Quote;
     }
@@ -141,7 +145,7 @@ export function CtaContactInsertList({
                             <div className="wp-article-links-cta-quick-wrap">
                                 <button
                                     type="button"
-                                    className="wp-article-links-insert-btn"
+                                    className="wp-article-links-insert-btn wp-article-links-insert-btn--contact"
                                     aria-label={primaryTooltip}
                                     title={primaryTooltip}
                                     data-cta-action="insert_contact_value"
@@ -155,11 +159,11 @@ export function CtaContactInsertList({
                                         }
                                     }}
                                 >
-                                    <TypeIcon size={14} aria-hidden />
+                                    <TypeIcon size={14} strokeWidth={2} aria-hidden />
                                 </button>
                                 <button
                                     type="button"
-                                    className="wp-article-links-insert-btn wp-article-links-insert-btn--icon"
+                                    className="wp-article-links-insert-btn wp-article-links-insert-btn--sentence"
                                     aria-label={t('cta_widget_insert_sentence_tooltip')}
                                     title={t('cta_widget_insert_sentence_tooltip')}
                                     data-cta-action="open_cta_templates"
@@ -178,8 +182,13 @@ export function CtaContactInsertList({
                                         setMenuKey((prev) => (prev === itemKey ? '' : itemKey));
                                     }}
                                 >
-                                    <Quote size={12} aria-hidden />
-                                    {templates.length > 1 ? <ChevronDown size={10} aria-hidden /> : null}
+                                    <Quote size={14} strokeWidth={2} aria-hidden />
+                                    <ChevronDown
+                                        size={10}
+                                        strokeWidth={2}
+                                        aria-hidden
+                                        className={templates.length > 1 ? 'is-visible' : 'is-spacer'}
+                                    />
                                 </button>
                                 {menuKey === itemKey ? (
                                     <ul className="wp-article-links-cta-template-menu">

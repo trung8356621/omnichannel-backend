@@ -507,6 +507,15 @@ function ImageRow({
                 <p className="seo-article-images-slug" title={slugText || t('image_slug_placeholder')}>
                     {slugText || '—'}
                 </p>
+                {row?.role_flags && (row.role_flags.content || row.role_flags.featured || row.role_flags.gallery) ? (
+                    <div className="seo-article-images-role-badges">
+                        {row.role_flags.content ? <span className="seo-article-images-role-badge">Content</span> : null}
+                        {row.role_flags.featured ? <span className="seo-article-images-role-badge">Featured</span> : null}
+                        {row.role_flags.gallery ? <span className="seo-article-images-role-badge">Gallery</span> : null}
+                    </div>
+                ) : (row?.originLabel ? (
+                    <p className="seo-article-images-origin">{row.originLabel}</p>
+                ) : null)}
             </div>
 
             <div className="seo-article-images-fields">
@@ -820,6 +829,9 @@ function ImageRow({
 export default function ArticleImagesTab({
     blocks,
     extraImages = [],
+    featuredImage = null,
+    galleryImages = [],
+    useUnifiedInventory = false,
     siteId = null,
     articleId = null,
     jumpTarget = null,
@@ -840,6 +852,31 @@ export default function ArticleImagesTab({
 }) {
     const blockImages = useMemo(() => collectImagesFromBlocks(blocks), [blocks]);
     const mergedImages = useMemo(() => {
+        // Canonical path: host already composed unified inventory (content+featured+gallery).
+        if (useUnifiedInventory) {
+            return assignInArticleQuickFixIndices(
+                (Array.isArray(extraImages) ? extraImages : []).map((row, index) => ({
+                    ...row,
+                    key: row?.key || row?.identity_key || `unified-${index}`,
+                    blockId: String(row?.blockId || row?.block_id || '').trim(),
+                    wpAttachmentId: Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0) || null,
+                    seoMediaId: Number(row?.seoMediaId ?? row?.seo_media_id ?? 0) || null,
+                    src: String(row?.src || row?.url || '').trim(),
+                    wpSrc: String(row?.wpSrc || row?.wp_url || '').trim(),
+                    localSrc: String(row?.localSrc || row?.local_src || '').trim(),
+                    slug: String(row?.slug || '').trim(),
+                    alt: String(row?.alt || '').trim(),
+                    title: String(row?.title || '').trim(),
+                    caption: String(row?.caption || '').trim(),
+                    align: String(row?.align || 'none').trim(),
+                    origin: String(row?.origin ?? '').trim(),
+                    originLabel: String(row?.originLabel || row?.origin_label || '').trim(),
+                    role_flags: row?.role_flags || null,
+                    excludeQuickFix: Boolean(row?.excludeQuickFix ?? row?.exclude_quick_fix),
+                })).filter((row) => String(row.src || '').trim() !== ''),
+            );
+        }
+
         const normalizeSrc = (value) => {
             const raw = String(value || '').trim();
             if (!raw) return '';
@@ -909,7 +946,7 @@ export default function ArticleImagesTab({
         });
 
         return assignInArticleQuickFixIndices(filterSupplementalDuplicatesOfBlockRows(merged));
-    }, [blockImages, extraImages]);
+    }, [blockImages, extraImages, useUnifiedInventory, featuredImage, galleryImages]);
     const [aiJobs, setAiJobs] = useState([]);
     const lastJumpTokenRef = useRef(null);
 

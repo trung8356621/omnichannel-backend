@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Support;
 
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsAiAdvanced;
+use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsDateTime;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsEditor;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsKeywords;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
@@ -27,6 +28,12 @@ final class SeoSettingsMenu
                 'label' => 'Overview',
                 'icon' => 'heroicon-o-home',
                 'url' => SeoSettingsOverview::getUrl(),
+            ],
+            [
+                'id' => 'date-time',
+                'label' => 'Date & Time',
+                'icon' => 'heroicon-o-clock',
+                'url' => SeoSettingsDateTime::getUrl(),
             ],
             [
                 'id' => 'workflows',

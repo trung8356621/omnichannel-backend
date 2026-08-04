@@ -37,7 +37,7 @@ Route binding: edit/view **does not** 404 when global domain ≠ `article.site_i
 | Livewire page | `Filament/Resources/ArticleResource/Pages/EditArticle` |
 | Blade host | `edit-article.blade.php` — `#seo-article-editor-root` + `#seo-article-core-bootstrap` |
 | Vite entry | `resources/js/article-editor.jsx` |
-| React core | `SeoArticleEditor.jsx` + `ArticleEditorModuleHost.jsx` |
+| React core | `SeoArticleEditor.jsx` + `EditorSidebarPortalHost` / runtime modules |
 | Persist | `ArticleEditorPersistService` |
 | Content update | `UpdateArticleContentAction` + `ArticleContentConflictGuard` |
 | SEO meta API | `ArticleEditorSeoMetaService` |
@@ -55,10 +55,15 @@ Route binding: edit/view **does not** 404 when global domain ≠ `article.site_i
 | Sticky header bridge | `articleEditorStickyHeader.js` |
 | AI History (manual recovery) | `ViewArticlePrompts` + `Services/ArticleAiHistory/*` — preview/apply/delete typed artifacts into editor draft |
 | Insertion context (transient) | `resources/js/utils/editorInsertionContext.js` — `activeSectionId` / `activeBlockId` / selection bookmark; used by CTA, link, media assistants |
-| CTA / Contact sidebar | `CtaContactInsertList.jsx` + `DomainCtaEditorService` — usable contacts only; insert value / quick CTA sentence (deterministic templates, no AI) |
+| CTA / Contact sidebar | `CtaContactInsertList.jsx` + `DomainCtaEditorService` — usable contacts only; insert value (`--contact`) / sentence (`--sentence`) icon pair, fixed equal height |
 | Quick CTA templates | `Support/CtaQuickTemplates` + `SeoDomainCtaGlobalSettingsService::cta_quick_templates` via `PUT /api/seo/domain-cta/quick-templates` (React form draft only) |
-| Assistant widget health | `resources/js/utils/assistantWidgetHealth.js` — Images: `error` (integrity) / `warning` (ALT/local placeholder slug) / `info` (SEO ratio); WP filename≠keyword is **not** an issue; WP media `protected_from_bulk_rename` |
-| Fix Slug All | Local/safe media only (`mediaSourceClassification.js`); WP → explicit `WordPressMediaRenameModal` + `WordPressMediaRenameService`. **Except removed.** |
+| Assistant widget health | `resources/js/utils/assistantWidgetHealth.js` — Images from **unified inventory**: `error` (`image_slug_unresolved`) / `warning` (`image_alt_missing`) / `info` (`image_ratio_low`, body content count only); Featured clean of ALT/slug/ratio; WP filename≠keyword is **not** an issue |
+| Unified images inventory | `resources/js/utils/unifiedArticleImagesInventory.js` — content + Featured + Gallery dedupe; Images panel `useUnifiedInventory: true` |
+| Media source classify | `resources/js/utils/mediaSourceClassification.js` — local `/storage/…/seo_media` wins over stale `wp_attachment_id` (featured meta SeoMedia PK); true WP = `/wp-content/uploads/` or real attachment |
+| Inline whitespace safety | `resources/js/utils/inlineWhitespaceGuard.js` + `InlineMarkBoundaryWhitespace` (PHP) — TipTap `preserveWhitespace: 'full'`; glued mark-boundary repair on bootstrap; save guard `inline_whitespace_corruption_detected` |
+| Paragraph style dropdown | `ParagraphStyleDropdown.jsx` — menu portals to `document.body` (`position: fixed`); format toolbar row `overflow: visible` (no clip “Heading N” tab) |
+| Fix Slug All | Local/safe media only (`mediaSourceClassification.js` — `https` alone ≠ WP); owning session via `editor_session_id` + `assertOwningActiveSessionForMediaMutation`. Response returns `document_version`/`content_hash`; client `syncVersionAfterSlugFix` before `after_fix_slug_all`. WP → explicit `WordPressMediaRenameModal`. |
+| Exclusive lock gate | `ExclusiveLockScreen` in `article-editor.jsx` — 404-style title + body only; mounts **instead of** TipTap when `article_editor_locked` / archived / not_editable. No takeover UI. Mid-session version conflict keeps editor writable (sync version; toast only). |
 | SEO reason metrics | `resources/js/utils/seoReasonMetrics.js` + `Support/SeoReasonPresentation` — `image_ratio_*` / `content_length_low` with current/recommended/missing; locale `lang/{vi,en}/seo_rules.php` |
 | CTA block insert | `insertCtaBlockInEditor` → `<p class="article-cta">` + label/value; `unsetAllMarks` / lift blockquote |
 | CTA freeze bookmark | `freezeEditorInsertionContext` on CTA `pointerdown` + `seo-assistant-freeze-insertion-context`; insert uses frozen caret |
@@ -98,9 +103,9 @@ Route binding: edit/view **does not** 404 when global domain ≠ `article.site_i
 | Canonical editable document | `articles.editor_document` TipTap envelope; `body` derived HTML | HTML-only save as SoT — see [`ARTICLE_EDITOR_JSON_PERSISTENCE.md`](../architecture/ARTICLE_EDITOR_JSON_PERSISTENCE.md) |
 | Editor module wiring | Runtime slots + `EditorSidebarPortalHost` / toolbar registry / nav API | Hard-coded panel switch in `SeoArticleEditor` — see [`ARTICLE_EDITOR_RUNTIME.md`](../architecture/ARTICLE_EDITOR_RUNTIME.md) |
 | Editor dock navigation (6C.1) | React `EditorSidebarNavigation` + runtime `openPanel` / health store | Alpine chips/`activePanel`/health SoT — Blade mount roots only; Publishing shell boundary — [`ARTICLE_EDITOR_SHELL_BOUNDARY.md`](../architecture/ARTICLE_EDITOR_SHELL_BOUNDARY.md) |
-| Links/FAQ/CTA modules (6C.2) | Runtime sidebar panels + command host actions; FAQ extract REST | `ArticleEditorModuleHost` Links/FAQ branches; insert via CustomEvent — see [`ARTICLE_EDITOR_RUNTIME.md`](../architecture/ARTICLE_EDITOR_RUNTIME.md) |
+| Links/FAQ/CTA modules (6C.2) | Runtime sidebar panels + command host actions; FAQ extract REST | Old `ArticleEditorModuleHost` Links/FAQ branches + insert CustomEvent — see [`ARTICLE_EDITOR_RUNTIME.md`](../architecture/ARTICLE_EDITOR_RUNTIME.md) + [`ARTICLE_EDITOR_LEGACY_CLEANUP.md`](../architecture/ARTICLE_EDITOR_LEGACY_CLEANUP.md) |
 | Featured/Gallery + Shared Media Picker (6C.3) | React panels + `openMediaPicker` modes + media snapshot APIs | Alpine Featured/Gallery draft + Alpine media modal — see [`ARTICLE_EDITOR_MEDIA_SNAPSHOT.md`](../architecture/ARTICLE_EDITOR_MEDIA_SNAPSHOT.md) |
-| AI Chat runtime (6C.4) | `article-editor.ai` + host generate actions; ModuleHost removed | `ArticleEditorModuleHost` — see [`ARTICLE_EDITOR_RUNTIME_COMPLETION.md`](../architecture/ARTICLE_EDITOR_RUNTIME_COMPLETION.md) |
+| AI Chat runtime (6C.4) | `article-editor.ai` + host generate actions; ModuleHost removed | Legacy ModuleHost — see [`ARTICLE_EDITOR_RUNTIME_COMPLETION.md`](../architecture/ARTICLE_EDITOR_RUNTIME_COMPLETION.md) |
 | FAQ domain | Laravel `faq_snapshot` API (`seo_faqs`); React draft/preview | Livewire FAQ shadow / LS SoT — see [`ARTICLE_EDITOR_WIDGETS_OWNERSHIP.md`](../architecture/ARTICLE_EDITOR_WIDGETS_OWNERSHIP.md) |
 | CTA quick templates | Laravel domain CTA settings API | localStorage CTA templates SoT |
 | FAQ catch keywords | `SeoOverviewSettingsService::KEY_FAQ_CATCH_KEYWORDS` | Hardcoded VI/EN only when setting empty |
@@ -123,17 +128,18 @@ Policy: max **one** heavy sidebar module mounted; switch unmounts (no CSS-hide t
 
 See [`ARTICLE_EDITOR_SESSION_LOCK.md`](../architecture/ARTICLE_EDITOR_SESSION_LOCK.md).
 
-- Acquire writable session before edit; other tabs/users → TipTap `setEditable(false)`.
+- Acquire writable session before edit; other tabs/users → **ExclusiveLockScreen** (no TipTap / no hard-readonly under lock).
 - Canonical guard: `expected_document_version` (`articles.document_version`).
 - Compat: `expected_updated_at` + `expected_content_hash`.
 - Explicit Save → session document endpoint; Save & Close → atomic `close`.
 - Legacy `POST .../save` cannot bypass active session without owning session id.
 - Livewire `EditArticle` persist requires owning `editorSessionId` and delegates `ArticleEditorPersistService` (no direct body update).
 - Shell Save/Save&Close reactive-disable via `article-editor-session-state-changed`.
-- Revision restore / media body rewrite blocked while active editor session exists.
+- Media body rewrite (Fix Slug) allowed for **owning** active session (`editor_session_id`); blocked for other sessions.
 - Server autosave (debounced) + localStorage draft schema v3 (user-scoped).
 - Featured/Gallery: immediate API persist + `media_snapshot` (no localStorage SoT).
 - Immediate analysis (Phase 2B): React owns live checks; Laravel owns `analysisPolicy` / `externalFacts` + save/publish validation. See [`ARTICLE_EDITOR_ANALYSIS_OWNERSHIP.md`](../architecture/ARTICLE_EDITOR_ANALYSIS_OWNERSHIP.md).
+- Article write mutex: `ActionSupport::withArticleLock` key `article-write:{id}` (process-local reentrancy; code `article_write_busy`).
 
 ### Local persist
 
@@ -150,7 +156,7 @@ SEO modal: `POST .../seo-meta` → `ArticleEditorSeoMetaService` (queues score; 
 
 Save payload SEO analysis: **violations (+ extracted_links) only** — never send fixed score/breakdown.
 
-Conflict: `document_version` primary; hash match allows pass despite `updated_at` skew. Force overwrite: `SeoAccessControl::canForceArticleContentOverwrite()` (actualRole rank > content_manager).
+Conflict: `document_version` primary; hash match allows pass despite `updated_at` skew. Mid-session version/hash conflict keeps editor writable (client syncs actual version; no ExclusiveLockScreen). Force overwrite: `SeoAccessControl::canForceArticleContentOverwrite()` (actualRole rank > content_manager).
 
 ### Sync WP (editor)
 
@@ -159,10 +165,13 @@ Conflict: `document_version` primary; hash match allows pass despite `updated_at
 ### Fix slug all
 
 1. Save editor (`before_fix_slug_all`).
-2. `SeoMediaArticleSlugFixService` (+ optional WP rename).
+2. `SeoMediaArticleSlugFixService` (+ optional WP rename) with owning `editor_session_id`.
 3. Apply exact `renamed[]` map to TipTap/blocks (not DOM-only).
-4. Invalidate picker / gallery / featured caches.
-5. Save again (`after_fix_slug_all`).
+4. Sync `document_version` / `content_hash` from Fix Slug response (`syncVersionAfterSlugFix`) — body rewrite bumps version; avoid false Version conflict on next save.
+5. Invalidate picker / gallery / featured caches.
+6. Save again (`after_fix_slug_all`; one silent retry on version/hash conflict).
+
+Conflict: `document_version` primary; hash match allows pass despite `updated_at` skew. Mid-session conflict does **not** unmount into ExclusiveLockScreen. Force overwrite: `SeoAccessControl::canForceArticleContentOverwrite()` (actualRole rank > content_manager).
 
 ### Review actions
 
@@ -259,7 +268,13 @@ No second scheduler for editor autosave — client debounce (local draft + serve
 | `ArticleReviewServiceTest` / cutover | `review_status` SoT |
 | Scoring unit / audit integration | Deduction registry; audit reads cache |
 | Editor performance audits | Bootstrap size budgets (docs/audits) |
-| `ArticleEditorContextPreservationContractTest` | Media/image UX không reset expanded sections; CTA dùng insertion bookmark; WP media site-level |
+| `ArticleEditorContextPreservationContractTest` | Media/image UX không reset expanded sections; CTA insert `--contact`/`--sentence`; WP media site-level |
+| `ArticleEditorExclusiveLockRegressionTest` | ExclusiveLockScreen gate; sessionStorage client id; no takeover; conflict ≠ exclusive screen |
+| `ArticleEditorImagesHealthAndSlugSessionTest` | Owning Fix Slug session; slug error / ALT warning / `image_ratio_low` |
+| `ArticleEditorUnifiedImagesInventoryHealthTest` | Unified inventory panel/health; Featured/Gallery roles; ratio ownership |
+| `ArticleEditorInlineWhitespaceRoundTripRegressionTest` | Mark-boundary spaces HTML↔JSON; glue repair; hydrate not dirty |
+| `ArticleEditorLocalFeaturedNotWpProtectedTest` | Local Featured `/storage/uploads/seo_media` ≠ WP protected |
+| `ArticleEditorHeadingStyleDropdownOverflowTest` | Style dropdown portal; format toolbar no overflow-x clip |
 | `CtaContactUsabilityAndQuickTemplatesTest` | Filter placeholder; resolve/validate quick CTA templates |
 | `SeoReasonPresentationAndAssistantHealthTest` | image/content metrics; locale keys; links min 5; focus keyword health |
 | `ArticleEditorRichText3eContractTest` | CTA paragraph; unlink keep text; quote CSS; images badge; featured snapshot; stable recommendation |
@@ -270,6 +285,8 @@ Manual verification (remote):
 $PHP_BIN vendor/bin/phpunit --filter=RuntimeLoggerWebAppChannelTest
 $PHP_BIN vendor/bin/phpunit --filter=ArticleReviewServiceTest
 $PHP_BIN vendor/bin/phpunit --filter=ArticleEditorContextPreservationContractTest
+$PHP_BIN vendor/bin/phpunit --filter=ArticleEditorExclusiveLockRegressionTest
+$PHP_BIN vendor/bin/phpunit --filter=ArticleEditorImagesHealthAndSlugSessionTest
 $PHP_BIN vendor/bin/phpunit --filter=CtaContactUsabilityAndQuickTemplatesTest
 $PHP_BIN vendor/bin/phpunit --filter=SeoReasonPresentationAndAssistantHealthTest
 $PHP_BIN vendor/bin/phpunit --filter=ArticleEditorRichText3eContractTest

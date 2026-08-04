@@ -8,15 +8,21 @@ use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\BusinessEventName;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueRunner;
+use App\Addons\SeoContentAi\Services\ContentProject\PublishingConnectionCandidateResolver;
+use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Models\SeoDatabaseConnection;
 use App\Support\RuntimeLogger;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 /**
  * Cron due-scheduled articles: emit business event only — never direct WordPress mutate.
  * Content Project items dùng scheduled_publish_at (SaaS queue), không WP future/cron.
+ *
+ * Connection bootstrap MUST reuse SeoDatabaseConnectionService (same as /seo/{connection_hash}).
+ * Per-connection failures are isolated — never abort the whole command for one stale row.
  */
 final class ScheduledArticlePublishRunner
 {
@@ -24,10 +30,19 @@ final class ScheduledArticlePublishRunner
         private readonly SeoDatabaseConnectionService $databaseConnection,
         private readonly BusinessHookEmitter $emitter,
         private readonly ContentProjectPublishingQueueRunner $contentProjectQueue,
+        private readonly PublishingConnectionCandidateResolver $connectionCandidates,
     ) {}
 
     /**
-     * @return array{processed: int, published: int, failed: int, skipped: int}
+     * @return array{
+     *     processed: int,
+     *     published: int,
+     *     failed: int,
+     *     skipped: int,
+     *     bootstrap_failed: int,
+     *     connections_attempted: int,
+     *     connections_skipped: int
+     * }
      */
     public function run(): array
     {
@@ -36,6 +51,9 @@ final class ScheduledArticlePublishRunner
             'published' => 0,
             'failed' => 0,
             'skipped' => 0,
+            'bootstrap_failed' => 0,
+            'connections_attempted' => 0,
+            'connections_skipped' => 0,
         ];
 
         try {
@@ -43,7 +61,9 @@ final class ScheduledArticlePublishRunner
                 return $stats;
             }
         } catch (Throwable $e) {
-            RuntimeLogger::warning('Scheduled article publish: cannot inspect seo_database_connections.', [
+            RuntimeLogger::warning('publishing.connection_bootstrap_failed', [
+                'runtime' => 'console',
+                'phase' => 'inspect_core_table',
                 'error' => $e->getMessage(),
                 'exception' => $e::class,
             ]);
@@ -51,21 +71,63 @@ final class ScheduledArticlePublishRunner
             throw $e;
         }
 
-        $connections = SeoDatabaseConnection::query()
-            ->where('is_active', true)
-            ->orderBy('id')
-            ->get();
+        foreach ($this->connectionCandidates->skippedActiveConnections() as $skipped) {
+            $connection = $skipped['connection'];
+            $stats['connections_skipped']++;
+            RuntimeLogger::info('publishing.connection_skipped', [
+                'runtime' => 'console',
+                'connection_id' => (int) $connection->getKey(),
+                'hash_id' => (string) $connection->hash_id,
+                'database' => (string) ($connection->database ?? ''),
+                'type' => (string) ($connection->type ?? ''),
+                'skip_reason' => $skipped['skip_reason'],
+                'result' => 'skipped',
+            ]);
+        }
+
+        $connections = $this->connectionCandidates->eligibleForPublishingScan();
 
         if ($connections->isEmpty()) {
             try {
-                $this->databaseConnection->bootstrapLegacySharedConnection();
-                $this->dispatchDueArticles($stats);
+                $legacy = $this->databaseConnection->resolveDefaultSharedConnectionRecord();
+                if ($legacy instanceof SeoDatabaseConnection
+                    && $this->connectionCandidates->isEligible($legacy) === null
+                ) {
+                    $stats['connections_attempted']++;
+                    $this->runForConnection($legacy, $stats);
+                } elseif (! $legacy instanceof SeoDatabaseConnection) {
+                    $this->databaseConnection->bootstrapLegacySharedConnection();
+                    $meta = [
+                        'connection_id' => null,
+                        'hash_id' => null,
+                        'connection_name' => $this->databaseConnection->connectionName(),
+                        'database' => (string) config('seo-content-ai.legacy_shared_database', 'omi_seo_ai'),
+                        'resolver' => 'SeoDatabaseConnectionService::bootstrapLegacySharedConnection',
+                        'runtime' => 'console',
+                    ];
+                    try {
+                        DB::connection($this->databaseConnection->connectionName())->getPdo();
+                    } catch (Throwable $e) {
+                        throw new \RuntimeException(
+                            'Không kết nối được tới database SEO (legacy): '.$e->getMessage(),
+                            previous: $e,
+                        );
+                    }
+                    $projectStats = $this->contentProjectQueue->dispatchDue($meta);
+                    $stats['processed'] += $projectStats['processed'];
+                    $stats['published'] += $projectStats['published'];
+                    $stats['failed'] += $projectStats['failed'];
+                    $stats['skipped'] += $projectStats['skipped'] ?? 0;
+                    $this->dispatchDueArticles($stats, $meta);
+                }
             } catch (Throwable $exception) {
-                RuntimeLogger::warning('Scheduled article publish: legacy connection path failed.', [
+                $stats['bootstrap_failed']++;
+                $this->contentProjectQueue->health()->rememberBootstrapFailure($exception->getMessage(), null);
+                RuntimeLogger::warning('publishing.connection_bootstrap_failed', [
+                    'runtime' => 'console',
+                    'phase' => 'legacy',
                     'error' => $exception->getMessage(),
                     'exception' => $exception::class,
-                    'file' => $exception->getFile(),
-                    'line' => $exception->getLine(),
                 ]);
 
                 throw $exception;
@@ -79,16 +141,33 @@ final class ScheduledArticlePublishRunner
                 continue;
             }
 
+            $stats['connections_attempted']++;
+
             try {
-                $this->databaseConnection->bootstrapFromConnection($connection);
-                $this->dispatchDueArticles($stats);
+                $this->runForConnection($connection, $stats);
             } catch (Throwable $exception) {
-                $stats['failed']++;
-                RuntimeLogger::warning('Scheduled article publish: connection bootstrap failed.', [
-                    'connection_id' => $connection->id,
+                // Failure isolation: log + keep scanning remaining connections.
+                $stats['bootstrap_failed']++;
+                $connectionId = (int) $connection->getKey();
+                $this->contentProjectQueue->health()->rememberBootstrapFailure(
+                    $exception->getMessage(),
+                    $connectionId,
+                );
+                RuntimeLogger::warning('publishing.connection_bootstrap_failed', [
+                    'runtime' => 'console',
+                    'connection_id' => $connectionId,
+                    'hash_id' => (string) $connection->hash_id,
+                    'database' => (string) ($connection->database ?? ''),
+                    'type' => (string) ($connection->type ?? ''),
+                    'resolver' => 'SeoDatabaseConnectionService',
+                    'result' => 'failed_continue',
                     'error' => $exception->getMessage(),
                     'exception' => $exception::class,
                 ]);
+            } finally {
+                $this->databaseConnection->forgetBootstrappedHash((string) $connection->hash_id);
+                DB::purge($this->databaseConnection->connectionName());
+                SeoConnectionContext::reset();
             }
         }
 
@@ -96,17 +175,62 @@ final class ScheduledArticlePublishRunner
     }
 
     /**
-     * @param  array{processed: int, published: int, failed: int, skipped: int}  $stats
+     * @param  array{processed: int, published: int, failed: int, skipped: int, bootstrap_failed: int, connections_attempted?: int, connections_skipped?: int}  $stats
      */
-    private function dispatchDueArticles(array &$stats): void
+    private function runForConnection(SeoDatabaseConnection $connection, array &$stats): void
     {
-        $projectStats = $this->contentProjectQueue->dispatchDue();
+        $expectedId = (int) $connection->getKey();
+        $expectedHash = (string) $connection->hash_id;
+
+        $meta = $this->databaseConnection->bootstrapAndVerifyFromConnection($connection, forceReconnect: true);
+        $meta['runtime'] = 'console';
+        $meta['resolver'] = 'SeoDatabaseConnectionService';
+
+        $resolvedId = (int) ($meta['connection_id'] ?? 0) ?: null;
+        $resolvedHash = (string) ($meta['hash_id'] ?? '');
+
+        RuntimeLogger::info('publishing.connection_ready', [
+            'expected_connection_id' => $expectedId,
+            'expected_hash_id' => $expectedHash,
+            'resolved_connection_id' => $resolvedId,
+            'resolved_hash_id' => $resolvedHash !== '' ? $resolvedHash : $expectedHash,
+            'connection_id' => $resolvedId ?? $expectedId,
+            'hash_id' => $resolvedHash !== '' ? $resolvedHash : $expectedHash,
+            'connection_name' => $meta['connection_name'] ?? null,
+            'database' => $meta['database'] ?? null,
+            'runtime_database' => $meta['runtime_database'] ?? null,
+            'type' => $meta['type'] ?? null,
+            'resolver' => $meta['resolver'],
+            'runtime' => 'console',
+            'result' => 'processed',
+        ]);
+
+        if ($resolvedId !== null && $resolvedId !== $expectedId) {
+            throw new \RuntimeException(sprintf(
+                'Publishing connection mismatch: expected id=%d hash=%s, resolved id=%d hash=%s',
+                $expectedId,
+                $expectedHash,
+                $resolvedId,
+                $resolvedHash,
+            ));
+        }
+
+        $projectStats = $this->contentProjectQueue->dispatchDue($meta);
         $stats['processed'] += $projectStats['processed'];
         $stats['published'] += $projectStats['published'];
         $stats['failed'] += $projectStats['failed'];
         $stats['skipped'] += $projectStats['skipped'] ?? 0;
 
-        $this->dueArticles()->each(function (SeoArticle $article) use (&$stats): void {
+        $this->dispatchDueArticles($stats, $meta);
+    }
+
+    /**
+     * @param  array{processed: int, published: int, failed: int, skipped: int, bootstrap_failed?: int}  $stats
+     * @param  array<string, mixed>  $connectionMeta
+     */
+    private function dispatchDueArticles(array &$stats, array $connectionMeta = []): void
+    {
+        $this->dueArticles()->each(function (SeoArticle $article) use (&$stats, $connectionMeta): void {
             $stats['processed']++;
 
             try {
@@ -116,12 +240,16 @@ final class ScheduledArticlePublishRunner
                     'wp_post_id' => (int) ($article->wp_post_id ?? 0) ?: null,
                     'status' => 'publish_requested',
                     'source' => 'scheduled_article_publish_runner',
+                    'connection_id' => $connectionMeta['connection_id'] ?? null,
+                    'hash_id' => $connectionMeta['hash_id'] ?? null,
                 ]);
                 $stats['published']++;
             } catch (Throwable $e) {
                 $stats['failed']++;
                 RuntimeLogger::warning('Scheduled article publish event emit failed.', [
                     'article_id' => $article->id,
+                    'connection_id' => $connectionMeta['connection_id'] ?? null,
+                    'hash_id' => $connectionMeta['hash_id'] ?? null,
                     'message' => $e->getMessage(),
                 ]);
             }
@@ -129,9 +257,6 @@ final class ScheduledArticlePublishRunner
     }
 
     /**
-     * Legacy/non-project schedule: articles.status=scheduled + published_at.
-     * Bỏ qua bài đang thuộc active Content Project (chúng đi qua scheduled_publish_at trên task).
-     *
      * @return Collection<int, SeoArticle>
      */
     private function dueArticles(): Collection

@@ -153,6 +153,19 @@ class SeoPanelProvider extends PanelProvider
         FilamentView::registerRenderHook(
             PanelsRenderHook::BODY_END,
             function (): HtmlString {
+                if (! request()->is('seo', 'seo/*')) {
+                    return new HtmlString('');
+                }
+
+                return new HtmlString(
+                    view('seo-content-ai::filament.hooks.system-datetime-bootstrap')->render()
+                );
+            },
+        );
+
+        FilamentView::registerRenderHook(
+            PanelsRenderHook::BODY_END,
+            function (): HtmlString {
                 if (! auth()->check() || ! request()->is('seo', 'seo/*')) {
                     return new HtmlString('');
                 }

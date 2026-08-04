@@ -27,19 +27,46 @@ Handoff: `content_project.send_to_publishing_queue` stamps `seo_project_tasks.pu
 | State | Meaning |
 |-------|---------|
 | Unscheduled | Handed off; no `scheduled_publish_at` |
-| Scheduled | Future `scheduled_publish_at`; execution `publish_queue_status=none` (not waiting) |
-| Publishing | Due / `processing` / legacy waiting-retrying |
-| Published | WP publisher success (`publish_published_at` / queue published) — never `articles.status` alone |
+| Scheduled | Có `scheduled_publish_at` (future **hoặc** due chưa claim); execution `none` / `waiting` / `retrying` — **chưa** Publishing |
+| Publishing | `publish_queue_status=processing` sau khi runner claim **và** publisher dispatch thành công (có `last_publish_attempt_at`) |
+| Published | WP publisher xác nhận thành công (`publish_published_at` / queue published) |
 | Failed | Queue failed; retry/reschedule/cancel |
 
-`ContentProjectPublishingQueueService::schedule`: future at → execution **none**; past/now → **waiting** for runner.
+**Không** chuyển Publishing chỉ vì schedule đã đến hạn, Save/Sync, Auto/Quick, hoặc `scheduled_publish_at` quá khứ.
+
+`ContentProjectPublishingQueueService::schedule`: luôn stamp execution **none** (plan). Waiting chỉ từ Publish Now / retry enqueue. Runner claim + publisher accept mới → processing.
+
+Stuck Publishing (`PublishingQueueStuckPublishingDefinition`): processing thiếu attempt, quá TTL (30 phút), **hoặc** `scheduled_publish_at` đã lố ≥ `PAST_DUE_GRACE_MINUTES` (5) → `content_project.recover_stuck_publishing` (scheduled / unscheduled / failed). Retry/Publish now **bị chặn** khi queue processing (`Publish queue is active`) — dùng Recover, không Cancel thường (`processing → cancelled` vẫn invalid).
+
+**Connection bootstrap (cron):** `seo:publish-scheduled-articles` → `ScheduledArticlePublishRunner` reuse `SeoDatabaseConnectionService::bootstrapAndVerifyFromConnection()`. Candidate filter: `PublishingConnectionCandidateResolver` (active, non-orphan, skip demo/manual without users). **Per-connection try/catch continue** — một connection lỗi không abort command. Health cache **scoped theo connection_id** (`ContentProjectQueueHealthService`); UI Publishing Queue bind `SeoConnectionContext` — lỗi hash A không sơn unhealthy hash B. Audit/cleanup: `seo:audit-seo-database-connections` (`--disable-orphans`). Schema probe sau PDO verify. Auth fail log `publishing.connection_bootstrap_failed`.
 
 ## 4. Auto / Quick Mode
 
-Both live **only** on Publishing Queue (`ContentProjectAutoScheduleService`):
+Cả hai là **project-level** trên Publishing Queue — **không cần** checkbox selection.
 
-- **Auto (`project_month`)**: remaining days of source project month; no past; increase articles/day if needed.
-- **Quick Mode (`quick`)**: days + start time; even distribution + minimum interval; deadline recovery — **not** Dev/Test/Debug.
+- **Date/time SoT**: System timezone từ Settings → Date & Time (`SeoDateTimeSettingsService` / `SystemDateTime`). **Không** lấy timezone WordPress. Storage + runner = UTC.
+- **Auto (`project_month`)**: phân bố eligible items trong tháng dự án; UI/parse qua `SystemDateTime`; DB lưu UTC.
+- **Quick Mode**:
+  - `in_day`: interval 5/10/15/20/30/45/60 (+ custom ≥5); safety delay 5 phút; `slot[n] = slot[0] + n × interval`. Preview + Apply dùng cùng `PublishingSchedulePlan` (`item_schedule_map` mỗi task một UTC ISO). Persist qua `ContentProjectPublishingQueueService::schedulePlan` — **không** bulk-set cùng timestamp.
+  - `quick` / N days (1/2/3/5/7): phân bố đều + min interval.
+- Eligibility: Unscheduled (+ Scheduled khi allow reschedule). **Exclude** Publishing + Published. Không cancel Publishing.
+- Preview: eligible/excluded count, first/last publish, timezone chip. Không success toast.
+- **Pending UX** (presentation only): `pendingTaskIds` / `pendingPhase` trên Livewire — không thêm DB enum `updating`. Publish Now: command accepted → phase `accepted` / state Publishing; **Published** chỉ khi publisher WP xác nhận.
+
+## 4b. System Date & Time
+
+| Concern | Owner |
+|---------|--------|
+| Settings UI | `/seo/.../settings/date-time` (`SeoSettingsDateTime`) |
+| Store | `wp_options.seo_datetime_settings` via `SeoDateTimeSettingsService` |
+| PHP formatter | `SystemDateTime` (`SeoDisplayTimezone` = BC facade) |
+| JS formatter | `resources/js/utils/systemDateTime.js` + `window.__SYSTEM_DATETIME__` |
+| Machine timestamps | UTC ISO-8601 |
+| User-visible | System timezone + preset `vi` \| `en` |
+
+## 5. Select All
+
+Publishing Queue: header checkbox (trang hiện tại) → banner “Chọn toàn bộ {filtered_total}” → `selectAllMatchingResults`. Clear khi đổi project/filter/search.
 
 ## 5. Main components
 
@@ -47,8 +74,9 @@ Both live **only** on Publishing Queue (`ContentProjectAutoScheduleService`):
 |------|--------|
 | Queue mutate API | `ContentProjectPublishingQueueService` (`acceptHandoff`, `schedule`, `returnToContentProject`, …) |
 | Due dispatcher | `ContentProjectPublishingQueueRunner::dispatchDue()` |
-| Auto / Quick | `ContentProjectAutoScheduleService` |
+| Auto / Quick | `ContentProjectAutoScheduleService` + `PublishingSchedulePlan` |
 | Read model | `ContentProjectPublishingQueueReadModel` + `PublishingQueueStateClassifier` |
+| Date/time | `SystemDateTime`, `SeoDateTimeSettingsService` |
 | Handoff eligibility | `PublishingQueueHandoffEligibility` |
 
 Operations center may show queue health; it does not own a second dispatcher.
@@ -139,8 +167,9 @@ Hosting cron
 1. Item publish lock + idempotency key (`scheduler:{item}:{scheduled_publish_at}` or actor key).
 2. Mark processing.
 3. `PublisherResolver` → `ContentPublisher::publish(ArticlePublishPayload)`.
-4. Reconcile attempts / `wp_post_id` / external_reference.
-5. Mark published or failed; emit Automation domain event when configured.
+4. Queue actor + `deliveryRequested` → emit `article.publish_requested` (**phải** có automation rule `dispatch-publish-request` → `wordpress.article.sync`). `AUTOMATION_RULE_NOT_FOUND` → mark Failed (không để stuck Processing). Seed: `php artisan automation:seed-rules` + queue worker.
+5. Reconcile attempts / `wp_post_id` / external_reference.
+6. Mark published or failed.
 
 ## 7. Public capabilities
 

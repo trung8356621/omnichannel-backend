@@ -113,6 +113,8 @@ Site Sync V2 button/flow: see `SITE_SYNC.md` (not legacy incremental alone).
 
 Agent/MCP site context reads may expose Knowledge Profile variables via prompt context helpers — capability catalog owned in contracts doc.
 
+**Datetime contract (Agent/MCP presentation):** machine fields UTC ISO-8601; user-facing labels via `SystemDateTime` / shared `window.__SYSTEM_DATETIME__` config (`timezone`, `preset` vi|en). WordPress site timezone is not schedule SoT.
+
 Domain CRUD is Filament UI (manager/planner per page gates).
 
 ## 8. Internal-only capabilities

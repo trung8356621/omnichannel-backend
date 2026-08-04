@@ -9,8 +9,8 @@ namespace App\Addons\SeoContentAi\Support\PublishingQueue;
  *
  * Unscheduled → Scheduled → Publishing → Published | Failed
  *
- * Delegates to the per-bucket Definition classes so Summary count and List
- * filter always agree (same SSOT pattern as ContentProjectOpsStateClassifier).
+ * Publishing = processing only (runner claimed + publisher op running).
+ * Due schedule chưa claim = Scheduled, không phải Publishing.
  */
 final class PublishingQueueStateClassifier
 {

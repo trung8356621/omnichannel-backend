@@ -84,6 +84,7 @@ function convertDomNode(node) {
 
     if (node.nodeType === Node.TEXT_NODE) {
         const text = String(node.textContent ?? '');
+        // Keep whitespace-only text (do not trim) — callers decide block wrapping.
         if (text === '') {
             return null;
         }
@@ -173,11 +174,7 @@ function convertDomNode(node) {
     }
 
     if (tag === 'table') {
-        return {
-            type: 'table',
-            content: [],
-            attrs: { htmlPreview: true },
-        };
+        return convertTableElement(el);
     }
 
     if (tag === 'br') {
@@ -210,6 +207,48 @@ function flattenBlockChildren(el) {
         }
     });
     return out;
+}
+
+/**
+ * @param {HTMLElement} table
+ * @returns {{ type: string, content: object[] }}
+ */
+function convertTableElement(table) {
+    const rows = [];
+    Array.from(table.querySelectorAll('tr')).forEach((tr) => {
+        if (tr.closest('table') !== table) {
+            return;
+        }
+        const cells = [];
+        Array.from(tr.children).forEach((cell) => {
+            const cellTag = String(cell.tagName || '').toLowerCase();
+            if (cellTag !== 'td' && cellTag !== 'th') {
+                return;
+            }
+            const attrs = {};
+            const colspan = Number.parseInt(cell.getAttribute('colspan') || '1', 10);
+            const rowspan = Number.parseInt(cell.getAttribute('rowspan') || '1', 10);
+            if (colspan > 1) attrs.colspan = colspan;
+            if (rowspan > 1) attrs.rowspan = rowspan;
+            const inline = convertInlineChildren(cell);
+            cells.push({
+                type: cellTag === 'th' ? 'tableHeader' : 'tableCell',
+                attrs: Object.keys(attrs).length > 0 ? attrs : undefined,
+                content: [{
+                    type: 'paragraph',
+                    content: inline.length > 0 ? inline : [{ type: 'text', text: '' }],
+                }],
+            });
+        });
+        if (cells.length > 0) {
+            rows.push({ type: 'tableRow', content: cells });
+        }
+    });
+
+    return {
+        type: 'table',
+        content: rows,
+    };
 }
 
 function classAttrs(el) {

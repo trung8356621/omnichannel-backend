@@ -103,7 +103,12 @@ final class ContentProjectOpsDashboardService
      */
     private function publishingSnapshot(?array $siteIds): array
     {
-        $health = $this->queueHealth->snapshot($siteIds);
+        $connectionId = null;
+        $current = \App\Addons\SeoContentAi\Support\SeoConnectionContext::current();
+        if ($current instanceof \App\Models\SeoDatabaseConnection) {
+            $connectionId = (int) $current->getKey();
+        }
+        $health = $this->queueHealth->snapshot($siteIds, $connectionId);
 
         return [
             'waiting' => $health['waiting'],
@@ -113,6 +118,8 @@ final class ContentProjectOpsDashboardService
             'last_worker_run' => $health['last_worker_run'],
             'last_success' => $health['last_success'],
             'last_failure' => $health['last_failure'],
+            'health_connection_id' => $health['health_connection_id'] ?? null,
+            'health_hash_id' => $health['health_hash_id'] ?? null,
         ];
     }
 
@@ -184,7 +191,12 @@ final class ContentProjectOpsDashboardService
      */
     private function workerSnapshot(): array
     {
-        $health = $this->queueHealth->snapshot();
+        $connectionId = null;
+        $current = \App\Addons\SeoContentAi\Support\SeoConnectionContext::current();
+        if ($current instanceof \App\Models\SeoDatabaseConnection) {
+            $connectionId = (int) $current->getKey();
+        }
+        $health = $this->queueHealth->snapshot(null, $connectionId);
         $lastRun = $health['last_worker_run'];
         $alive = false;
 
