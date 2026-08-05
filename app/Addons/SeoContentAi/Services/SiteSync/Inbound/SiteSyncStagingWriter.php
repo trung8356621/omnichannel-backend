@@ -18,10 +18,14 @@ final class SiteSyncStagingWriter
         Site $site,
         SiteSyncBatchData $batch,
         ?int $runId = null,
+        bool $attemptScoped = false,
     ): SeoSiteSyncBatch {
         $payload = $batch->toArray();
         $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
-        $checksum = hash('sha256', $json);
+        $checksumMaterial = $attemptScoped && $runId !== null
+            ? $json.'|run:'.$runId
+            : $json;
+        $checksum = hash('sha256', $checksumMaterial);
 
         $existing = SeoSiteSyncBatch::query()
             ->where('site_id', (int) $site->id)

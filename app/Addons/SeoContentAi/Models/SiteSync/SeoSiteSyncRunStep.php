@@ -18,14 +18,20 @@ class SeoSiteSyncRunStep extends Model
         'step_key',
         'step_order',
         'status',
+        'attempt_count',
+        'last_error_code',
         'metrics',
+        'checkpoint',
         'error_message',
+        'retry_after',
         'started_at',
         'finished_at',
     ];
 
     protected $casts = [
         'metrics' => 'array',
+        'checkpoint' => 'array',
+        'retry_after' => 'datetime',
         'started_at' => 'datetime',
         'finished_at' => 'datetime',
     ];

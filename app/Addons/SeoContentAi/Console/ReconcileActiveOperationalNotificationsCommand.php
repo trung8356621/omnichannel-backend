@@ -98,7 +98,7 @@ final class ReconcileActiveOperationalNotificationsCommand extends Command
         try {
             $runs = SeoSiteSyncRun::query()
                 ->whereIn('status', ['running', 'pending'])
-                ->where('updated_at', '<', now()->subMinutes(15))
+                ->where('updated_at', '<', now()->subMinutes(5))
                 ->orderBy('id')
                 ->limit(50)
                 ->get();
@@ -117,10 +117,29 @@ final class ReconcileActiveOperationalNotificationsCommand extends Command
                 if ($tenantOwnerId <= 0) {
                     continue;
                 }
+                $counters = is_array($run->counters) ? $run->counters : [];
+                $hasProgress = (int) ($counters['total_to_check'] ?? 0) > 0
+                    || (int) ($counters['checked'] ?? 0) > 0
+                    || (int) ($counters['fetched'] ?? 0) > 0
+                    || (int) ($counters['created'] ?? 0) > 0
+                    || (int) ($counters['updated'] ?? 0) > 0
+                    || (int) ($counters['unchanged'] ?? 0) > 0
+                    || (int) ($counters['failed'] ?? 0) > 0;
                 $stuckRuns++;
                 if ($dryRun) {
                     $this->line(sprintf('site_sync_run=%d step=%s', (int) $run->getKey(), $stepName));
                 } else {
+                    if (! $hasProgress) {
+                        $meta = is_array($run->meta) ? $run->meta : [];
+                        $meta['watchdog_failed_at'] = now()->toIso8601String();
+                        $meta['watchdog_reason'] = 'No progress for 5 minutes: total=0 and counters unchanged.';
+                        $run->forceFill([
+                            'status' => 'failed',
+                            'resumable' => true,
+                            'error_message' => 'Site Sync stuck: no progress for 5 minutes while total remained 0.',
+                            'meta' => $meta,
+                        ])->save();
+                    }
                     $siteSync->notifyStuck($run, $tenantOwnerId, $stepName);
                 }
                 $actions++;

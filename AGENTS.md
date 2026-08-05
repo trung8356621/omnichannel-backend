@@ -1,117 +1,117 @@
 # Codex Project Instructions
 
-## Communication
+## Repository Role
 
-- Respond in Vietnamese unless the user asks for another language.
-- Keep answers concise, direct, and implementation-focused.
-- Before changing code, inspect the relevant implementation, nearby tests, and the closest README.
-- When documentation and code disagree, treat the current code, manifests, and dependency files as authoritative. Mention meaningful discrepancies.
-- Do not replace an entire file when a focused patch is sufficient.
+- This repository is the canonical Laravel SaaS backend for the Omnichannel workspace.
+- Stack: Laravel 12, PHP 8.2+, Filament 3, React, Vite, Tailwind CSS, MySQL.
+- It owns canonical business workflows for sites, services, subscriptions, wallets, payments, orders, invoices, SEO Content AI, publishing, site sync, Agent/MCP, and plugin update delivery.
+- The sibling WordPress plugin lives at `..\wp-seo-ai`. For REST/API/auth/site-sync/publishing/article/media/capability contract work, Codex MUST inspect both repositories.
 
-## Project Context
+## Source Of Truth
 
-- This is an omnichannel SaaS backend built with Laravel 12, PHP 8.2+, Filament 3, React, Vite, Tailwind CSS, and MySQL.
-- The core application manages sites, services, subscriptions, wallets, payments, orders, invoices, jobs, and frontend proxies.
-- Filament's core admin panel is available under `/admin`.
-- Features that can be isolated must be implemented as addons under `app/Addons/{PascalCaseName}/`.
-- Read `README.md` for the core architecture.
-- When working in SEO Content AI, also read `docs/README.md` (canonical index). `docs/SUPER_MAP_INDEX.md` and `app/Addons/SeoContentAi/README_ADDON_SEOCONTENTAI.md` are compatibility stubs only.
+- Code/runtime/manifests MUST win when command, route, binding, scheduler, or script behavior conflicts with docs.
+- Start from `README.md` and `docs/README.md`.
+- Canonical docs are `docs/architecture/*`, `docs/modules/*`, `docs/contracts/*`, `docs/operations/*`, and current `docs/audits/*`.
+- `docs/archive/*`, `docs/SUPER_MAP_INDEX.md`, and `app/Addons/SeoContentAi/README_ADDON_SEOCONTENTAI.md` MUST NOT be used as source of truth.
+- For module work, read the relevant canonical docs listed in `docs/README.md`, especially:
+  - Content Projects: `docs/modules/CONTENT_PROJECTS.md`
+  - Publishing Queue: `docs/modules/PUBLISHING.md`
+  - Site Sync: `docs/modules/SITE_SYNC.md`
+  - WordPress Bridge: `docs/modules/WORDPRESS_BRIDGE.md`
+  - Site MCP/Domains: `docs/modules/SITE_MCP_AND_DOMAINS.md`
+  - Agent/MCP: `docs/contracts/AGENT_AND_MCP_CONTRACTS.md`
+  - Prompts/AI: `docs/modules/PROMPTS_AND_AI.md`
+  - Article Editor: `docs/modules/ARTICLE_EDITOR.md` plus matching `docs/architecture/ARTICLE_EDITOR_*.md`
+  - Extension SDK: `docs/modules/EXTENSION_SDK.md` and `docs/contracts/EXTENSION_AND_REGISTRY_CONTRACTS.md`
+  - Operations: `docs/operations/*`
 
-## Addon Architecture
+## Mandatory Work Sequence
 
-- Each addon should own its metadata, provider, routes, migrations, models, services, Filament code, views, and frontend assets.
-- Keep addon-specific changes inside the addon unless integration with the core application genuinely requires a root-level change.
-- Do not register an addon statically in `config/app.php`; active addons are registered dynamically from the `services` table.
-- Use `addon.json` as the source of truth for addon slug, provider, version, and optional static database config.
-- Use `App\Addons\RegistersAddonDatabase` for addons with a dedicated database declared in `addon.json` (not SEO Content AI).
-- Slugs listed in `config/addons.php` → `skip_slugs` (default includes `wp-headless`) are ignored by `AddonManager::discover()` and `AppServiceProvider` even if still active in `services`.
-- Place addon migrations in `app/Addons/{AddonName}/database/migrations/`.
-- Avoid foreign-key constraints across databases. Represent cross-database references as scalar IDs and enforce them at the application layer.
-- Do not edit `bootstrap/app.php` for ordinary addon behavior. Changes there are limited to true application-level middleware or narrowly scoped CSRF exceptions.
+- For any non-trivial task, Codex MUST query `codebase-memory` near the start for relevant prior decisions/context when the MCP server is available.
+- `codebase-memory` is NOT source of truth. Codex MUST verify memory results against current code, manifests, routes, container bindings, scheduler, tests, and canonical docs before acting.
+- Before changing code, Codex MUST inspect the relevant implementation, nearby tests, closest README/canonical docs, and cross-repo contract consumers when applicable.
+- Before the first application-code edit in a task, Codex MUST ensure a deploy-diff session has been started with a short stable kebab-case task id.
+- If the correct session already exists, Codex MUST NOT start a duplicate session.
+- After meaningful application-code changes, Codex MUST run deploy-diff `track` for every modified/deleted application file before final response, or clearly report why tracking could not run.
+- Codex MUST report changed files and verification commands run or intentionally not run.
+- Codex MUST NOT claim work is deploy-ready unless tracked diff was checked.
 
-## PHP And Laravel
+## Deploy Diff Workflow
 
-- Add `declare(strict_types=1);` to new PHP files.
-- Use parameter types, return types, typed properties, enums, constructor property promotion, match expressions, and nullsafe access where appropriate.
-- Follow existing local patterns before introducing a new abstraction.
-- Prefer early returns over deeply nested conditionals.
-- Use constructor or method injection for application dependencies. Avoid resolving dependencies through `app()` in business logic.
-- Put validation in Form Request classes when handling conventional HTTP controller input.
-- Keep controllers thin. Put non-trivial business behavior in focused Service or Action classes.
-- Use Eloquent casts for JSON, booleans, enums, dates, and structured values.
-- Prevent N+1 queries with eager loading when relationships are accessed in loops or serializers.
-- Wrap multi-write financial operations involving wallets, transactions, orders, or invoices in `DB::transaction()`.
-- Preserve authorization and tenant boundaries when changing queries.
+- Verified script: `.secure/deploy-diff.ps1`.
+- Supported modes: `start`, `track`, `deploy`, `cancel`, `list`.
+- `start`, `track`, `deploy`, and `cancel` REQUIRED `-Id`.
+- `track` REQUIRED one or more `-Path`; it also accepts `-Action modified|deleted`.
+- The script has NO `-Current` parameter. Codex MUST NOT use `-Current`.
+- Correct syntax:
 
-## Filament
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".secure\deploy-diff.ps1" -Mode start -Id "<task-id>"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".secure\deploy-diff.ps1" -Mode track -Id "<task-id>" -Path "<file1>","<file2>"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".secure\deploy-diff.ps1" -Mode deploy -Id "<task-id>"
+```
 
-- Organize large forms with `Section`, `Grid`, `Fieldset`, tabs, or existing project components.
-- Define access explicitly through policies, `canAccess()`, query scoping, or the established access-control helpers.
-- Non-admin users must only see records within their permitted owner/site/domain scope.
-- Use Filament notifications for user-facing action results.
-- Place addon pages and resources under the addon's `Filament/` directory so its panel/provider can discover them.
-- Do not use Livewire only to open/close modals, drawers, dropdowns, or other pure UI containers. Toggle those states with JavaScript/Alpine, and call Livewire only when loading data or executing server-side actions.
+- `deploy` MUST run ONLY WHEN the user explicitly asks to deploy.
+- The script tracks only files under this backend repo root. It does NOT cover `..\wp-seo-ai`.
+- WordPress plugin packaging is separate (`compress_plugin.ps1`) and MUST run ONLY WHEN the user explicitly requests plugin packaging/release.
 
-## Databases
+## Always-On Guardrails
 
-- Core models use the default `mysql` connection.
-- Never assume every addon uses the same secondary connection; inspect its provider and configuration source.
-- SEO Content AI uses runtime connection name `omi_seo_ai`. Credentials come from core table `seo_database_connections` (Filament: SEO Database Connections), bootstrapped by `SeoDatabaseConnectionService` — not from `addon.json` or core `.env` DB vars.
-- SEO Content AI models and migrations must consistently target `omi_seo_ai`.
-- Other addons may use `addon.json` + optional `database.local.php` via `RegistersAddonDatabase`.
+- Codex MUST NOT read `.env`, private keys, tokens, passwords, credentials, deployment logs, or full `.secure`; only read `.secure/deploy-diff.ps1` when needed for workflow.
+- Codex MUST NOT store secrets, `.env` values, tokens, production logs, credentials, or speculation in `codebase-memory`.
+- Codex MUST write memory ONLY WHEN a durable decision has been verified from code/docs or explicitly confirmed by the user.
+- Codex MUST NOT deploy, commit, push, install dependencies, run migrations, alter databases, upload via FTP/SFTP/SCP/rsync, or bump plugin version unless the user explicitly asks.
+- Codex MUST NOT remove compatibility endpoints, adapters, handlers, routes, classes, or shims until zero caller is proven across routes, container bindings, scheduler, events/listeners, queues/jobs, tests, docs/contracts, and the WordPress plugin.
+- Codex MUST preserve authorization, tenant boundaries, token-based WordPress bridge auth, and narrow CSRF exceptions.
+- HTTP/Filament/Livewire/editor logging MUST use `App\Support\RuntimeLogger` or `Log::channel('web_app')`; HTTP code MUST NOT write default `laravel.log`.
+- Blade select boxes MUST use `<x-select>`; SEO React MUST use `SeoSelect`.
+- Modals/drawers/popovers MUST open/close through Alpine/JavaScript immediately; Livewire is for loading, validation, persistence, and server actions.
 
-## SEO Content AI
+## Laravel And Addons
 
-- The addon lives in `app/Addons/SeoContentAi/` and its Filament panel is mounted at `/seo`.
-- Keep business logic in `Services/`, persistence in `Models/`, HTTP endpoints in `Http/Controllers/`, and Filament UI in `Filament/`.
-- Preserve the WordPress bridge contracts and token-based authentication when changing sync, media, webhook, or plugin endpoints.
-- Use the `seo-content-ai::` namespace for addon views and translations.
-- Add or update focused tests under `app/Addons/SeoContentAi/tests/Unit/` for service and parser behavior.
-- After changing addon JavaScript or CSS, verify the relevant Vite entry and run the frontend build.
+- New PHP files MUST use `declare(strict_types=1);`.
+- Prefer typed properties, return types, enums, constructor promotion, match, nullsafe, early returns, Form Requests, thin controllers, and focused Service/Action classes.
+- Business logic MUST use injection over `app()` resolution unless an existing local pattern requires otherwise.
+- Core models use default `mysql`.
+- SEO Content AI uses runtime connection `omi_seo_ai`, bootstrapped by `SeoDatabaseConnectionService` from core table `seo_database_connections`; it does not use addon static DB config.
+- Features that can be isolated MUST live under `app/Addons/{PascalCaseName}/`.
+- Addons MUST NOT be statically registered in `config/app.php`; active addons are registered dynamically.
+- Avoid cross-database foreign keys; use scalar IDs and application-level enforcement.
 
-## Blade Select Boxes
+## Canonical Architecture Rules
 
-- Every `<select>` in Blade views must use the shared `<x-select>` component at `resources/views/components/select.blade.php`.
-- Do not write raw `<select>` elements or custom chevron CSS/SVG wrappers.
-- Pass `name`, `wire:model`, `x-model`, `id`, and layout classes through `<x-select>` attributes; put `<option>` elements in the slot.
-- Never add an extra arrow SVG outside `<x-select>` — the component already includes the chevron.
-- In SEO Content AI React code, use `SeoSelect`; in SEO Blade views, prefer `<x-select>` over ad-hoc selects.
-
-## React And Vite
-
-- Follow the existing addon-local frontend layout. SEO Content AI assets live under `app/Addons/SeoContentAi/resources/`.
-- Register new entry points in `vite.config.js` only when a separate bundle is required.
-- Pass server data to React through explicit serialized props or the existing page bootstrap mechanism.
-- Reuse the project's icon library and existing UI patterns; use `lucide-react` where that is the established component convention.
-- Do not duplicate state between Livewire and React without defining which side owns it.
-
-## Security And Integrations
-
-- Validate and authorize every state-changing endpoint, including addon APIs and WordPress callbacks.
-- Do not log tokens, passwords, API keys, authorization headers, or full sensitive payloads.
-- Keep CSRF exclusions narrow and route-specific.
-- Preserve `WpHeadlessCors` or the addon-specific middleware for external WordPress requests where currently required.
-- Read WordPress credentials from the established site/domain settings or metadata storage; do not hard-code them.
+- Content Project lifecycle writes MUST go through `ContentProjectCommandBus`.
+- Agent/MCP writes MUST go through Gateway, Registry, CommandFactory, and CommandBus; Agent/MCP MUST NOT import models/handlers directly.
+- MCP write surface is stricter than Agent write surface; do not expose internal scheduler commands as MCP tools.
+- Publishing schedule is owned by SaaS/Laravel. WordPress MUST NOT be treated as schedule source of truth.
+- Publishing Queue processing/stuck recovery MUST follow `docs/modules/PUBLISHING.md` and `docs/contracts/QUEUE_SCHEDULER_AND_IDEMPOTENCY.md`.
+- Prompt hooks MUST resolve via settings binding or task node `prompt_id`; do not select prompts by legacy `is_active` alone.
+- Article Editor changes MUST preserve session lock, document version, TipTap JSON document model, command layer, media snapshot ownership, and public/internal SDK boundaries.
+- Extension SDK v1 public contracts are frozen; breaking changes REQUIRE a new ADR and SDK major bump.
 
 ## Verification
 
-- Prefer remote PHPUnit (host dùng `$PHP_BIN`), không dùng `php artisan test` làm mặc định.
-- Smallest related set first, e.g.:
-  - `$PHP_BIN vendor/bin/phpunit --filter=PromptOwnershipModelTest`
-  - `$PHP_BIN vendor/bin/phpunit app/Addons/SeoContentAi/tests/Unit`
-- Do not treat `php artisan test --filter=...` as the project standard — many SEO unit tests extend plain `PHPUnit\Framework\TestCase` and are run via `vendor/bin/phpunit` on production hosts.
-- Run Laravel Pint on changed PHP files when practical.
-- For JavaScript or CSS changes, run the relevant frontend build or checks, normally `npm run build`.
-- For migration changes, inspect both `up()` and `down()` behavior and verify the intended database connection.
-- Report commands that could not be run and the reason.
+- Remote-first PHP verification is standard. Prefer:
 
-## Troubleshooting Addon Removal
+```text
+$PHP_BIN vendor/bin/phpunit --filter=ClassOrMethodName
+$PHP_BIN vendor/bin/phpunit app/Addons/SeoContentAi/tests/Unit
+```
 
-For class-not-found failures after removing an addon or package:
+- Do not use `php artisan test --filter=...` as the project standard.
+- For JS/CSS changes, run or report the relevant build/check, normally `npm run build`.
+- For migration changes, inspect both `up()` and `down()` and verify intended DB connection; do not run migrations unless explicitly asked.
+- If verification is skipped because the task is documentation-only or user forbids execution, report that plainly.
 
-1. Check `bootstrap/providers.php` and remove only stale provider entries.
-2. Clear generated PHP files under `bootstrap/cache/` without deleting `.gitignore`.
-3. Run `composer dump-autoload -o`.
-4. Run `php artisan optimize:clear`.
+## Skills
 
-Do not delete caches or providers blindly; first identify the stale class reference.
+- Use `$deploy-diff-workflow` for deploy session, track list, deploy, upload, or deployment requests.
+- Use `$remote-test-selection` when choosing backend PHP/frontend verification commands.
+- Use `$docs-update-on-xong` when the user says `XONG!`.
+- Use `$site-sync-debugging` for Site Sync, WordPress bridge sync, delta, snapshot, queue, or reconcile investigations.
+- Use `$cross-repo-contract-change` for backend/plugin API, payload, auth, publishing, article sync, media, updater, or capability contract changes.
+
+## Final Response
+
+- Final responses MUST be concise and in Vietnamese unless the user asks otherwise.
+- Include changed files, verification status, deploy tracking status for application-code tasks, and any skipped commands with reason.

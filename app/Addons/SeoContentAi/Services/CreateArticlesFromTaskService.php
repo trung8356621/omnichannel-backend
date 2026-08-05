@@ -323,6 +323,10 @@ final class CreateArticlesFromTaskService
 
         try {
             if ($projectType === SeoProjectTask::TYPE_REWRITE) {
+                if ((string) ($context->variables['rerun_scope'] ?? '') === 'full') {
+                    return $this->runOutlineThenArticleForContext($context, $resolvedSiteId);
+                }
+
                 // «Tạo lại bài từ dàn ý» — content node only, không chạy lại outline.
                 return $this->runArticleWritingForContext(
                     $context,
@@ -611,6 +615,7 @@ final class CreateArticlesFromTaskService
             $context->variables,
         );
         $this->workflowRunner->applyParsedMetaFromSteps($article, $steps);
+        $this->syncFocusKeywordFromContext($article, $resolvedSiteId, $context);
 
         return [
             'success' => true,
@@ -948,6 +953,23 @@ final class CreateArticlesFromTaskService
             $article,
             (int) $article->site_id,
             trim($phrase),
+        );
+    }
+
+    private function syncFocusKeywordFromContext(SeoArticle $article, int $siteId, TaskTestContext $context): void
+    {
+        $focusKeyword = ContentProjectItemIdentity::normalize(
+            isset($context->variables['focus_keyword']) ? (string) $context->variables['focus_keyword'] : null,
+        );
+        if ($focusKeyword === '') {
+            return;
+        }
+
+        KeywordFocusAttach::syncMainKeyword(
+            $article,
+            $siteId,
+            auth()->id() !== null ? (int) auth()->id() : 0,
+            $focusKeyword,
         );
     }
 

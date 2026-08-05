@@ -223,6 +223,9 @@ final class OperationalNotificationContractTest extends TestCase
         $reconcile = $this->readAddon('Console/ReconcileActiveOperationalNotificationsCommand.php');
         self::assertStringContainsString('seo:notifications:reconcile-active-incidents', $reconcile);
         self::assertStringContainsString('--dry-run', $reconcile);
+        self::assertStringContainsString('subMinutes(5)', $reconcile);
+        self::assertStringContainsString('Site Sync stuck: no progress for 5 minutes', $reconcile);
+        self::assertStringContainsString('watchdog_failed_at', $reconcile);
 
         $health = $this->readAddon('Console/CheckOperationalRunnerHealthCommand.php');
         self::assertStringContainsString('seo:notifications:check-runner-health', $health);

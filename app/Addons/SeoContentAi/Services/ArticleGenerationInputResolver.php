@@ -290,13 +290,17 @@ class ArticleGenerationInputResolver
                 : [];
 
             foreach ($steps as $step) {
-                if (! is_array($step) || ! $this->isOutlineProducerStep($step)) {
+                if (! is_array($step)) {
                     continue;
                 }
 
                 foreach ($this->candidatePayloadsFromStep($step) as $candidate) {
                     $parsed = $this->tryParseArtifact($candidate);
                     if ($parsed === null) {
+                        continue;
+                    }
+
+                    if (! $this->isOutlineProducerStep($step) && ! $this->isLegacyOutlineArtifactStep($step)) {
                         continue;
                     }
 
@@ -319,13 +323,37 @@ class ArticleGenerationInputResolver
     }
 
     /**
+     * Legacy project snapshots may lack hook/role/ports but still store the complete
+     * two-section outline artifact in the prompt output.
+     *
+     * @param  array<string, mixed>  $step
+     */
+    private function isLegacyOutlineArtifactStep(array $step): bool
+    {
+        $status = trim((string) ($step['status'] ?? ''));
+        if ($status !== '' && ! in_array($status, ['completed', 'success', 'succeeded'], true)) {
+            return false;
+        }
+
+        $hookKey = trim((string) ($step['hook_key'] ?? ''));
+        if (str_starts_with($hookKey, 'article.content.')) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
      * @return \Illuminate\Support\Collection<int, SeoProjectRunItem>
      */
     protected function fetchSuccessfulRunItems(int $articleId, ?int $preferRunId): \Illuminate\Support\Collection
     {
         $query = SeoProjectRunItem::query()
             ->where('article_id', $articleId)
-            ->where('status', SeoProjectRunItemStatus::Success->value)
+            ->whereIn('status', [
+                SeoProjectRunItemStatus::Success->value,
+                SeoProjectRunItemStatus::Failed->value,
+            ])
             ->orderByDesc('id')
             ->limit(50);
 

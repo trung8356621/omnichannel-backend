@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Automation\Enums\ActionSelectability;
 use App\Addons\SeoContentAi\Automation\Enums\ActionSideEffect;
 use App\Addons\SeoContentAi\Automation\Support\ActionSupport;
 use App\Addons\SeoContentAi\Services\ArticleEditorSeoMetaService;
+use App\Addons\SeoContentAi\Services\SeoArticleScoringQueueService;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -22,6 +23,7 @@ final class UpdateArticleSeoMetaAction implements BusinessAction
 {
     public function __construct(
         private readonly ArticleEditorSeoMetaService $seoMeta,
+        private readonly SeoArticleScoringQueueService $scoringQueue,
     ) {}
 
     public static function definition(): ActionDefinition
@@ -69,6 +71,8 @@ final class UpdateArticleSeoMetaAction implements BusinessAction
         $metaDescription = trim((string) ($input['meta_description'] ?? ''));
         $slug = trim((string) ($input['slug'] ?? ''));
 
+        $scoringQueued = false;
+
         try {
             [$fresh, $focusKeyword, $metaDescription, $normalizedSlug] = ActionSupport::withArticleLock(
                 $articleId,
@@ -83,6 +87,10 @@ final class UpdateArticleSeoMetaAction implements BusinessAction
                     });
                 },
             );
+
+            if (($input['dispatch_scoring'] ?? true) !== false) {
+                $scoringQueued = $this->scoringQueue->dispatchForArticle($fresh, force: true);
+            }
         } catch (\Throwable $exception) {
             return ActionResult::failure('seo_meta_update_failed', $exception->getMessage());
         }
@@ -93,7 +101,8 @@ final class UpdateArticleSeoMetaAction implements BusinessAction
                 'focus_keyword' => $focusKeyword,
                 'meta_description' => $metaDescription,
                 'slug' => $normalizedSlug !== '' ? $normalizedSlug : (string) ($fresh->slug ?? ''),
-                'seo_analysis_pending' => false,
+                'seo_analysis_pending' => $scoringQueued,
+                'seo_scoring_queued' => $scoringQueued,
             ],
             events: [
                 ActionSupport::articleEvent('article.seo_meta_updated', $context, $articleId, [

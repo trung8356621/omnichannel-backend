@@ -49,7 +49,40 @@ final class ContentProjectPublishingQueueUiParityContractTest extends TestCase
 
         self::assertStringNotContainsString('pq-hub-kpi-grid', $hub);
         self::assertStringContainsString('variant="publishing_queue"', $hub);
+        self::assertStringContainsString(':show-checkbox="true"', $hub);
+        self::assertStringNotContainsString('pq-hub-project', $hub);
+        self::assertStringNotContainsString('selectableProjects', $hub);
         self::assertStringContainsString('variant="content_project"', $ops);
+
+        $hubClass = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Filament/Pages/PublishingQueueHub.php',
+        );
+        foreach ([
+            'bulkSchedule(?string $at = null)',
+            'bulkScheduleInMinutes(int $minutes)',
+            'bulkScheduleTomorrowMorning()',
+            'bulkUnschedule()',
+            'bulkPublishNow()',
+            'bulkRetryPublish()',
+            'bulkCancelPublish()',
+        ] as $method) {
+            self::assertStringContainsString($method, $hubClass);
+        }
+        self::assertStringContainsString('withProjectFromItems($this->selectedItemIds()', $hubClass);
+    }
+
+    public function test_shared_thumbnail_is_large_enough_for_ops_lists(): void
+    {
+        $thumb = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/components/content-project-item-thumbnail.blade.php',
+        );
+        $styles = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/components/content-project-ops-styles.blade.php',
+        );
+
+        self::assertStringContainsString("'size' => 'w-12 h-12'", $thumb);
+        self::assertStringContainsString("['w-12 shrink-0']", $thumb);
+        self::assertStringContainsString('.cp-ops-col-thumb { width: 4rem; min-width: 4rem; }', $styles);
     }
 
     public function test_publishing_queue_read_model_exposes_thumbnail_fields(): void

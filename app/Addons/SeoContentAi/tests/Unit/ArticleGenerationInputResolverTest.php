@@ -87,6 +87,33 @@ final class ArticleGenerationInputResolverTest extends TestCase
         self::assertStringNotContainsString('body body', $result->rawArtifact);
     }
 
+    public function test_query_includes_failed_run_items_to_reuse_completed_outline_step(): void
+    {
+        $source = (string) file_get_contents(dirname(__DIR__, 2).'/Services/ArticleGenerationInputResolver.php');
+
+        self::assertStringContainsString('whereIn(\'status\'', $source);
+        self::assertStringContainsString('SeoProjectRunItemStatus::Success->value', $source);
+        self::assertStringContainsString('SeoProjectRunItemStatus::Failed->value', $source);
+    }
+
+    public function test_legacy_completed_raw_outline_artifact_step_is_reusable_without_hook_metadata(): void
+    {
+        $outlineRaw = $this->fixtureArtifact('legacy-outline', 'legacy-vocab');
+        $legacyStep = [
+            'type' => 'prompt',
+            'title' => 'Dàn ý bài viết',
+            'status' => 'completed',
+            'output' => $outlineRaw,
+        ];
+
+        $result = $this->resolveFromInjectedItems([$this->fakeRunItem(77, 88, [$legacyStep])]);
+
+        self::assertSame(ArticleGenerationSourceResult::SOURCE_RUN_OUTLINE_ARTIFACT, $result->sourceType);
+        self::assertSame(77, $result->sourceRunItemId);
+        self::assertStringContainsString('legacy-outline', $result->rawArtifact);
+        self::assertStringContainsString('legacy-vocab', $result->writingInstructionsSection);
+    }
+
     public function test_does_not_pick_article_output_masquerading_as_outline_fields(): void
     {
         $articleBody = "**SEO Title:** X\n\n**Meta Description:** Y\n\n".str_repeat('paragraph ', 300);
@@ -283,31 +310,31 @@ final class ArticleGenerationInputResolverTest extends TestCase
      */
     private function tryResolveFromInjectedItems(array $items): ?ArticleGenerationSourceResult
     {
-        $resolver = $this->resolver('');
+        $outline = \Mockery::mock(ArticleOutlineResolver::class);
+        $outline->shouldReceive('resolveMarkdown')->andReturn('');
 
-        foreach ($items as $item) {
-            $steps = is_array($item->output_snapshot['steps'] ?? null)
-                ? $item->output_snapshot['steps']
-                : [];
-            foreach ($steps as $step) {
-                if (! is_array($step) || ! $resolver->isOutlineProducerStep($step)) {
-                    continue;
-                }
-                foreach ($resolver->candidatePayloadsFromStep($step) as $candidate) {
-                    $parsed = $resolver->tryResolveFromRawArtifact(
-                        $candidate,
-                        ArticleGenerationSourceResult::SOURCE_RUN_OUTLINE_ARTIFACT,
-                        (int) $item->run_id,
-                        (int) $item->id,
-                        (int) ($step['result_id'] ?? 0) ?: null,
-                    );
-                    if ($parsed instanceof ArticleGenerationSourceResult) {
-                        return $parsed;
-                    }
-                }
+        $resolver = new class($outline, $items) extends ArticleGenerationInputResolver
+        {
+            /**
+             * @param  list<object>  $items
+             */
+            public function __construct(ArticleOutlineResolver $outline, private readonly array $items)
+            {
+                parent::__construct($outline);
             }
-        }
 
-        return null;
+            protected function fetchSuccessfulRunItems(int $articleId, ?int $preferRunId): \Illuminate\Support\Collection
+            {
+                unset($articleId, $preferRunId);
+
+                return collect($this->items);
+            }
+        };
+
+        try {
+            return $resolver->resolveForArticle($this->article(1));
+        } catch (\InvalidArgumentException) {
+            return null;
+        }
     }
 }

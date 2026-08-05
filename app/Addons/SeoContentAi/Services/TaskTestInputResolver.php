@@ -70,8 +70,11 @@ final class TaskTestInputResolver
     /**
      * @param  null|callable(Builder): void  $scopeArticles
      */
-    public function resolveForProjectTask(SeoProjectTask $task, ?callable $scopeArticles = null): TaskTestContext
-    {
+    public function resolveForProjectTask(
+        SeoProjectTask $task,
+        ?callable $scopeArticles = null,
+        bool $cleanRestart = false,
+    ): TaskTestContext {
         $type = SeoProjectTask::normalizeType($task->type);
         $promptInputs = SeoProjectTask::promptInputFields(
             isset($task->keyword) ? (string) $task->keyword : null,
@@ -102,10 +105,14 @@ final class TaskTestInputResolver
             : '';
 
         if ($type === SeoProjectTask::TYPE_REWRITE || $type === SeoProjectTask::TYPE_IMPROVE) {
+            $rewriteContext = $cleanRestart && $type === SeoProjectTask::TYPE_REWRITE
+                ? $this->resolveExistingArticleRewriteForCleanRestart($task, $scopeArticles)
+                : $this->resolveExistingArticleRewrite($task, $scopeArticles, $type);
+
             return $this->stampProjectTaskOrigin(
                 $this->withOptionalPromptInputs(
                     $this->withProductPromptVariables(
-                        $this->resolveExistingArticleRewrite($task, $scopeArticles, $type),
+                        $rewriteContext,
                         $galleryDescription,
                         $loaiSanPham,
                     ),
@@ -256,6 +263,68 @@ final class TaskTestInputResolver
                 $variables['rewrite_instruction'] = $notes;
                 $variables['rewrite_notes'] = $notes;
             }
+
+            $taskSiteId = (int) ($task->site_id ?? 0);
+            if ($context->siteId === null && $taskSiteId > 0) {
+                $context = $context->withSiteId($taskSiteId);
+            }
+
+            return $context
+                ->withVariables($variables)
+                ->withRewriteOptions(SeoProjectTask::REWRITE_MODE_CONTENT, $notes !== '' ? $notes : null);
+        } finally {
+            $this->articleScope = null;
+        }
+    }
+
+    private function resolveExistingArticleRewriteForCleanRestart(
+        SeoProjectTask $task,
+        ?callable $scopeArticles,
+    ): TaskTestContext {
+        $this->articleScope = $scopeArticles;
+
+        try {
+            $article = null;
+            $articleId = (int) ($task->article_id ?? 0);
+            if ($articleId > 0) {
+                $article = $this->articlesQuery()->find($articleId);
+            }
+
+            $pickerTitle = trim((string) $task->source_content);
+            if (! $article instanceof SeoArticle && $pickerTitle !== '') {
+                $article = $this->findArticleByTitle($pickerTitle);
+            }
+
+            if (! $article instanceof SeoArticle) {
+                throw new \InvalidArgumentException(
+                    'Không tìm thấy bài viết để viết lại (task #'.(int) $task->id.'). '
+                    .'Hãy chọn đúng Target / Existing Article.',
+                );
+            }
+
+            $article->loadMissing(['articleMetas', 'site']);
+            $notes = trim((string) ($task->rewrite_notes ?? ''));
+            $context = $this->contextFromArticle($article, 'id')
+                ->withProjectTaskType(SeoProjectTask::TYPE_REWRITE)
+                ->withRewriteOptions(SeoProjectTask::REWRITE_MODE_CONTENT, $notes !== '' ? $notes : null);
+
+            $variables = $context->variables;
+            $variables['rewrite_instruction'] = $notes;
+            $variables['rewrite_notes'] = $notes;
+            $variables['rerun_scope'] = 'full';
+            $variables['force_ai_regenerate'] = 'true';
+            unset(
+                $variables['article_writing_raw_input'],
+                $variables['article_writing_formatted'],
+                $variables['article_generation_source'],
+                $variables['outline_id'],
+                $variables['outline_version'],
+                $variables['outline_source'],
+                $variables['outline_marker_found'],
+                $variables['writing_instructions_marker_found'],
+                $variables['artifact_version'],
+                $variables['artifact_hash'],
+            );
 
             $taskSiteId = (int) ($task->site_id ?? 0);
             if ($context->siteId === null && $taskSiteId > 0) {

@@ -206,6 +206,12 @@
                         <span class="cp-ops-menu__label">{{ __('seo-content-ai::filament.projects.item_action_regen_article') }}</span>
                     </button>
                 @endif
+                @if ($a['debug_rerun_from_start'])
+                    <button role="menuitem" type="button" wire:click="rerunOne({{ $tid }})" wire:confirm="{{ __('seo-content-ai::filament.projects.item_action_rerun_from_start_confirm') }}" @click="open = false" class="{{ $itemClass }}" title="Debug rerun from start">
+                        <x-filament::icon icon="heroicon-o-arrow-path-rounded-square" class="cp-ops-menu__icon" />
+                        <span class="cp-ops-menu__label">Debug rerun from start</span>
+                    </button>
+                @endif
                 @if ($a['run_again'])
                     <button role="menuitem" type="button" wire:click="rerunOne({{ $tid }})" wire:confirm="{{ __('seo-content-ai::filament.projects.item_action_rerun_from_start_confirm') }}" @click="open = false" class="{{ $itemClass }}" title="{{ __('seo-content-ai::filament.projects.item_action_rerun_from_start') }}">
                         <x-filament::icon icon="heroicon-o-arrow-path-rounded-square" class="cp-ops-menu__icon" />

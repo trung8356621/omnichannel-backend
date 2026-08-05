@@ -89,6 +89,20 @@ final class ArticleMetaAndSeoScoreContractTest extends TestCase
         ) ?: '');
     }
 
+    public function test_seo_meta_action_requeues_workspace_score_after_meta_change(): void
+    {
+        $source = file_get_contents(
+            dirname(__DIR__, 2).'/Automation/Actions/Article/UpdateArticleSeoMetaAction.php'
+        );
+
+        self::assertIsString($source);
+        self::assertStringContainsString('SeoArticleScoringQueueService', $source);
+        self::assertStringContainsString('dispatchForArticle($fresh, force: true)', $source);
+        self::assertStringContainsString('\'seo_analysis_pending\' => $scoringQueued', $source);
+        self::assertStringContainsString('\'seo_scoring_queued\' => $scoringQueued', $source);
+        self::assertStringNotContainsString("'seo_analysis_pending' => false", $source);
+    }
+
     public function test_js_preview_api_and_live_saved_labels_exist(): void
     {
         $api = file_get_contents(

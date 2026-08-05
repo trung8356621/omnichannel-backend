@@ -6,7 +6,6 @@
     $active = $this->stateFilter;
     $project = $this->project;
     $hasProject = $project instanceof \App\Addons\SeoContentAi\Models\SeoProject;
-    $projects = $this->selectableProjects;
     $selectedCount = count($this->selectedTaskIds);
     $pageCount = count($rows);
     $filteredTotal = (int) ($stats['total'] ?? $pageCount);
@@ -61,21 +60,6 @@
         wire:poll.30s="refreshQueueHealth"
     >
         <div class="flex flex-wrap items-center gap-2">
-            <label class="text-xs font-medium text-gray-500 dark:text-gray-400" for="pq-hub-project">
-                {{ __('seo-content-ai::filament.projects.publishing_queue_hub_select_project') }}
-            </label>
-            <x-select id="pq-hub-project" wire:model.live="projectId" class="!w-64">
-                <option value="">{{ __('seo-content-ai::filament.projects.publishing_queue_hub_all_projects') }}</option>
-                @foreach ($projects as $p)
-                    <option value="{{ $p['id'] }}">{{ $p['name'] }}</option>
-                @endforeach
-            </x-select>
-            @unless ($hasProject)
-                <span class="text-xs text-gray-500 dark:text-gray-400">
-                    {{ __('seo-content-ai::filament.projects.publishing_queue_hub_actions_disabled_hint') }}
-                </span>
-            @endunless
-
             <span
                 class="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] font-medium text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
                 title="{{ __('seo-content-ai::filament.projects.publishing_queue_timezone_tooltip') }}"
@@ -130,7 +114,7 @@
             :active="$active"
             wire-method="applyStateFilter"
             aria-label="Publishing Queue summary"
-            loading-targets="applyStateFilter,clearFilters,search,projectId,stateFilter"
+            loading-targets="applyStateFilter,clearFilters,search,stateFilter"
         />
         @unless ($invariantOk)
             <div class="rounded-lg border border-danger-300 bg-danger-50 px-3 py-2 text-xs text-danger-800 dark:border-danger-500/40 dark:bg-danger-500/10 dark:text-danger-200" role="alert">
@@ -147,7 +131,7 @@
             @endif
             <x-seo-content-ai::content-project-filter-toolbar variant="publishing_queue" />
 
-                    @if ($hasProject)
+            @if ($hasProject)
                 <div class="mt-3 flex flex-wrap items-center gap-2">
                     <div class="inline-flex overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
                         <button
@@ -174,28 +158,29 @@
                     </div>
                 </div>
 
-                @if ($selectedCount > 0 && $selectedCount >= $pageCount && $pageCount > 0 && ! $this->selectAllMatching && $filteredTotal > $pageCount)
-                    <div class="mt-2 rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm dark:border-primary-500/30 dark:bg-primary-500/10">
-                        Đã chọn {{ $pageCount }} bài trên trang này.
-                        <button type="button" wire:click="selectAllMatchingResults" class="font-semibold text-primary-700 hover:underline dark:text-primary-300">
-                            Chọn toàn bộ {{ $filteredTotal }} bài phù hợp.
-                        </button>
-                    </div>
-                @endif
-
-                <x-seo-content-ai::content-project-bulk-selection-toolbar
-                    variant="publishing_queue"
-                    :selected-count="$selectedCount"
-                    :timezone-label="$tz"
-                />
             @endif
+
+            @if ($selectedCount > 0 && $selectedCount >= $pageCount && $pageCount > 0 && ! $this->selectAllMatching && $filteredTotal > $pageCount)
+                <div class="mt-2 rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm dark:border-primary-500/30 dark:bg-primary-500/10">
+                    Đã chọn {{ $pageCount }} bài trên trang này.
+                    <button type="button" wire:click="selectAllMatchingResults" class="font-semibold text-primary-700 hover:underline dark:text-primary-300">
+                        Chọn toàn bộ {{ $filteredTotal }} bài phù hợp.
+                    </button>
+                </div>
+            @endif
+
+            <x-seo-content-ai::content-project-bulk-selection-toolbar
+                variant="publishing_queue"
+                :selected-count="$selectedCount"
+                :timezone-label="$tz"
+            />
         </div>
 
         <x-seo-content-ai::content-project-items-list
             variant="publishing_queue"
             :rows="$rows"
             :has-active-filters="$hasActiveFilters"
-            :show-checkbox="$hasProject"
+            :show-checkbox="true"
             :use-row-visibility="false"
             :selected-ids="$this->selectedTaskIds"
             :pending-task-ids="$this->pendingTaskIds"

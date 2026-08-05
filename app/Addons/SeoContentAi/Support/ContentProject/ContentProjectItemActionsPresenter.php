@@ -25,6 +25,7 @@ use App\Addons\SeoContentAi\Support\PublishingQueue\PublishingQueueHandoffEligib
  *     regen_article: bool,
  *     regen_image: bool,
  *     retry_failed_step: bool,
+ *     debug_rerun_from_start: bool,
  *     acknowledge_error: bool,
  *     prefer_acknowledge_error: bool,
  *     skip_generation: bool,
@@ -98,6 +99,7 @@ final class ContentProjectItemActionsPresenter
         $regenArticle = $canRegen && ! $generationBlocked;
         $regenImage = $canRegen && $hasArticle && ! $generationBlocked;
         $retryFailed = $genKey === 'failed' && $canRegen && ! $generationBlocked;
+        $debugRerunFromStart = $canRegen && ! $runAgain && ! $isImprove && ! $isGenuineRunning && ! $generationBlocked;
         $improveNote = $isImprove;
         $message = trim((string) ($row['message'] ?? ''));
         $acknowledgeError = (! $isGenuineRunning)
@@ -159,7 +161,7 @@ final class ContentProjectItemActionsPresenter
         $debugToPublished = $debugEnabled && in_array($lifecycleBucket, ['approved', 'scheduled'], true);
 
         $hasContent = $openArticle || $generate || $runAgain || $stopGeneration || $resumeGeneration
-            || $regenOutline || $regenArticle || $regenImage || $retryFailed || $improveNote
+            || $regenOutline || $regenArticle || $regenImage || $retryFailed || $debugRerunFromStart || $improveNote
             || $acknowledgeError || $skipGeneration || $allowGeneration;
         $hasReview = $startReview || $approve;
         $hasPublishing = $sendToPublishingQueue;
@@ -176,6 +178,7 @@ final class ContentProjectItemActionsPresenter
             'regen_article' => $regenArticle,
             'regen_image' => $regenImage,
             'retry_failed_step' => $retryFailed,
+            'debug_rerun_from_start' => $debugRerunFromStart,
             'acknowledge_error' => $acknowledgeError,
             'prefer_acknowledge_error' => $preferAcknowledgeError,
             'skip_generation' => $skipGeneration,
@@ -232,6 +235,7 @@ final class ContentProjectItemActionsPresenter
         $flags['regen_article'] = false;
         $flags['regen_image'] = false;
         $flags['retry_failed_step'] = false;
+        $flags['debug_rerun_from_start'] = false;
         $flags['skip_generation'] = false;
         $flags['allow_generation'] = false;
         $flags['start_review'] = false;

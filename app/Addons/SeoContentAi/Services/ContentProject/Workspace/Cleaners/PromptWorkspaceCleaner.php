@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\Models\SeoPromptResult;
 use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
 use App\Addons\SeoContentAi\Services\ContentProject\Workspace\ContentProjectWorkspaceCleanupContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Workspace\Contracts\ContentProjectWorkspaceCleaner;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Dọn Prompt History / Prompt Result gắn project.
@@ -63,7 +64,7 @@ final class PromptWorkspaceCleaner implements ContentProjectWorkspaceCleaner
             $context->bumpStat('prompt_result_links_deleted', (int) $deletedLinks);
         }
 
-        if ($context->hasArticles()) {
+        if ($context->hasArticles() && Schema::connection('omi_seo_ai')->hasColumn('articles', 'prompt_result_id')) {
             $legacyIds = SeoArticle::query()
                 ->whereIn('id', $context->articleIds())
                 ->whereNotNull('prompt_result_id')

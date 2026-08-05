@@ -163,18 +163,6 @@ final class PublishingQueueHub extends SeoPanelPage
     }
 
     /**
-     * @return list<array{id: int, name: string}>
-     */
-    public function getSelectableProjectsProperty(): array
-    {
-        return SeoProjectResource::getRecordRouteBindingEloquentQuery()
-            ->orderBy('name')
-            ->get(['id', 'name'])
-            ->map(static fn (SeoProject $p): array => ['id' => (int) $p->getKey(), 'name' => (string) $p->name])
-            ->all();
-    }
-
-    /**
      * @return array{stats: array<string, int>, rows: list<array<string, mixed>>}
      */
     public function getQueuePayloadProperty(): array
@@ -401,6 +389,89 @@ final class PublishingQueueHub extends SeoPanelPage
                 (int) $this->requireProject()->getKey(),
                 $this->selectedItemIds(),
             ), 'return_to_content_project');
+        });
+    }
+
+    public function bulkSchedule(?string $at = null): void
+    {
+        $this->withProjectFromItems($this->selectedItemIds(), function () use ($at): void {
+            $when = $at !== null && $at !== ''
+                ? SystemDateTime::parseSystemInputToUtc($at)
+                : SystemDateTime::currentSystemTime()->addHour()->utc();
+
+            $this->dispatchPublishingCommand(new ScheduleProjectItemsCommand(
+                (int) $this->requireProject()->getKey(),
+                $this->selectedItemIds(),
+                $when,
+            ), 'schedule');
+        });
+    }
+
+    public function bulkScheduleInMinutes(int $minutes): void
+    {
+        $this->withProjectFromItems($this->selectedItemIds(), function () use ($minutes): void {
+            $minutes = max(1, min(24 * 60, $minutes));
+            $this->dispatchPublishingCommand(new ScheduleProjectItemsCommand(
+                (int) $this->requireProject()->getKey(),
+                $this->selectedItemIds(),
+                SystemDateTime::currentSystemTime()->addMinutes($minutes)->utc(),
+            ), 'schedule');
+        });
+    }
+
+    public function bulkScheduleTomorrowMorning(): void
+    {
+        $this->withProjectFromItems($this->selectedItemIds(), function (): void {
+            $when = SystemDateTime::currentSystemTime()
+                ->addDay()
+                ->setTime(9, 0, 0)
+                ->utc();
+
+            $this->dispatchPublishingCommand(new ScheduleProjectItemsCommand(
+                (int) $this->requireProject()->getKey(),
+                $this->selectedItemIds(),
+                $when,
+            ), 'schedule');
+        });
+    }
+
+    public function bulkUnschedule(): void
+    {
+        $this->withProjectFromItems($this->selectedItemIds(), function (): void {
+            $this->dispatchPublishingCommand(new UnscheduleProjectItemsCommand(
+                (int) $this->requireProject()->getKey(),
+                $this->selectedItemIds(),
+            ), 'unschedule');
+        });
+    }
+
+    public function bulkPublishNow(): void
+    {
+        $this->withProjectFromItems($this->selectedItemIds(), function (): void {
+            $this->dispatchPublishingCommand(new \App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\PublishProjectItemsNowCommand(
+                (int) $this->requireProject()->getKey(),
+                $this->selectedItemIds(),
+            ), 'publish_now');
+        });
+    }
+
+    public function bulkRetryPublish(): void
+    {
+        $this->withProjectFromItems($this->selectedItemIds(), function (): void {
+            $this->dispatchPublishingCommand(new \App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RetryProjectItemPublishingCommand(
+                (int) $this->requireProject()->getKey(),
+                $this->selectedItemIds(),
+            ), 'retry');
+        });
+    }
+
+    public function bulkCancelPublish(): void
+    {
+        $this->withProjectFromItems($this->selectedItemIds(), function (): void {
+            $this->dispatchPublishingCommand(new \App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CancelProjectItemPublishingCommand(
+                (int) $this->requireProject()->getKey(),
+                $this->selectedItemIds(),
+            ), 'cancel');
         });
     }
 

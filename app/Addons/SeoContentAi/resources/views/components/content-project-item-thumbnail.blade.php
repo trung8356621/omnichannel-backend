@@ -1,6 +1,6 @@
 @props([
     'row' => [],
-    'size' => 'w-10 h-10',
+    'size' => 'w-12 h-12',
 ])
 
 @php
@@ -12,7 +12,7 @@
     $noImageLabel = __('seo-content-ai::filament.projects.ops_no_featured_image');
 @endphp
 
-<div {{ $attributes->class(['w-10 shrink-0']) }}>
+<div {{ $attributes->class(['w-12 shrink-0']) }}>
     <div @class([$size, 'overflow-hidden rounded-md border border-gray-200 bg-gray-100 dark:border-gray-700 dark:bg-gray-800'])>
         @if ($hasImage)
             @if ($editUrl)

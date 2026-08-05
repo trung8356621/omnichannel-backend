@@ -131,6 +131,7 @@ final class SiteSyncStatusPresenter
         }
 
         $errorMessage = trim((string) ($run->error_message ?? ''));
+        $meta = is_array($run->meta) ? $run->meta : [];
         $scoringProgress = $this->safeScoringProgress((int) $site->id);
         $scoringContext = $this->scoringContextMessage(
             (string) $run->status,
@@ -162,6 +163,7 @@ final class SiteSyncStatusPresenter
             'phase' => (string) ($run->current_step ?? ''),
             'public_ref' => (string) $run->public_ref,
             'run_id' => (int) $run->id,
+            'last_progress_at' => (string) ($meta['last_progress_at'] ?? optional($run->updated_at)?->toIso8601String()),
             'counters' => $counters,
             'warnings' => array_values(array_unique($warnings)),
             'capability_sources' => $sources,
@@ -390,6 +392,10 @@ final class SiteSyncStatusPresenter
             $updated = (int) ($counters['updated'] ?? 0);
             $unchanged = (int) ($counters['unchanged'] ?? 0);
             $failed = (int) ($counters['failed'] ?? 0);
+
+            if ($total === 0 && $checked === 0) {
+                return 'Đang kiểm tra dữ liệu WordPress…';
+            }
 
             return sprintf(
                 'Chế độ: Đồng bộ lại toàn bộ website · Tổng cần kiểm tra: %s · Đã kiểm tra: %s · Có thay đổi: %s · Không thay đổi: %s · Thất bại: %s',

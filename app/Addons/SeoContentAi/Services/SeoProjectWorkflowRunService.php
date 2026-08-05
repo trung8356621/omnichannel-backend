@@ -643,9 +643,14 @@ final class SeoProjectWorkflowRunService
         $fromStepRaw = $runSettings['rerun_from_step'] ?? null;
         $fromStep = \App\Addons\SeoContentAi\Enums\ContentProjectRerunFromStep::tryFromMixed($fromStepRaw);
         $includeDownstream = (bool) ($runSettings['rerun_include_downstream'] ?? false);
+        $cleanRestart = $fromStep === null || (bool) ($runSettings['rerun'] ?? false);
 
         try {
-            $context = $this->inputResolver->resolveForProjectTask($task, $scope);
+            $context = $this->inputResolver->resolveForProjectTask(
+                $task,
+                $scope,
+                cleanRestart: $cleanRestart,
+            );
 
             Log::info('seo.project_run.task.start', [
                 'run_id' => (int) $run->id,

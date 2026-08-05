@@ -12,7 +12,9 @@ use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RunSiteSyncCo
 use App\Addons\SeoContentAi\Services\SiteSync\Application\Handlers\SiteSyncCommandHandler;
 use App\Addons\SeoContentAi\Services\SiteSync\Contracts\SiteSyncBatchData;
 use App\Addons\SeoContentAi\Services\SiteSync\Contracts\SiteSyncSchema;
+use App\Addons\SeoContentAi\Services\SiteSync\Inbound\SiteSyncStagingWriter;
 use App\Addons\SeoContentAi\Services\SiteSync\Orchestration\RunSiteSyncOrchestrator;
+use App\Addons\SeoContentAi\Services\SiteSync\Orchestration\SiteSyncStepClaimResult;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use ReflectionMethod;
@@ -107,6 +109,31 @@ final class SiteSyncV2ForceFullFreezeTest extends TestCase
         self::assertStringContainsString("include_unchanged' => true", $src);
         self::assertStringContainsString('never modified-since', $src);
         self::assertStringContainsString('total_to_check', $src);
+        self::assertStringContainsString('SiteSyncStepClaimResult::Claimed', $src);
+        self::assertStringContainsString('Force full sync discovered zero WordPress records', $src);
+    }
+
+    public function test_force_full_batches_are_attempt_scoped(): void
+    {
+        $src = (string) file_get_contents(
+            (new ReflectionClass(SiteSyncStagingWriter::class))->getFileName()
+        );
+
+        self::assertStringContainsString('bool $attemptScoped = false', $src);
+        self::assertStringContainsString("'|run:'.\$runId", $src);
+
+        $runner = (string) file_get_contents(
+            (new ReflectionClass(\App\Addons\SeoContentAi\Services\SiteSync\Orchestration\SiteSyncStepRunner::class))->getFileName()
+        );
+        self::assertStringContainsString('$this->staging->stage($site, $batch, (int) $run->id, $forceFull)', $runner);
+    }
+
+    public function test_step_claim_result_is_explicit(): void
+    {
+        self::assertSame('claimed', SiteSyncStepClaimResult::Claimed->value);
+        self::assertSame('already_completed', SiteSyncStepClaimResult::AlreadyCompleted->value);
+        self::assertSame('invalid_run_state', SiteSyncStepClaimResult::InvalidRunState->value);
+        self::assertSame('tenant_mismatch', SiteSyncStepClaimResult::TenantMismatch->value);
     }
 
     public function test_command_bus_registers_force_full(): void

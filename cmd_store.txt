@@ -38,4 +38,7 @@ php artisan database:cleanup-misplaced-tables --execute --force
 
 
 # deloy code after cursor start
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".secure\deploy-diff.ps1" -Mode track -Id "<DEPLOY_ID>" -Action deleted -Path "<OLD_FILE_PATH>"
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File ".secure\deploy-diff.ps1" `
+  -Mode deploy `
+  -Id "publishing-queue-bu" -Mode track -Id "publishing-queue-bulk-ui" -Deloy

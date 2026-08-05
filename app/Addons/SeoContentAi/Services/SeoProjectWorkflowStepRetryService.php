@@ -553,6 +553,8 @@ final class SeoProjectWorkflowStepRetryService
                 function ($builder) use ($projectSiteId): void {
                     $builder->where('site_id', $projectSiteId);
                 },
+                cleanRestart: SeoProjectTask::normalizeType((string) ($task->type ?? '')) === SeoProjectTask::TYPE_REWRITE
+                    && in_array((string) ($stepMeta['kind'] ?? ''), ['outline', 'content'], true),
             );
 
             if (! $context->article instanceof SeoArticle && (int) ($task->article_id ?? 0) > 0) {

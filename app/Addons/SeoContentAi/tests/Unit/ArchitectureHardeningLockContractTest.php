@@ -42,11 +42,13 @@ final class ArchitectureHardeningLockContractTest extends TestCase
 
     public function test_site_sync_and_agent_jobs_are_unique(): void
     {
-        self::assertTrue(is_a(ProcessSiteSyncStepJob::class, ShouldBeUnique::class, true));
+        self::assertFalse(
+            is_a(ProcessSiteSyncStepJob::class, ShouldBeUnique::class, true),
+            'Step continuation jobs must not share a run-level unique lock; a running job dispatches the next step before its lock would be released.'
+        );
         self::assertTrue(is_a(ProcessSiteSyncInboundEventJob::class, ShouldBeUnique::class, true));
         self::assertTrue(is_a(RunAgentAutomationJob::class, ShouldBeUnique::class, true));
 
-        self::assertSame('site-sync-step:42', (new ProcessSiteSyncStepJob(42))->uniqueId());
         self::assertSame('site-sync-inbound-event:7', (new ProcessSiteSyncInboundEventJob(7))->uniqueId());
         self::assertSame('agent-automation-run:9', (new RunAgentAutomationJob(9))->uniqueId());
     }

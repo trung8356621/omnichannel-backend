@@ -14,6 +14,7 @@ use App\Addons\SeoContentAi\Services\SiteSync\Application\Commands\RetryFailedSe
 use App\Addons\SeoContentAi\Services\SiteSync\Contracts\SiteSyncSchema;
 use App\Addons\SeoContentAi\Services\SiteSync\Orchestration\SiteSyncStepRunner;
 use App\Addons\SeoContentAi\Services\SiteSync\Presentation\SiteSyncStatusPresenter;
+use App\Addons\SeoContentAi\Services\SyncDomainContentService;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 
@@ -37,7 +38,21 @@ final class SiteSyncV2ScorePipelineFreezeTest extends TestCase
         self::assertStringContainsString("'score_missing_articles'", $src);
         self::assertStringContainsString('queueMissingOrStaleForSite', $src);
         self::assertStringContainsString('__defer_step', $src);
+        self::assertStringContainsString('$polls >= 6', $src);
         self::assertStringContainsString('completed_with_warnings', $src);
+    }
+
+    public function test_wordpress_sync_import_scores_each_item_with_php_engine(): void
+    {
+        $src = (string) file_get_contents((new ReflectionClass(SyncDomainContentService::class))->getFileName());
+
+        self::assertStringContainsString('scoreSyncedItemWithPhp', $src);
+        self::assertStringContainsString('analyzeFromSyncItem', $src);
+        self::assertStringContainsString('markCompleted', $src);
+        self::assertMatchesRegularExpression(
+            '/syncSeoMetaFromWordPress\(\$article, \$item\);[\s\S]*?scoreSyncedItemWithPhp\(\$article, \$item\);/',
+            $src,
+        );
     }
 
     public function test_scoring_service_exposes_missing_or_stale(): void

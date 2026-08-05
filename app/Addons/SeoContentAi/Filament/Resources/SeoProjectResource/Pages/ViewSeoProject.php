@@ -14,6 +14,7 @@ use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ApproveProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemStepCommand;
@@ -23,6 +24,8 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\BlockPr
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\DebugOverrideProjectItemLifecycleCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UnblockProjectItemGenerationCommand;
+use App\Addons\SeoContentAi\Services\ArchiveContentProjectService;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResultNotifier;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectPublicRef;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceDeepLink;
@@ -38,6 +41,7 @@ use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Support\RuntimeLogger;
 use Carbon\Carbon;
 use Filament\Actions;
+use Filament\Forms;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Page;
 use Illuminate\Contracts\Support\Htmlable;
@@ -541,13 +545,108 @@ final class ViewSeoProject extends Page
                 ->color('gray')
                 ->action(fn () => $this->settingsOpen = ! $this->settingsOpen),
             Actions\ActionGroup::make([
+                Actions\Action::make('archive_project')
+                    ->label(__('seo-content-ai::filament.projects.archive_project'))
+                    ->icon('heroicon-o-archive-box')
+                    ->color('danger')
+                    ->requiresConfirmation()
+                    ->visible(fn (): bool => SeoAccessControl::canArchiveContentProjects())
+                    ->disabled(function () use ($project): bool {
+                        if ($project->isProjectArchived()) {
+                            return true;
+                        }
+
+                        $gate = app(ArchiveContentProjectService::class)->archiveGate($project);
+
+                        return ! (bool) ($gate['can_archive'] ?? false);
+                    })
+                    ->tooltip(function () use ($project): ?string {
+                        if ($project->isProjectArchived()) {
+                            return 'Project already archived.';
+                        }
+
+                        $gate = app(ArchiveContentProjectService::class)->archiveGate($project);
+
+                        return (bool) ($gate['can_archive'] ?? false) ? null : (string) ($gate['blocked_reason'] ?? '');
+                    })
+                    ->modalHeading(fn (): string => __('seo-content-ai::filament.projects.archive_project_heading_named', [
+                        'name' => (string) $project->name,
+                    ]))
+                    ->modalDescription(function () use ($project): HtmlString {
+                        $summary = app(ArchiveContentProjectService::class)->buildSummary($project);
+                        $gate = app(ArchiveContentProjectService::class)->archiveGate($project);
+
+                        return new HtmlString(view('seo-content-ai::filament.resources.seo-project-resource.partials.archive-project-modal-summary', [
+                            'summary' => $summary,
+                            'gate' => $gate,
+                        ])->render());
+                    })
+                    ->modalSubmitActionLabel(__('seo-content-ai::filament.projects.archive_project_submit'))
+                    ->form(function () use ($project): array {
+                        $gate = app(ArchiveContentProjectService::class)->archiveGate($project);
+                        $fields = [
+                            Forms\Components\Textarea::make('note')
+                                ->label(__('seo-content-ai::filament.projects.archive_note'))
+                                ->placeholder(__('seo-content-ai::filament.projects.archive_note_placeholder'))
+                                ->rows(2)
+                                ->maxLength(500),
+                        ];
+
+                        if ($gate['requires_waiting_publish_confirm']) {
+                            $fields[] = Forms\Components\Checkbox::make('confirm_waiting_publish')
+                                ->label(__('seo-content-ai::filament.projects.archive_waiting_publish_confirm', [
+                                    'count' => $gate['waiting_publish'],
+                                ]))
+                                ->rule('accepted')
+                                ->required();
+                        }
+
+                        return $fields;
+                    })
+                    ->action(function (array $data) use ($project): void {
+                        try {
+                            abort_unless(SeoAccessControl::canArchiveContentProjects(), 403);
+                            abort_unless(SeoAccessControl::canAccessSite((int) ($project->site_id ?? 0)), 403);
+
+                            $result = app(ContentProjectCommandBus::class)->dispatch(
+                                new ArchiveContentProjectCommand(
+                                    (int) $project->getKey(),
+                                    isset($data['note']) ? (string) $data['note'] : null,
+                                    (bool) ($data['confirm_waiting_publish'] ?? false),
+                                ),
+                                ActorContext::user(
+                                    auth()->id() !== null ? (int) auth()->id() : null,
+                                    (int) ($project->site_id ?? 0) ?: null,
+                                ),
+                            );
+
+                            app(ContentProjectActionResultNotifier::class)->send($result);
+                            $this->project = null;
+                            $this->cachedOperationsPayload = null;
+                            $this->cachedOperationsKey = '';
+                            $this->opsTableEpoch++;
+                        } catch (Throwable $exception) {
+                            RuntimeLogger::report($exception, [
+                                'endpoint' => 'content_project.archive',
+                                'project_id' => (int) $project->getKey(),
+                            ]);
+
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.projects.archive_failed'))
+                                ->body($exception->getMessage())
+                                ->danger()
+                                ->send();
+                        }
+                    }),
                 SeoProjectResource::makeDevTestGeneratePendingItemsAction($project),
             ])
                 ->label('More')
                 ->icon('heroicon-m-ellipsis-vertical')
                 ->color('gray')
                 ->button()
-                ->visible(fn (): bool => SeoProjectResource::allowsDevTestGenerateUi()),
+                ->visible(fn (): bool => (
+                    SeoAccessControl::canArchiveContentProjects()
+                ) || SeoProjectResource::allowsDevTestGenerateUi()),
         ];
     }
 

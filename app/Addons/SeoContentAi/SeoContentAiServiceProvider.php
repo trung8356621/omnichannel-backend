@@ -679,6 +679,7 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 \App\Addons\SeoContentAi\Console\InstallDefaultProductGalleryPromptsCommand::class,
                 \App\Addons\SeoContentAi\Console\ProductGalleryCanaryFixtureCommand::class,
                 \App\Addons\SeoContentAi\Console\RepairContentProjectCommand::class,
+                \App\Addons\SeoContentAi\Console\RepairLegacyContentProjectGenerationCommand::class,
                 \App\Addons\SeoContentAi\Console\CleanupContentProjectAgentSessionsCommand::class,
                 \App\Addons\SeoContentAi\Console\CleanupContentProjectAgentPlansCommand::class,
                 \App\Addons\SeoContentAi\Console\RepairContentProjectMonthDriftCommand::class,

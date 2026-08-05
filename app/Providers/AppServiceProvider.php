@@ -106,6 +106,10 @@ class AppServiceProvider extends ServiceProvider
             return;
         }
 
+        $this->commands([
+            \App\Addons\SeoContentAi\Console\RepairLegacyContentProjectGenerationCommand::class,
+        ]);
+
         // Collision owns `php artisan test` when require-dev is installed.
         if (class_exists(\NunoMaduro\Collision\Adapters\Laravel\Commands\TestCommand::class)) {
             return;

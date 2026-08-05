@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services\SiteSync\Orchestration;
 
 use App\Addons\SeoContentAi\Jobs\SiteSync\ProcessSiteSyncStepJob;
+use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SiteSync\SeoSiteLinkCatalog;
 use App\Addons\SeoContentAi\Models\SiteSync\SeoSiteSyncBatch;
 use App\Addons\SeoContentAi\Models\SiteSync\SeoSiteSyncRun;
@@ -36,12 +37,20 @@ final class SiteSyncStepRunner
 
     public function runNext(int $runId, bool $dispatchContinue = true): void
     {
+        $started = microtime(true);
         $run = SeoSiteSyncRun::query()->with('steps')->find($runId);
         if ($run === null) {
+            RuntimeLogger::warning('site_sync.step_claim_rejected', [
+                'run_id' => $runId,
+                'claim_result' => SiteSyncStepClaimResult::MissingRun->value,
+            ]);
+
             return;
         }
 
         if (in_array($run->status, ['completed', 'cancelled', 'canceled'], true)) {
+            $this->persistClaimResult($run, null, SiteSyncStepClaimResult::AlreadyCompleted);
+
             return;
         }
 
@@ -57,6 +66,7 @@ final class SiteSyncStepRunner
 
         $site = CoreSite::query()->find((int) $run->site_id);
         if ($site === null) {
+            $this->persistClaimResult($run, null, SiteSyncStepClaimResult::MissingRun, 'Site not found');
             $run->forceFill([
                 'status' => 'failed',
                 'error_message' => 'Site not found',
@@ -73,6 +83,7 @@ final class SiteSyncStepRunner
             ->first();
 
         if ($step === null) {
+            $this->persistClaimResult($run, null, SiteSyncStepClaimResult::AlreadyCompleted);
             $run->forceFill([
                 'status' => 'completed',
                 'current_step' => 'finalize',
@@ -83,6 +94,8 @@ final class SiteSyncStepRunner
             return;
         }
 
+        $this->persistClaimResult($run, $step, SiteSyncStepClaimResult::Claimed);
+
         $run->forceFill([
             'status' => 'running',
             'current_step' => $step->step_key,
@@ -91,10 +104,22 @@ final class SiteSyncStepRunner
         $step->forceFill([
             'status' => 'running',
             'started_at' => $step->started_at ?? now(),
+            'attempt_count' => (int) ($step->attempt_count ?? 0) + 1,
             'error_message' => null,
         ])->save();
 
         try {
+            RuntimeLogger::warning('site_sync.step_started', [
+                'run_id' => $runId,
+                'domain_id' => (int) $site->id,
+                'tenant_id' => (int) ($site->user_id ?? 0),
+                'step' => (string) $step->step_key,
+                'attempt' => (int) $step->attempt_count,
+                'mode' => (string) $run->mode,
+                'force_full' => (bool) ((is_array($run->meta) ? $run->meta : [])['force_full'] ?? false),
+                'claim_result' => SiteSyncStepClaimResult::Claimed->value,
+            ]);
+
             $metrics = $this->executeStep($site, $run, (string) $step->step_key);
 
             if (! empty($metrics['__defer_step'])) {
@@ -119,7 +144,7 @@ final class SiteSyncStepRunner
 
                 $delaySeconds = max(5, (int) ($metrics['defer_seconds'] ?? 20));
                 if ($dispatchContinue) {
-                    ProcessSiteSyncStepJob::dispatch($runId)->delay(now()->addSeconds($delaySeconds));
+                    ProcessSiteSyncStepJob::dispatch($runId)->delay(now()->addSeconds($delaySeconds))->afterCommit();
                 }
 
                 return;
@@ -181,10 +206,25 @@ final class SiteSyncStepRunner
             }
 
             if ($dispatchContinue) {
-                ProcessSiteSyncStepJob::dispatch($runId);
+                ProcessSiteSyncStepJob::dispatch($runId)->afterCommit();
             } else {
                 $this->runNext($runId, false);
             }
+
+            RuntimeLogger::warning('site_sync.step_completed', [
+                'run_id' => $runId,
+                'domain_id' => (int) $site->id,
+                'tenant_id' => (int) ($site->user_id ?? 0),
+                'step' => (string) $step->step_key,
+                'attempt' => (int) $step->attempt_count,
+                'mode' => (string) $run->mode,
+                'force_full' => (bool) ((is_array($run->meta) ? $run->meta : [])['force_full'] ?? false),
+                'metrics' => $metrics,
+                'next_step' => (string) $next->step_key,
+                'next_job_dispatched' => $dispatchContinue,
+                'duration_ms' => (int) round((microtime(true) - $started) * 1000),
+                'business_outcome' => 'step_completed_continue',
+            ]);
         } catch (Throwable $e) {
             RuntimeLogger::warning('site_sync.step_failed', [
                 'run_id' => $runId,
@@ -204,6 +244,40 @@ final class SiteSyncStepRunner
 
             $this->notifySiteSyncFailed($run, $e->getMessage());
         }
+    }
+
+    private function persistClaimResult(
+        SeoSiteSyncRun $run,
+        ?SeoSiteSyncRunStep $step,
+        SiteSyncStepClaimResult $result,
+        ?string $message = null,
+    ): void {
+        $meta = is_array($run->meta) ? $run->meta : [];
+        $meta['last_claim_result'] = $result->value;
+        $meta['last_progress_at'] = now()->toIso8601String();
+        if ($message !== null) {
+            $meta['last_claim_message'] = $message;
+        }
+        $run->meta = $meta;
+        $run->save();
+
+        if ($step !== null) {
+            $checkpoint = is_array($step->checkpoint) ? $step->checkpoint : [];
+            $checkpoint['claim_result'] = $result->value;
+            $checkpoint['claimed_at'] = now()->toIso8601String();
+            if ($message !== null) {
+                $checkpoint['claim_message'] = $message;
+            }
+            $step->forceFill(['checkpoint' => $checkpoint])->save();
+        }
+
+        RuntimeLogger::warning('site_sync.step_claim_result', [
+            'run_id' => (int) $run->id,
+            'site_id' => (int) $run->site_id,
+            'step' => $step?->step_key,
+            'claim_result' => $result->value,
+            'message' => $message,
+        ]);
     }
 
     /**
@@ -297,7 +371,7 @@ final class SiteSyncStepRunner
         }
 
         $batch = $result['batch'];
-        $staged = $this->staging->stage($site, $batch, (int) $run->id);
+        $staged = $this->staging->stage($site, $batch, (int) $run->id, $forceFull);
 
         $batchIds = is_array($meta['batch_ids'] ?? null) ? $meta['batch_ids'] : [];
         $batchIds[] = (int) $staged->id;
@@ -320,6 +394,13 @@ final class SiteSyncStepRunner
         $run->cursor = $batch->cursor;
         $run->save();
 
+        if ($forceFull && $totalFromWp === 0 && $fetched === 0) {
+            $localArticles = SeoArticle::query()->where('site_id', (int) $site->id)->count();
+            if ($localArticles > 0) {
+                throw new \RuntimeException("Force full sync discovered zero WordPress records while {$localArticles} local articles exist.");
+            }
+        }
+
         // Keep pulling while has_more for force_full / snapshot within this step budget.
         $loops = 0;
         while (($forceFull || $run->mode === SiteSyncSchema::MODE_SNAPSHOT) && $batch->hasMore && $loops < 40) {
@@ -338,7 +419,7 @@ final class SiteSyncStepRunner
                 break;
             }
             $batch = $more['batch'];
-            $staged = $this->staging->stage($site, $batch, (int) $run->id);
+            $staged = $this->staging->stage($site, $batch, (int) $run->id, $forceFull);
             $meta = is_array($run->meta) ? $run->meta : [];
             $batchIds = is_array($meta['batch_ids'] ?? null) ? $meta['batch_ids'] : [];
             $batchIds[] = (int) $staged->id;
@@ -348,6 +429,10 @@ final class SiteSyncStepRunner
             $fetched = count($batch->articles);
             $counters['fetched'] = (int) ($counters['fetched'] ?? 0) + $fetched;
             $counters['checked'] = (int) ($counters['checked'] ?? 0) + $fetched;
+            $totalFromWp = (int) ($batch->raw['total_count'] ?? 0);
+            if ($forceFull && $totalFromWp > 0) {
+                $counters['total_to_check'] = max((int) ($counters['total_to_check'] ?? 0), $totalFromWp);
+            }
             $run->counters = $counters;
             $run->cursor = $batch->cursor;
             $run->save();
@@ -459,7 +544,7 @@ final class SiteSyncStepRunner
                 break;
             }
             $batchData = $result['batch'];
-            $staged = $this->staging->stage($site, $batchData, (int) $run->id);
+            $staged = $this->staging->stage($site, $batchData, (int) $run->id, $forceFull);
             $counters = $this->reconciler->apply($site, $staged);
             $totals['articles'] += (int) ($counters['articles'] ?? 0);
             $totals['urls_synced'] += (int) ($counters['urls_synced'] ?? 0);
@@ -622,6 +707,23 @@ final class SiteSyncStepRunner
         if ($inFlight > 0) {
             // Worker idle: pending stuck with processing=0 for many polls.
             $waitingWorker = $pending > 0 && $processing === 0 && $polls >= 3;
+            if ($polls >= 6) {
+                return [
+                    'scoring_pending' => $pending,
+                    'scoring_processing' => $processing,
+                    'scoring_failed' => $failed,
+                    'scoring_completed' => $completed,
+                    'workspace_scores_queued' => $queued,
+                    'scoring_waiting_worker' => $waitingWorker ? 1 : 0,
+                    'warnings' => [
+                        sprintf(
+                            'Chấm SEO nền chưa xử lý xong (%d pending, %d processing). Dữ liệu sync đã áp dụng; có thể chạy chấm lại SEO riêng.',
+                            $pending,
+                            $processing,
+                        ),
+                    ],
+                ];
+            }
 
             return [
                 '__defer_step' => true,

@@ -1280,6 +1280,7 @@ class SyncDomainContentService
 
         $this->syncSeoMetaFromWordPress($article, $item);
         $this->syncFocusKeyword($site, $userId, $article, $item);
+        $this->scoreSyncedItemWithPhp($article, $item);
         app(WordPressArticleSyncService::class)->applyMultilingualFromSyncPayload($article, $site, $item);
 
         $syncFlags->clearAll($article);
@@ -1302,6 +1303,29 @@ class SyncDomainContentService
         }
 
         $this->timestampService->sync($article, $item);
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function scoreSyncedItemWithPhp(SeoArticle $article, array $item): void
+    {
+        if (! $article->countsTowardSeoScore()) {
+            return;
+        }
+
+        try {
+            $fresh = $article->fresh(['articleMetas', 'faqs']) ?? $article;
+            app(SeoAnalyzerService::class)->analyzeFromSyncItem($fresh, $item);
+            app(SeoArticleScoringQueueService::class)->markCompleted($fresh->fresh(['articleMetas', 'faqs']) ?? $fresh);
+        } catch (Throwable $e) {
+            Log::warning('SeoContentAi sync item PHP scoring failed', [
+                'article_id' => (int) $article->id,
+                'site_id' => (int) ($article->site_id ?? 0),
+                'wp_id' => (int) ($article->wp_post_id ?? 0),
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
