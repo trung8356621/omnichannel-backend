@@ -27,6 +27,8 @@ use App\Addons\SeoContentAi\Support\PublishingQueue\PublishingQueueHandoffEligib
  *     retry_failed_step: bool,
  *     acknowledge_error: bool,
  *     prefer_acknowledge_error: bool,
+ *     skip_generation: bool,
+ *     allow_generation: bool,
  *     improve_note: bool,
  *     start_review: bool,
  *     approve: bool,
@@ -68,13 +70,15 @@ final class ContentProjectItemActionsPresenter
         $isGenuineRunning = (bool) ($row['is_genuinely_running'] ?? false);
         $hasResumableCheckpoint = (bool) ($row['has_resumable_checkpoint'] ?? false);
         $generationStatus = strtolower((string) ($row['generation_status'] ?? ''));
+        $generationBlocked = ! empty($row['generation_blocked']);
 
         $hasGenerated = in_array($genKey, ['success', 'generated'], true)
             || in_array($lifecycle, ['review', 'approved', 'waiting_publish', 'published'], true);
 
         $openArticle = $hasArticle;
-        $generate = $canGenerate && $genKey === 'pending' && $generationStatus === 'pending';
+        $generate = $canGenerate && $genKey === 'pending' && $generationStatus === 'pending' && ! $generationBlocked;
         $runAgain = (! $isGenuineRunning)
+            && ! $generationBlocked
             && (
                 $isStaleGeneration
                 || $genKey === 'failed'
@@ -88,12 +92,12 @@ final class ContentProjectItemActionsPresenter
         }
 
         $stopGeneration = $isGenuineRunning && ! $isStaleGeneration;
-        $resumeGeneration = $hasResumableCheckpoint && ! $isGenuineRunning && ! $isStaleGeneration;
+        $resumeGeneration = $hasResumableCheckpoint && ! $isGenuineRunning && ! $isStaleGeneration && ! $generationBlocked;
 
-        $regenOutline = $canRegen;
-        $regenArticle = $canRegen;
-        $regenImage = $canRegen && $hasArticle;
-        $retryFailed = $genKey === 'failed' && $canRegen;
+        $regenOutline = $canRegen && ! $generationBlocked;
+        $regenArticle = $canRegen && ! $generationBlocked;
+        $regenImage = $canRegen && $hasArticle && ! $generationBlocked;
+        $retryFailed = $genKey === 'failed' && $canRegen && ! $generationBlocked;
         $improveNote = $isImprove;
         $message = trim((string) ($row['message'] ?? ''));
         $acknowledgeError = (! $isGenuineRunning)
@@ -106,6 +110,17 @@ final class ContentProjectItemActionsPresenter
         $preferAcknowledgeError = $acknowledgeError
             && $hasArticle
             && in_array($lifecycle, ['published', 'approved', 'review', 'waiting_publish'], true);
+
+        $skipGeneration = ! $generationBlocked
+            && ! $isGenuineRunning
+            && (
+                $genKey === 'failed'
+                || $lifecycle === 'failed'
+                || $generationStatus === 'failed'
+                || $message !== ''
+                || ($canGenerate && $generationStatus === 'pending')
+            );
+        $allowGeneration = $generationBlocked && ! $isGenuineRunning;
 
         $startReview = $hasGenerated && in_array($lifecycle, ['draft', 'generating'], true);
         $approve = $lifecycle === 'review';
@@ -145,7 +160,7 @@ final class ContentProjectItemActionsPresenter
 
         $hasContent = $openArticle || $generate || $runAgain || $stopGeneration || $resumeGeneration
             || $regenOutline || $regenArticle || $regenImage || $retryFailed || $improveNote
-            || $acknowledgeError;
+            || $acknowledgeError || $skipGeneration || $allowGeneration;
         $hasReview = $startReview || $approve;
         $hasPublishing = $sendToPublishingQueue;
         $hasLifecycle = $archiveItem;
@@ -163,6 +178,8 @@ final class ContentProjectItemActionsPresenter
             'retry_failed_step' => $retryFailed,
             'acknowledge_error' => $acknowledgeError,
             'prefer_acknowledge_error' => $preferAcknowledgeError,
+            'skip_generation' => $skipGeneration,
+            'allow_generation' => $allowGeneration,
             'improve_note' => $improveNote,
             'start_review' => $startReview,
             'approve' => $approve,
@@ -215,6 +232,8 @@ final class ContentProjectItemActionsPresenter
         $flags['regen_article'] = false;
         $flags['regen_image'] = false;
         $flags['retry_failed_step'] = false;
+        $flags['skip_generation'] = false;
+        $flags['allow_generation'] = false;
         $flags['start_review'] = false;
         $flags['approve'] = false;
         $flags['schedule'] = false;

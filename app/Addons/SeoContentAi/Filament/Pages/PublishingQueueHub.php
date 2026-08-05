@@ -7,10 +7,12 @@ namespace App\Addons\SeoContentAi\Filament\Pages;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Concerns\InteractsWithContentProjectPublishingActions;
 use App\Addons\SeoContentAi\Models\SeoProject;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AutoScheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RecoverStuckPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ReturnToContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ScheduleProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UnscheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectAutoScheduleService;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueReadModel;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectQueueHealthService;
@@ -19,11 +21,14 @@ use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SystemDateTime;
 use Carbon\Carbon;
 use Filament\Actions;
+use Filament\Notifications\Notification;
+use Filament\Support\Exceptions\Halt;
 use Illuminate\Contracts\Support\Htmlable;
 use Livewire\Attributes\Url;
 
 /**
- * Independent Publishing Queue hub — top-level page (not nested under a Content Project).
+ * Publishing Queue hub — nested under Content Projects nav, keeps slug /publishing-queue.
+ * Navigation item is owned by SeoProjectResource::getNavigationItems() (parentItem).
  */
 final class PublishingQueueHub extends SeoPanelPage
 {
@@ -35,16 +40,24 @@ final class PublishingQueueHub extends SeoPanelPage
 
     protected static ?int $navigationSort = 5;
 
+    protected static bool $shouldRegisterNavigation = false;
+
     protected static string $view = 'seo-content-ai::filament.pages.publishing-queue-hub';
+
+    public static function getNavigationParentItem(): ?string
+    {
+        return SeoProjectResource::getNavigationLabel();
+    }
 
     #[Url]
     public ?int $projectId = null;
 
+    #[Url(as: 'state')]
+    public string $stateFilter = '';
+
     public ?SeoProject $project = null;
 
     public string $search = '';
-
-    public string $stateFilter = '';
 
     /** @var list<int> */
     public array $selectedTaskIds = [];
@@ -368,38 +381,111 @@ final class PublishingQueueHub extends SeoPanelPage
         ), static fn (int $id): bool => $id > 0));
     }
 
+    /** Temporary project for row actions when hub filter = all projects. */
+    private ?SeoProject $actionProjectOverride = null;
+
     public function returnOne(int $taskId): void
     {
-        $this->dispatchPublishingCommand(new ReturnToContentProjectCommand(
-            (int) $this->requireProject()->getKey(),
-            [$taskId],
-        ), 'return_to_content_project');
+        $this->withProjectFromTask($taskId, function () use ($taskId): void {
+            $this->dispatchPublishingCommand(new ReturnToContentProjectCommand(
+                (int) $this->requireProject()->getKey(),
+                [$taskId],
+            ), 'return_to_content_project');
+        });
     }
 
     public function bulkReturn(): void
     {
-        $this->dispatchPublishingCommand(new ReturnToContentProjectCommand(
-            (int) $this->requireProject()->getKey(),
-            $this->selectedItemIds(),
-        ), 'return_to_content_project');
+        $this->withProjectFromItems($this->selectedItemIds(), function (): void {
+            $this->dispatchPublishingCommand(new ReturnToContentProjectCommand(
+                (int) $this->requireProject()->getKey(),
+                $this->selectedItemIds(),
+            ), 'return_to_content_project');
+        });
     }
 
     public function scheduleOneAt(int $taskId, string $at): void
     {
-        $this->dispatchPublishingCommand(new ScheduleProjectItemsCommand(
-            (int) $this->requireProject()->getKey(),
-            [$taskId],
-            Carbon::parse($at, SystemDateTime::timezone())->utc(),
-        ), 'schedule');
+        $this->withProjectFromTask($taskId, function () use ($taskId, $at): void {
+            $this->dispatchPublishingCommand(new ScheduleProjectItemsCommand(
+                (int) $this->requireProject()->getKey(),
+                [$taskId],
+                Carbon::parse($at, SystemDateTime::timezone())->utc(),
+            ), 'schedule');
+        });
     }
 
     public function scheduleOne(int $taskId): void
     {
-        $this->dispatchPublishingCommand(new ScheduleProjectItemsCommand(
-            (int) $this->requireProject()->getKey(),
-            [$taskId],
-            SystemDateTime::currentSystemTime()->addHour()->utc(),
-        ), 'schedule');
+        $this->scheduleOneInMinutes($taskId, 60);
+    }
+
+    public function scheduleOneInMinutes(int $taskId, int $minutes = 60): void
+    {
+        $this->withProjectFromTask($taskId, function () use ($taskId, $minutes): void {
+            $minutes = max(1, min(24 * 60, $minutes));
+            $this->dispatchPublishingCommand(new ScheduleProjectItemsCommand(
+                (int) $this->requireProject()->getKey(),
+                [$taskId],
+                SystemDateTime::currentSystemTime()->addMinutes($minutes)->utc(),
+            ), 'schedule');
+        });
+    }
+
+    public function scheduleOneTomorrowMorning(int $taskId): void
+    {
+        $this->withProjectFromTask($taskId, function () use ($taskId): void {
+            $when = SystemDateTime::currentSystemTime()
+                ->addDay()
+                ->setTime(9, 0, 0)
+                ->utc();
+
+            $this->dispatchPublishingCommand(new ScheduleProjectItemsCommand(
+                (int) $this->requireProject()->getKey(),
+                [$taskId],
+                $when,
+            ), 'schedule');
+        });
+    }
+
+    public function unscheduleOne(int $taskId): void
+    {
+        $this->withProjectFromTask($taskId, function () use ($taskId): void {
+            $this->dispatchPublishingCommand(new UnscheduleProjectItemsCommand(
+                (int) $this->requireProject()->getKey(),
+                [$taskId],
+            ), 'unschedule');
+        });
+    }
+
+    public function publishOneNow(int $taskId): void
+    {
+        $this->withProjectFromTask($taskId, function () use ($taskId): void {
+            $this->dispatchPublishingCommand(new \App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\PublishProjectItemsNowCommand(
+                (int) $this->requireProject()->getKey(),
+                [$taskId],
+            ), 'publish_now');
+        });
+    }
+
+    public function retryPublishOne(int $taskId): void
+    {
+        $this->withProjectFromTask($taskId, function () use ($taskId): void {
+            $this->dispatchPublishingCommand(new \App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RetryProjectItemPublishingCommand(
+                (int) $this->requireProject()->getKey(),
+                [$taskId],
+            ), 'retry');
+        });
+    }
+
+    public function cancelPublishOne(int $taskId): void
+    {
+        $this->withProjectFromTask($taskId, function () use ($taskId): void {
+            $this->dispatchPublishingCommand(new \App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CancelProjectItemPublishingCommand(
+                (int) $this->requireProject()->getKey(),
+                [$taskId],
+            ), 'cancel');
+        });
     }
 
     public function runProjectMonthAutoSchedule(): void
@@ -446,11 +532,55 @@ final class PublishingQueueHub extends SeoPanelPage
             $ids = $this->stuckPublishingIds;
         }
 
-        $this->dispatchPublishingCommand(new RecoverStuckPublishingCommand(
-            (int) $this->requireProject()->getKey(),
-            $ids,
-            $this->recoverTarget,
-        ), 'recover_stuck');
+        $this->withProjectFromItems($ids, function () use ($ids): void {
+            $this->dispatchPublishingCommand(new RecoverStuckPublishingCommand(
+                (int) $this->requireProject()->getKey(),
+                $ids,
+                $this->recoverTarget,
+                force: false,
+            ), 'recover_stuck');
+        });
+    }
+
+    public function recoverOne(int $taskId): void
+    {
+        $this->withProjectFromTask($taskId, function () use ($taskId): void {
+            $this->dispatchPublishingCommand(new RecoverStuckPublishingCommand(
+                (int) $this->requireProject()->getKey(),
+                [$taskId],
+                $this->recoverTarget,
+                force: false,
+            ), 'recover_stuck');
+        });
+    }
+
+    public function forceRecoverOne(int $taskId): void
+    {
+        $this->withProjectFromTask($taskId, function () use ($taskId): void {
+            $this->dispatchPublishingCommand(new RecoverStuckPublishingCommand(
+                (int) $this->requireProject()->getKey(),
+                [$taskId],
+                $this->recoverTarget,
+                force: true,
+            ), 'recover_stuck');
+        });
+    }
+
+    public function forceRecoverStuckSelected(): void
+    {
+        $ids = $this->selectedItemIds();
+        if ($ids === []) {
+            $ids = $this->stuckPublishingIds;
+        }
+
+        $this->withProjectFromItems($ids, function () use ($ids): void {
+            $this->dispatchPublishingCommand(new RecoverStuckPublishingCommand(
+                (int) $this->requireProject()->getKey(),
+                $ids,
+                $this->recoverTarget,
+                force: true,
+            ), 'recover_stuck');
+        });
     }
 
     public function refreshQueueHealth(): void
@@ -476,10 +606,100 @@ final class PublishingQueueHub extends SeoPanelPage
 
     protected function requireProject(): SeoProject
     {
-        if (! $this->project instanceof SeoProject) {
-            abort(404);
+        if ($this->actionProjectOverride instanceof SeoProject) {
+            return $this->actionProjectOverride;
         }
 
-        return $this->project;
+        if ($this->project instanceof SeoProject) {
+            return $this->project;
+        }
+
+        Notification::make()
+            ->warning()
+            ->title((string) __('seo-content-ai::filament.projects.publishing_queue_hub_select_project'))
+            ->body((string) __('seo-content-ai::filament.projects.publishing_queue_hub_actions_disabled_hint'))
+            ->send();
+
+        throw new Halt;
+    }
+
+    /**
+     * @param  callable(): void  $callback
+     */
+    private function withProjectFromTask(int $taskId, callable $callback): void
+    {
+        $this->withProjectFromItems([$taskId], $callback);
+    }
+
+    /**
+     * @param  list<int>  $taskIds
+     * @param  callable(): void  $callback
+     */
+    private function withProjectFromItems(array $taskIds, callable $callback): void
+    {
+        if ($this->project instanceof SeoProject || $this->actionProjectOverride instanceof SeoProject) {
+            $callback();
+
+            return;
+        }
+
+        $previous = $this->actionProjectOverride;
+        $this->actionProjectOverride = $this->loadAccessibleProjectForTasks($taskIds);
+        try {
+            $callback();
+        } finally {
+            $this->actionProjectOverride = $previous;
+        }
+    }
+
+    /**
+     * @param  list<int>  $taskIds
+     */
+    private function loadAccessibleProjectForTasks(array $taskIds): SeoProject
+    {
+        $ids = array_values(array_filter(array_map(
+            static fn (mixed $id): int => (int) $id,
+            $taskIds,
+        ), static fn (int $id): bool => $id > 0));
+
+        if ($ids === []) {
+            Notification::make()
+                ->warning()
+                ->title((string) __('seo-content-ai::filament.projects.publishing_queue_hub_select_project'))
+                ->body((string) __('seo-content-ai::filament.projects.queue_select_required'))
+                ->send();
+
+            throw new Halt;
+        }
+
+        $projectIds = SeoProjectTask::query()
+            ->whereIn('id', $ids)
+            ->pluck('project_id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->filter(static fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values();
+
+        if ($projectIds->count() !== 1) {
+            Notification::make()
+                ->warning()
+                ->title((string) __('seo-content-ai::filament.projects.publishing_queue_hub_select_project'))
+                ->body((string) __('seo-content-ai::filament.projects.publishing_queue_hub_actions_disabled_hint'))
+                ->send();
+
+            throw new Halt;
+        }
+
+        $project = SeoProjectResource::getRecordRouteBindingEloquentQuery()->find((int) $projectIds->first());
+        if (! $project instanceof SeoProject || ! SeoAccessControl::canAccessSite((int) ($project->site_id ?? 0))) {
+            Notification::make()
+                ->danger()
+                ->title('Project not found')
+                ->send();
+
+            throw new Halt;
+        }
+
+        return $project;
     }
 }

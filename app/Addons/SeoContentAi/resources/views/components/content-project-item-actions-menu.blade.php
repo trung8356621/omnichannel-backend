@@ -50,7 +50,9 @@
     @if ($a['open_article'] && $articleUrl)
         <a
             href="{{ $articleUrl }}"
-            @click.prevent="openNeedsReviewArticle({{ $tid }}, {{ ! empty($row['is_recently_completed']) ? 'true' : 'false' }}, {{ \Illuminate\Support\Js::from($articleUrl) }})"
+            target="_blank"
+            rel="noopener noreferrer"
+            @click="typeof claimNeedsReviewArticle === 'function' && claimNeedsReviewArticle({{ $tid }}, {{ ! empty($row['is_recently_completed']) ? 'true' : 'false' }})"
             class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-primary-600 ring-1 ring-gray-200 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-primary-400 dark:ring-gray-700 dark:hover:bg-gray-800"
             aria-label="{{ __('seo-content-ai::filament.projects.item_action_open_article') }}"
             title="{{ __('seo-content-ai::filament.projects.item_action_open_article') }}"
@@ -137,13 +139,42 @@
                     <a
                         role="menuitem"
                         href="{{ $articleUrl }}"
-                        @click.prevent="open = false; openNeedsReviewArticle({{ $tid }}, {{ ! empty($row['is_recently_completed']) ? 'true' : 'false' }}, {{ \Illuminate\Support\Js::from($articleUrl) }})"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        @click="open = false; typeof claimNeedsReviewArticle === 'function' && claimNeedsReviewArticle({{ $tid }}, {{ ! empty($row['is_recently_completed']) ? 'true' : 'false' }})"
                         class="{{ $itemClass }}"
                         title="{{ __('seo-content-ai::filament.projects.item_action_open_article') }}"
                     >
                         <x-filament::icon icon="heroicon-o-arrow-top-right-on-square" class="cp-ops-menu__icon" />
                         <span class="cp-ops-menu__label">{{ __('seo-content-ai::filament.projects.item_action_open_article') }}</span>
                     </a>
+                @endif
+                @if ($a['skip_generation'])
+                    <button
+                        role="menuitem"
+                        type="button"
+                        wire:click="skipGenerationOne({{ $tid }})"
+                        wire:confirm="{{ __('seo-content-ai::filament.projects.item_action_skip_generation_confirm') }}"
+                        @click="open = false"
+                        class="{{ $itemClass }}"
+                        title="{{ __('seo-content-ai::filament.projects.item_action_skip_generation') }}"
+                    >
+                        <x-filament::icon icon="heroicon-o-no-symbol" class="cp-ops-menu__icon" />
+                        <span class="cp-ops-menu__label">{{ __('seo-content-ai::filament.projects.item_action_skip_generation') }}</span>
+                    </button>
+                @endif
+                @if ($a['allow_generation'])
+                    <button
+                        role="menuitem"
+                        type="button"
+                        wire:click="allowGenerationOne({{ $tid }})"
+                        @click="open = false"
+                        class="{{ $itemClass }}"
+                        title="{{ __('seo-content-ai::filament.projects.item_action_allow_generation') }}"
+                    >
+                        <x-filament::icon icon="heroicon-o-arrow-uturn-left" class="cp-ops-menu__icon" />
+                        <span class="cp-ops-menu__label">{{ __('seo-content-ai::filament.projects.item_action_allow_generation') }}</span>
+                    </button>
                 @endif
                 @if ($a['acknowledge_error'])
                     <button role="menuitem" type="button" wire:click="acknowledgeGenerationError({{ $tid }})" wire:confirm="{{ __('seo-content-ai::filament.projects.item_action_acknowledge_error_confirm') }}" @click="open = false" class="{{ $itemClass }}" title="{{ __('seo-content-ai::filament.projects.item_action_acknowledge_error') }}">

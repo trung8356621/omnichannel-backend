@@ -150,6 +150,8 @@ final class AutomationDefaultRulesSeeder
                     'delay_seconds' => 0,
                     'input_mapping' => [
                         'article_id' => '{{ payload.article_id }}',
+                        'task_id' => '{{ payload.task_id }}',
+                        'publish_attempt_token' => '{{ payload.publish_attempt_token }}',
                     ],
                     'settings' => ['mode' => 'publish'],
                 ],
@@ -571,7 +573,11 @@ final class AutomationDefaultRulesSeeder
                 'is_enabled' => true,
                 'continue_on_failure' => false,
                 'delay_seconds' => 0,
-                'input_mapping' => ['article_id' => '{{ payload.article_id }}'],
+                'input_mapping' => [
+                    'article_id' => '{{ payload.article_id }}',
+                    'task_id' => '{{ payload.task_id }}',
+                    'publish_attempt_token' => '{{ payload.publish_attempt_token }}',
+                ],
                 'settings' => ['mode' => 'publish'],
             ]);
 

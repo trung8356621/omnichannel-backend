@@ -72,7 +72,16 @@ class SeoProjectTask extends Model
         'target_date' => 'date',
         'scheduled_publish_at' => 'datetime',
         'publish_retry_count' => 'integer',
+        'publish_attempt_count' => 'integer',
+        'dispatch_count' => 'integer',
         'last_publish_attempt_at' => 'datetime',
+        'publishing_started_at' => 'datetime',
+        'delivery_dispatched_at' => 'datetime',
+        'publisher_started_at' => 'datetime',
+        'publish_lease_expires_at' => 'datetime',
+        'next_publish_retry_at' => 'datetime',
+        'last_publish_failed_at' => 'datetime',
+        'last_publish_http_status' => 'integer',
         'publish_published_at' => 'datetime',
         'connected_at' => 'datetime',
         'completed_at' => 'datetime',
@@ -80,6 +89,8 @@ class SeoProjectTask extends Model
         'content_manager_reviewed_by' => 'integer',
         'publishing_queued_at' => 'datetime',
         'publishing_queued_by' => 'integer',
+        'generation_blocked_at' => 'datetime',
+        'generation_blocked_by' => 'integer',
         'archived_at' => 'datetime',
         'deleted_at' => 'datetime',
     ];
@@ -93,6 +104,49 @@ class SeoProjectTask extends Model
     public function scopeActive(Builder $query): Builder
     {
         return $query->whereNull('archived_at');
+    }
+
+    /**
+     * Canonical eligibility for Generate / retry / resume / bulk selection.
+     * planned() + not operator-blocked.
+     *
+     * @param  Builder<SeoProjectTask>  $query
+     * @return Builder<SeoProjectTask>
+     */
+    public function scopeEligibleForGeneration(Builder $query): Builder
+    {
+        $query = $query->planned();
+        try {
+            if (\Illuminate\Support\Facades\Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'generation_blocked_at')) {
+                $query->whereNull('generation_blocked_at');
+            }
+        } catch (\Throwable) {
+            // Schema unavailable — keep planned set.
+        }
+
+        return $query;
+    }
+
+    public function isGenerationBlocked(): bool
+    {
+        try {
+            if (! \Illuminate\Support\Facades\Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'generation_blocked_at')) {
+                return false;
+            }
+        } catch (\Throwable) {
+            return false;
+        }
+
+        return $this->generation_blocked_at !== null;
+    }
+
+    public function isEligibleForGeneration(): bool
+    {
+        if ($this->archived_at !== null || (string) $this->status === self::STATUS_CANCELLED) {
+            return false;
+        }
+
+        return ! $this->isGenerationBlocked();
     }
 
     /**

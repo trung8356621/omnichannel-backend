@@ -60,10 +60,11 @@ Route binding: edit/view **does not** 404 when global domain ≠ `article.site_i
 | Assistant widget health | `resources/js/utils/assistantWidgetHealth.js` — Images from **unified inventory**: `error` (`image_slug_unresolved`) / `warning` (`image_alt_missing`) / `info` (`image_ratio_low`, body content count only); Featured clean of ALT/slug/ratio; WP filename≠keyword is **not** an issue |
 | Unified images inventory | `resources/js/utils/unifiedArticleImagesInventory.js` — content + Featured + Gallery dedupe; Images panel `useUnifiedInventory: true` |
 | Media source classify | `resources/js/utils/mediaSourceClassification.js` — local `/storage/…/seo_media` wins over stale `wp_attachment_id` (featured meta SeoMedia PK); true WP = `/wp-content/uploads/` or real attachment |
+| Shared media picker | `resources/js/editor/host/SharedMediaPicker.jsx` + `ArticleMediaPickerController` / `WorkspaceMediaPickerController` — remote tabs paginate **28**/page (7×4); search/tab change resets to page 1 |
 | Inline whitespace safety | `resources/js/utils/inlineWhitespaceGuard.js` + `InlineMarkBoundaryWhitespace` (PHP) — TipTap `preserveWhitespace: 'full'`; glued mark-boundary repair on bootstrap; save guard `inline_whitespace_corruption_detected` |
 | Paragraph style dropdown | `ParagraphStyleDropdown.jsx` — menu portals to `document.body` (`position: fixed`); format toolbar row `overflow: visible` (no clip “Heading N” tab) |
 | Fix Slug All | Local/safe media only (`mediaSourceClassification.js` — `https` alone ≠ WP); owning session via `editor_session_id` + `assertOwningActiveSessionForMediaMutation`. Response returns `document_version`/`content_hash`; client `syncVersionAfterSlugFix` before `after_fix_slug_all`. WP → explicit `WordPressMediaRenameModal`. |
-| Exclusive lock gate | `ExclusiveLockScreen` in `article-editor.jsx` — 404-style title + body only; mounts **instead of** TipTap when `article_editor_locked` / archived / not_editable. No takeover UI. Mid-session version conflict keeps editor writable (sync version; toast only). |
+| Exclusive lock gate | `ExclusiveLockScreen` in `article-editor.jsx` — mounts **instead of** TipTap when locked / archived / not_editable **or** session fault (`article_editor_session_unavailable` / 5xx heartbeat / `unknown_error`). Reload CTA + toast; no silent read-only. Mid-session version conflict keeps editor writable (sync version; toast only). |
 | SEO reason metrics | `resources/js/utils/seoReasonMetrics.js` + `Support/SeoReasonPresentation` — `image_ratio_*` / `content_length_low` with current/recommended/missing; locale `lang/{vi,en}/seo_rules.php` |
 | CTA block insert | `insertCtaBlockInEditor` → `<p class="article-cta">` + label/value; `unsetAllMarks` / lift blockquote |
 | CTA freeze bookmark | `freezeEditorInsertionContext` on CTA `pointerdown` + `seo-assistant-freeze-insertion-context`; insert uses frozen caret |
@@ -129,6 +130,9 @@ Policy: max **one** heavy sidebar module mounted; switch unmounts (no CSS-hide t
 See [`ARTICLE_EDITOR_SESSION_LOCK.md`](../architecture/ARTICLE_EDITOR_SESSION_LOCK.md).
 
 - Acquire writable session before edit; other tabs/users → **ExclusiveLockScreen** (no TipTap / no hard-readonly under lock).
+- Heartbeat `PUT .../heartbeat`: `expireStaleSessionsForArticleId` is best-effort (retry then skip InnoDB 1205/1213) so deadlock must not 500 the owning session.
+- Heartbeat/server 5xx → FE code `article_editor_session_unavailable` → ExclusiveLockScreen + notify + **Tải lại trang** (`editorSessionClient.js` / `article-editor.jsx`).
+- Preparing gate: `ArticleEditorReadinessService` (processing AI media + body hash). `evaluate()` calls `reconcileStaleAiMediaJobs`; stuck jobs → `forceOpenEditorWhilePreparing` / `abandonPreparingGate` (EditArticle + blade CTA).
 - Canonical guard: `expected_document_version` (`articles.document_version`).
 - Compat: `expected_updated_at` + `expected_content_hash`.
 - Explicit Save → session document endpoint; Save & Close → atomic `close`.
@@ -160,7 +164,17 @@ Conflict: `document_version` primary; hash match allows pass despite `updated_at
 
 ### Sync WP (editor)
 
-`syncArticleToWordPress` / bridge outbound — see `WORDPRESS_BRIDGE.md`. Toast `wp_sync_blocked` often means persist failed before enqueue.
+Two contracts:
+
+| Action | When | Behavior |
+|--------|------|----------|
+| **Lưu bài** (`POST …/save`) | Always | Laravel only — `article.content.update`. Never WordPress. |
+| **Đồng bộ WordPress** (`POST …/sync-wp`) | Non-CP: manual queue. CP **Published** (queue + `publish_published_at`): `SyncPublishedArticleToWordPressCommand` | Save local first, then **UPDATE** existing `wp_post_id`. Never `create_post`. |
+| CP not yet Published | Sync button hidden / blocked | Initial WordPress create owned by Publishing Queue only. |
+
+Post-publish success toast: «Đã đồng bộ bài viết lên WordPress.» + «Mở bài WordPress». Failure keeps `publish_queue_status=published` (separate `post_publish_wp_sync_error` meta).
+
+See `PUBLISHING.md` § post-publish sync. Toast `wp_sync_blocked` may mean persist failed or eligibility blocked.
 
 ### Fix slug all
 
@@ -208,7 +222,7 @@ Related public:
 | Trigger | Job / effect |
 |---------|----------------|
 | Persist / seo-meta | `AnalyzeArticleSeoJob` |
-| AI media generate | `GenerateMediaJob` (`media_generation` queue) |
+| AI media generate | `GenerateMediaJob` (`media_generation` queue); dispatch failure marks placeholder `failed`; stale `processing` reconciled via `ArticleEditorMediaAiService::reconcileStaleAiMediaJobs` / `failAllProcessingAiMediaJobs` |
 | Quick post reviews | `GenerateArticleReviewsJob` |
 | CP full rewrite from editor menu | `ArticleWritingExecutionService` path (not Publish graph) |
 
@@ -227,7 +241,8 @@ No second scheduler for editor autosave — client debounce (local draft + serve
 
 - Persist lock timeout → user-friendly message; do not enqueue WP sync.
 - Score job unique per article; domain queue missing/retry failed.
-- AI media: retry-generation / delete-ai-job endpoints.
+- AI media: retry-generation / delete-ai-job endpoints; editor preparing lock → reconcile stale + **Mở editor ngay** (`abandonPreparingGate`).
+- Session heartbeat expire sweep: skip after deadlock retries (`sessions_expire_skipped_lock`); FE surfaces reload on 5xx.
 - Slug fix: never invent second rename pipeline; recovery only if file already renamed.
 - **Editor does not own full workflow rerun.** Menu «Chạy lại quy trình» (from-outline / from-article modal) removed. Retry/resume stays on Content Project.
 - After editor save, emit `project-item-updated` + `sessionStorage` dirty flag so Content Project ops page can **lazy-refresh** summary (no websocket/poll). Opening a generated article from project **Needs Review** (presentation filter) marks that generation viewed — not a lifecycle change.
@@ -270,6 +285,8 @@ No second scheduler for editor autosave — client debounce (local draft + serve
 | Editor performance audits | Bootstrap size budgets (docs/audits) |
 | `ArticleEditorContextPreservationContractTest` | Media/image UX không reset expanded sections; CTA insert `--contact`/`--sentence`; WP media site-level |
 | `ArticleEditorExclusiveLockRegressionTest` | ExclusiveLockScreen gate; sessionStorage client id; no takeover; conflict ≠ exclusive screen |
+| `ArticleEditorPreparingLockContractTest` | Readiness reconcile + `abandonPreparingGate` / force-open CTA |
+| `ArticleEditorSessionHeartbeatUxContractTest` | Expire deadlock skip; 5xx → `SESSION_UNAVAILABLE` + reload CTA |
 | `ArticleEditorImagesHealthAndSlugSessionTest` | Owning Fix Slug session; slug error / ALT warning / `image_ratio_low` |
 | `ArticleEditorUnifiedImagesInventoryHealthTest` | Unified inventory panel/health; Featured/Gallery roles; ratio ownership |
 | `ArticleEditorInlineWhitespaceRoundTripRegressionTest` | Mark-boundary spaces HTML↔JSON; glue repair; hydrate not dirty |

@@ -175,6 +175,8 @@ final class SiteSyncStepRunner
                     'finished_at' => now(),
                 ])->save();
 
+                $this->notifySiteSyncTerminal($run, $finalStatus, $counters);
+
                 return;
             }
 
@@ -199,6 +201,8 @@ final class SiteSyncStepRunner
                 'error_message' => $e->getMessage(),
                 'resumable' => true,
             ])->save();
+
+            $this->notifySiteSyncFailed($run, $e->getMessage());
         }
     }
 
@@ -233,10 +237,36 @@ final class SiteSyncStepRunner
 
         $this->capabilities->store($site, $result['manifest']);
 
+        $missing = $this->capabilities->missingCapabilities($site);
+        if (is_array($missing) && $missing !== []) {
+            try {
+                $tenantId = (int) ($site->user_id ?? 0);
+                if ($tenantId <= 0) {
+                    $tenantId = (int) (\App\Models\User::query()
+                        ->where('seo_role', \App\Models\User::SEO_ROLE_MANAGER)
+                        ->whereNull('parent_id')
+                        ->value('id') ?? 0);
+                }
+                foreach ($missing as $capability) {
+                    $name = is_string($capability) ? $capability : (string) ($capability['name'] ?? $capability['key'] ?? 'unknown');
+                    app(\App\Addons\SeoContentAi\Services\Notifications\Publishers\WordPressConnectionNotificationPublisher::class)
+                        ->notifyCapabilityMissing(
+                            $tenantId,
+                            (int) $site->id,
+                            $name,
+                            'Phiên bản hiện tại chưa hỗ trợ '.$name.'.',
+                            (int) $site->id,
+                        );
+                }
+            } catch (Throwable) {
+                // Notification must not break sync.
+            }
+        }
+
         return [
             'capabilities_stored' => 1,
             'bridge_version' => $result['manifest']->bridgeVersion,
-            'missing' => $this->capabilities->missingCapabilities($site),
+            'missing' => $missing,
         ];
     }
 
@@ -670,5 +700,98 @@ final class SiteSyncStepRunner
         if (! empty($meta['bootstrap']) || $forceFull) {
             SiteSyncSiteMeta::put($site, SiteSyncSchema::META_BOOTSTRAPPED_AT, now()->toIso8601String());
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $counters
+     */
+    private function notifySiteSyncTerminal(SeoSiteSyncRun $run, string $finalStatus, array $counters): void
+    {
+        try {
+            $publisher = app(\App\Addons\SeoContentAi\Services\Notifications\Publishers\SiteSyncIncidentNotificationPublisher::class);
+            $tenantId = $this->resolveSiteSyncTenantId($run);
+            if ($tenantId <= 0) {
+                return;
+            }
+
+            $connectionId = (int) ($run->site_id ?? 0);
+            if ($finalStatus === 'completed') {
+                // Quick sync success — intentionally no notification.
+                $publisher->resolveRun($tenantId, $connectionId, (int) $run->getKey());
+                if (is_string($run->current_step) && $run->current_step !== '') {
+                    $publisher->resolveStuck($tenantId, $connectionId, (string) $run->current_step);
+                }
+
+                return;
+            }
+
+            $failed = (int) ($counters['scoring_failed'] ?? 0);
+            $synced = (int) ($counters['urls_synced'] ?? $counters['workspace_scores_generated'] ?? 0);
+            $total = max($synced + $failed, (int) ($counters['urls_total'] ?? $synced + $failed));
+            if ($failed > 0 || $finalStatus === 'completed_with_warnings') {
+                $publisher->notifyPartialFailure(
+                    $run,
+                    $tenantId,
+                    $synced,
+                    max($total, 1),
+                    max($failed, 1),
+                    null,
+                );
+            }
+        } catch (Throwable $e) {
+            RuntimeLogger::warning('seo.operational_notification.site_sync_terminal_hook_failed', [
+                'run_id' => (int) $run->getKey(),
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function notifySiteSyncFailed(SeoSiteSyncRun $run, string $message): void
+    {
+        try {
+            $tenantId = $this->resolveSiteSyncTenantId($run);
+            if ($tenantId <= 0) {
+                return;
+            }
+
+            $http = null;
+            if (preg_match('/\b(401|403)\b/', $message, $matches) === 1) {
+                $http = (int) $matches[1];
+            }
+            if ($http === 401 || $http === 403) {
+                app(\App\Addons\SeoContentAi\Services\Notifications\Publishers\WordPressConnectionNotificationPublisher::class)
+                    ->notifyConnectionFailed(
+                        $tenantId,
+                        (int) ($run->site_id ?? 0),
+                        'HTTP_'.$http,
+                        'site #'.(int) ($run->site_id ?? 0),
+                        'Publishing và Site Sync đang bị chặn do WordPress trả về '.$http.'.',
+                        permanent: true,
+                    );
+            }
+
+            app(\App\Addons\SeoContentAi\Services\Notifications\Publishers\SiteSyncIncidentNotificationPublisher::class)
+                ->notifyFailed($run, $tenantId, $message);
+        } catch (Throwable $e) {
+            RuntimeLogger::warning('seo.operational_notification.site_sync_failed_hook_failed', [
+                'run_id' => (int) $run->getKey(),
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function resolveSiteSyncTenantId(SeoSiteSyncRun $run): int
+    {
+        $site = CoreSite::query()->find((int) $run->site_id);
+        $ownerId = (int) ($site?->user_id ?? 0);
+        if ($ownerId > 0) {
+            return $ownerId;
+        }
+
+        return (int) (\App\Models\User::query()
+            ->where('status', \App\Models\User::STATUS_NORMAL)
+            ->where('seo_role', \App\Models\User::SEO_ROLE_MANAGER)
+            ->whereNull('parent_id')
+            ->value('id') ?? 0);
     }
 }

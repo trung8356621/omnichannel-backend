@@ -38,6 +38,7 @@ final class PublishingQueueCanonicalStateMachineTest extends TestCase
     {
         $row = [
             'publish_queue_status' => 'processing',
+            'publisher_started_at' => now()->toIso8601String(),
             'scheduled_publish_at' => now()->subHour()->toIso8601String(),
             'last_publish_attempt_at' => now()->toIso8601String(),
         ];
@@ -46,20 +47,41 @@ final class PublishingQueueCanonicalStateMachineTest extends TestCase
         self::assertSame('publishing', PublishingQueueStateClassifier::classify($row)['state']);
     }
 
+    public function test_queued_for_delivery_is_awaiting_worker_not_publishing(): void
+    {
+        $row = [
+            'publish_queue_status' => 'queued_for_delivery',
+            'delivery_dispatched_at' => now()->toIso8601String(),
+            'publisher_started_at' => null,
+        ];
+        self::assertFalse(PublishingQueuePublishingDefinition::matches($row));
+        self::assertSame('awaiting_delivery', PublishingQueueStateClassifier::classify($row)['state']);
+    }
+
     public function test_stuck_publishing_without_attempt_or_stale_ttl(): void
     {
+        // Stuck Publishing = real publisher started (publisher_started_at), not dispatch-only.
         self::assertTrue(PublishingQueueStuckPublishingDefinition::matches([
             'publish_queue_status' => 'processing',
+            'publisher_started_at' => now()->subHours(2)->toIso8601String(),
         ]));
 
         self::assertTrue(PublishingQueueStuckPublishingDefinition::matches([
             'publish_queue_status' => 'processing',
+            'publisher_started_at' => now()->subHours(2)->toIso8601String(),
             'last_publish_attempt_at' => now()->subHours(2)->toIso8601String(),
         ]));
 
         self::assertFalse(PublishingQueueStuckPublishingDefinition::matches([
             'publish_queue_status' => 'processing',
-            'last_publish_attempt_at' => now()->subMinutes(5)->toIso8601String(),
+            'publisher_started_at' => now()->subMinutes(2)->toIso8601String(),
+            'last_publish_attempt_at' => now()->subMinutes(2)->toIso8601String(),
+        ]));
+
+        // Dispatch-only processing (no publisher_started_at) is awaiting_worker, not stuck Publishing.
+        self::assertFalse(PublishingQueueStuckPublishingDefinition::matches([
+            'publish_queue_status' => 'processing',
+            'publisher_started_at' => null,
         ]));
     }
 
@@ -90,10 +112,10 @@ final class PublishingQueueCanonicalStateMachineTest extends TestCase
         self::assertStringContainsString("'in_day'", $src);
         self::assertStringContainsString('buildInDaySlots', $src);
         self::assertStringContainsString('resolveEligible', $src);
-        self::assertStringContainsString("reason' => 'publishing'", $src);
-        self::assertStringContainsString('SeoDisplayTimezone', $src);
+        self::assertStringContainsString("'reason' => 'publishing'", $src);
+        self::assertStringContainsString('SystemDateTime::timezone', $src);
         self::assertStringContainsString('MIN_INTERVAL_MINUTES', $src);
-        self::assertStringContainsString('Preview never crashes the page', $src);
+        self::assertStringContainsString('Loại Publishing/Published', $src);
     }
 
     public function test_hub_auto_quick_no_selection_required(): void
@@ -105,6 +127,7 @@ final class PublishingQueueCanonicalStateMachineTest extends TestCase
         self::assertStringContainsString('selectAllMatchingResults', $hub);
         self::assertStringContainsString('togglePageSelection', $hub);
         self::assertStringContainsString('RecoverStuckPublishingCommand', $hub);
+        self::assertStringContainsString('forceRecoverStuckSelected', $hub);
         self::assertStringContainsString('in_day', $hub);
 
         $trait = (string) file_get_contents(
@@ -119,22 +142,27 @@ final class PublishingQueueCanonicalStateMachineTest extends TestCase
         self::assertStringContainsString('Auto Schedule', $view);
         self::assertStringContainsString('Quick Mode', $view);
         self::assertStringContainsString('In Day', $view);
-        self::assertStringContainsString('Timezone:', $view);
-        self::assertStringContainsString('Recover stuck publishing', $view);
+        self::assertStringContainsString('publishing_queue_timezone', $view);
+        self::assertStringContainsString('Recover stuck', $view);
+        self::assertStringContainsString('Force stop', $view);
         self::assertStringContainsString('Runner healthy', $view);
         self::assertStringContainsString('Không cần tick checkbox', $view);
     }
 
-    public function test_process_handler_marks_processing_after_dispatch(): void
+    public function test_process_handler_dispatches_before_publisher_worker_starts(): void
     {
         $source = (string) file_get_contents(
             (string) (new ReflectionClass(ProcessScheduledProjectItemPublishHandler::class))->getFileName(),
         );
+        $posClaim = strpos($source, 'claimForDispatch($task)');
         $posPublisher = strpos($source, '$publisher->publish($payload)');
-        $posProcessing = strpos($source, 'markProcessing($task->fresh()');
+        self::assertNotFalse($posClaim);
         self::assertNotFalse($posPublisher);
-        self::assertNotFalse($posProcessing);
-        self::assertGreaterThan($posPublisher, $posProcessing);
+        self::assertLessThan($posPublisher, $posClaim);
+        self::assertStringContainsString('queued_for_delivery', $source);
+        self::assertStringContainsString('awaiting worker', $source);
+        // Publisher lease/attempt owned by WP worker beginPublisherAttempt — not markProcessing after publish.
+        self::assertStringNotContainsString('markProcessing($task->fresh()', $source);
     }
 
     public function test_recover_command_registered(): void

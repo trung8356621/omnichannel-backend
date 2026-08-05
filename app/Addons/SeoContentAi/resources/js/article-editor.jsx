@@ -630,16 +630,22 @@ function ExclusiveLockScreen({
     lockInfo,
     onRetry,
     onBack = null,
+    onReload = null,
     reasonCode = null,
     status = null,
 }) {
-    if (!lockInfo && !onRetry && !reasonCode) {
+    if (!lockInfo && !onRetry && !reasonCode && !onReload) {
         return null;
     }
 
     const code = String(reasonCode ?? '').trim();
     const archived = code === 'content_project_archived' || code === 'article_not_editable';
     const conflict = status === 'conflict' || code.includes('conflict');
+    const unavailable = code === 'article_editor_session_unavailable'
+        || code === 'unknown_error'
+        || code === 'lost'
+        || code === 'error'
+        || status === 'network_degraded';
     const name = String(lockInfo?.editor_name ?? '').trim() || t('editor_locked_other_user');
 
     let title = t('editor_locked_title');
@@ -650,14 +656,18 @@ function ExclusiveLockScreen({
     } else if (conflict) {
         title = t('editor_conflict_title');
         body = t('editor_conflict_body');
+    } else if (unavailable) {
+        title = t('editor_session_unavailable_title');
+        body = t('editor_session_unavailable_body');
     }
 
     const showRetry = typeof onRetry === 'function' && !archived && !conflict;
+    const showReload = typeof onReload === 'function' && (unavailable || conflict);
     const showBack = typeof onBack === 'function';
 
     return (
         <div
-            className={`seo-editor-exclusive-lock-screen${archived ? ' is-archived' : ''}${conflict ? ' is-conflict' : ''}`}
+            className={`seo-editor-exclusive-lock-screen${archived ? ' is-archived' : ''}${conflict ? ' is-conflict' : ''}${unavailable ? ' is-unavailable' : ''}`}
             role="alert"
             data-seo-editor-exclusive-lock="1"
             data-seo-editor-lock-banner="1"
@@ -667,12 +677,21 @@ function ExclusiveLockScreen({
             <div className="seo-editor-exclusive-lock-screen__notice">
                 <h2 className="seo-editor-exclusive-lock-screen__title">{title}</h2>
                 <p className="seo-editor-exclusive-lock-screen__body">{body}</p>
-                {(showRetry || showBack) ? (
+                {(showRetry || showReload || showBack) ? (
                     <div className="seo-editor-exclusive-lock-screen__actions">
-                        {showRetry ? (
+                        {showReload ? (
                             <button
                                 type="button"
                                 className="seo-editor-exclusive-lock-screen__btn"
+                                onClick={onReload}
+                            >
+                                {t('editor_session_reload')}
+                            </button>
+                        ) : null}
+                        {showRetry ? (
+                            <button
+                                type="button"
+                                className={`seo-editor-exclusive-lock-screen__btn${showReload ? ' seo-editor-exclusive-lock-screen__btn--muted' : ''}`}
                                 onClick={onRetry}
                             >
                                 {t('editor_locked_retry')}
@@ -909,6 +928,10 @@ function ArticleEditorWithSession(props) {
         window.location.href = '/seo';
     }, []);
 
+    const onReload = React.useCallback(() => {
+        window.location.reload();
+    }, []);
+
     if (!sessionReady) {
         return (
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-600 animate-pulse">
@@ -917,10 +940,21 @@ function ArticleEditorWithSession(props) {
         );
     }
 
+    const reason = String(sessionReasonCode || acquireError?.code || '');
+    const sessionFault = (
+        reason === 'article_editor_session_unavailable'
+        || reason === 'unknown_error'
+        || reason === 'lost'
+        || reason === 'error'
+        || reason === 'article_editor_session_revoked'
+        || reason === 'article_editor_session_taken_over'
+        || sessionStatus === EDITOR_SESSION_STATUS.NETWORK_DEGRADED
+    );
     const blocked = (
-        String(sessionReasonCode || acquireError?.code || '') === 'article_editor_locked'
-        || String(sessionReasonCode || '') === 'content_project_archived'
-        || String(sessionReasonCode || '') === 'article_not_editable'
+        reason === 'article_editor_locked'
+        || reason === 'content_project_archived'
+        || reason === 'article_not_editable'
+        || sessionFault
     ) && Boolean(sessionReadOnly);
 
     if (blocked) {
@@ -937,6 +971,7 @@ function ArticleEditorWithSession(props) {
                     reasonCode={sessionReasonCode || acquireError?.code || null}
                     status={sessionStatus}
                     onRetry={() => { void runAcquire(); }}
+                    onReload={onReload}
                     onBack={onBack}
                 />
             </div>
@@ -948,12 +983,12 @@ function ArticleEditorWithSession(props) {
             className="seo-editor-session-shell"
             data-seo-editor-session-shell="1"
             data-session-status={sessionStatus || undefined}
-            data-session-writable="1"
+            data-session-writable={sessionReadOnly ? '0' : '1'}
         >
             <SeoArticleEditor
                 {...editorProps}
                 articleId={articleId}
-                sessionReadOnly={false}
+                sessionReadOnly={Boolean(sessionReadOnly)}
                 documentVersion={documentVersion}
             />
         </div>

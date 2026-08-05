@@ -68,6 +68,8 @@ Middleware: Authenticate + role checks + `SetDynamicSeoDatabase` / connection co
 | History | `SeoMediaProcessingHistoryService` |
 | Model | `SeoMedia` + `SeoMediaBuilder` (meta-field routing) |
 | Library actions | `SeoMediaLibraryImageActionService` |
+| Media Library page | `Filament/Pages/MediaLibrary` + `SeoMediaLibraryService::fetch` default **50**/page (5×10 desktop); tab/filter/search reset page; `#[Url]` keeps `activeTab` deep-link |
+| Article media picker | `ArticleMediaPickerController` — perPage **28** (shared with workspace picker) |
 | Article slug fix | `SeoMediaArticleSlugFixService` |
 | Media source classify (editor) | `resources/js/utils/mediaSourceClassification.js` + snapshot `isLocalLaravelMediaUrl` |
 | Unified images inventory | `resources/js/utils/unifiedArticleImagesInventory.js` |

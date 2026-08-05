@@ -86,6 +86,22 @@ trait InteractsWithContentProjectPublishingActions
         ), 'retry');
     }
 
+    public function bulkResyncPublishedWordPress(): void
+    {
+        $this->dispatchPublishingCommand(new \App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\BulkResyncPublishedArticlesToWordPressCommand(
+            (int) $this->requireProject()->getKey(),
+            $this->selectedItemIds(),
+        ), 'bulk_resync_wordpress');
+    }
+
+    public function resyncPublishedItemWordPress(int $taskId): void
+    {
+        $this->dispatchPublishingCommand(new \App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\BulkResyncPublishedArticlesToWordPressCommand(
+            (int) $this->requireProject()->getKey(),
+            [$taskId],
+        ), 'resync_wordpress');
+    }
+
     public function bulkMoveTime(string $at): void
     {
         $this->dispatchPublishingCommand(new MoveProjectItemScheduleCommand(

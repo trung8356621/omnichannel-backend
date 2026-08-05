@@ -58,7 +58,7 @@ final class ArticleEditorMediaMutationService
         if ($refId <= 0) {
             throw ArticleEditorSessionException::make(
                 'featured_media_id_required',
-                'Featured media identity is required.',
+                'Featured media identity is required. Chọn ảnh từ tab Local/WordPress (có ID), không dùng ảnh trong bài thiếu identity.',
                 [],
                 422,
             );
@@ -229,9 +229,22 @@ final class ArticleEditorMediaMutationService
      */
     private function resolveRefId(SeoArticle $article, array $item, string $url): int
     {
-        $wpAttachmentId = max(0, (int) ($item['wp_attachment_id'] ?? $item['wpAttachmentId'] ?? 0));
-        $seoMediaId = max(0, (int) ($item['seo_media_id'] ?? $item['seoMediaId'] ?? $item['media_id'] ?? $item['id'] ?? 0));
-        $refId = $wpAttachmentId > 0 ? $wpAttachmentId : $seoMediaId;
+        $wpAttachmentId = max(0, (int) (
+            $item['wp_attachment_id']
+            ?? $item['wpAttachmentId']
+            ?? $item['attachment_id']
+            ?? $item['attachmentId']
+            ?? 0
+        ));
+        $seoMediaId = max(0, (int) (
+            $item['seo_media_id']
+            ?? $item['seoMediaId']
+            ?? $item['media_id']
+            ?? $item['mediaId']
+            ?? 0
+        ));
+        $rawId = max(0, (int) ($item['id'] ?? 0));
+        $refId = $wpAttachmentId > 0 ? $wpAttachmentId : ($seoMediaId > 0 ? $seoMediaId : $rawId);
         if ($refId > 0) {
             return $refId;
         }

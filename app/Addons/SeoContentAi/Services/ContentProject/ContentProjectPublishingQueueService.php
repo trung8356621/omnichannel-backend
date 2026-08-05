@@ -6,12 +6,20 @@ namespace App\Addons\SeoContentAi\Services\ContentProject;
 
 use App\Addons\SeoContentAi\Enums\ContentProjectItemAction;
 use App\Addons\SeoContentAi\Enums\ContentProjectPublishQueueStatus;
+use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\PublishFailureClassification;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\PublishOperationKeyFactory;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\PublishingRetryPolicy;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\DispatchClaimResult;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishingActiveProcessing;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishingProcessingMarkerClearer;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemActionGuard;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPublishTransitionGuard;
 use App\Support\RuntimeLogger;
 use Carbon\Carbon;
+use Carbon\CarbonInterface;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use RuntimeException;
@@ -25,7 +33,31 @@ final class ContentProjectPublishingQueueService
     public function __construct(
         private readonly ContentProjectPublishTransitionGuard $transitionGuard,
         private readonly ContentProjectItemActionGuard $actionGuard = new ContentProjectItemActionGuard,
+        private readonly ?PublishOperationKeyFactory $operationKeys = null,
+        private readonly ?PublishingRetryPolicy $retryPolicy = null,
+        private readonly ?PublishingActiveProcessing $activeProcessing = null,
+        private readonly ?PublishingProcessingMarkerClearer $markerClearer = null,
     ) {}
+
+    private function operationKeys(): PublishOperationKeyFactory
+    {
+        return $this->operationKeys ?? app(PublishOperationKeyFactory::class);
+    }
+
+    private function retryPolicy(): PublishingRetryPolicy
+    {
+        return $this->retryPolicy ?? app(PublishingRetryPolicy::class);
+    }
+
+    private function activeProcessing(): PublishingActiveProcessing
+    {
+        return $this->activeProcessing ?? new PublishingActiveProcessing;
+    }
+
+    private function markerClearer(): PublishingProcessingMarkerClearer
+    {
+        return $this->markerClearer ?? new PublishingProcessingMarkerClearer;
+    }
 
     /**
      * Persist per-item UTC schedule map (Quick Mode / Auto Schedule).
@@ -59,17 +91,17 @@ final class ContentProjectPublishingQueueService
                     ? $at->copy()->utc()
                     : Carbon::parse((string) $at)->utc();
 
-                $scheduled += $this->batchUpdate($project, [$id], [
+                $scheduled += $this->batchUpdate($project, [$id], $this->scheduleResetAttributes([
                     'scheduled_publish_at' => $carbon,
                     'publish_queue_status' => ContentProjectPublishQueueStatus::None->value,
-                    'last_publish_error' => null,
-                ], onlyStatuses: [
+                ]), onlyStatuses: [
                     ContentProjectPublishQueueStatus::None->value,
                     ContentProjectPublishQueueStatus::Waiting->value,
                     ContentProjectPublishQueueStatus::Retrying->value,
                     ContentProjectPublishQueueStatus::Failed->value,
                     ContentProjectPublishQueueStatus::Cancelled->value,
                     ContentProjectPublishQueueStatus::Skipped->value,
+                    ContentProjectPublishQueueStatus::Processing->value,
                 ]);
             }
         });
@@ -86,29 +118,98 @@ final class ContentProjectPublishingQueueService
      */
     public function schedule(SeoProject $project, array $taskIds, Carbon $at): int
     {
+        return (int) ($this->scheduleWithReport($project, $taskIds, $at)['scheduled'] ?? 0);
+    }
+
+    /**
+     * @param  list<int>  $taskIds
+     * @return array{
+     *     scheduled: int,
+     *     skipped_active: int,
+     *     cancelled_pending: int,
+     *     failed: int,
+     *     skipped_active_ids: list<int>,
+     *     cancelled_pending_ids: list<int>
+     * }
+     */
+    public function scheduleWithReport(SeoProject $project, array $taskIds, Carbon $at): array
+    {
         $this->assertProjectActive($project);
         $ids = $this->normalizeIds($taskIds);
+        $report = [
+            'scheduled' => 0,
+            'skipped_active' => 0,
+            'cancelled_pending' => 0,
+            'failed' => 0,
+            'skipped_active_ids' => [],
+            'cancelled_pending_ids' => [],
+        ];
         if ($ids === []) {
-            return 0;
+            return $report;
         }
 
-        $this->assertTasksCanScheduleOrReschedule($project, $ids);
+        $utc = $at->copy()->utc();
+        $tasks = SeoProjectTask::query()
+            ->where('project_id', (int) $project->getKey())
+            ->whereIn('id', $ids)
+            ->whereNull('archived_at')
+            ->with(['article'])
+            ->get();
+
+        foreach ($tasks as $task) {
+            $id = (int) $task->getKey();
+            try {
+                if ($this->activeProcessing()->isActivelyPublishing($task)) {
+                    $report['skipped_active']++;
+                    $report['skipped_active_ids'][] = $id;
+                    continue;
+                }
+
+                if ($this->activeProcessing()->isQueuedAwaitingWorker($task)) {
+                    $this->supersedeDeliveryAttempt($task, 'schedule_cancel_pending');
+                    $report['cancelled_pending']++;
+                    $report['cancelled_pending_ids'][] = $id;
+                    $task = $task->fresh() ?? $task;
+                }
+
+                // Reschedule allowed for queue rows; Schedule action alone is for unscheduled.
+                $status = ContentProjectPublishQueueStatus::tryFrom((string) ($task->publish_queue_status ?? ''))
+                    ?? ContentProjectPublishQueueStatus::None;
+                if ($status === ContentProjectPublishQueueStatus::Published
+                    || $task->publish_published_at !== null
+                ) {
+                    $report['failed']++;
+                    continue;
+                }
+
+                $updated = $this->batchUpdate($project, [$id], $this->scheduleResetAttributes([
+                    'scheduled_publish_at' => $utc,
+                    'publish_queue_status' => ContentProjectPublishQueueStatus::Waiting->value,
+                ]), onlyStatuses: [
+                    ContentProjectPublishQueueStatus::None->value,
+                    ContentProjectPublishQueueStatus::Waiting->value,
+                    ContentProjectPublishQueueStatus::Retrying->value,
+                    ContentProjectPublishQueueStatus::Failed->value,
+                    ContentProjectPublishQueueStatus::Cancelled->value,
+                    ContentProjectPublishQueueStatus::Skipped->value,
+                    ContentProjectPublishQueueStatus::Processing->value,
+                    ContentProjectPublishQueueStatus::QueuedForDelivery->value,
+                ]);
+                if ($updated > 0) {
+                    $fresh = SeoProjectTask::query()->whereKey($id)->first();
+                    if ($fresh instanceof SeoProjectTask) {
+                        $this->markerClearer()->applySideEffects($fresh, 'schedule_plus');
+                    }
+                    $report['scheduled'] += $updated;
+                }
+            } catch (\Throwable) {
+                $report['failed']++;
+            }
+        }
+
         $this->ensureInPublishingQueue($project, $ids);
 
-        $utc = $at->copy()->utc();
-
-        return $this->batchUpdate($project, $ids, [
-            'scheduled_publish_at' => $utc,
-            'publish_queue_status' => ContentProjectPublishQueueStatus::None->value,
-            'last_publish_error' => null,
-        ], onlyStatuses: [
-            ContentProjectPublishQueueStatus::None->value,
-            ContentProjectPublishQueueStatus::Waiting->value,
-            ContentProjectPublishQueueStatus::Retrying->value,
-            ContentProjectPublishQueueStatus::Failed->value,
-            ContentProjectPublishQueueStatus::Cancelled->value,
-            ContentProjectPublishQueueStatus::Skipped->value,
-        ]);
+        return $report;
     }
 
     /**
@@ -238,7 +339,7 @@ final class ContentProjectPublishingQueueService
             $from = ContentProjectPublishQueueStatus::tryFrom((string) ($task->publish_queue_status ?? ''))
                 ?? ContentProjectPublishQueueStatus::None;
 
-            if ($from === ContentProjectPublishQueueStatus::Processing) {
+            if ($this->activeProcessing()->isActivelyPublishing($task)) {
                 continue;
             }
 
@@ -250,16 +351,18 @@ final class ContentProjectPublishingQueueService
                     ContentProjectPublishQueueStatus::Retrying,
                     ContentProjectPublishQueueStatus::None,
                     ContentProjectPublishQueueStatus::Published,
+                    // Expired/stale processing only reaches here after isActivelyPublishing=false.
+                    ContentProjectPublishQueueStatus::Processing,
                 ], true);
                 if (! $retryable) {
                     continue;
                 }
 
-                $to = $from === ContentProjectPublishQueueStatus::Failed
-                    ? ContentProjectPublishQueueStatus::Retrying
-                    : ContentProjectPublishQueueStatus::Waiting;
+                // Manual / explicit retry = due ngay (Waiting), không để Retrying thiếu next_publish_retry_at.
+                $to = ContentProjectPublishQueueStatus::Waiting;
             } else {
                 // Published → Waiting = update existing WP post with latest local content.
+                // Expired processing → Waiting = immediate requeue.
                 $to = ContentProjectPublishQueueStatus::Waiting;
             }
 
@@ -271,8 +374,19 @@ final class ContentProjectPublishingQueueService
                 'last_publish_error' => null,
             ];
 
+            if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'next_publish_retry_at')) {
+                $payload['next_publish_retry_at'] = null;
+            }
+            if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'last_publish_error_code')) {
+                $payload['last_publish_error_code'] = null;
+                $payload['last_publish_error_message'] = null;
+                $payload['last_publish_http_status'] = null;
+            }
+
+            $payload = $this->markerClearer()->mergeInto($payload);
+
             if ($asRetry && $from === ContentProjectPublishQueueStatus::Failed) {
-                $payload['publish_retry_count'] = DB::raw('publish_retry_count + 1');
+                $payload['publish_retry_count'] = (int) ($task->publish_retry_count ?? 0) + 1;
             }
 
             $updated = SeoProjectTask::query()
@@ -280,6 +394,11 @@ final class ContentProjectPublishingQueueService
                 ->whereKey((int) $task->getKey())
                 ->whereNull('archived_at')
                 ->update($payload);
+
+            if ($updated > 0) {
+                $task->forceFill(array_merge($task->getAttributes(), $payload));
+                $this->markerClearer()->applySideEffects($task, $asRetry ? 'explicit_retry' : 'publish_now');
+            }
 
             $affected += (int) $updated;
         }
@@ -338,9 +457,7 @@ final class ContentProjectPublishingQueueService
             ->get();
 
         foreach ($tasks as $task) {
-            $from = ContentProjectPublishQueueStatus::tryFrom((string) ($task->publish_queue_status ?? ''))
-                ?? ContentProjectPublishQueueStatus::None;
-            if ($from === ContentProjectPublishQueueStatus::Processing) {
+            if ($this->activeProcessing()->isActivelyPublishing($task)) {
                 throw new RuntimeException(
                     'publishing.busy_cannot_reschedule: Bài đang được xuất bản nên không thể đổi lịch.',
                 );
@@ -350,11 +467,11 @@ final class ContentProjectPublishingQueueService
         $this->assertTasksCan($project, $ids, ContentProjectItemAction::CancelPublish);
         $this->assertTransitionForTasks($project, $ids, ContentProjectPublishQueueStatus::Cancelled);
 
-        return $this->batchUpdate($project, $ids, [
+        return $this->batchUpdate($project, $ids, $this->markerClearer()->mergeInto([
             'scheduled_publish_at' => null,
             'publish_queue_status' => ContentProjectPublishQueueStatus::Cancelled->value,
             'last_publish_error' => null,
-        ], onlyStatuses: [
+        ]), onlyStatuses: [
             ContentProjectPublishQueueStatus::Waiting->value,
             ContentProjectPublishQueueStatus::Retrying->value,
             ContentProjectPublishQueueStatus::Failed->value,
@@ -399,7 +516,7 @@ final class ContentProjectPublishingQueueService
             }
 
             $payload = match ($target) {
-                'scheduled' => [
+                'scheduled' => $this->markerClearer()->mergeInto([
                     'scheduled_publish_at' => $rescheduleAt ?? (
                         $task->scheduled_publish_at !== null && $task->scheduled_publish_at->gt(now())
                             ? $task->scheduled_publish_at
@@ -408,18 +525,18 @@ final class ContentProjectPublishingQueueService
                     'publish_queue_status' => ContentProjectPublishQueueStatus::None->value,
                     'last_publish_error' => null,
                     'last_publish_attempt_at' => null,
-                ],
-                'unscheduled' => [
+                ]),
+                'unscheduled' => $this->markerClearer()->mergeInto([
                     'scheduled_publish_at' => null,
                     'publish_queue_status' => ContentProjectPublishQueueStatus::None->value,
                     'last_publish_error' => null,
                     'last_publish_attempt_at' => null,
-                ],
-                default => [
+                ]),
+                default => $this->markerClearer()->mergeInto([
                     'publish_queue_status' => ContentProjectPublishQueueStatus::Failed->value,
                     'last_publish_error' => 'stale_processing: Tiến trình xuất bản đã quá hạn. Hãy khôi phục trạng thái trước.',
                     'last_publish_attempt_at' => now(),
-                ],
+                ]),
             };
 
             $updated = SeoProjectTask::query()
@@ -427,6 +544,11 @@ final class ContentProjectPublishingQueueService
                 ->where('project_id', (int) $project->getKey())
                 ->where('publish_queue_status', ContentProjectPublishQueueStatus::Processing->value)
                 ->update($payload);
+
+            if ($updated > 0) {
+                $task->forceFill(array_merge($task->getAttributes(), $payload));
+                $this->markerClearer()->applySideEffects($task, 'recover_stuck_'.$target);
+            }
 
             $affected += (int) $updated;
         }
@@ -457,35 +579,402 @@ final class ContentProjectPublishingQueueService
         return $this->unschedule($project, $taskIds);
     }
 
+    /**
+     * Scanner claim → queued_for_delivery (dispatch only).
+     * Does NOT create publisher lease and does NOT increment publish_attempt_count.
+     * Publisher lease + attempt are owned by beginPublisherAttempt() when WP worker starts.
+     *
+     * @deprecated Prefer claimForDispatch() structured result.
+     */
+    public function claimForPublishing(SeoProjectTask $task): ?SeoProjectTask
+    {
+        $result = $this->claimForDispatch($task);
+
+        return $result->isClaimed() ? $result->task : null;
+    }
+
+    /**
+     * Atomic claim for downstream delivery dispatch (not active publishing).
+     * Always returns an explicit rejection code — never silent null.
+     */
+    public function claimForDispatch(SeoProjectTask $task): DispatchClaimResult
+    {
+        $taskId = (int) $task->getKey();
+
+        try {
+            return DB::connection('omi_seo_ai')->transaction(function () use ($taskId): DispatchClaimResult {
+                /** @var SeoProjectTask|null $locked */
+                $locked = SeoProjectTask::query()->whereKey($taskId)->lockForUpdate()->first();
+                if (! $locked instanceof SeoProjectTask) {
+                    return DispatchClaimResult::rejected(DispatchClaimResult::NOT_FOUND, 'Task không tồn tại.');
+                }
+
+                if (! $locked->article instanceof SeoArticle && (int) ($locked->article_id ?? 0) <= 0) {
+                    return DispatchClaimResult::rejected(
+                        DispatchClaimResult::MISSING_ARTICLE,
+                        'Task không có article.',
+                        $locked,
+                    );
+                }
+
+                $status = ContentProjectPublishQueueStatus::tryFrom((string) ($locked->publish_queue_status ?? ''))
+                    ?? ContentProjectPublishQueueStatus::None;
+
+                if ($this->activeProcessing()->isActivelyPublishing($locked)) {
+                    return DispatchClaimResult::rejected(
+                        DispatchClaimResult::ACTIVE_PUBLISH,
+                        'Item đang xuất bản (publisher lease còn hiệu lực).',
+                        $locked,
+                        ['publish_queue_status' => $status->value],
+                    );
+                }
+
+                if ($this->activeProcessing()->hasStaleProcessingMarkers($locked)) {
+                    // Allow reclaim below for stalled/false-active — log category for health.
+                    RuntimeLogger::info('publishing.claim_stale_markers', [
+                        'task_id' => $taskId,
+                        'status' => $status->value,
+                    ]);
+                }
+
+                if ($status === ContentProjectPublishQueueStatus::QueuedForDelivery
+                    && ! $this->activeProcessing()->isDeliveryWorkerStalled($locked)
+                ) {
+                    return DispatchClaimResult::rejected(
+                        DispatchClaimResult::AWAITING_WORKER,
+                        'Item đã queued_for_delivery, đang chờ worker.',
+                        $locked,
+                    );
+                }
+
+                $attempts = (int) ($locked->publish_attempt_count ?? 0);
+                if ($status === ContentProjectPublishQueueStatus::Retrying
+                    && ! $this->retryPolicy()->canRetry($attempts)
+                ) {
+                    return DispatchClaimResult::rejected(
+                        DispatchClaimResult::ATTEMPTS_EXHAUSTED,
+                        'Đã hết số lần thử xuất bản.',
+                        $locked,
+                        ['publish_attempt_count' => $attempts],
+                    );
+                }
+
+                if (! in_array($status, [
+                    ContentProjectPublishQueueStatus::Waiting,
+                    ContentProjectPublishQueueStatus::Retrying,
+                    ContentProjectPublishQueueStatus::None,
+                    ContentProjectPublishQueueStatus::QueuedForDelivery,
+                    ContentProjectPublishQueueStatus::Processing, // legacy false-active reclaim
+                ], true)) {
+                    return DispatchClaimResult::rejected(
+                        DispatchClaimResult::INVALID_STATUS,
+                        'Status không claim được: '.$status->value,
+                        $locked,
+                        ['publish_queue_status' => $status->value],
+                    );
+                }
+
+                $to = ContentProjectPublishQueueStatus::QueuedForDelivery;
+                try {
+                    $this->transitionGuard->assertCanTransition($status, $to);
+                } catch (RuntimeException $e) {
+                    return DispatchClaimResult::rejected(
+                        DispatchClaimResult::INVALID_STATUS,
+                        $e->getMessage(),
+                        $locked,
+                    );
+                }
+
+                $now = now('UTC');
+                $attemptToken = (string) \Illuminate\Support\Str::ulid();
+                $payload = [
+                    'publish_queue_status' => $to->value,
+                    'last_publish_attempt_at' => $now,
+                ];
+
+                // Clear publisher lease — scanner must not own active publisher lease.
+                $payload = $this->markerClearer()->mergeInto($payload, clearPublishingStartedAt: true);
+
+                if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'delivery_dispatched_at')) {
+                    $payload['delivery_dispatched_at'] = $now;
+                }
+                if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publisher_started_at')) {
+                    $payload['publisher_started_at'] = null;
+                }
+                if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_attempt_token')) {
+                    $payload['publish_attempt_token'] = $attemptToken;
+                }
+                if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'dispatch_count')) {
+                    $payload['dispatch_count'] = (int) ($locked->dispatch_count ?? 0) + 1;
+                }
+                // Intentionally do NOT increment publish_attempt_count here.
+                if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'next_publish_retry_at')) {
+                    $payload['next_publish_retry_at'] = null;
+                }
+                if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_operation_key')) {
+                    $existingKey = trim((string) ($locked->publish_operation_key ?? ''));
+                    $payload['publish_operation_key'] = $existingKey !== ''
+                        ? $existingKey
+                        : $this->operationKeys()->forTask($locked, $locked->article instanceof SeoArticle ? $locked->article : null);
+                }
+
+                $locked->forceFill($payload)->saveQuietly();
+
+                RuntimeLogger::info('publishing.dispatched', [
+                    'task_id' => $taskId,
+                    'dispatch_count' => (int) ($locked->dispatch_count ?? 0),
+                    'publisher_attempt_count' => (int) ($locked->publish_attempt_count ?? 0),
+                    'attempt_token' => $attemptToken,
+                    'operation_key' => (string) ($locked->publish_operation_key ?? ''),
+                ]);
+
+                return DispatchClaimResult::claimed($locked->fresh() ?? $locked);
+            });
+        } catch (\Throwable $e) {
+            RuntimeLogger::warning('publishing.claim_dispatch_failed', [
+                'task_id' => $taskId,
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
+            ]);
+
+            return DispatchClaimResult::rejected(
+                DispatchClaimResult::DISPATCH_FAILED,
+                $e->getMessage(),
+                null,
+                ['exception' => $e::class],
+            );
+        }
+    }
+
+    /**
+     * Publisher worker start — creates active lease and increments publisher attempt.
+     *
+     * @return 'started'|'already_active'|'superseded'|'not_found'
+     */
+    public function beginPublisherAttempt(SeoProjectTask $task, ?string $attemptToken = null): string
+    {
+        $taskId = (int) $task->getKey();
+
+        return DB::connection('omi_seo_ai')->transaction(function () use ($taskId, $attemptToken): string {
+            /** @var SeoProjectTask|null $locked */
+            $locked = SeoProjectTask::query()->whereKey($taskId)->lockForUpdate()->first();
+            if (! $locked instanceof SeoProjectTask) {
+                return 'not_found';
+            }
+
+            if ($this->activeProcessing()->isActivelyPublishing($locked)) {
+                return 'already_active';
+            }
+
+            $currentToken = trim((string) ($locked->publish_attempt_token ?? ''));
+            $incoming = trim((string) ($attemptToken ?? ''));
+            if ($currentToken !== '' && $incoming !== '' && ! hash_equals($currentToken, $incoming)) {
+                RuntimeLogger::info('publishing.attempt_superseded', [
+                    'task_id' => $taskId,
+                    'expected_token_prefix' => substr($currentToken, 0, 8),
+                    'incoming_token_prefix' => substr($incoming, 0, 8),
+                ]);
+
+                return 'superseded';
+            }
+
+            $from = ContentProjectPublishQueueStatus::tryFrom((string) ($locked->publish_queue_status ?? ''))
+                ?? ContentProjectPublishQueueStatus::None;
+            $this->transitionGuard->assertCanTransition($from, ContentProjectPublishQueueStatus::Processing);
+
+            $now = now('UTC');
+            $payload = [
+                'publish_queue_status' => ContentProjectPublishQueueStatus::Processing->value,
+                'last_publish_attempt_at' => $now,
+            ];
+            if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publisher_started_at')) {
+                $payload['publisher_started_at'] = $now;
+            }
+            if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publishing_started_at')) {
+                $payload['publishing_started_at'] = $now;
+            }
+            if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_lease_expires_at')) {
+                $payload['publish_lease_expires_at'] = $this->retryPolicy()->leaseExpiresAt($now);
+            }
+            if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_attempt_count')) {
+                $payload['publish_attempt_count'] = (int) ($locked->publish_attempt_count ?? 0) + 1;
+            }
+            if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_retry_count')
+                && (int) ($locked->publish_attempt_count ?? 0) > 0
+            ) {
+                $payload['publish_retry_count'] = (int) ($locked->publish_retry_count ?? 0) + 1;
+            }
+            if ($incoming !== '' && Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_attempt_token')) {
+                $payload['publish_attempt_token'] = $incoming;
+            } elseif ($currentToken === ''
+                && Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_attempt_token')
+            ) {
+                $payload['publish_attempt_token'] = (string) \Illuminate\Support\Str::ulid();
+            }
+
+            $locked->forceFill($payload)->saveQuietly();
+
+            RuntimeLogger::info('publishing.publisher_started', [
+                'task_id' => $taskId,
+                'attempt' => (int) ($locked->publish_attempt_count ?? 0),
+                'lease_expires_at' => $locked->publish_lease_expires_at?->toIso8601String(),
+                'attempt_token' => (string) ($locked->publish_attempt_token ?? ''),
+            ]);
+
+            return 'started';
+        });
+    }
+
+    /**
+     * Supersede pending delivery so old queued automation jobs become no-ops.
+     */
+    public function supersedeDeliveryAttempt(SeoProjectTask $task, string $reason = 'supersede'): string
+    {
+        $newToken = (string) \Illuminate\Support\Str::ulid();
+        $payload = $this->markerClearer()->mergeInto([
+            'publish_queue_status' => ContentProjectPublishQueueStatus::None->value,
+        ]);
+        if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_attempt_token')) {
+            $payload['publish_attempt_token'] = $newToken;
+        }
+        if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'delivery_dispatched_at')) {
+            $payload['delivery_dispatched_at'] = null;
+        }
+        if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publisher_started_at')) {
+            $payload['publisher_started_at'] = null;
+        }
+
+        $task->forceFill($payload)->saveQuietly();
+        $this->markerClearer()->applySideEffects($task, $reason);
+
+        RuntimeLogger::info('publishing.attempt_superseded_by_operator', [
+            'task_id' => (int) $task->getKey(),
+            'reason' => $reason,
+            'new_token_prefix' => substr($newToken, 0, 8),
+        ]);
+
+        return $newToken;
+    }
+
     public function markProcessing(SeoProjectTask $task): void
     {
-        $from = ContentProjectPublishQueueStatus::tryFrom((string) ($task->publish_queue_status ?? ''))
-            ?? ContentProjectPublishQueueStatus::None;
-        $this->transitionGuard->assertCanTransition($from, ContentProjectPublishQueueStatus::Processing);
+        // Legacy callers — start publisher attempt (owns lease + attempt count).
+        $outcome = $this->beginPublisherAttempt($task, (string) ($task->publish_attempt_token ?? ''));
+        if ($outcome === 'started' || $outcome === 'already_active') {
+            $fresh = $task->fresh();
+            if ($fresh instanceof SeoProjectTask) {
+                $task->forceFill($fresh->getAttributes());
+            }
+        }
+    }
+
+    public function extendPublishLease(SeoProjectTask $task): void
+    {
+        if (! Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_lease_expires_at')) {
+            return;
+        }
 
         $task->forceFill([
-            'publish_queue_status' => ContentProjectPublishQueueStatus::Processing->value,
+            'publish_lease_expires_at' => $this->retryPolicy()->leaseExpiresAt(),
             'last_publish_attempt_at' => now(),
         ])->saveQuietly();
     }
 
     public function markPublished(SeoProjectTask $task): void
     {
-        $task->forceFill([
+        $this->markPublishedFromReconcile($task);
+    }
+
+    public function markPublishedFromReconcile(SeoProjectTask $task): void
+    {
+        $payload = $this->markerClearer()->mergeInto([
             'publish_queue_status' => ContentProjectPublishQueueStatus::Published->value,
-            'publish_published_at' => now(),
+            'publish_published_at' => $task->publish_published_at ?? now(),
             'scheduled_publish_at' => null,
             'last_publish_error' => null,
-        ])->saveQuietly();
+        ]);
+
+        if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'next_publish_retry_at')) {
+            $payload['next_publish_retry_at'] = null;
+        }
+        if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'last_publish_error_code')) {
+            $payload['last_publish_error_code'] = null;
+            $payload['last_publish_error_message'] = null;
+            $payload['last_publish_http_status'] = null;
+        }
+        // Do NOT reset publish_published_at if already set; do NOT clear publish_operation_key.
+
+        $task->forceFill($payload)->saveQuietly();
+        $this->markerClearer()->applySideEffects($task, 'published');
     }
 
     public function markFailed(SeoProjectTask $task, string $error): void
     {
-        $task->forceFill([
+        $classification = new PublishFailureClassification(
+            retryable: false,
+            code: 'publish_failed',
+            message: mb_substr(trim($error), 0, 500),
+        );
+        $this->markFailedFromClassification($task, $classification);
+    }
+
+    public function markRetryWait(
+        SeoProjectTask $task,
+        PublishFailureClassification $classification,
+        ?CarbonInterface $nextAt,
+    ): void {
+        $from = ContentProjectPublishQueueStatus::tryFrom((string) ($task->publish_queue_status ?? ''))
+            ?? ContentProjectPublishQueueStatus::None;
+        // processing → retrying allowed via extended guard.
+        $this->transitionGuard->assertCanTransition($from, ContentProjectPublishQueueStatus::Retrying);
+
+        $payload = $this->markerClearer()->mergeInto([
+            'publish_queue_status' => ContentProjectPublishQueueStatus::Retrying->value,
+            'last_publish_attempt_at' => now(),
+            'last_publish_error' => $classification->message,
+        ]);
+
+        if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'next_publish_retry_at')) {
+            $payload['next_publish_retry_at'] = $nextAt;
+        }
+        if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'last_publish_error_code')) {
+            $payload['last_publish_error_code'] = $classification->code;
+            $payload['last_publish_error_message'] = $classification->message;
+            $payload['last_publish_http_status'] = $classification->httpStatus;
+            $payload['last_publish_failed_at'] = now();
+        }
+
+        $task->forceFill($payload)->saveQuietly();
+        $this->markerClearer()->applySideEffects($task, 'retry_wait');
+    }
+
+    public function markFailedFromClassification(
+        SeoProjectTask $task,
+        PublishFailureClassification $classification,
+    ): void {
+        $payload = $this->markerClearer()->mergeInto([
             'publish_queue_status' => ContentProjectPublishQueueStatus::Failed->value,
             'last_publish_attempt_at' => now(),
-            'last_publish_error' => mb_substr(trim($error), 0, 2000),
-        ])->saveQuietly();
+            'last_publish_error' => $classification->message,
+        ]);
+
+        if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'next_publish_retry_at')) {
+            $payload['next_publish_retry_at'] = null;
+        }
+        if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'last_publish_error_code')) {
+            $payload['last_publish_error_code'] = $classification->code;
+            $payload['last_publish_error_message'] = $classification->message;
+            $payload['last_publish_http_status'] = $classification->httpStatus;
+            $payload['last_publish_failed_at'] = now();
+        }
+
+        $task->forceFill($payload)->saveQuietly();
+        $this->markerClearer()->applySideEffects($task, 'failed');
+    }
+
+    private function releasePublishIdempotency(SeoProjectTask $task): void
+    {
+        $this->markerClearer()->applySideEffects($task, 'idempotency_release');
     }
 
     private function assertProjectActive(SeoProject $project): void
@@ -532,7 +1021,7 @@ final class ContentProjectPublishingQueueService
             $status = ContentProjectPublishQueueStatus::tryFrom((string) ($task->publish_queue_status ?? ''))
                 ?? ContentProjectPublishQueueStatus::None;
 
-            if ($status === ContentProjectPublishQueueStatus::Processing) {
+            if ($this->activeProcessing()->isActivelyPublishing($task)) {
                 throw new RuntimeException(
                     'publishing.busy_cannot_reschedule: Bài đang được xuất bản nên không thể đổi lịch.',
                 );
@@ -576,6 +1065,34 @@ final class ContentProjectPublishingQueueService
                 );
             }
         }
+    }
+
+    /**
+     * Clear publish error / lease / retry clocks when (re)scheduling.
+     * Prevents stale "WordPress has no matching published post" under Scheduled rows.
+     *
+     * @param  array<string, mixed>  $base
+     * @return array<string, mixed>
+     */
+    private function scheduleResetAttributes(array $base): array
+    {
+        $attrs = array_merge($base, [
+            'last_publish_error' => null,
+        ]);
+
+        if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'last_publish_error_code')) {
+            $attrs['last_publish_error_code'] = null;
+            $attrs['last_publish_error_message'] = null;
+            $attrs['last_publish_http_status'] = null;
+        }
+        if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'last_publish_failed_at')) {
+            $attrs['last_publish_failed_at'] = null;
+        }
+        if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'next_publish_retry_at')) {
+            $attrs['next_publish_retry_at'] = null;
+        }
+
+        return $this->markerClearer()->mergeInto($attrs);
     }
 
     /**

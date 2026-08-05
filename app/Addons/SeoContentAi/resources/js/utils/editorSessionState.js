@@ -154,6 +154,11 @@ export function resolveSessionStatusFromClient(code, opts = {}) {
             return EDITOR_SESSION_STATUS.CONFLICT;
         case 'network_error':
             return EDITOR_SESSION_STATUS.NETWORK_DEGRADED;
+        case 'article_editor_session_unavailable':
+        case 'unknown_error':
+        case 'lost':
+        case 'error':
+            return EDITOR_SESSION_STATUS.NETWORK_DEGRADED;
         case 'released':
             return EDITOR_SESSION_STATUS.RELEASED;
         case 'owned':

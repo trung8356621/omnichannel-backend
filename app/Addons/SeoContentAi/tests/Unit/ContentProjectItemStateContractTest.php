@@ -161,14 +161,42 @@ final class ContentProjectItemStateContractTest extends TestCase
             ],
         ];
         yield 'queue_processing' => [
-            ['status' => 'completed', 'publish_queue_status' => 'processing', 'article' => ['review_status' => 'approved']],
+            [
+                'status' => 'completed',
+                'publish_queue_status' => 'processing',
+                'publish_lease_expires_at' => '2099-01-01 00:00:00',
+                'publisher_started_at' => '2099-01-01 00:00:00',
+                'article' => ['review_status' => 'approved'],
+            ],
+            [
+                'lifecycle' => ContentProjectLifecyclePhase::WaitingPublish,
+                'publish' => ContentProjectItemPublishState::Queued,
+                'bucket' => ContentProjectItemDashboardBucket::WaitingPublish,
+                'actions' => [],
+                'blocked' => [
+                    ContentProjectItemAction::Archive,
+                    ContentProjectItemAction::Schedule,
+                ],
+            ],
+        ];
+        yield 'queue_retrying_allows_retry' => [
+            [
+                'status' => 'completed',
+                'publish_queue_status' => 'retrying',
+                'next_publish_retry_at' => '2099-01-01 00:00:00',
+                'publish_lease_expires_at' => null,
+                'article' => ['review_status' => 'approved'],
+            ],
             [
                 'lifecycle' => ContentProjectLifecyclePhase::WaitingPublish,
                 'publish' => ContentProjectItemPublishState::Queued,
                 'bucket' => ContentProjectItemDashboardBucket::WaitingPublish,
                 'actions' => [
+                    ContentProjectItemAction::Unschedule,
                     ContentProjectItemAction::CancelPublish,
                     ContentProjectItemAction::SkipPublish,
+                    ContentProjectItemAction::RetryPublish,
+                    ContentProjectItemAction::PublishNow,
                 ],
                 'blocked' => [ContentProjectItemAction::Archive, ContentProjectItemAction::Schedule],
             ],

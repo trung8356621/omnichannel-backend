@@ -14,6 +14,7 @@ use App\Addons\SeoContentAi\Services\ArticleEditorBundleApplyService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSavePatchService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSeoMetaService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSeoPayloadService;
+use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\ArticleEditorSessionErrorCode;
@@ -102,6 +103,26 @@ final class ArticleEditorSyncController extends Controller
         $savedArticle = $article->fresh() ?? $article;
         $this->bundleApply->apply($savedArticle, $bundle, $context);
 
+        $savedArticle = $savedArticle->fresh() ?? $savedArticle;
+        $persistedSeo = null;
+        try {
+            $persistedSeo = app(SeoAnalyzerService::class)->analyzeSubmittedContent(
+                $savedArticle,
+                $html !== '' ? $html : (string) ($savedArticle->body ?? ''),
+                trim((string) ($context->title !== '' ? $context->title : ($savedArticle->title ?? ''))),
+                $context->normalizedSlug() !== '' ? $context->normalizedSlug() : trim((string) ($savedArticle->slug ?? '')),
+                trim((string) ($context->seoMetaDescription ?? '')) !== ''
+                    ? trim((string) $context->seoMetaDescription)
+                    : null,
+            );
+        } catch (\Throwable $e) {
+            RuntimeLogger::warning('seo.editor.save_score_failed', [
+                'article_id' => (int) $savedArticle->id,
+                'error' => $e->getMessage(),
+            ]);
+            $persistedSeo = is_array($seoAnalysis) ? $seoAnalysis : null;
+        }
+
         $message = (string) ($result->output['message'] ?? 'Article saved');
         $handoff = is_array($result->output['content_project_handoff'] ?? null)
             ? $result->output['content_project_handoff']
@@ -114,7 +135,7 @@ final class ArticleEditorSyncController extends Controller
             'patch' => $this->savePatch->build(
                 $savedArticle->fresh() ?? $savedArticle,
                 $context,
-                $seoAnalysis,
+                $persistedSeo,
             ),
             'content_project_handoff' => $handoff,
             'notification' => [
@@ -181,6 +202,19 @@ final class ArticleEditorSyncController extends Controller
                 $result['notification'] = [
                     'title' => __('seo-content-ai::filament.automation.content_project_workspace_saved_title'),
                     'body' => (string) ($result['message'] ?? __('seo-content-ai::filament.automation.content_project_workspace_saved')),
+                    'status' => 'success',
+                ];
+            }
+        } elseif ($dispatchStatus === 'post_publish_synced') {
+            $result['queued'] = false;
+            $result['already_queued'] = false;
+            $result['workspace_only'] = false;
+            $result['reload'] = false;
+            $result['close_editor'] = false;
+            if (! isset($result['notification']) || ! is_array($result['notification'])) {
+                $result['notification'] = [
+                    'title' => 'Đã đồng bộ bài viết lên WordPress.',
+                    'body' => (string) ($result['message'] ?? 'Đã đồng bộ bài viết lên WordPress.'),
                     'status' => 'success',
                 ];
             }

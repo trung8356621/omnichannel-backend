@@ -120,6 +120,40 @@ final class ArticleLinkSuggestionRuntimeWiringTest extends TestCase
         self::assertStringContainsString('links_generate_fallback', $source);
     }
 
+    public function test_suggestion_anchor_supports_inline_double_click_edit(): void
+    {
+        $source = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/components/ArticleLinksSidebar.jsx',
+        );
+        $i18n = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/utils/i18n.js',
+        );
+        $css = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/css/article-editor.css',
+        );
+
+        self::assertStringContainsString('function keywordRowKey', $source);
+        self::assertStringContainsString('${variant}-${target}-kw-${keywordId}', $source);
+        self::assertStringContainsString('onDoubleClick', $source);
+        self::assertStringContainsString('startAnchorEdit', $source);
+        self::assertStringContainsString('commitAnchorEdit', $source);
+        self::assertStringContainsString('cancelAnchorEdit', $source);
+        self::assertStringContainsString("e.key === 'Enter'", $source);
+        self::assertStringContainsString("e.key === 'Escape'", $source);
+        self::assertStringContainsString('onUpdateSuggestionAnchor', $source);
+        self::assertStringContainsString('updateSuggestionAnchor', $source);
+        self::assertStringContainsString('patchSuggestionAnchorInList', $source);
+        self::assertStringContainsString('setAnchorEditTick', $source);
+        self::assertStringContainsString('wp-article-links-keyword-edit', $source);
+        self::assertStringContainsString('is-editable-anchor', $source);
+        self::assertStringContainsString('suppressClickRef', $source);
+        self::assertStringContainsString('links_suggestion_edit_anchor_hint', $i18n);
+        self::assertStringContainsString('Double-click to edit anchor text', $i18n);
+        self::assertStringContainsString('Double click để sửa anchor text', $i18n);
+        self::assertStringContainsString('.wp-article-links-keyword-edit', $css);
+        self::assertStringContainsString('.wp-article-links-keyword.is-suggestion.is-editable-anchor', $css);
+    }
+
     public function test_editor_responds_to_document_html_request(): void
     {
         $source = (string) file_get_contents(

@@ -13,14 +13,21 @@ use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\SeoMainDomainService;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
+use App\Addons\SeoContentAi\Support\ArticleFeaturedImageResolver;
+use App\Addons\SeoContentAi\Support\ArticleListDiagnostics;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Support\RuntimeLogger;
 use Filament\Actions;
 use Filament\Forms;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ListRecords;
 use Filament\Tables\Table;
+use Illuminate\Contracts\Pagination\CursorPaginator;
+use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Livewire\Attributes\Url;
 
 class ListArticles extends ListRecords
@@ -103,28 +110,41 @@ class ListArticles extends ListRecords
 
     public function mount(): void
     {
-        parent::mount();
+        ArticleListDiagnostics::begin('seo.articles.index');
+        ArticleListDiagnostics::mark('tenant_site_resolution');
 
-        $tab = request()->query('tab', self::TAB_POSTS);
-        if ($tab === 'sync-queue') {
-            $tab = self::TAB_QUEUE;
-        }
-        if (is_string($tab) && in_array($tab, [
-            self::TAB_POSTS,
-            self::TAB_CATEGORIES,
-            self::TAB_QUEUE,
-            self::TAB_REVIEWED,
-            self::TAB_SKIPPED,
-        ], true)) {
-            $this->contentTab = $tab;
-        }
+        try {
+            parent::mount();
 
-        $categoryFilter = request()->input('tableFilters.category_id.value');
-        if ($categoryFilter !== null && $categoryFilter !== '') {
-            $this->contentTab = self::TAB_POSTS;
-        }
+            $tab = request()->query('tab', self::TAB_POSTS);
+            if ($tab === 'sync-queue') {
+                $tab = self::TAB_QUEUE;
+            }
+            if (is_string($tab) && in_array($tab, [
+                self::TAB_POSTS,
+                self::TAB_CATEGORIES,
+                self::TAB_QUEUE,
+                self::TAB_REVIEWED,
+                self::TAB_SKIPPED,
+            ], true)) {
+                $this->contentTab = $tab;
+            }
 
-        $this->ensureDefaultPostsTableFilters();
+            $categoryFilter = request()->input('tableFilters.category_id.value');
+            if ($categoryFilter !== null && $categoryFilter !== '') {
+                $this->contentTab = self::TAB_POSTS;
+            }
+
+            $this->ensureDefaultPostsTableFilters();
+            ArticleListDiagnostics::mark('page_mount');
+        } catch (\Throwable $e) {
+            RuntimeLogger::report($e, [
+                'endpoint' => 'seo.articles.index',
+                'request_id' => ArticleListDiagnostics::requestId(),
+                'content_tab' => $this->contentTab ?? null,
+            ]);
+            throw $e;
+        }
     }
 
     /**
@@ -196,14 +216,30 @@ class ListArticles extends ListRecords
 
     /**
      * Badge Sync Queue — số bài chưa sync thành công (cùng scope với tab).
+     * Short cache so badge count does not block list HTML on every GET.
      */
     public function getSyncQueueBadgeCount(): int
     {
-        $query = ArticleResource::getEloquentQuery();
-        ArticleResource::applyContentTabScope($query, self::TAB_QUEUE);
-        ArticleResource::applyExcludeSkipSeoAuditScope($query);
+        return (int) ArticleListDiagnostics::measure('tab_counts', function (): int {
+            $ttl = (int) config('seo-content-ai.article_list.sync_queue_badge_cache_seconds', 15);
+            $siteId = (int) (SeoAccessControl::globalSiteId() ?? 0);
+            $userId = (int) (auth()->id() ?? 0);
+            $cacheKey = 'seo.article_list.sync_queue_badge.'.$siteId.'.'.$userId;
 
-        return (int) $query->count();
+            $resolver = static function (): int {
+                $query = ArticleResource::getEloquentQuery();
+                ArticleResource::applyContentTabScope($query, self::TAB_QUEUE);
+                ArticleResource::applyExcludeSkipSeoAuditScope($query);
+
+                return (int) $query->count();
+            };
+
+            if ($ttl <= 0) {
+                return $resolver();
+            }
+
+            return (int) Cache::remember($cacheKey, $ttl, $resolver);
+        });
     }
 
     public function getArticlesFilterUrlForCategory(int $categoryWpId, ?int $siteId = null): string
@@ -215,32 +251,51 @@ class ListArticles extends ListRecords
     {
         return ArticleResource::table($table)
             ->modifyQueryUsing(function (Builder $query): Builder {
-                ArticleResource::applyContentTabScope($query, $this->contentTab);
+                return ArticleListDiagnostics::measure('table_query', function () use ($query): Builder {
+                    ArticleResource::applyListSelectColumns($query);
+                    ArticleResource::applyContentTabScope($query, $this->contentTab);
 
-                if ($this->contentTab === self::TAB_SKIPPED) {
-                    return ArticleResource::applyOnlySkipSeoAuditScope($query);
-                }
+                    if ($this->contentTab === self::TAB_SKIPPED) {
+                        return ArticleResource::applyOnlySkipSeoAuditScope($query);
+                    }
 
-                ArticleResource::applyExcludeSkipSeoAuditScope($query);
+                    ArticleResource::applyExcludeSkipSeoAuditScope($query);
 
-                if ($this->contentTab === self::TAB_CATEGORIES) {
-                    return ArticleResource::appendArticlesInCategoryCountSelect($query);
-                }
+                    if ($this->contentTab === self::TAB_CATEGORIES) {
+                        return ArticleResource::appendArticlesInCategoryCountSelect($query);
+                    }
 
-                if ($this->contentTab === self::TAB_QUEUE) {
-                    return ArticleResource::appendWpSyncQueueMetaSelect($query);
-                }
+                    if ($this->contentTab === self::TAB_QUEUE) {
+                        return ArticleResource::appendWpSyncQueueMetaSelect($query);
+                    }
 
-                if ($this->contentTab === self::TAB_REVIEWED) {
-                    return ArticleResource::applyApprovedReviewScope($query)->whereNotNull('reviewed_at');
-                }
+                    if ($this->contentTab === self::TAB_REVIEWED) {
+                        return ArticleResource::applyApprovedReviewScope($query)->whereNotNull('reviewed_at');
+                    }
 
-                if (in_array($this->contentTab, [self::TAB_POSTS, self::TAB_CATEGORIES, self::TAB_QUEUE], true)) {
-                    ArticleResource::applyWpSyncQueueUnreviewedScope($query);
-                }
+                    if (in_array($this->contentTab, [self::TAB_POSTS, self::TAB_CATEGORIES, self::TAB_QUEUE], true)) {
+                        ArticleResource::applyWpSyncQueueUnreviewedScope($query);
+                    }
 
-                return $query;
+                    return $query;
+                });
             });
+    }
+
+    /**
+     * @param  Builder<\Illuminate\Database\Eloquent\Model>  $query
+     */
+    protected function paginateTableQuery(Builder $query): Paginator|CursorPaginator
+    {
+        $records = parent::paginateTableQuery($query);
+
+        $items = method_exists($records, 'getCollection')
+            ? $records->getCollection()
+            : Collection::make(method_exists($records, 'items') ? $records->items() : []);
+
+        app(ArticleFeaturedImageResolver::class)->primeForArticles($items);
+
+        return $records;
     }
 
     public function setSeoScoreBandFilter(?string $band = null): void

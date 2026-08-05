@@ -389,7 +389,8 @@ final class ContentProjectItemOperationsReadModel
             'publish_published_at' => $task->publish_published_at?->toIso8601String(),
             'has_published_revision' => $state->hasPublishedRevision,
             'is_generation_stale' => $isStaleGeneration,
-            'can_generate' => in_array(ContentProjectItemAction::Generate, $state->availableActions, true),
+            'can_generate' => in_array(ContentProjectItemAction::Generate, $state->availableActions, true)
+                && ! $task->isGenerationBlocked(),
             'message' => is_string($message) ? $message : '',
             'current_error_source' => $state->currentErrorSource->value,
             // Rows here always come from scopeInContentProjectWorkingSet() — kept explicit
@@ -397,6 +398,11 @@ final class ContentProjectItemOperationsReadModel
             'article_id' => $articleId,
             'publishing_queued_at' => $task->publishing_queued_at?->toIso8601String(),
             'in_publishing_queue' => $task->publishing_queued_at !== null,
+            'generation_blocked' => $task->isGenerationBlocked(),
+            'generation_blocked_at' => $task->generation_blocked_at?->toIso8601String(),
+            'generation_block_reason' => $task->generation_block_reason !== null
+                ? (string) $task->generation_block_reason
+                : null,
         ];
         $classified = ContentProjectOpsStateClassifier::classify($rowBase);
         $genBadge = match ($classified['generation_key']) {
@@ -465,13 +471,20 @@ final class ContentProjectItemOperationsReadModel
             'can_generate' => (bool) $rowBase['can_generate'],
             'can_regen' => $articleId > 0
                 && $type !== SeoProjectTask::TYPE_IMPROVE
+                && ! $task->isGenerationBlocked()
                 && in_array(ContentProjectItemAction::Rerun, $state->availableActions, true),
-            'can_run_again' => $isStaleGeneration
-                || (string) ($task->status ?? '') === SeoProjectTask::STATUS_FAILED,
+            'can_run_again' => ! $task->isGenerationBlocked()
+                && (
+                    $isStaleGeneration
+                    || (string) ($task->status ?? '') === SeoProjectTask::STATUS_FAILED
+                ),
             'is_generation_stale' => $isStaleGeneration,
             'is_genuinely_running' => $isGenuineRunning,
             'has_resumable_checkpoint' => $hasResumableCheckpoint,
             'is_improve' => $type === SeoProjectTask::TYPE_IMPROVE,
+            'generation_blocked' => (bool) ($rowBase['generation_blocked'] ?? false),
+            'generation_blocked_at' => $rowBase['generation_blocked_at'] ?? null,
+            'generation_block_reason' => $rowBase['generation_block_reason'] ?? null,
             'generation_badge' => $genBadge,
             'lifecycle_badge' => $workflowBadge,
             'workflow_badge' => $workflowBadge,

@@ -380,6 +380,30 @@ class EditArticle extends SeoEditRecord
         $this->articleHeavyAction = null;
     }
 
+    public function forceOpenEditorWhilePreparing(): void
+    {
+        if (! $this->editorPreparing) {
+            return;
+        }
+
+        $this->record->refresh();
+        app(ArticleEditorReadinessService::class)->abandonPreparingGate(
+            $this->record,
+            'Người dùng bỏ qua màn chuẩn bị editor (job AI/ảnh treo).',
+        );
+
+        $this->editorPreparing = false;
+        $this->editorPreparingMessage = '';
+        $this->hydrateArticleState();
+
+        if ((int) ($this->record->wp_post_id ?? 0) > 0) {
+            $this->wordpressMetadataStale = true;
+        }
+
+        $this->articleHeavyActionBusy = false;
+        $this->articleHeavyAction = null;
+    }
+
     public function updatedArticleSlug($value): void
     {
         $normalized = Str::slug((string) $value);
@@ -876,7 +900,7 @@ class EditArticle extends SeoEditRecord
         // Phase 2: album stays out of Livewire snapshot until Images/gallery actions load it.
         $this->productGallery = [];
 
-        // Phase 2: editor HTML from local body/meta only — no resolveEditorHtml() WP fallback on mount.
+        // Phase 2: editor HTML from local body/meta only — no remote WP HTML fallback on mount.
         $localBody = trim((string) ($this->record->body ?? ''));
         if ($localBody === '') {
             $localBody = trim((string) $metaMap->get('wp_post_content', ''));
@@ -1625,14 +1649,14 @@ class EditArticle extends SeoEditRecord
                     null,
                     $this->mediaPickerPage,
                     $search !== '' ? $search : null,
-                    24,
+                    28,
                     restrictToArticleIds: $restrictArticleIds,
                 )
                 : app(WordPressMediaLibraryService::class)->fetch(
                     $site,
                     null,
                     $this->mediaPickerPage,
-                    24,
+                    28,
                     $search !== '' ? $search : null,
                     includeAttachmentIds: $restrictWpAttachmentIds,
                 );
@@ -1712,7 +1736,7 @@ class EditArticle extends SeoEditRecord
             }));
         }
 
-        $perPage = 24;
+        $perPage = 28;
         $total = count($catalog);
         $totalPages = max(1, (int) ceil($total / $perPage));
         $page = min(max(1, $this->mediaPickerPage), $totalPages);
@@ -3239,13 +3263,13 @@ class EditArticle extends SeoEditRecord
         );
         $this->refreshAiHistoryPendingBanner();
 
-        if (is_array($seoAnalysis) && array_key_exists('violations', $seoAnalysis)) {
-            app(SeoAnalyzerService::class)->persistClientAnalysis(
-                $this->record->fresh(),
-                $writtenHtml,
-                $seoAnalysis,
-            );
-        }
+        app(SeoAnalyzerService::class)->analyzeSubmittedContent(
+            $this->record->fresh(),
+            $writtenHtml,
+            trim($this->articleTitle),
+            Str::slug($this->articleSlug) !== '' ? Str::slug($this->articleSlug) : trim((string) ($this->record->slug ?? '')),
+            trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
+        );
 
         $this->expectedDocumentVersion = max(
             1,
@@ -3317,21 +3341,13 @@ class EditArticle extends SeoEditRecord
             }
             $slug = Str::slug($this->articleSlug);
 
-            if (is_array($seoAnalysis) && array_key_exists('violations', $seoAnalysis)) {
-                app(SeoAnalyzerService::class)->persistClientAnalysis(
-                    $this->record->fresh(),
-                    $html,
-                    $seoAnalysis,
-                );
-            } else {
-                app(SeoAnalyzerService::class)->analyzeSubmittedContent(
-                    $this->record->fresh(),
-                    $html,
-                    trim($this->articleTitle),
-                    $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
-                    trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
-                );
-            }
+            app(SeoAnalyzerService::class)->analyzeSubmittedContent(
+                $this->record->fresh(),
+                $html,
+                trim($this->articleTitle),
+                $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
+                trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
+            );
 
             $syncService->storeLocalSaveFingerprint($this->record->fresh(), $html, $seoAnalysis);
 
@@ -3424,21 +3440,13 @@ class EditArticle extends SeoEditRecord
             }
 
             $slug = Str::slug($this->articleSlug);
-            if (is_array($seoAnalysis) && array_key_exists('violations', $seoAnalysis)) {
-                app(SeoAnalyzerService::class)->persistClientAnalysis(
-                    $this->record->fresh(),
-                    $html,
-                    $seoAnalysis,
-                );
-            } else {
-                app(SeoAnalyzerService::class)->analyzeSubmittedContent(
-                    $this->record->fresh(),
-                    $html,
-                    trim($this->articleTitle),
-                    $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
-                    trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
-                );
-            }
+            app(SeoAnalyzerService::class)->analyzeSubmittedContent(
+                $this->record->fresh(),
+                $html,
+                trim($this->articleTitle),
+                $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
+                trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
+            );
 
             $article = $this->record->fresh();
             $result = app(\App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::class)

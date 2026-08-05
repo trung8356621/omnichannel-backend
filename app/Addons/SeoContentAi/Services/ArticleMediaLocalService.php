@@ -34,6 +34,13 @@ final class ArticleMediaLocalService
             ->firstWhere('meta_key', self::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0);
 
         if ($existingUrl === $url && $existingId === $attachmentId) {
+            app(ArticleFeaturedImageProjection::class)->syncAvailable(
+                $article,
+                $url,
+                $attachmentId,
+                \App\Addons\SeoContentAi\Support\ArticleFeaturedImageSource::EDITOR_LOCAL,
+            );
+
             return;
         }
 
@@ -46,6 +53,8 @@ final class ArticleMediaLocalService
             ['meta_value' => (string) $attachmentId],
         );
         $this->markMediaPendingSync($article);
+        $article->unsetRelation('articleMetas');
+        app(ArticleFeaturedImageProjection::class)->rebuildAndPersist($article);
     }
 
     public function clearFeaturedLocal(SeoArticle $article): void
@@ -56,6 +65,7 @@ final class ArticleMediaLocalService
         ])->delete();
         $article->unsetRelation('articleMetas');
         $this->markMediaPendingSync($article);
+        app(ArticleFeaturedImageProjection::class)->clear($article);
     }
 
     /**
@@ -220,14 +230,27 @@ final class ArticleMediaLocalService
         }
 
         $path = parse_url($url, PHP_URL_PATH);
-        if (! is_string($path) || ! str_contains($path, '/storage/uploads/seo_media/')) {
+        if (! is_string($path) || $path === '') {
             return 0;
         }
 
-        $relative = ltrim(str_replace('/storage/', '', $path), '/');
+        // Absolute /storage/... or relative path under seo_media.
+        $relative = '';
+        if (str_contains($path, '/storage/uploads/seo_media/')) {
+            $relative = ltrim(str_replace('/storage/', '', $path), '/');
+        } elseif (str_starts_with(ltrim($path, '/'), 'uploads/seo_media/')) {
+            $relative = ltrim($path, '/');
+        } elseif (str_contains($path, '/uploads/seo_media/')) {
+            $pos = strpos($path, 'uploads/seo_media/');
+            $relative = $pos !== false ? substr($path, $pos) : '';
+        }
+
         if ($relative === '') {
             return 0;
         }
+
+        // Strip query-like suffixes accidentally left in path.
+        $relative = explode('?', $relative, 2)[0];
 
         $query = SeoMedia::query()->where('path', $relative);
         if ($siteId > 0) {
@@ -235,6 +258,22 @@ final class ArticleMediaLocalService
         }
 
         $media = $query->first();
+        if ($media !== null) {
+            return (int) $media->id;
+        }
+
+        // Basename fallback (same filename under seo_media).
+        $basename = basename($relative);
+        if ($basename === '' || $basename === '.' || $basename === '/') {
+            return 0;
+        }
+
+        $fallback = SeoMedia::query()->where('path', 'like', '%/'.$basename);
+        if ($siteId > 0) {
+            $fallback->where('site_id', $siteId);
+        }
+
+        $media = $fallback->orderByDesc('id')->first();
 
         return $media !== null ? (int) $media->id : 0;
     }
@@ -332,6 +371,7 @@ final class ArticleMediaLocalService
             ])->delete();
 
             $this->markMediaPendingSync($article);
+            app(ArticleFeaturedImageProjection::class)->clear($article);
 
             return [];
         }
@@ -366,6 +406,8 @@ final class ArticleMediaLocalService
         );
 
         $this->markMediaPendingSync($article);
+        $article->unsetRelation('articleMetas');
+        app(ArticleFeaturedImageProjection::class)->rebuildAndPersist($article);
 
         return $normalized;
     }

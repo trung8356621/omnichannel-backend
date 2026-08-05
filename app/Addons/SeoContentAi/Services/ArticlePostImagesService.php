@@ -16,7 +16,17 @@ final class ArticlePostImagesService
     public const META_KEY = 'wp_post_images';
 
     /**
-     * @return array<int, array<string, mixed>>
+     * Count images from cached `wp_post_images` meta only.
+     * Never resolves HTML or calls WordPress — safe for Article List rows.
+     */
+    public function countCachedForArticle(SeoArticle $article): int
+    {
+        return count($this->normalizeList($this->getMetaJson($article)));
+    }
+
+    /**
+     * Prefer cached meta; otherwise resolve from HTML (may hit WordPress).
+     * Do not use on Article List GET — use {@see countCachedForArticle()} instead.
      */
     public function countForArticle(SeoArticle $article): int
     {

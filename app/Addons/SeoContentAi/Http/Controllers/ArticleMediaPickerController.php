@@ -42,7 +42,7 @@ class ArticleMediaPickerController extends Controller
                 null,
                 $page,
                 $search !== '' ? $search : null,
-                24,
+                28,
                 restrictToArticleIds: $restrictArticleIds,
             );
             $images = $articleResolver->enrichImages(
@@ -68,7 +68,7 @@ class ArticleMediaPickerController extends Controller
                 $site,
                 null,
                 $page,
-                24,
+                28,
                 $search !== '' ? $search : null,
                 includeAttachmentIds: $restrictWpAttachmentIds,
             );

@@ -90,13 +90,19 @@ final class SeoAnalyzerScoringTest extends TestCase
 
         $article = SeoArticle::query()->create([
             'site_id' => 1,
-            'title' => 'Test article',
-            'slug' => 'test-article',
+            'title' => 'keyword heading content',
+            'slug' => 'keyword',
             'type' => 'post',
             'status' => 'draft',
-            'body' => '<h2>A</h2><h2>B</h2><p>Focus keyword content</p>',
+            'body' => '<h2>keyword one</h2><h2>keyword two</h2><p>keyword content with enough words for scoring path.</p>',
         ]);
 
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => 'seo_focus_keyword'],
+            ['meta_value' => 'keyword'],
+        );
+
+        // Client violations are ignored — PHP engine is SoT.
         $result = app(SeoAnalyzerService::class)->persistClientAnalysis(
             $article->fresh(),
             (string) $article->body,
@@ -109,11 +115,15 @@ final class SeoAnalyzerScoringTest extends TestCase
             ],
         );
 
-        $this->assertSame(['h2_missing', 'faq_missing'], $result['violations']);
-        $this->assertSame(70, $result['score']);
+        self::assertNotContains('h2_missing', $result['violations']);
+        self::assertArrayHasKey('score_version', $result);
+        self::assertSame(SeoScoringRulesRegistry::SCORE_VERSION, $result['score_version']);
+        self::assertArrayHasKey('content_hash', $result);
 
         $meta = $article->fresh()?->articleMetas()->where('meta_key', SeoScoringRulesRegistry::META_KEY_VIOLATIONS)->first();
-        $this->assertNotNull($meta);
-        $this->assertSame(['h2_missing', 'faq_missing'], json_decode((string) $meta->meta_value, true));
+        self::assertNotNull($meta);
+        $stored = json_decode((string) $meta->meta_value, true);
+        self::assertIsArray($stored);
+        self::assertNotContains('h2_missing', $stored);
     }
 }

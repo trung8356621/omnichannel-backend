@@ -25,6 +25,9 @@ final class AuditLinkStatusJob implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
+    /** SEO link-health maintenance — must not share WP publish worker. */
+    public const QUEUE_NAME = 'seo-audit';
+
     private const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
     public int $timeout = 45;
@@ -34,7 +37,9 @@ final class AuditLinkStatusJob implements ShouldQueue
     public function __construct(
         public int $linkMapId,
         public int $siteId,
-    ) {}
+    ) {
+        $this->onQueue(self::QUEUE_NAME);
+    }
 
     public function handle(
         SeoDatabaseConnectionService $databaseConnection,

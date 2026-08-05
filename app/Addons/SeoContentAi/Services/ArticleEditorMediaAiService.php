@@ -276,25 +276,38 @@ final class ArticleEditorMediaAiService
         string $toolType,
         bool $sync,
     ): void {
-        if ($sync) {
-            GenerateMediaJob::dispatchSync(
+        try {
+            if ($sync) {
+                GenerateMediaJob::dispatchSync(
+                    (int) $placeholder->id,
+                    $promptId,
+                    $variables,
+                    $toolType,
+                );
+
+                return;
+            }
+
+            GenerateMediaJob::dispatch(
                 (int) $placeholder->id,
                 $promptId,
                 $variables,
                 $toolType,
-            );
+            )
+                ->onQueue('media_generation')
+                ->afterResponse();
+        } catch (\Throwable $exception) {
+            $placeholder->update([
+                'status' => 'failed',
+                'error_message' => mb_substr(
+                    'Không gửi được job AI: '.$exception->getMessage(),
+                    0,
+                    1000,
+                ),
+            ]);
 
-            return;
+            throw $exception;
         }
-
-        GenerateMediaJob::dispatch(
-            (int) $placeholder->id,
-            $promptId,
-            $variables,
-            $toolType,
-        )
-            ->onQueue('media_generation')
-            ->afterResponse();
     }
 
     /**
@@ -1106,6 +1119,27 @@ final class ArticleEditorMediaAiService
             'status' => 'failed',
             'error_message' => 'Quá thời gian chờ xử lý AI. Kiểm tra queue worker rồi bấm Thử lại.',
         ]);
+    }
+
+    public function failAllProcessingAiMediaJobs(int $articleId, string $reason): void
+    {
+        if ($articleId <= 0) {
+            return;
+        }
+
+        $reason = trim($reason);
+        if ($reason === '') {
+            $reason = 'Job AI bị hủy khi mở editor.';
+        }
+
+        SeoMedia::query()
+            ->where('article_id', $articleId)
+            ->whereIn('source', ['ai_prompt', 'ai_video_prompt'])
+            ->where('status', 'processing')
+            ->update([
+                'status' => 'failed',
+                'error_message' => mb_substr($reason, 0, 1000),
+            ]);
     }
 
     private function findReusableProcessingJob(

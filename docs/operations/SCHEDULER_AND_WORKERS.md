@@ -2,7 +2,7 @@
 
 > Status: Canonical  
 > Owner: SeoContentAi (+ core schedule)  
-> Last verified: 2026-08-03  
+> Last verified: 2026-08-05  
 > Supersedes: scattered schedule notes in archived Site Sync / WordPress MAP docs; automation cron/queue notes from `docs/archive/automation/AUTOMATION_SERVICE_INVENTORY.md` (durable ownership only)
 
 Runtime expectation: host cron runs `php artisan schedule:run` every minute; queue workers process named queues below.
@@ -88,12 +88,16 @@ aaPanel tasks + Final smoke test: [AAPANEL_QUEUE_RUNTIME.md](AAPANEL_QUEUE_RUNTI
 | Queue | Runtime worker |
 |-------|----------------|
 | `seo-content-run` | Dedicated Content Project Queue Worker |
-| `automation-critical` | Shared Queue Worker |
-| `automation` | Shared Queue Worker |
-| `automation-external` | Shared Queue Worker |
-| `seo` | Shared Queue Worker |
-| `media_generation` | Shared Queue Worker |
-| `default` | Shared Queue Worker |
+| `automation-critical` | **automation-critical** worker (dedicated) |
+| `automation-external` | **automation-external** worker (dedicated — WP publish only) |
+| `automation-policy` | **automation-policy** worker (`DispatchContentProjectAutomationPoliciesJob`) |
+| `seo-audit` | **SEO maintenance** worker (low concurrency; `AuditLinkStatusJob`) |
+| `automation` | general worker |
+| `seo` | general worker |
+| `media_generation` | general worker |
+| `default` | general worker (Filament/Laravel queued notifications without explicit queue) |
+
+**Invariant:** `AuditLinkStatusJob` (`seo-audit`) and CP policy dispatch (`automation-policy`) must **not** share the worker that consumes `automation-external`.
 
 ## Automation (three owners)
 
@@ -103,15 +107,18 @@ Registered in `SeoContentAiServiceProvider` (distinct names, `withoutOverlapping
 |----------|---------|--------|
 | `automation:dispatch-scheduled` | everyMinute | Business Hook rules |
 | `agent:automations:dispatch-due` | everyMinute | Agent Automations → `RunAgentAutomationJob` (unique `agent-automation-run:{id}`) |
-| CP automation policies | hourly job | `DispatchContentProjectAutomationPoliciesJob` |
+| CP automation policies | hourly job on `automation-policy` | `DispatchContentProjectAutomationPoliciesJob` |
 
 ### Queues
 
 | Queue | Role |
 |-------|------|
 | `automation-critical` | `ExecuteAutomationRuleJob` |
-| `automation-external` | WP / external action nodes |
+| `automation-external` | WP / external action nodes (`ExecuteAutomationNodeJob` when action `defaultQueue` is External) |
+| `automation-policy` | `DispatchContentProjectAutomationPoliciesJob` |
+| `seo-audit` | `AuditLinkStatusJob` (link health; not WP publish) |
 | `seo` | Legacy/manual WP sync job (not `default`) |
+| `default` | Filament/Laravel queued notifications without explicit `onQueue()` |
 
 ### Ops invariants (durable)
 

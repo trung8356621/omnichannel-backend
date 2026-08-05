@@ -25,12 +25,22 @@
     $stuckCount = (int) ($health['stuck_publishing'] ?? 0);
     $recoverableStuck = max($stuckCount, count($this->stuckPublishingIds));
     $kpiCards = [
-        ['key' => 'unscheduled', 'card' => 'unscheduled', 'filter' => 'unscheduled', 'label' => 'Unscheduled', 'hint' => 'In queue, not scheduled yet', 'value' => (int) ($stats['unscheduled'] ?? 0)],
-        ['key' => 'scheduled', 'card' => 'scheduled', 'filter' => 'scheduled', 'label' => 'Scheduled', 'hint' => 'Waiting for due time / claim', 'value' => (int) ($stats['scheduled'] ?? 0)],
-        ['key' => 'publishing', 'card' => 'publishing', 'filter' => 'publishing', 'label' => 'Publishing', 'hint' => 'Publisher operation running', 'value' => (int) ($stats['publishing'] ?? 0)],
-        ['key' => 'published', 'card' => 'published', 'filter' => 'published', 'label' => 'Published', 'hint' => 'Publisher confirmed on WordPress', 'value' => (int) ($stats['published'] ?? 0)],
-        ['key' => 'failed', 'card' => 'failed', 'filter' => 'failed', 'label' => 'Failed', 'hint' => 'Publish failed', 'value' => (int) ($stats['failed'] ?? 0)],
+        ['key' => 'unscheduled', 'card' => 'unscheduled', 'filter' => 'unscheduled', 'label' => 'Chưa lên lịch', 'hint' => 'Trong queue, chưa có lịch', 'value' => (int) ($stats['unscheduled'] ?? 0)],
+        ['key' => 'scheduled', 'card' => 'scheduled', 'filter' => 'scheduled', 'label' => 'Đã lên lịch', 'hint' => 'Chờ tới giờ đăng', 'value' => (int) ($stats['scheduled'] ?? 0)],
+        ['key' => 'awaiting_delivery', 'card' => 'scheduled', 'filter' => 'awaiting_delivery', 'label' => 'Đang chuẩn bị', 'hint' => 'Đã gửi yêu cầu, chờ bắt đầu', 'value' => (int) ($stats['awaiting_delivery'] ?? $stats['awaiting_worker'] ?? 0)],
+        ['key' => 'publishing', 'card' => 'publishing', 'filter' => 'publishing', 'label' => 'Đang xuất bản', 'hint' => 'Đang xuất bản lên WordPress', 'value' => (int) ($stats['publishing'] ?? 0)],
+        ['key' => 'retry_wait', 'card' => 'scheduled', 'filter' => 'retry_wait', 'label' => 'Thử lại sau', 'hint' => 'Chờ auto retry', 'value' => (int) ($stats['retry_wait'] ?? 0)],
+        ['key' => 'published', 'card' => 'published', 'filter' => 'published', 'label' => 'Đã xuất bản', 'hint' => 'WordPress đã xác nhận', 'value' => (int) ($stats['published'] ?? 0)],
+        ['key' => 'failed', 'card' => 'failed', 'filter' => 'failed', 'label' => 'Không thể xuất bản', 'hint' => 'Hết lần thử / lỗi', 'value' => (int) ($stats['failed'] ?? 0)],
+        ['key' => 'needs_attention', 'card' => 'failed', 'filter' => 'needs_attention', 'label' => 'Cần xử lý', 'hint' => 'State không dự đoán được', 'value' => (int) ($stats['needs_attention'] ?? 0)],
     ];
+    $kpiCards = array_values(array_filter(
+        $kpiCards,
+        static fn (array $c): bool => $c['key'] !== 'needs_attention' || (int) $c['value'] > 0,
+    ));
+    $projectedSum = (int) ($stats['projected_sum'] ?? 0);
+    $queueTotal = (int) ($stats['total'] ?? 0);
+    $invariantOk = ($stats['invariant_ok'] ?? true) === true;
 @endphp
 
 <x-filament-panels::page>
@@ -39,15 +49,16 @@
         x-data="{
             autoOpen: false,
             quickOpen: false,
-            recoverOpen: false,
             mode: 'auto',
             openNeedsReviewArticle(taskId, isNeedsReview, url) {
-                if (typeof url === 'string' && url !== '') {
-                    window.location.href = url;
-                }
+                // No-op navigate — real anchors open Edit Article in a new tab.
+            },
+            claimNeedsReviewArticle(taskId, isNeedsReview) {
+                // Publishing Queue has no Needs Review claim flow.
             },
         }"
         x-on:visibilitychange.window="$wire.refreshQueueHealth()"
+        wire:poll.30s="refreshQueueHealth"
     >
         <div class="flex flex-wrap items-center gap-2">
             <label class="text-xs font-medium text-gray-500 dark:text-gray-400" for="pq-hub-project">
@@ -121,6 +132,11 @@
             aria-label="Publishing Queue summary"
             loading-targets="applyStateFilter,clearFilters,search,projectId,stateFilter"
         />
+        @unless ($invariantOk)
+            <div class="rounded-lg border border-danger-300 bg-danger-50 px-3 py-2 text-xs text-danger-800 dark:border-danger-500/40 dark:bg-danger-500/10 dark:text-danger-200" role="alert">
+                Count invariant lệch: queue={{ $queueTotal }}, projected={{ $projectedSum }}. Kiểm tra tab Cần xử lý.
+            </div>
+        @endunless
 
         <div>
             @if ($this->bulkRunning && count($this->pendingTaskIds) > 0)
@@ -131,7 +147,7 @@
             @endif
             <x-seo-content-ai::content-project-filter-toolbar variant="publishing_queue" />
 
-            @if ($hasProject)
+                    @if ($hasProject)
                 <div class="mt-3 flex flex-wrap items-center gap-2">
                     <div class="inline-flex overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
                         <button
@@ -156,11 +172,6 @@
                             Quick Mode
                         </button>
                     </div>
-                    @if ($recoverableStuck > 0)
-                        <button type="button" @click="recoverOpen = true" class="fi-btn fi-btn-color-warning fi-size-sm">
-                            Recover stuck publishing ({{ $recoverableStuck }})
-                        </button>
-                    @endif
                 </div>
 
                 @if ($selectedCount > 0 && $selectedCount >= $pageCount && $pageCount > 0 && ! $this->selectAllMatching && $filteredTotal > $pageCount)
@@ -175,6 +186,7 @@
                 <x-seo-content-ai::content-project-bulk-selection-toolbar
                     variant="publishing_queue"
                     :selected-count="$selectedCount"
+                    :timezone-label="$tz"
                 />
             @endif
         </div>
@@ -224,7 +236,7 @@
                         <p class="mb-3 text-xs text-warning-700">Không có bài chưa lên lịch phù hợp</p>
                     @endif
                     <div class="flex justify-end gap-2">
-                        <button type="button" class="text-sm" @click="autoOpen = false">Cancel</button>
+                        <button type="button" class="text-sm" @click="autoOpen = false">Đóng</button>
                         <button
                             type="button"
                             class="fi-btn fi-btn-color-primary fi-size-sm"
@@ -304,7 +316,7 @@
                     @endif
 
                     <div class="flex justify-end gap-2">
-                        <button type="button" class="text-sm" @click="quickOpen = false">Cancel</button>
+                        <button type="button" class="text-sm" @click="quickOpen = false">Đóng</button>
                         <button
                             type="button"
                             class="fi-btn fi-btn-color-primary fi-size-sm"
@@ -316,22 +328,7 @@
                 </div>
             </div>
 
-            {{-- Recover stuck --}}
-            <div x-show="recoverOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-                <div class="w-full max-w-md rounded-xl bg-white p-4 shadow-xl dark:bg-gray-900" @click.outside="recoverOpen = false">
-                    <h3 class="mb-2 text-sm font-semibold">Recover stuck publishing</h3>
-                    <p class="mb-3 text-xs text-gray-500">Không gọi WordPress. Không dùng Cancel thường.</p>
-                    <x-select wire:model="recoverTarget" class="!w-full mb-3">
-                        <option value="scheduled">Recover to Scheduled</option>
-                        <option value="unscheduled">Recover to Unscheduled</option>
-                        <option value="failed">Mark Failed (stale_processing)</option>
-                    </x-select>
-                    <div class="flex justify-end gap-2">
-                        <button type="button" class="text-sm" @click="recoverOpen = false">Cancel</button>
-                        <button type="button" class="fi-btn fi-btn-color-warning fi-size-sm" wire:click="recoverStuckSelected" @click="recoverOpen = false">Recover</button>
-                    </div>
-                </div>
-            </div>
+            {{-- Advanced recover modal removed from normal PQ UX; inline row recover only. --}}
         @endif
     </div>
 

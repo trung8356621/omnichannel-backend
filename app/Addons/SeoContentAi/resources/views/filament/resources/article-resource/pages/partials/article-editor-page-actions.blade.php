@@ -28,6 +28,9 @@
         'reviewGenericError' => __('seo-content-ai::filament.article_review.errors.invalid_transition'),
     ];
     $inContentProject = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsInContentProject($record);
+    $postPublishWpSyncEligible = $inContentProject
+        && app(\App\Addons\SeoContentAi\Services\ContentProject\Publishing\PostPublishWordPressSyncEligibility::class)
+            ->isEligible($record);
     $isContentArchived = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsContentArchived($record);
     $contentProjectUrl = $inContentProject
         ? \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleContentProjectUrl($record)
@@ -286,8 +289,41 @@
         </button>
 
         @if (! $isContentManager)
-            @if ($inContentProject)
-                {{-- Content Project: không hiện Manual Sync WP. Save & Close = lưu nội dung + về project. --}}
+            @if ($inContentProject && $postPublishWpSyncEligible)
+                {{-- Published CP: local Save + post-publish UPDATE sync (never create). --}}
+                <button
+                    type="button"
+                    class="seo-editor-toolbar-btn seo-editor-toolbar-btn--accent seo-editor-toolbar-btn--labeled"
+                    title="{{ $syncTitle }}"
+                    aria-label="{{ $syncTitle }}"
+                    data-seo-page-action="sync"
+                    data-seo-sync-mode="post_publish_wordpress_sync"
+                    x-bind:disabled="!canMutateDocument()"
+                    x-on:click="if (!canMutateDocument()) { notifyReadOnly(); return; } window.dispatchEvent(new CustomEvent('article-editor-shortcut', { detail: { action: 'sync' } }))"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1.1 15.9-3.3-9.7h2l1.5 5.1 1.5-5.1h1.9l1.5 5.1 1.5-5.1h2l-3.3 9.7h-1.9l-1.5-4.9-1.5 4.9h-1.9z"/>
+                    </svg>
+                    <span class="seo-editor-toolbar-btn__label">{{ $syncLabel }}</span>
+                </button>
+                <button
+                    type="button"
+                    class="seo-editor-toolbar-btn seo-editor-toolbar-btn--labeled"
+                    title="{{ $saveCloseTitle }}"
+                    aria-label="{{ $saveCloseTitle }}"
+                    data-seo-page-action="save-close"
+                    data-seo-content-project-url="{{ $contentProjectUrl ?? '' }}"
+                    x-bind:disabled="!canMutateDocument()"
+                    x-on:click="if (!canMutateDocument()) { notifyReadOnly(); return; } window.dispatchEvent(new CustomEvent('article-editor-shortcut', { detail: { action: 'save-close' } }))"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M17 21v-8H7v8M7 3v5h8" />
+                    </svg>
+                    <span class="seo-editor-toolbar-btn__label">{{ $saveCloseLabel }}</span>
+                </button>
+            @elseif ($inContentProject)
+                {{-- Content Project chưa Published: không hiện Manual Sync WP. Save & Close = lưu nội dung + về project. --}}
                 <button
                     type="button"
                     class="seo-editor-toolbar-btn seo-editor-toolbar-btn--accent seo-editor-toolbar-btn--labeled"

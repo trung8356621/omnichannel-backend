@@ -153,6 +153,16 @@ final class ArticleEditorSeoPayloadService
             'score' => $skipSeoScore ? null : $score,
             'status' => 'cached',
             'analyzed_content_hash' => $analyzedContentHash,
+            'score_version' => trim((string) (
+                $article->articleMetas->first(
+                    static fn ($meta): bool => (string) $meta->meta_key === SeoScoringRulesRegistry::META_KEY_SCORE_VERSION,
+                )?->meta_value ?? ''
+            )) ?: SeoScoringRulesRegistry::SCORE_VERSION,
+            'score_calculated_at' => trim((string) (
+                $article->articleMetas->first(
+                    static fn ($meta): bool => (string) $meta->meta_key === SeoScoringRulesRegistry::META_KEY_SCORE_CALCULATED_AT,
+                )?->meta_value ?? ''
+            )) ?: null,
             'focus_keyword' => app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article),
             'seo_title' => $seoTitle,
             'meta_description' => $seoDescription,
@@ -214,6 +224,8 @@ final class ArticleEditorSeoPayloadService
             'stale' => false,
             'skip_seo_score' => $skipSeoScore,
             'analyzed_content_hash' => $this->resolveAnalyzedContentHash($article, $bodyHtml),
+            'score_version' => trim((string) $metaMap->get(SeoScoringRulesRegistry::META_KEY_SCORE_VERSION, '')) ?: SeoScoringRulesRegistry::SCORE_VERSION,
+            'score_calculated_at' => trim((string) $metaMap->get(SeoScoringRulesRegistry::META_KEY_SCORE_CALCULATED_AT, '')) ?: null,
             'focus_keyword' => app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article),
             'seo_title' => $seoTitle,
             'meta_description' => $seoDescription,
@@ -233,7 +245,7 @@ final class ArticleEditorSeoPayloadService
     {
         $fromMeta = trim((string) (
             $article->articleMetas->first(
-                static fn ($meta): bool => (string) $meta->meta_key === 'seo_analyzed_content_hash',
+                static fn ($meta): bool => (string) $meta->meta_key === SeoScoringRulesRegistry::META_KEY_ANALYZED_CONTENT_HASH,
             )?->meta_value ?? ''
         ));
 

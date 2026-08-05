@@ -6,11 +6,15 @@ namespace App\Addons\SeoContentAi\Enums;
 
 /**
  * Trạng thái Publishing Queue trên Content Project Item (SaaS-owned).
+ *
+ * queued_for_delivery = scanner claimed + downstream dispatched, WP worker not started.
+ * processing = publisher worker started (owns active lease).
  */
 enum ContentProjectPublishQueueStatus: string
 {
     case None = 'none';
     case Waiting = 'waiting';
+    case QueuedForDelivery = 'queued_for_delivery';
     case Processing = 'processing';
     case Retrying = 'retrying';
     case Published = 'published';
@@ -22,6 +26,7 @@ enum ContentProjectPublishQueueStatus: string
     {
         return in_array($this, [
             self::Waiting,
+            self::QueuedForDelivery,
             self::Processing,
             self::Retrying,
         ], true);
@@ -43,6 +48,7 @@ enum ContentProjectPublishQueueStatus: string
     {
         return [
             self::Waiting->value,
+            self::QueuedForDelivery->value,
             self::Processing->value,
             self::Retrying->value,
         ];

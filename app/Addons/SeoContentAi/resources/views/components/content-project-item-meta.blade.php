@@ -12,6 +12,7 @@
     $url = $row['article_edit_url'] ?? null;
     $message = $row['message'] ?? null;
     $showKeyword = $keyword !== '' && $keyword !== '—' && $keyword !== $primary && $keyword !== $title;
+    $isNeedsReview = ! empty($row['is_recently_completed']);
 @endphp
 
 <div {{ $attributes->class(['min-w-0']) }}>
@@ -19,9 +20,9 @@
         @if ($url)
             <a
                 href="{{ $url }}"
-                @click.prevent="typeof openNeedsReviewArticle === 'function'
-                    ? openNeedsReviewArticle({{ $tid }}, {{ ! empty($row['is_recently_completed']) ? 'true' : 'false' }}, {{ \Illuminate\Support\Js::from($url) }})
-                    : (window.location.href = {{ \Illuminate\Support\Js::from($url) }})"
+                target="_blank"
+                rel="noopener noreferrer"
+                @click="typeof claimNeedsReviewArticle === 'function' && claimNeedsReviewArticle({{ $tid }}, {{ $isNeedsReview ? 'true' : 'false' }})"
                 class="hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 rounded"
             >{{ $primary }}</a>
         @else
@@ -48,6 +49,13 @@
     @if (! empty($message))
         <div class="mt-1 line-clamp-1 text-[11px] font-medium text-danger-600 dark:text-danger-400" title="{{ $message }}">
             {{ $message }}
+        </div>
+    @endif
+    @if (! empty($row['generation_blocked']))
+        <div class="mt-1">
+            <span class="inline-flex rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold text-gray-700 ring-1 ring-gray-600/20 dark:bg-gray-500/15 dark:text-gray-300 dark:ring-gray-400/30">
+                {{ __('seo-content-ai::filament.projects.badge_generation_skipped') }}
+            </span>
         </div>
     @endif
     @if (! empty($row['show_reporting_chip']) && ! empty($row['reporting_badge']))

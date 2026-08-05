@@ -526,6 +526,8 @@
                                 @if ($articleId > 0 && filled($articleEditUrl))
                                     <a
                                         href="{{ $articleEditUrl }}"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
                                         class="seo-media-library-article-link"
                                         title="Open article in editor"
                                     >

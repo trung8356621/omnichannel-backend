@@ -294,7 +294,7 @@ class MediaLibrary extends Page
 
     public function updated($propertyName): void
     {
-        if (in_array($propertyName, ['activeTab', 'siteId', 'filterMonth'], true)) {
+        if (in_array($propertyName, ['activeTab', 'siteId', 'filterMonth', 'filterSearch'], true)) {
             $this->normalizeFilters();
             $this->page = 1;
             $this->loadImages();

@@ -19,6 +19,7 @@ final class RecoverStuckPublishingCommand implements ContentProjectCommand
         public readonly string $target,
         public readonly ?Carbon $rescheduleAt = null,
         public readonly bool $dryRun = false,
+        public readonly bool $force = false,
     ) {}
 
     public function name(): string

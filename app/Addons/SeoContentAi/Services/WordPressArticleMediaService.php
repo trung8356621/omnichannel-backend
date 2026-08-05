@@ -166,6 +166,8 @@ final class WordPressArticleMediaService
                 ['meta_key' => 'wp_featured_image_url'],
                 ['meta_value' => $featuredUrl],
             );
+            $article->unsetRelation('articleMetas');
+            app(\App\Addons\SeoContentAi\Services\ArticleFeaturedImageProjection::class)->rebuildAndPersist($article);
         }
 
         if (is_array($body['product_gallery'] ?? null) && $body['product_gallery'] !== []) {

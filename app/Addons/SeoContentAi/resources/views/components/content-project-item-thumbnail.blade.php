@@ -18,7 +18,9 @@
             @if ($editUrl)
                 <a
                     href="{{ $editUrl }}"
-                    @click.prevent="openNeedsReviewArticle({{ $tid }}, {{ ! empty($row['is_recently_completed']) ? 'true' : 'false' }}, {{ \Illuminate\Support\Js::from($editUrl) }})"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    @click="typeof claimNeedsReviewArticle === 'function' && claimNeedsReviewArticle({{ $tid }}, {{ ! empty($row['is_recently_completed']) ? 'true' : 'false' }})"
                     class="block h-full w-full"
                     title="{{ $title }}"
                 >

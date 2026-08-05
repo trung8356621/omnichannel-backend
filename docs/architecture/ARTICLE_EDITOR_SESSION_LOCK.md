@@ -57,8 +57,9 @@ Manager/admin (or `User::ROLE_ADMIN` / `ROLE_OWNER`). Revokes old session as `ta
 - **Consumers:** Alpine shell Save/Save&Close, Livewire props sync (`editorSessionId`, `expectedDocumentVersion`)
 - **Payload:** `{ article_id, session_id, status, writable, document_version, reason_code, lock? }`
 - **Statuses:** `acquiring|active|locked|read_only|expired|revoked|taken_over|conflict|closing|released|network_degraded`
-- **Reason codes:** use `ArticleEditorSessionErrorCode` / `EDITOR_SESSION_ERROR` constants — never parse Error.message strings
+- **Reason codes:** use `ArticleEditorSessionErrorCode` / `EDITOR_SESSION_ERROR` constants — never parse Error.message strings. Heartbeat HTTP ≥500 → `article_editor_session_unavailable` (reload CTA, not silent read-only).
 - Shell must **not** write session state back
+- `expireStaleSessionsForArticleId`: best-effort; InnoDB 1205/1213 retry then `sessions_expire_skipped_lock` — must not fail owning heartbeat/save
 
 ## Legacy save
 
@@ -70,7 +71,7 @@ System writers (`article.content.update` from automation/sync) still go through 
 
 - `EditorSessionClient` (`resources/js/utils/editorSessionClient.js`) — `client_instance_id` in **sessionStorage** (per-tab)
 - Session state event: `article-editor-session-state-changed` (`editorSessionState.js`)
-- Mount gate `ArticleEditorWithSession` in `article-editor.jsx`: acquire-first; if locked/archived/not_editable → **ExclusiveLockScreen** only (404-style title + body; no TipTap / no takeover UI)
+- Mount gate `ArticleEditorWithSession` in `article-editor.jsx`: acquire-first; if locked/archived/not_editable **or** session unavailable (5xx heartbeat) → **ExclusiveLockScreen** only (title/body + Reload/Retry; no TipTap / no takeover UI)
 - Mid-session `document_version` / content-hash conflict: sync actual version from payload; **keep writable** (toast); do not unmount ExclusiveLockScreen
 - Mutation guard: `canMutateEditor` / `assertWritableEditorSession` / `runEditorMutation`
 - Shell Alpine consumes session-state event (Save disabled reactive); chrome hidden while exclusive-lock mounted

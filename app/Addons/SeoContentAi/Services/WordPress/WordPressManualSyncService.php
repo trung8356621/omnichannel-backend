@@ -13,8 +13,11 @@ use App\Addons\SeoContentAi\Services\ArticleWpSyncLeaseService;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\PublishProjectItemsNowCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SyncPublishedArticleToWordPressCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResult;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectArticleMembership;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PostPublishWordPressSyncEligibility;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\User;
@@ -51,12 +54,23 @@ final class WordPressManualSyncService
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
         abort_unless($actor->getKey() > 0, 403);
 
-        // Content Project (active hoặc archived assignment): Manual Sync fail-closed — không gọi WP.
+        // Content Project: before first publish → fail-closed (Publishing Queue owns create).
+        // After confirmed Published → SyncPublishedArticleToWordPressCommand (UPDATE only).
         if ($this->contentProjectMembership->belongsToContentProject($article)) {
-            return $this->blocked(
-                'content_project_manual_sync_forbidden',
-                (string) __('seo-content-ai::filament.automation.content_project_manual_sync_forbidden'),
-            );
+            $eligibility = app(\App\Addons\SeoContentAi\Services\ContentProject\Publishing\PostPublishWordPressSyncEligibility::class)
+                ->evaluate($article);
+            if (! ($eligibility['allowed'] ?? false)) {
+                return $this->blocked(
+                    'content_project_manual_sync_forbidden',
+                    (string) __('seo-content-ai::filament.automation.content_project_manual_sync_forbidden'),
+                    [
+                        'block_code' => (string) ($eligibility['code'] ?? 'not_published'),
+                        'post_publish_eligible' => false,
+                    ],
+                );
+            }
+
+            return $this->syncPublishedFromEditorBundle($article, $bundle, $actor, $initiatedFrom, $eligibility);
         }
 
         $bundle = $this->syncQueue->applyPublishImmediatelyToBundle($bundle);
@@ -125,10 +139,30 @@ final class WordPressManualSyncService
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
         if ($this->contentProjectMembership->belongsToContentProject($article)) {
-            return $this->blocked(
-                'content_project_manual_sync_forbidden',
-                (string) __('seo-content-ai::filament.automation.content_project_manual_sync_forbidden'),
+            $eligibility = app(PostPublishWordPressSyncEligibility::class)->evaluate($article);
+            if (! ($eligibility['allowed'] ?? false)) {
+                return $this->blocked(
+                    'content_project_manual_sync_forbidden',
+                    (string) __('seo-content-ai::filament.automation.content_project_manual_sync_forbidden'),
+                    [
+                        'block_code' => (string) ($eligibility['code'] ?? 'not_published'),
+                        'post_publish_eligible' => false,
+                    ],
+                );
+            }
+
+            $task = $eligibility['task'] ?? null;
+            $result = $this->contentProjectCommandBus->dispatch(
+                new SyncPublishedArticleToWordPressCommand(
+                    articleId: (int) $article->id,
+                    projectRef: $task !== null ? (int) ($task->project_id ?? 0) ?: null : null,
+                    itemRef: $task !== null ? (int) $task->id : null,
+                    initiatedFrom: $initiatedFrom,
+                ),
+                ActorContext::user((int) $actor->id, (int) ($article->site_id ?? 0) ?: null),
             );
+
+            return $this->mapPostPublishCommandResult($result, $article);
         }
 
         return $this->enqueueManual($article, $actor, $initiatedFrom, ['mode' => 'sync']);
@@ -465,11 +499,144 @@ final class WordPressManualSyncService
     }
 
     /**
+     * @param  array<string, mixed>  $bundle
+     * @param  array<string, mixed>  $eligibility
      * @return array<string, mixed>
      */
-    private function blocked(string $code, string $message): array
+    private function syncPublishedFromEditorBundle(
+        SeoArticle $article,
+        array $bundle,
+        User $actor,
+        string $initiatedFrom,
+        array $eligibility,
+    ): array {
+        $context = ArticleEditorSaveContext::fromBundle($article, $bundle);
+        $this->bundleApply->apply($article, $bundle, $context);
+
+        $html = (string) ($bundle['html'] ?? '');
+        $fresh = $article->fresh() ?? $article;
+        $persist = $this->actions->dispatch(
+            'article.content.update',
+            [
+                'article_id' => (int) $fresh->id,
+                'content' => $html,
+                'title' => $context->title,
+                'slug' => $context->slug,
+                'status' => $context->status,
+                'post_type' => $context->postType,
+                'visibility' => $context->visibility,
+                'publish_day' => $context->publishDay,
+                'publish_month' => $context->publishMonth,
+                'publish_year' => $context->publishYear,
+                'publish_hour' => $context->publishHour,
+                'publish_minute' => $context->publishMinute,
+                'seo_meta_description' => $context->seoMetaDescription,
+                'focus_keyword' => $context->focusKeyword,
+            ],
+            ActionContext::fromArray([
+                'origin' => 'post_publish_wordpress_sync',
+                'correlation_id' => Str::uuid()->toString(),
+                'actor_id' => (int) $actor->id,
+                'site_id' => (int) ($fresh->site_id ?? 0) ?: null,
+            ]),
+        );
+
+        if (! $persist->success) {
+            return [
+                'success' => false,
+                'status' => 'blocked',
+                'queued' => false,
+                'workspace_only' => false,
+                'message' => (string) ($persist->error['message'] ?? 'Không lưu được bài trước khi đồng bộ WordPress.'),
+            ];
+        }
+
+        $article = $fresh->fresh() ?? $fresh;
+        $task = $eligibility['task'] ?? null;
+        $result = $this->contentProjectCommandBus->dispatch(
+            new SyncPublishedArticleToWordPressCommand(
+                articleId: (int) $article->id,
+                projectRef: $task !== null ? (int) ($task->project_id ?? 0) ?: null : null,
+                itemRef: $task !== null ? (int) $task->id : null,
+                seoOverride: $context->seoPayloadForWordPress(),
+                initiatedFrom: $initiatedFrom !== '' ? $initiatedFrom : 'article_editor.post_publish_sync',
+            ),
+            ActorContext::user((int) $actor->id, (int) ($article->site_id ?? 0) ?: null),
+        );
+
+        return $this->mapPostPublishCommandResult($result, $article);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function mapPostPublishCommandResult(ContentProjectActionResult $result, SeoArticle $article): array
     {
+        $meta = $result->metadata;
+        $wpUrl = trim((string) ($meta['wordpress_url'] ?? ''));
+        $actions = [];
+        if ($wpUrl !== '') {
+            $actions[] = [
+                'label' => 'Mở bài WordPress',
+                'url' => $wpUrl,
+            ];
+        }
+
+        if ($result->success) {
+            return [
+                'success' => true,
+                'status' => 'post_publish_synced',
+                'queued' => false,
+                'already_queued' => false,
+                'workspace_only' => false,
+                'close_editor' => false,
+                'reload' => false,
+                'message' => $result->message,
+                'data' => [
+                    'article_id' => (int) $article->id,
+                    'wp_post_id' => $meta['wp_post_id'] ?? null,
+                    'operation_id' => $meta['operation_id'] ?? null,
+                    'publish_queue_status' => $meta['publish_queue_status'] ?? 'published',
+                    'create_post_called' => false,
+                ],
+                'notification' => [
+                    'title' => 'Đã đồng bộ bài viết lên WordPress.',
+                    'body' => $result->message,
+                    'status' => 'success',
+                    'actions' => $actions,
+                ],
+            ];
+        }
+
         return [
+            'success' => false,
+            'status' => 'blocked',
+            'queued' => false,
+            'workspace_only' => false,
+            'close_editor' => false,
+            'message' => $result->message,
+            'data' => [
+                'article_id' => (int) $article->id,
+                'operation_id' => $meta['operation_id'] ?? null,
+                'block_code' => $meta['block_code'] ?? $result->code,
+                'create_post_called' => (bool) ($meta['create_post_called'] ?? false),
+                'publish_queue_status_unchanged' => true,
+            ],
+            'notification' => [
+                'title' => __('seo-content-ai::filament.automation.wp_sync_blocked_title'),
+                'body' => $result->message,
+                'status' => 'danger',
+            ],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $extra
+     * @return array<string, mixed>
+     */
+    private function blocked(string $code, string $message, array $extra = []): array
+    {
+        return array_merge([
             'success' => false,
             'status' => 'blocked',
             'queued' => false,
@@ -482,6 +649,6 @@ final class WordPressManualSyncService
                 'body' => $message,
                 'status' => 'warning',
             ],
-        ];
+        ], $extra);
     }
 }

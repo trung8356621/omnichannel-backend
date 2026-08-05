@@ -44,7 +44,18 @@ final class ArticleEditorMediaSnapshotController extends Controller
     {
         return $this->mutate($request, $article, function (User $user, ?string $sessionId, $expected) use ($request, $article): array {
             /** @var array<string, mixed> $item */
-            $item = is_array($request->input('item')) ? $request->input('item') : $request->all();
+            $item = is_array($request->input('item')) ? $request->input('item') : [];
+            // Merge top-level identity fields — client may send them outside `item`.
+            foreach (['url', 'wp_attachment_id', 'seo_media_id', 'id', 'attachment_id', 'media_id', 'alt', 'slug'] as $key) {
+                if (! array_key_exists($key, $item) || $item[$key] === null || $item[$key] === '' || $item[$key] === 0) {
+                    if ($request->filled($key)) {
+                        $item[$key] = $request->input($key);
+                    }
+                }
+            }
+            if (! isset($item['url']) || trim((string) $item['url']) === '') {
+                $item['url'] = (string) $request->input('url', '');
+            }
 
             return $this->mutations->setFeatured($article, $user, $item, $sessionId, $expected);
         });

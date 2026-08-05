@@ -19,6 +19,15 @@ final class SeoScoringRulesRegistry
 
     public const META_KEY_VIOLATIONS = 'seo_rule_violations';
 
+    /** Canonical scoring contract version — bump when rule weights / normalization change. */
+    public const SCORE_VERSION = 'seo-scoring.v1';
+
+    public const META_KEY_ANALYZED_CONTENT_HASH = 'seo_analyzed_content_hash';
+
+    public const META_KEY_SCORE_VERSION = 'seo_score_version';
+
+    public const META_KEY_SCORE_CALCULATED_AT = 'seo_score_calculated_at';
+
     private const H2_MIN_COUNT = 2;
 
     public const KEY_MISSING_FOCUS_KEYWORD = 'missing_focus_keyword';

@@ -6,6 +6,7 @@ import { useEditorMedia } from '../../host/hooks/useEditorMedia';
 import { useEditorMediaPicker } from '../../host/hooks/useEditorMediaPicker';
 import { useEditorNotifications } from '../../host/hooks/useEditorNotifications';
 import { GallerySidebarPanel } from '../gallery/GallerySidebarPanel';
+import { normalizeFeaturedMediaItem } from '../../../utils/articleEditorMediaSnapshot';
 import { t } from '../../../utils/i18n';
 
 function isProductType(type, supportsProductGallery = false) {
@@ -48,16 +49,10 @@ function FeaturedImagePanel({ articleId = null, active = false }) {
             mode: 'featured',
             selection: 'single',
             onConfirm: async (items) => {
-                const item = items[0];
+                const item = normalizeFeaturedMediaItem(items[0]);
                 if (!item?.url) return;
                 try {
-                    await media.setFeatured({
-                        url: item.url,
-                        wp_attachment_id: item.wp_attachment_id,
-                        seo_media_id: item.seo_media_id,
-                        alt: item.alt,
-                        slug: item.slug,
-                    });
+                    await media.setFeatured(item);
                     notify({ title: t('make_featured_image_success') || 'Featured updated', status: 'success' });
                 } catch (error) {
                     notify({

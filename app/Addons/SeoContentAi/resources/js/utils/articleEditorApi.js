@@ -356,6 +356,37 @@ export async function saveSeoMetaViaApi(articleId, payload) {
 }
 
 /**
+ * PHP canonical SEO score preview — no DB write.
+ *
+ * @param {number} articleId
+ * @param {{
+ *   title?: string,
+ *   slug?: string,
+ *   meta_description?: string,
+ *   focus_keyword?: string|null,
+ *   content: string,
+ * }} payload
+ * @param {{ signal?: AbortSignal }} [options]
+ */
+export async function previewSeoScoreViaApi(articleId, payload, options = {}) {
+    const { response, data } = await seoArticleApiFetch(`/api/seo/articles/${articleId}/seo-score/preview`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': csrfToken(),
+        },
+        body: JSON.stringify(payload),
+        signal: options.signal,
+    });
+
+    if (!response.ok) {
+        throw new Error(data?.message ?? 'SEO score preview failed');
+    }
+
+    return data;
+}
+
+/**
  * Chạy Prompt Hook (không lưu article / SEO / WP).
  *
  * @param {string} hookKey vd. article.title_suggestion

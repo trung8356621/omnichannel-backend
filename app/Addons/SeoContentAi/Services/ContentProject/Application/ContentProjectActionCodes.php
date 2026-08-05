@@ -37,6 +37,8 @@ final class ContentProjectActionCodes
 
     public const ITEMS_PUBLISH_RECOVERED = 'items.publish_recovered';
 
+    public const ITEMS_PUBLISH_RECONCILED = 'items.publish_reconciled';
+
     public const ITEMS_SENT_TO_PUBLISHING_QUEUE = 'items.sent_to_publishing_queue';
 
     public const ITEMS_RETURNED_TO_CONTENT_PROJECT = 'items.returned_to_content_project';
@@ -90,6 +92,14 @@ final class ContentProjectActionCodes
     public const CONFIRMATION_STALE = 'confirmation.stale';
 
     public const ITEMS_SYNCED = 'items.synced';
+
+    public const PUBLISHED_ARTICLE_WP_SYNCED = 'publishing.published_article_wp_synced';
+
+    public const PUBLISHED_ARTICLE_WP_SYNC_BLOCKED = 'publishing.published_article_wp_sync_blocked';
+
+    public const PUBLISHED_ARTICLE_WP_SYNC_FAILED = 'publishing.published_article_wp_sync_failed';
+
+    public const PUBLISHED_ARTICLES_BULK_RESYNCED = 'publishing.published_articles_bulk_resynced';
 
     public const EXECUTION_STOPPED = 'execution.stopped';
 

@@ -73,8 +73,9 @@ final class ContentProjectPublishingQueueUiParityContractTest extends TestCase
         ]);
         self::assertTrue($unscheduled['schedule']);
         self::assertTrue($unscheduled['publish_now']);
-        self::assertTrue($unscheduled['return_to_content_project']);
+        self::assertTrue($unscheduled['remove_from_queue']);
         self::assertFalse($unscheduled['retry_publish']);
+        self::assertFalse($unscheduled['publish_now'] && $unscheduled['retry_now']);
 
         $failed = PublishingQueueItemActionsPresenter::forRow([
             'publish_state' => 'failed',
@@ -83,5 +84,15 @@ final class ContentProjectPublishingQueueUiParityContractTest extends TestCase
         self::assertTrue($failed['retry_publish']);
         self::assertTrue($failed['return_to_content_project']);
         self::assertFalse($failed['schedule']);
+        self::assertFalse($failed['view_on_wordpress'] ?? false);
+        self::assertFalse($failed['show_recover_banner']);
+
+        $published = PublishingQueueItemActionsPresenter::forRow([
+            'publish_state' => 'published',
+            'article_edit_url' => '/a/1',
+            'wp_permalink' => 'https://example.com/hello/',
+        ]);
+        self::assertTrue($published['view_on_wordpress']);
+        self::assertFalse($published['schedule']);
     }
 }

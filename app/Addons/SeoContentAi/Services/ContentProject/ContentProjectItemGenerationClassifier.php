@@ -29,7 +29,7 @@ final class ContentProjectItemGenerationClassifier
         $projectId = (int) $project->getKey();
         $tasks = SeoProjectTask::query()
             ->where('project_id', $projectId)
-            ->planned()
+            ->eligibleForGeneration()
             ->with(['article'])
             ->orderBy('id')
             ->get();
@@ -154,6 +154,10 @@ final class ContentProjectItemGenerationClassifier
             return $this->decision($taskId, ContentProjectItemGenerationDecision::ACTION_SKIP, 'archived', $status, $type, $evidence, $keyword, $articleId);
         }
 
+        if (($snapshot['generation_blocked_at'] ?? null) !== null || ! empty($snapshot['generation_blocked'])) {
+            return $this->decision($taskId, ContentProjectItemGenerationDecision::ACTION_SKIP, 'generation_blocked', $status, $type, $evidence, $keyword, $articleId);
+        }
+
         if ($status === SeoProjectTask::STATUS_CANCELLED) {
             return $this->decision($taskId, ContentProjectItemGenerationDecision::ACTION_SKIP, 'cancelled', $status, $type, $evidence, $keyword, $articleId);
         }
@@ -276,6 +280,8 @@ final class ContentProjectItemGenerationClassifier
             'article_id' => (int) ($task->article_id ?? 0),
             'keyword' => $task->keyword !== null ? (string) $task->keyword : ($task->title !== null ? (string) $task->title : null),
             'archived_at' => $task->archived_at,
+            'generation_blocked_at' => $task->isGenerationBlocked() ? ($task->generation_blocked_at ?? true) : null,
+            'generation_blocked' => $task->isGenerationBlocked(),
             'lifecycle_phase' => $phase->value,
             'article_has_body' => $body !== '',
             'article_manually_edited' => $manuallyEdited,

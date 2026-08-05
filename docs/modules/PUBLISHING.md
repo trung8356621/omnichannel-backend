@@ -272,7 +272,25 @@ Publishing-specific:
 | SoT schedule | SaaS `scheduled_publish_at` | N/A |
 | Identity | `wp_post_id` + `omi_seo_article_{id}` | Site Sync run/event idempotency |
 | CommandBus | CP publish commands | Site Sync jobs/services (separate) |
-| Workspace Sync WP | Save content + `last_synced_at` only | Not a substitute for either |
+| Workspace local Save | Laravel content + `last_synced_at` only | Not a substitute for either |
+| Post-publish editorial sync | `SyncPublishedArticleToWordPressCommand` — UPDATE existing `wp_post_id` | Not Site Sync; not initial publish |
 
-**Save ≠ Sync ≠ Publish ≠ Rebuild.** Active CP “Sync WP” never schedules or publishes.
+**Save ≠ Sync ≠ Publish ≠ Rebuild.**
+
+### Initial publish vs post-publish editorial sync
+
+| Concern | Initial publish (Publishing Queue) | Post-publish sync (editor / bulk) |
+|---------|-------------------------------------|-----------------------------------|
+| Owner | `ProcessScheduledProjectItemPublish` / Publish Now / Retry | `SyncPublishedArticleToWordPressCommand` |
+| Create WP post | Allowed (idempotent) | **Never** — update only |
+| Eligibility | Queue waiting/processing | `publish_queue_status=published` + `publish_published_at` + tenant |
+| Queue status after | → published | **Stays** published |
+| Missing `wp_post_id` | Reconcile then create if needed | Reconcile only; block if 0/ambiguous matches |
+| Retry counters | Initial publish retries | Separate post-publish sync error meta |
+| Bulk repair | N/A | `BulkResyncPublishedArticlesToWordPressCommand` → `updated/skipped/failed` |
+
+Symbols: `PostPublishWordPressSyncEligibility`, `PostPublishWordPressPostReconciler`, `WordPressArticleSyncService::updatePublishedArticleOnly`.
+
+Active CP unpublished “Sync WP” remains blocked — Publishing Queue owns first create.
+
 )

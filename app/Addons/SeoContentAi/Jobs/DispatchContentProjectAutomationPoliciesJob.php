@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Jobs;
 
+use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationQueueName;
 use App\Addons\SeoContentAi\Models\ContentProjectAutomationPolicy;
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\AgentExecutionContext;
 use App\Addons\SeoContentAi\Services\ContentProject\Agent\Planner\AgentPlanTriggerType;
@@ -26,6 +27,12 @@ final class DispatchContentProjectAutomationPoliciesJob implements ShouldQueue
     use InteractsWithQueue;
     use Queueable;
     use SerializesModels;
+
+    public function __construct()
+    {
+        // Never land on `default` / automation-external — dedicated policy worker.
+        $this->onQueue(AutomationQueueName::Policy->value);
+    }
 
     public function handle(
         SeoDatabaseConnectionService $databaseConnection,

@@ -86,11 +86,14 @@ final class ContentProjectStatusBadgePresenter
     public static function publishQueueState(string $state): array
     {
         return match (strtolower(trim($state))) {
-            'unscheduled' => self::badge('unscheduled', 'Unscheduled', 'heroicon-o-clock', 'bg-gray-200/80 text-gray-800 ring-gray-500/30 dark:bg-gray-500/20 dark:text-gray-200 dark:ring-gray-400/30'),
-            'scheduled' => self::badge('scheduled', self::t('badge_scheduled', 'Scheduled'), 'heroicon-o-calendar-days', 'bg-primary-100 text-primary-800 ring-primary-600/30 dark:bg-primary-400/15 dark:text-primary-300 dark:ring-primary-400/40'),
-            'publishing' => self::badge('publishing', 'Publishing', 'heroicon-o-arrow-path', 'bg-info-100 text-info-800 ring-info-600/30 dark:bg-info-400/15 dark:text-info-300 dark:ring-info-400/40'),
-            'published' => self::badge('published', self::t('badge_published', 'Published'), 'heroicon-o-globe-alt', 'bg-success-100 text-success-900 ring-success-700/30 dark:bg-success-400/20 dark:text-success-200 dark:ring-success-400/50'),
-            'failed' => self::badge('failed', self::t('badge_failed', 'Failed'), 'heroicon-o-x-circle', 'bg-danger-100 text-danger-800 ring-danger-600/30 dark:bg-danger-400/15 dark:text-danger-300 dark:ring-danger-400/40'),
+            'unscheduled' => self::badge('unscheduled', 'Chưa lên lịch', 'heroicon-o-clock', 'bg-gray-200/80 text-gray-800 ring-gray-500/30 dark:bg-gray-500/20 dark:text-gray-200 dark:ring-gray-400/30'),
+            'scheduled' => self::badge('scheduled', 'Đã lên lịch', 'heroicon-o-calendar-days', 'bg-primary-100 text-primary-800 ring-primary-600/30 dark:bg-primary-400/15 dark:text-primary-300 dark:ring-primary-400/40'),
+            'awaiting_delivery', 'awaiting_worker' => self::badge('awaiting_delivery', 'Đang chuẩn bị', 'heroicon-o-queue-list', 'bg-amber-100 text-amber-900 ring-amber-600/30 dark:bg-amber-400/15 dark:text-amber-200 dark:ring-amber-400/40'),
+            'publishing' => self::badge('publishing', 'Đang xuất bản', 'heroicon-o-arrow-path', 'bg-info-100 text-info-800 ring-info-600/30 dark:bg-info-400/15 dark:text-info-300 dark:ring-info-400/40'),
+            'retry_wait' => self::badge('retry_wait', 'Thử lại sau', 'heroicon-o-arrow-uturn-left', 'bg-warning-100 text-warning-900 ring-warning-600/30 dark:bg-warning-400/15 dark:text-warning-200 dark:ring-warning-400/40'),
+            'published' => self::badge('published', self::t('badge_published', 'Đã xuất bản'), 'heroicon-o-globe-alt', 'bg-success-100 text-success-900 ring-success-700/30 dark:bg-success-400/20 dark:text-success-200 dark:ring-success-400/50'),
+            'failed' => self::badge('failed', self::t('badge_failed', 'Không thể xuất bản'), 'heroicon-o-x-circle', 'bg-danger-100 text-danger-800 ring-danger-600/30 dark:bg-danger-400/15 dark:text-danger-300 dark:ring-danger-400/40'),
+            'needs_attention' => self::badge('needs_attention', 'Cần xử lý', 'heroicon-o-exclamation-triangle', 'bg-danger-50 text-danger-900 ring-danger-500/40 dark:bg-danger-400/10 dark:text-danger-200 dark:ring-danger-400/40'),
             default => self::badge('none', self::t('badge_none', 'None'), 'heroicon-o-minus', 'bg-gray-100 text-gray-600 ring-gray-400/30 dark:bg-gray-800 dark:text-gray-400 dark:ring-gray-600/40'),
         };
     }
@@ -137,24 +140,6 @@ final class ContentProjectStatusBadgePresenter
                 'bg-warning-100 text-warning-900 ring-warning-600/30 dark:bg-warning-400/15 dark:text-warning-200 dark:ring-warning-400/40',
             ),
             default => null,
-        };
-    }
-
-    /**
-     * Publishing Queue item status chip — mirrors summaryAccent() colors for
-     * unscheduled/scheduled/publishing/published/failed so the KPI card and the
-     * per-row badge always agree (Summary ≡ List).
-     *
-     * @return Badge
-     */
-    public static function publishQueueState(string $state): array
-    {
-        return match (strtolower(trim($state))) {
-            'scheduled' => self::badge('scheduled', self::t('badge_scheduled', 'Scheduled'), 'heroicon-o-calendar-days', 'bg-primary-100 text-primary-800 ring-primary-600/30 dark:bg-primary-400/15 dark:text-primary-300 dark:ring-primary-400/40'),
-            'publishing' => self::badge('publishing', self::t('badge_publishing', 'Publishing'), 'heroicon-o-arrow-path', 'bg-info-100 text-info-800 ring-info-600/30 dark:bg-info-400/15 dark:text-info-300 dark:ring-info-400/40'),
-            'published' => self::badge('published', self::t('badge_published', 'Published'), 'heroicon-o-globe-alt', 'bg-success-100 text-success-900 ring-success-700/30 dark:bg-success-400/20 dark:text-success-200 dark:ring-success-400/50'),
-            'failed' => self::badge('failed', self::t('badge_failed', 'Failed'), 'heroicon-o-x-circle', 'bg-danger-100 text-danger-800 ring-danger-600/30 dark:bg-danger-400/15 dark:text-danger-300 dark:ring-danger-400/40'),
-            default => self::badge('unscheduled', self::t('badge_unscheduled', 'Unscheduled'), 'heroicon-o-clock', 'bg-gray-200/80 text-gray-800 ring-gray-500/30 dark:bg-gray-500/20 dark:text-gray-200 dark:ring-gray-400/30'),
         };
     }
 

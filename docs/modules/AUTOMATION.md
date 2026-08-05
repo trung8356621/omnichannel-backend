@@ -51,7 +51,7 @@ They share safety culture (no arbitrary code, confirmation, tenant gates) but **
 | Component | Role |
 |-----------|------|
 | `seo_content_project_automation_policies` | Policy entity |
-| `DispatchContentProjectAutomationPoliciesJob` | Hourly dispatch |
+| `DispatchContentProjectAutomationPoliciesJob` | Hourly dispatch on queue `automation-policy` |
 | `ContentProjectAgentBudgetGuard` | Daily budget |
 | Plan gateway | Plan create/confirm/start (not CommandBus) |
 

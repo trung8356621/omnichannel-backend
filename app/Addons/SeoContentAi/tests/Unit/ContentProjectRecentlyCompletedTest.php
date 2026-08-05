@@ -140,6 +140,9 @@ final class ContentProjectRecentlyCompletedTest extends TestCase
 
         self::assertSame([
             'total_items' => 0,
+            'working_set' => 0,
+            'publishing_queue' => 0,
+            'normal' => 0,
             'draft' => 0,
             'pending' => 1,
             'needs_review' => 6,
@@ -226,6 +229,7 @@ final class ContentProjectRecentlyCompletedTest extends TestCase
         self::assertStringContainsString('ops_needs_review', $blade);
         self::assertStringNotContainsString('wire:poll', $blade);
         self::assertStringContainsString('openNeedsReviewArticle', $blade);
+        self::assertStringContainsString('claimNeedsReviewArticle', $blade);
         self::assertStringContainsString('beginRowExit', $blade);
         self::assertStringContainsString('exitingRows', $blade);
         self::assertStringContainsString('pendingTransitions', $blade);
@@ -250,7 +254,8 @@ final class ContentProjectRecentlyCompletedTest extends TestCase
             .DIRECTORY_SEPARATOR.'components'
             .DIRECTORY_SEPARATOR.'content-project-item-meta.blade.php',
         );
-        self::assertStringContainsString('openNeedsReviewArticle', $meta);
+        self::assertStringContainsString('claimNeedsReviewArticle', $meta);
+        self::assertStringContainsString('target="_blank"', $meta);
         self::assertStringContainsString('show_reporting_chip', $meta);
         self::assertStringContainsString('reporting_badge', $meta);
 

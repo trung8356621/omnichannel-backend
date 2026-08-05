@@ -14,6 +14,8 @@ use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoMediaProcessingHistory;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\ArticleFeaturedImageProjection;
+use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;
 use App\Addons\SeoContentAi\Services\ArticleReviewService;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
@@ -115,13 +117,10 @@ class ArticleResource extends SeoPanelResource
         return $table
             ->recordAction('edit')
             ->columns([
-                Tables\Columns\ImageColumn::make('thumbnail')
+                Tables\Columns\ViewColumn::make('featured_thumb')
                     ->label(__('seo-content-ai::filament.article_list.thumb'))
-                    ->square()
-                    ->height(46)
-                    ->width(46)
-                    ->defaultImageUrl(url('/assets/images/placeholder-loading.svg'))
-                    ->getStateUsing(fn (SeoArticle $record): ?string => static::resolveThumbnailUrl($record))
+                    ->view('seo-content-ai::filament.tables.columns.article-list-thumbnail')
+                    ->getStateUsing(fn (SeoArticle $record): array => app(ArticleFeaturedImageProjection::class)->forList($record))
                     ->toggleable(isToggledHiddenByDefault: false),
                 Tables\Columns\TextColumn::make('wp_data_out_of_sync')
                     ->label('')
@@ -806,7 +805,7 @@ class ArticleResource extends SeoPanelResource
     public static function appendArticlesInCategoryCountSelect(Builder $query): Builder
     {
         if ($query->getQuery()->columns === null) {
-            $query->select('articles.*');
+            static::applyListSelectColumns($query);
         }
 
         return $query->selectSub(function ($subQuery): void {
@@ -834,7 +833,7 @@ class ArticleResource extends SeoPanelResource
     public static function appendWpSyncQueueMetaSelect(Builder $query): Builder
     {
         if ($query->getQuery()->columns === null) {
-            $query->select('articles.*');
+            static::applyListSelectColumns($query);
         }
 
         return $query->selectSub(function ($subQuery): void {
@@ -1286,6 +1285,75 @@ class ArticleResource extends SeoPanelResource
     }
 
     /**
+     * Columns needed for Article List rows — excludes body/blocks/editor_document (heavy payloads).
+     * Featured image FKs live in article_meta (wp_featured_*), not articles.* — keep site_id/id for SeoMedia lookup.
+     *
+     * @return list<string>
+     */
+    public static function listSelectColumns(): array
+    {
+        $columns = [
+            'articles.id',
+            'articles.user_id',
+            'articles.site_id',
+            'articles.title',
+            'articles.slug',
+            'articles.language',
+            'articles.status',
+            'articles.type',
+            'articles.seo_score',
+            'articles.skip_seo_score',
+            'articles.internal_link_count',
+            'articles.external_link_count',
+            'articles.wp_post_id',
+            'articles.published_at',
+            'articles.reviewed_at',
+            'articles.review_status',
+            'articles.content_archived_at',
+            'articles.created_at',
+            'articles.updated_at',
+            'articles.deleted_at',
+        ];
+
+        if (static::hasFeaturedProjectionColumns()) {
+            $columns = array_merge($columns, [
+                'articles.featured_thumb_url',
+                'articles.featured_media_id',
+                'articles.featured_image_status',
+                'articles.featured_image_source',
+            ]);
+        }
+
+        return $columns;
+    }
+
+    private static function hasFeaturedProjectionColumns(): bool
+    {
+        static $ok = null;
+        if ($ok !== null) {
+            return $ok;
+        }
+
+        try {
+            $ok = \Illuminate\Support\Facades\Schema::connection('omi_seo_ai')
+                ->hasColumn('articles', 'featured_image_status');
+        } catch (\Throwable) {
+            $ok = false;
+        }
+
+        return $ok;
+    }
+
+    public static function applyListSelectColumns(Builder $query): Builder
+    {
+        if ($query->getQuery()->columns === null) {
+            $query->select(static::listSelectColumns());
+        }
+
+        return $query;
+    }
+
+    /**
      * @return array<int|string, mixed>
      */
     private static function articleEagerLoads(): array
@@ -1293,14 +1361,17 @@ class ArticleResource extends SeoPanelResource
         return [
             'user',
             'site',
+            'faqs',
             'articleMetas' => static fn ($query) => $query->whereIn('meta_key', [
                 'seo_focus_keyword',
                 'seo_rule_violations',
                 self::META_SKIP_SEO_AUDIT,
                 'wp_post_images',
                 'wp_featured_image_url',
+                ArticleMediaLocalService::META_FEATURED_ATTACHMENT_ID,
                 'wp_permalink',
                 'wp_post_type',
+                ArticleWordPressSyncFlagService::META_WP_DATA_OUT_OF_SYNC,
             ]),
         ];
     }
@@ -1382,35 +1453,7 @@ class ArticleResource extends SeoPanelResource
 
     private static function resolveThumbnailUrl(SeoArticle $record): ?string
     {
-        $record->loadMissing('articleMetas');
-
-        $featured = trim((string) ($record->articleMetas->firstWhere('meta_key', 'wp_featured_image_url')?->meta_value ?? ''));
-        if ($featured !== '') {
-            return $featured;
-        }
-
-        $rawImages = $record->articleMetas->firstWhere('meta_key', 'wp_post_images')?->meta_value ?? '';
-        if (! is_string($rawImages) || trim($rawImages) === '') {
-            return null;
-        }
-
-        $decoded = json_decode($rawImages, true);
-        if (! is_array($decoded)) {
-            return null;
-        }
-
-        foreach ($decoded as $row) {
-            if (! is_array($row)) {
-                continue;
-            }
-
-            $src = trim((string) ($row['src'] ?? ''));
-            if ($src !== '') {
-                return $src;
-            }
-        }
-
-        return null;
+        return app(ArticleFeaturedImageProjection::class)->forList($record)['url'];
     }
 
     private static function resolveWordPressPermalink(SeoArticle $record): ?string

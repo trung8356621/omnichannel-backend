@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoArticleWpSyncJob;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
@@ -17,6 +18,7 @@ use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoQueueContext;
 use App\Addons\SeoContentAi\Support\WordPressRestResponseParser;
 use App\Models\Site;
+use App\Support\RuntimeLogger;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -211,6 +213,101 @@ final class WordPressArticleSyncService
                 'message' => 'Không kết nối được WordPress: '.$e->getMessage(),
             ];
         }
+    }
+
+    /**
+     * Read-only reconcile probe for Publishing Queue recovery / post-publish sync.
+     *
+     * @return array{
+     *     found: bool,
+     *     wp_post_id?: int|null,
+     *     permalink?: string,
+     *     status?: string,
+     *     slug?: string,
+     *     match_count?: int,
+     *     ambiguous?: bool
+     * }|null
+     */
+    public function findPublishedPostForReconcile(
+        SeoArticle $article,
+        WordPressExecutionContext $sideEffect,
+        ?string $operationKey = null,
+    ): ?array {
+        $site = $article->site;
+        if ($site === null) {
+            $article->loadMissing('site');
+            $site = $article->site;
+        }
+        if ($site === null) {
+            return null;
+        }
+
+        $site->loadMissing('metas');
+        $writeToken = trim((string) ($site->getMeta('seo_migration_token') ?? ''));
+        if ($writeToken === '') {
+            return null;
+        }
+
+        $base = app(WordPressArticleContentService::class)->getPermalinkBase($site);
+        if ($base === '') {
+            return null;
+        }
+
+        $syncKey = SeoArticleWpSyncJob::makeIdempotencyKey(
+            (int) ($article->site_id ?? 0),
+            (int) $article->id,
+        );
+
+        $query = [
+            'article_id' => (int) $article->id,
+            'sync_key' => $syncKey,
+        ];
+        $operationKey = trim((string) $operationKey);
+        if ($operationKey !== '') {
+            $query['operation_key'] = $operationKey;
+        }
+
+        try {
+            $response = $this->gateway->getJson(
+                $sideEffect,
+                'article.find_post_by_meta',
+                $base.'/wp-json/omi-seo-ai/v1/posts/find-by-article',
+                $writeToken,
+                self::EDITOR_SYNC_HTTP_TIMEOUT_SECONDS,
+                $query,
+                (int) $article->id,
+                (int) ($article->site_id ?? 0),
+            );
+        } catch (Throwable $e) {
+            RuntimeLogger::warning('publishing.wordpress_find_by_article_failed', [
+                'article_id' => $article->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        if (! $response->successful()) {
+            return null;
+        }
+
+        $decoded = $response->json();
+        if (! is_array($decoded)) {
+            return null;
+        }
+
+        $matchCount = (int) ($decoded['match_count'] ?? (($decoded['found'] ?? false) ? 1 : 0));
+        $ambiguous = (bool) ($decoded['ambiguous'] ?? false) || $matchCount > 1;
+
+        return [
+            'found' => (bool) ($decoded['found'] ?? false) && ! $ambiguous,
+            'wp_post_id' => $ambiguous ? null : ((int) ($decoded['wp_post_id'] ?? 0) ?: null),
+            'permalink' => trim((string) ($decoded['permalink'] ?? '')),
+            'status' => trim((string) ($decoded['status'] ?? '')),
+            'slug' => trim((string) ($decoded['slug'] ?? '')),
+            'match_count' => $matchCount,
+            'ambiguous' => $ambiguous,
+        ];
     }
 
     /**
@@ -589,6 +686,116 @@ final class WordPressArticleSyncService
     }
 
     /**
+     * Post-publish editorial UPDATE only — never calls article.create_post.
+     *
+     * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null  $seoOverride
+     * @return array<string, mixed>
+     */
+    public function updatePublishedArticleOnly(
+        SeoArticle $article,
+        WordPressExecutionContext $sideEffect,
+        ?array $seoOverride = null,
+    ): array {
+        $this->assertSideEffectArticle($sideEffect, $article);
+
+        if ($blocked = $this->blockContentManagerWordPressSync()) {
+            return $blocked;
+        }
+
+        $canonicalWpPostId = (int) ($article->wp_post_id ?? 0);
+        if ($canonicalWpPostId <= 0) {
+            return [
+                'success' => false,
+                'message' => 'Thiếu wp_post_id — không thể cập nhật bài WordPress đã xuất bản.',
+                'create_post_called' => false,
+            ];
+        }
+
+        $lock = Cache::lock('seo-wp-post-publish-sync-'.(int) $article->id.'-'.$canonicalWpPostId, 120);
+
+        try {
+            $lock->block(5);
+        } catch (LockTimeoutException) {
+            return [
+                'success' => false,
+                'message' => 'Đang có lượt đồng bộ cập nhật khác cho bài này.',
+                'error_code' => 'sync_locked',
+                'create_post_called' => false,
+            ];
+        }
+
+        try {
+            $article = $article->fresh() ?? $article;
+            if ((int) ($article->wp_post_id ?? 0) !== $canonicalWpPostId) {
+                return [
+                    'success' => false,
+                    'message' => 'wp_post_id đã đổi trong lúc đồng bộ — bỏ qua ghi đè cũ.',
+                    'error_code' => 'stale_wp_post_id',
+                    'create_post_called' => false,
+                ];
+            }
+
+            $context = $this->resolveEditorSyncContext($article);
+            if (! ($context['success'] ?? false)) {
+                return [
+                    'success' => false,
+                    'message' => (string) ($context['message'] ?? 'Không thể đồng bộ lên WordPress.'),
+                    'create_post_called' => false,
+                ];
+            }
+
+            $prepared = $this->prepareEditorSyncPayload($article, $seoOverride, [
+                'omit_publication_fields' => true,
+                'force_editor_sync' => true,
+            ]);
+            if (($prepared['request_payload'] ?? []) === [] && ($prepared['local_media_sync_errors'] ?? []) !== []) {
+                return [
+                    'success' => false,
+                    'message' => implode(' | ', $prepared['local_media_sync_errors']),
+                    'create_post_called' => false,
+                ];
+            }
+
+            $outgoingContent = (string) ($prepared['post_content'] ?? '');
+            $httpResult = $this->executeEditorSyncRequest($article, $sideEffect, $context, $prepared);
+            if (! ($httpResult['success'] ?? false)) {
+                return array_merge($httpResult, [
+                    'create_post_called' => false,
+                    'outgoing_post_content' => $outgoingContent,
+                    'canonical_wp_post_id' => $canonicalWpPostId,
+                ]);
+            }
+
+            $completed = $this->completeEditorSyncResponse(
+                $article,
+                $prepared,
+                is_array($httpResult['decoded'] ?? null) ? $httpResult['decoded'] : [],
+            );
+
+            $returnedWp = (int) ($completed['wp_post_id'] ?? $article->fresh()?->wp_post_id ?? 0);
+            if ($returnedWp > 0 && $returnedWp !== $canonicalWpPostId) {
+                return [
+                    'success' => false,
+                    'message' => 'WordPress trả về wp_post_id khác canonical — không chấp nhận.',
+                    'error_code' => 'wp_post_id_mismatch',
+                    'create_post_called' => false,
+                    'canonical_wp_post_id' => $canonicalWpPostId,
+                    'returned_wp_post_id' => $returnedWp,
+                ];
+            }
+
+            return array_merge($completed, [
+                'create_post_called' => false,
+                'outgoing_post_content' => $outgoingContent,
+                'canonical_wp_post_id' => $canonicalWpPostId,
+                'returned_wp_post_id' => $returnedWp > 0 ? $returnedWp : $canonicalWpPostId,
+            ]);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
      * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null  $seoOverride
      * @return array{
      *     request_payload: array<string, mixed>,
@@ -906,7 +1113,9 @@ final class WordPressArticleSyncService
             $article->fresh() ?? $article,
             hash('sha256', trim((string) (($article->fresh() ?? $article)->body ?? $postContent ?? ''))),
         );
-        $this->confirmContentProjectPublishDelivery($article->fresh() ?? $article);
+        $fresh = $article->fresh() ?? $article;
+        $fresh->loadMissing('articleMetas');
+        $this->confirmContentProjectPublishDelivery($fresh);
         app(ArticleLastSavedTimestampService::class)->touchSynced($article);
         $this->timestampService->sync($article, $decoded);
 
@@ -938,26 +1147,90 @@ final class WordPressArticleSyncService
 
     /**
      * Confirm Content Project publishing queue only after real WP sync success.
+     *
+     * Accepts processing and queued_for_delivery (publisher may have skipped
+     * beginPublisherAttempt when task_id was missing from automation mapping).
      */
-    private function confirmContentProjectPublishDelivery(SeoArticle $article): void
-    {
+    public function confirmContentProjectPublishDelivery(
+        SeoArticle $article,
+        ?int $preferredTaskId = null,
+        ?string $attemptToken = null,
+        bool $reconciledFromTokenMismatch = false,
+    ): void {
         if (! \Illuminate\Support\Facades\Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_queue_status')) {
             return;
         }
 
-        $processing = \App\Addons\SeoContentAi\Enums\ContentProjectPublishQueueStatus::Processing->value;
-        $tasks = SeoProjectTask::query()
+        $openStatuses = [
+            \App\Addons\SeoContentAi\Enums\ContentProjectPublishQueueStatus::Processing->value,
+            \App\Addons\SeoContentAi\Enums\ContentProjectPublishQueueStatus::QueuedForDelivery->value,
+            \App\Addons\SeoContentAi\Enums\ContentProjectPublishQueueStatus::Waiting->value,
+            \App\Addons\SeoContentAi\Enums\ContentProjectPublishQueueStatus::Retrying->value,
+        ];
+
+        $query = SeoProjectTask::query()
             ->where('article_id', (int) $article->id)
-            ->where('publish_queue_status', $processing)
-            ->get();
+            ->whereIn('publish_queue_status', $openStatuses);
+
+        if ($preferredTaskId !== null && $preferredTaskId > 0) {
+            $query->whereKey($preferredTaskId);
+        }
+
+        $tasks = $query->get();
+        if ($tasks->isEmpty() && $preferredTaskId !== null && $preferredTaskId > 0) {
+            $one = SeoProjectTask::query()->find($preferredTaskId);
+            if ($one instanceof SeoProjectTask
+                && (int) ($one->article_id ?? 0) === (int) $article->id
+                && (string) ($one->publish_queue_status ?? '') !== \App\Addons\SeoContentAi\Enums\ContentProjectPublishQueueStatus::Published->value
+            ) {
+                $tasks = collect([$one]);
+            }
+        }
 
         if ($tasks->isEmpty()) {
             return;
         }
 
         $queue = app(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueService::class);
+        $wpPostId = (int) ($article->wp_post_id ?? 0);
+        $permalink = trim((string) ($article->articleMetas
+            ->firstWhere('meta_key', 'wp_permalink')?->meta_value ?? ''));
+
         foreach ($tasks as $task) {
+            if ($attemptToken !== null && $attemptToken !== '') {
+                $current = trim((string) ($task->publish_attempt_token ?? ''));
+                if ($current !== '' && ! hash_equals($current, $attemptToken) && $wpPostId <= 0) {
+                    RuntimeLogger::info('publishing.confirm_skipped_token_mismatch_no_wp_post', [
+                        'task_id' => (int) $task->getKey(),
+                        'article_id' => (int) $article->id,
+                    ]);
+
+                    continue;
+                }
+                if ($current !== '' && ! hash_equals($current, $attemptToken) && $wpPostId > 0) {
+                    $reconciledFromTokenMismatch = true;
+                }
+            }
+
             $queue->markPublished($task);
+            RuntimeLogger::info('publishing.confirmed_after_wp_sync', [
+                'task_id' => (int) $task->getKey(),
+                'article_id' => (int) $article->id,
+                'wp_post_id' => $wpPostId > 0 ? $wpPostId : null,
+                'permalink' => $permalink !== '' ? $permalink : null,
+                'reconciled_token_mismatch' => $reconciledFromTokenMismatch,
+            ]);
+
+            app(\App\Addons\SeoContentAi\Services\ContentProject\Application\Events\ContentProjectDomainEvents::class)
+                ->dispatchAfterCommit(new \App\Addons\SeoContentAi\Services\ContentProject\Application\Events\ArticlePublished(
+                    projectId: (int) ($task->project_id ?? 0),
+                    itemId: (int) $task->getKey(),
+                    articleId: (int) $article->id,
+                    wpPostId: $wpPostId > 0 ? $wpPostId : 0,
+                ));
+
+            app(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectQueueHealthService::class)
+                ->rememberSuccess(1);
         }
     }
 
@@ -1145,6 +1418,11 @@ final class WordPressArticleSyncService
             }
         }
 
+        // Post-publish editorial sync: update content only — preserve remote status/date.
+        if ((bool) ($syncOptions['omit_publication_fields'] ?? false)) {
+            unset($payload['status'], $payload['post_date'], $payload['post_date_gmt']);
+        }
+
         // FAQ rỗng thật trên Laravel → cho phép WP xóa meta; tránh giữ FAQ cũ lệch.
         if ($faqs === []) {
             $payload['clear_faqs'] = true;
@@ -1161,7 +1439,9 @@ final class WordPressArticleSyncService
             'defer_inline_media_sync' => $deferInlineMedia,
         ];
 
-        $skipCheck = $this->shouldSkipEditorSyncRequest($article, $prepared);
+        $skipCheck = (bool) ($syncOptions['force_editor_sync'] ?? false)
+            ? ['skip' => false, 'reason' => 'force_editor_sync']
+            : $this->shouldSkipEditorSyncRequest($article, $prepared);
 
         return [
             ...$prepared,

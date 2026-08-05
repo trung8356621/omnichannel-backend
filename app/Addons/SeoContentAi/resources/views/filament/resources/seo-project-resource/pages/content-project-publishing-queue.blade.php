@@ -93,6 +93,10 @@
                 <span wire:loading.remove wire:target="bulkPublishNow">{{ __('seo-content-ai::filament.projects.queue_publish_now') }}</span>
                 <span wire:loading wire:target="bulkPublishNow">…</span>
             </button>
+            <button type="button" wire:click="bulkResyncPublishedWordPress" wire:loading.attr="disabled" wire:target="bulkResyncPublishedWordPress" class="fi-btn fi-btn-color-gray fi-size-sm" title="Chỉ cập nhật bài WordPress đã Published — không tạo bài mới">
+                <span wire:loading.remove wire:target="bulkResyncPublishedWordPress">Đồng bộ lại WordPress</span>
+                <span wire:loading wire:target="bulkResyncPublishedWordPress">…</span>
+            </button>
             <button type="button" wire:click="bulkRetry" class="fi-btn fi-btn-color-warning fi-size-sm">
                 {{ __('seo-content-ai::filament.projects.queue_retry') }}
             </button>

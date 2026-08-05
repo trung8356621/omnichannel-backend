@@ -20,6 +20,7 @@ use App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionSnapshotBuil
 use App\Addons\SeoContentAi\Support\ContentProjectRunSettings;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoProjectRunErrorFormatter;
+use App\Support\RuntimeLogger;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\DB;
@@ -314,6 +315,30 @@ final class SeoProjectWorkflowRunService
         $result = app(SeoProjectRunConsolidationService::class)->maybeConsolidate($project) ?? $run;
         app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
             ->runCompleted($result);
+
+        try {
+            app(\App\Addons\SeoContentAi\Services\Notifications\Publishers\GenerationBatchNotificationPublisher::class)
+                ->notifyRunCompleted($project, $result, (int) ($result->user_id ?? 0) ?: null);
+
+            $succeeded = (int) ($result->succeeded ?? 0);
+            if ($succeeded > 0) {
+                $reviewerId = (int) ($project->user_id ?? 0);
+                if ($reviewerId > 0) {
+                    app(\App\Addons\SeoContentAi\Services\Notifications\Publishers\ReviewAssignmentNotificationPublisher::class)
+                        ->notifyItemsAssigned(
+                            $project,
+                            $reviewerId,
+                            $succeeded,
+                            (int) ($result->user_id ?? 0) ?: null,
+                        );
+                }
+            }
+        } catch (\Throwable $notificationError) {
+            RuntimeLogger::warning('seo.operational_notification.generation_batch_hook_failed', [
+                'run_id' => (int) $result->getKey(),
+                'error' => $notificationError->getMessage(),
+            ]);
+        }
 
         return $result;
     }
@@ -785,6 +810,36 @@ final class SeoProjectWorkflowRunService
                 $failedArticleId > 0 ? $failedArticleId : null,
             );
             $this->safeTaskEvent($task, SeoProjectTaskEventType::TaskFailed, SeoProjectTask::STATUS_WRITING, SeoProjectTask::STATUS_FAILED, $run, $runItem);
+
+            try {
+                if (is_array($failedStep)) {
+                    $enriched = $failedStep;
+                    foreach ($this->promptSteps($steps) as $stepRow) {
+                        if (! is_array($stepRow) || (string) ($stepRow['status'] ?? '') !== 'failed') {
+                            continue;
+                        }
+                        foreach (['failure_category', 'prompt_id', 'hook', 'hook_key', 'error_code'] as $key) {
+                            if (! isset($enriched[$key]) && isset($stepRow[$key])) {
+                                $enriched[$key] = $stepRow[$key];
+                            }
+                        }
+                        break;
+                    }
+                    app(\App\Addons\SeoContentAi\Services\Notifications\Publishers\PromptContractNotificationPublisher::class)
+                        ->notifyFromFailedStep(
+                            $project,
+                            $enriched,
+                            (int) $run->id,
+                            (int) $task->id,
+                        );
+                }
+            } catch (\Throwable $notificationError) {
+                RuntimeLogger::warning('seo.operational_notification.prompt_contract_hook_failed', [
+                    'run_id' => (int) $run->id,
+                    'task_id' => (int) $task->id,
+                    'error' => $notificationError->getMessage(),
+                ]);
+            }
 
             if ($failedArticleId > 0) {
                 $this->storeArticleRunMeta($failedArticleId, $run, $task);

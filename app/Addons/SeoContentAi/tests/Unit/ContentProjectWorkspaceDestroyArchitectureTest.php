@@ -108,6 +108,8 @@ final class ContentProjectWorkspaceDestroyArchitectureTest extends TestCase
         );
         self::assertStringContainsString('belongsToContentProject', $source);
         self::assertStringContainsString('content_project_manual_sync_forbidden', $source);
+        self::assertStringContainsString('PostPublishWordPressSyncEligibility', $source);
+        self::assertStringContainsString('syncPublishedFromEditorBundle', $source);
         self::assertStringNotContainsString('workspaceSave->saveFromEditorBundle', $source);
 
         $membership = (string) file_get_contents(

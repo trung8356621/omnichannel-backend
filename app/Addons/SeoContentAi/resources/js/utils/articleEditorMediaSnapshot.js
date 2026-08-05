@@ -249,20 +249,77 @@ export async function fetchMediaSnapshot(articleId, endpoint) {
     return parseSnapshotResponse(response, id);
 }
 
+/**
+ * Normalize Featured media identity from picker / block / Livewire payloads.
+ * Accepts snake_case + camelCase aliases.
+ *
+ * @param {Record<string, unknown>|null|undefined} item
+ * @returns {{
+ *   url: string,
+ *   wp_attachment_id: number,
+ *   seo_media_id: number,
+ *   id: number,
+ *   alt: string,
+ *   slug: string,
+ * }|null}
+ */
+export function normalizeFeaturedMediaItem(item) {
+    if (!item || typeof item !== 'object') {
+        return null;
+    }
+
+    const url = String(item.url ?? item.src ?? item.localSrc ?? item.thumb_url ?? '').trim();
+    if (url === '') {
+        return null;
+    }
+
+    const wpAttachmentId = Number(
+        item.wp_attachment_id
+        ?? item.wpAttachmentId
+        ?? item.attachment_id
+        ?? item.attachmentId
+        ?? 0,
+    ) || 0;
+    const seoMediaId = Number(
+        item.seo_media_id
+        ?? item.seoMediaId
+        ?? item.media_id
+        ?? item.mediaId
+        ?? 0,
+    ) || 0;
+    const rawId = Number(item.id ?? 0) || 0;
+    const id = wpAttachmentId > 0 ? wpAttachmentId : (seoMediaId > 0 ? seoMediaId : rawId);
+
+    return {
+        url,
+        wp_attachment_id: wpAttachmentId,
+        seo_media_id: seoMediaId,
+        id: id > 0 ? id : 0,
+        alt: String(item.alt ?? '').trim(),
+        slug: String(item.slug ?? item.filename ?? '').trim(),
+    };
+}
+
 export async function setFeaturedViaApi(articleId, item, endpoint) {
     const id = Number(articleId);
     const url = endpoint || `/api/seo/articles/${id}/editor/media/featured`;
     const previous = getMediaSnapshot(id);
+    const normalized = normalizeFeaturedMediaItem(item);
+    if (!normalized) {
+        throw new Error('Featured image URL is required.');
+    }
+
     const response = await fetch(url, {
         method: 'PUT',
         credentials: 'same-origin',
         headers: sessionHeaders(),
         body: JSON.stringify({
             ...sessionBodyExtras(id),
-            item,
-            url: item?.url,
-            wp_attachment_id: item?.wp_attachment_id ?? item?.wpAttachmentId,
-            seo_media_id: item?.seo_media_id ?? item?.seoMediaId,
+            item: normalized,
+            url: normalized.url,
+            wp_attachment_id: normalized.wp_attachment_id || undefined,
+            seo_media_id: normalized.seo_media_id || undefined,
+            id: normalized.id || undefined,
         }),
     });
 
@@ -345,6 +402,7 @@ export default {
     featuredFromSnapshot,
     galleryFromSnapshot,
     fetchMediaSnapshot,
+    normalizeFeaturedMediaItem,
     setFeaturedViaApi,
     clearFeaturedViaApi,
     replaceGalleryViaApi,

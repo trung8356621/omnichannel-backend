@@ -574,6 +574,8 @@ class WordPressArticleContentService
                 ['meta_key' => 'wp_featured_image_url'],
                 ['meta_value' => (string) $post['featured_image_url']],
             );
+            $article->unsetRelation('articleMetas');
+            app(\App\Addons\SeoContentAi\Services\ArticleFeaturedImageProjection::class)->rebuildAndPersist($article);
         }
 
         if (is_array($post['product_gallery'] ?? null) && $post['product_gallery'] !== []) {

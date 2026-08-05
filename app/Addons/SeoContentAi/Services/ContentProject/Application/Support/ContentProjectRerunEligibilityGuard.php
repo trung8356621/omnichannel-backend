@@ -122,6 +122,10 @@ final class ContentProjectRerunEligibilityGuard
             return 'Archived item cannot be rerun.';
         }
 
+        if ($task->isGenerationBlocked()) {
+            return 'Item đã được đánh dấu bỏ qua tạo bài.';
+        }
+
         if ((string) $task->status === SeoProjectTask::STATUS_CANCELLED) {
             return 'Cancelled item cannot be rerun.';
         }

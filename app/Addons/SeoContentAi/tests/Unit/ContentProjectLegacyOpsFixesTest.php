@@ -124,11 +124,15 @@ final class ContentProjectLegacyOpsFixesTest extends TestCase
 
     public function test_due_tasks_include_null_queue_status(): void
     {
-        $source = (string) file_get_contents(
-            (new ReflectionClass(ContentProjectPublishingQueueRunner::class))->getFileName(),
+        $selector = (string) file_get_contents(
+            (new ReflectionClass(\App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishingDueItemSelector::class))->getFileName(),
         );
-        self::assertStringContainsString('orWhereNull(\'publish_queue_status\')', $source);
-        self::assertStringContainsString('ProcessScheduledProjectItemPublishCommand', $source);
+        self::assertStringContainsString('orWhereNull(\'publish_queue_status\')', $selector);
+
+        $service = (string) file_get_contents(
+            (new ReflectionClass(\App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishDueItemService::class))->getFileName(),
+        );
+        self::assertStringContainsString('ProcessScheduledProjectItemPublishCommand', $service);
     }
 
     public function test_archive_items_command_registered_and_blocks_active_ops(): void

@@ -10,6 +10,7 @@ export const EDITOR_SESSION_ERROR = Object.freeze({
     SESSION_EXPIRED: 'article_editor_session_expired',
     SESSION_REVOKED: 'article_editor_session_revoked',
     SESSION_TAKEN_OVER: 'article_editor_session_taken_over',
+    SESSION_UNAVAILABLE: 'article_editor_session_unavailable',
     LOCK_NOT_OWNED: 'article_editor_lock_not_owned',
     DOCUMENT_VERSION_CONFLICT: 'article_document_version_conflict',
     CONTENT_HASH_CONFLICT: 'article_content_hash_conflict',
@@ -88,6 +89,21 @@ export function __resetAcquireInFlightForTests() {
 
 export function normalizeSessionError(data, status) {
     const code = String(data?.error ?? data?.conflict?.code ?? '').trim();
+    const httpStatus = Number(status) || 0;
+
+    if (httpStatus >= 500) {
+        return {
+            code: EDITOR_SESSION_ERROR.SESSION_UNAVAILABLE,
+            message: String(
+                data?.message
+                ?? 'Editor session server error. Reload the page and try again.',
+            ),
+            lock: data?.lock ?? null,
+            status: httpStatus,
+            data,
+        };
+    }
+
     if (code) {
         return {
             code,
@@ -368,6 +384,25 @@ export class EditorSessionClient {
         this.lockStatus = error?.code || 'lost';
         this.lockInfo = error?.lock ?? this.lockInfo;
         this.emit();
+
+        if (String(error?.code || '') === EDITOR_SESSION_ERROR.SESSION_UNAVAILABLE
+            || Number(error?.status) >= 500
+            || String(error?.code || '') === 'unknown_error'
+            || String(error?.code || '') === 'lost'
+            || String(error?.code || '') === 'error') {
+            try {
+                window.dispatchEvent(new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: 'Phiên editor lỗi',
+                        body: 'Máy chủ không giữ được phiên chỉnh sửa. Hãy tải lại trang rồi tiếp tục.',
+                        status: 'danger',
+                        reason_code: String(error?.code || EDITOR_SESSION_ERROR.SESSION_UNAVAILABLE),
+                    },
+                }));
+            } catch {
+                // ignore
+            }
+        }
 
         if (RECOVERABLE_SESSION_LOSS.has(String(error?.code || ''))) {
             void this.recoverSession();

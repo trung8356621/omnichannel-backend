@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Support\PublishingQueue;
 
 /**
- * Publishing Queue "Publishing" bucket — publisher operation đang chạy thật.
+ * Publishing Queue "Publishing" bucket — publisher worker đã start thật.
  *
- * Chỉ `publish_queue_status=processing`. Due schedule chưa claim KHÔNG phải Publishing.
+ * Chỉ `processing` + publisher_started_at. queued_for_delivery / dispatch-only ≠ Publishing.
  */
 final class PublishingQueuePublishingDefinition
 {
@@ -23,7 +23,17 @@ final class PublishingQueuePublishingDefinition
         }
 
         $queue = strtolower(trim((string) ($row['publish_queue_status'] ?? $row['queue_status'] ?? '')));
+        if ($queue !== 'processing') {
+            return false;
+        }
 
-        return $queue === 'processing';
+        // Require publisher_started_at evidence. Missing key = not actively publishing.
+        if (! array_key_exists('publisher_started_at', $row)) {
+            return false;
+        }
+
+        $started = $row['publisher_started_at'];
+
+        return $started !== null && $started !== '';
     }
 }

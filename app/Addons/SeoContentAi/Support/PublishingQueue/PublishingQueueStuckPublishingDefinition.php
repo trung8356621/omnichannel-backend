@@ -7,11 +7,12 @@ namespace App\Addons\SeoContentAi\Support\PublishingQueue;
 use Carbon\Carbon;
 
 /**
- * Stuck Publishing — processing quá TTL, thiếu attempt, hoặc đã lố lịch (past due).
+ * Stuck Publishing — lease hết hạn (canonical) hoặc legacy TTL.
  */
 final class PublishingQueueStuckPublishingDefinition
 {
-    public const TTL_MINUTES = 30;
+    /** UI/health stuck badge; auto recovery uses PublishingRetryPolicy::LEASE_MINUTES (5). */
+    public const TTL_MINUTES = 5;
 
     /** Schedule đã qua + vẫn processing → stuck sớm hơn TTL (Retry không dùng được). */
     public const PAST_DUE_GRACE_MINUTES = 5;
@@ -25,6 +26,11 @@ final class PublishingQueueStuckPublishingDefinition
     {
         if (! PublishingQueuePublishingDefinition::matches($row)) {
             return false;
+        }
+
+        $leaseExpires = self::leaseExpiresAt($row);
+        if ($leaseExpires !== null) {
+            return $leaseExpires->isPast();
         }
 
         if (self::isPastDueStuck($row)) {
@@ -44,9 +50,29 @@ final class PublishingQueueStuckPublishingDefinition
     /**
      * @param  array<string, mixed>  $row
      */
+    public static function leaseExpiresAt(array $row): ?Carbon
+    {
+        $raw = $row['publish_lease_expires_at'] ?? null;
+        if ($raw instanceof Carbon) {
+            return $raw;
+        }
+        if (is_string($raw) && trim($raw) !== '') {
+            try {
+                return Carbon::parse($raw);
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
     public static function startedAt(array $row): ?Carbon
     {
-        foreach (['publishing_started_at', 'last_publish_attempt_at', 'last_publish_attempt'] as $key) {
+        foreach (['publisher_started_at', 'publishing_started_at', 'last_publish_attempt_at', 'last_publish_attempt'] as $key) {
             $raw = $row[$key] ?? null;
             if ($raw instanceof Carbon) {
                 return $raw;

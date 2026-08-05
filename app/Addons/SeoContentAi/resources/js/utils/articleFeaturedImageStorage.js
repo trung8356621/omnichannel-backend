@@ -2,6 +2,7 @@ import {
     clearFeaturedViaApi,
     featuredFromSnapshot,
     getMediaSnapshot,
+    normalizeFeaturedMediaItem,
     setFeaturedViaApi,
 } from './articleEditorMediaSnapshot';
 
@@ -10,25 +11,7 @@ import {
  */
 
 export function normalizeFeaturedImage(item) {
-    if (!item || typeof item !== 'object') {
-        return null;
-    }
-
-    const url = String(item.url ?? item.src ?? '').trim();
-    if (url === '') {
-        return null;
-    }
-
-    const wpAttachmentId = Number(item.wp_attachment_id ?? item.wpAttachmentId ?? 0);
-    const seoMediaId = Number(item.seo_media_id ?? item.seoMediaId ?? 0);
-
-    return {
-        url,
-        wp_attachment_id: wpAttachmentId > 0 ? wpAttachmentId : 0,
-        seo_media_id: seoMediaId > 0 ? seoMediaId : 0,
-        alt: String(item.alt ?? '').trim(),
-        slug: String(item.slug ?? '').trim(),
-    };
+    return normalizeFeaturedMediaItem(item);
 }
 
 export function loadFeaturedImage(articleId) {

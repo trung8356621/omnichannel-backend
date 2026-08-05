@@ -58,6 +58,8 @@ export default function SeoScorePanel({
     onViolationAction,
     canGenerateFaq = true,
     canGenerateFeaturedSnippet = true,
+    savedScore = null,
+    scoreSource = 'live',
 }) {
     const [passedOpen, setPassedOpen] = useState(true);
     const rules = Array.isArray(seoScoringRules) && seoScoringRules.length > 0
@@ -76,6 +78,8 @@ export default function SeoScorePanel({
     const passedItems = buildPassedRuleItems(violations, rules, messages);
     const quality = scoreQualityLabel(score);
     const isLoading = loading || analyzing;
+    const saved = savedScore === null || savedScore === undefined ? null : Number(savedScore);
+    const showSavedDiff = Number.isFinite(saved) && saved !== score;
 
     return (
         <div className="seo-score-panel seo-assistant-score">
@@ -98,8 +102,18 @@ export default function SeoScorePanel({
                     ? t('editor_seo_analyzing')
                     : analyzeError
                       ? t('editor_seo_analyze_failed')
-                      : t('editor_seo_updated_by_content')}
+                      : scoreSource === 'saved'
+                        ? t('editor_seo_saved_score_hint')
+                        : t('editor_seo_live_score_hint')}
             </p>
+
+            {showSavedDiff && !analyzing ? (
+                <p className="seo-assistant-score__saved-diff">
+                    {t('editor_seo_saved_score_label')}: {saved}/100
+                    {' · '}
+                    {t('editor_seo_live_score_label')}: {score}/100
+                </p>
+            ) : null}
 
             {analyzeError && !analyzing ? (
                 <button

@@ -115,7 +115,12 @@ final class ScheduledArticlePublishRunner
                     }
                     $projectStats = $this->contentProjectQueue->dispatchDue($meta);
                     $stats['processed'] += $projectStats['processed'];
-                    $stats['published'] += $projectStats['published'];
+                    $stats['published'] += (int) ($projectStats['published_confirmed'] ?? $projectStats['published'] ?? 0);
+                    $stats['published_confirmed'] = ($stats['published_confirmed'] ?? 0) + (int) ($projectStats['published_confirmed'] ?? $projectStats['published'] ?? 0);
+                    $stats['claimed'] = ($stats['claimed'] ?? 0) + (int) ($projectStats['claimed'] ?? $projectStats['claimed_count'] ?? 0);
+                    $stats['dispatched'] = ($stats['dispatched'] ?? 0) + (int) ($projectStats['dispatched'] ?? $projectStats['dispatched_count'] ?? 0);
+                    $stats['publisher_started'] = ($stats['publisher_started'] ?? 0) + (int) ($projectStats['publisher_started'] ?? $projectStats['publisher_started_count'] ?? 0);
+                    $stats['retry_scheduled'] = ($stats['retry_scheduled'] ?? 0) + (int) ($projectStats['retry_scheduled'] ?? $projectStats['retry_wait_count'] ?? 0);
                     $stats['failed'] += $projectStats['failed'];
                     $stats['skipped'] += $projectStats['skipped'] ?? 0;
                     $this->dispatchDueArticles($stats, $meta);
@@ -217,7 +222,12 @@ final class ScheduledArticlePublishRunner
 
         $projectStats = $this->contentProjectQueue->dispatchDue($meta);
         $stats['processed'] += $projectStats['processed'];
-        $stats['published'] += $projectStats['published'];
+        $stats['published'] += (int) ($projectStats['published_confirmed'] ?? $projectStats['published'] ?? 0);
+        $stats['published_confirmed'] = ($stats['published_confirmed'] ?? 0) + (int) ($projectStats['published_confirmed'] ?? $projectStats['published'] ?? 0);
+        $stats['claimed'] = ($stats['claimed'] ?? 0) + (int) ($projectStats['claimed'] ?? $projectStats['claimed_count'] ?? 0);
+        $stats['dispatched'] = ($stats['dispatched'] ?? 0) + (int) ($projectStats['dispatched'] ?? $projectStats['dispatched_count'] ?? 0);
+        $stats['publisher_started'] = ($stats['publisher_started'] ?? 0) + (int) ($projectStats['publisher_started'] ?? $projectStats['publisher_started_count'] ?? 0);
+        $stats['retry_scheduled'] = ($stats['retry_scheduled'] ?? 0) + (int) ($projectStats['retry_scheduled'] ?? $projectStats['retry_wait_count'] ?? 0);
         $stats['failed'] += $projectStats['failed'];
         $stats['skipped'] += $projectStats['skipped'] ?? 0;
 

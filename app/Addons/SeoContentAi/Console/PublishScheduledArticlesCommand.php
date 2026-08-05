@@ -43,10 +43,14 @@ final class PublishScheduledArticlesCommand extends Command
         }
 
         $this->line(sprintf(
-            'processed=%d published=%d failed=%d skipped=%d bootstrap_failed=%d connections_attempted=%d connections_skipped=%d',
+            'processed=%d claimed_count=%d dispatched_count=%d publisher_started_count=%d published_confirmed_count=%d retry_wait_count=%d failed_count=%d skipped=%d bootstrap_failed=%d connections_attempted=%d connections_skipped=%d',
             $stats['processed'],
-            $stats['published'],
-            $stats['failed'],
+            $stats['claimed'] ?? $stats['claimed_count'] ?? 0,
+            $stats['dispatched'] ?? $stats['dispatched_count'] ?? 0,
+            $stats['publisher_started'] ?? $stats['publisher_started_count'] ?? 0,
+            $stats['published_confirmed'] ?? $stats['published_confirmed_count'] ?? $stats['published'] ?? 0,
+            $stats['retry_scheduled'] ?? $stats['retry_wait_count'] ?? 0,
+            $stats['failed'] ?? $stats['failed_count'] ?? 0,
             $stats['skipped'] ?? 0,
             $stats['bootstrap_failed'] ?? 0,
             $stats['connections_attempted'] ?? 0,

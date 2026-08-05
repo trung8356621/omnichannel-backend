@@ -91,6 +91,17 @@ final class WordPressPublisher implements ContentPublisher
 
             $this->recordAttempt($payload, 'published', null, $resolvedWp);
 
+            $permalink = '';
+            if (is_array($result)) {
+                $permalink = trim((string) ($result['permalink'] ?? ''));
+            }
+            if ($permalink === '') {
+                $permalink = $this->resolveStoredPermalink($payload->articleId);
+            }
+            if ($permalink !== '') {
+                $this->persistPermalink($payload->articleId, $permalink);
+            }
+
             return new PublishResult(
                 success: true,
                 wpPostId: $resolvedWp,
@@ -98,6 +109,7 @@ final class WordPressPublisher implements ContentPublisher
                     ? 'Updated existing WordPress post.'
                     : 'Published to WordPress.',
                 externalReference: $payload->externalReference,
+                permalink: $permalink !== '' ? $permalink : null,
             );
         } catch (Throwable $e) {
             $reconciled = $this->findByExternalReference($payload->siteId, $payload->externalReference);
@@ -155,6 +167,37 @@ final class WordPressPublisher implements ContentPublisher
         SeoArticle::query()->whereKey($articleId)->update([
             'wp_post_id' => $wpPostId,
         ]);
+    }
+
+    private function resolveStoredPermalink(int $articleId): string
+    {
+        $article = SeoArticle::query()->with([
+            'articleMetas' => static fn ($q) => $q->where('meta_key', 'wp_permalink'),
+        ])->find($articleId);
+
+        if (! $article instanceof SeoArticle) {
+            return '';
+        }
+
+        return trim((string) ($article->articleMetas->firstWhere('meta_key', 'wp_permalink')?->meta_value ?? ''));
+    }
+
+    private function persistPermalink(int $articleId, string $permalink): void
+    {
+        $permalink = trim($permalink);
+        if ($articleId <= 0 || $permalink === '') {
+            return;
+        }
+
+        $article = SeoArticle::query()->find($articleId);
+        if (! $article instanceof SeoArticle) {
+            return;
+        }
+
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => 'wp_permalink'],
+            ['meta_value' => $permalink],
+        );
     }
 
     private function recordAttempt(

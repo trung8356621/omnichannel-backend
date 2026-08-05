@@ -59,13 +59,17 @@ Worker ownership: [SCHEDULER_AND_WORKERS.md](SCHEDULER_AND_WORKERS.md).
 
 | Queue | Worker | Why |
 |-------|--------|-----|
-| `automation-critical` | Shared | Business Hook rule execution |
-| `automation` | Shared | Automation node default queue |
-| `automation-external` | Shared | WP / external action nodes |
-| `seo` | Shared | Site Sync steps/inbound, manual WP sync, many SEO jobs |
-| `media_generation` | Shared | Image pipeline when used |
-| `default` | Shared | Jobs without `onQueue()` |
-| `seo-content-run` | **Dedicated** CP worker | `RunContentProjectArticleJob` (`$timeout=900`, `$tries=1`). **Do not** add to shared worker. |
+| `automation-critical` | automation-critical | `ExecuteAutomationRuleJob` |
+| `automation-external` | automation-external | WP / external action nodes only |
+| `automation-policy` | automation-policy | `DispatchContentProjectAutomationPoliciesJob` |
+| `seo-audit` | SEO maintenance (low concurrency) | `AuditLinkStatusJob` — not on WP publish worker |
+| `automation` | general | Automation node default queue |
+| `seo` | general | Site Sync steps/inbound, manual WP sync, many SEO jobs |
+| `media_generation` | general | Image pipeline when used |
+| `default` | general | Filament/Laravel queued notifications without `onQueue()` |
+| `seo-content-run` | **Dedicated** CP worker | `RunContentProjectArticleJob` (`$timeout=900`, `$tries=1`). **Do not** add to general worker. |
+
+**Invariant:** Do not put `seo-audit` or `automation-policy` on the same worker that listens to `automation-external`.
 
 Scheduler cron: every minute `schedule:run` (see [AAPANEL_QUEUE_RUNTIME.md](AAPANEL_QUEUE_RUNTIME.md)).
 

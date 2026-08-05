@@ -97,6 +97,7 @@ final class ContentProjectPublishingQueueBoundaryContractTest extends TestCase
         );
         self::assertStringContainsString("slug = 'publishing-queue'", $hub);
         self::assertStringContainsString('canManageContentProjectWorkflow', $hub);
+        self::assertStringContainsString('getNavigationParentItem', $hub);
     }
 
     public function test_classifier_and_eligibility(): void

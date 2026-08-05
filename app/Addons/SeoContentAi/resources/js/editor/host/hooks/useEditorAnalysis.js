@@ -11,6 +11,8 @@ export function useEditorAnalysis() {
         analysis: host?.seo?.analysis ?? null,
         loading: Boolean(host?.seo?.loading || host?.seo?.analyzing),
         error: host?.seo?.error ?? host?.seo?.analyzeError ?? null,
+        savedScore: host?.seo?.savedScore ?? null,
+        scoreSource: host?.seo?.scoreSource ?? 'live',
         onAnalyze: host?.seo?.onAnalyzeClick,
         onViolationAction: host?.seo?.onViolationAction,
     }), [host]);

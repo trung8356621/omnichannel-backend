@@ -19,7 +19,6 @@ use App\Addons\SeoContentAi\Services\PromptResultLinkService;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
-use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Support\ImageToolType;
 use App\Addons\SeoContentAi\Support\ImagenProviderErrorClassifier;
 use App\Addons\SeoContentAi\Support\PromptPostProcessing;

@@ -26,6 +26,7 @@ use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Auth;
+use Livewire\Attributes\Url;
 
 /**
  * Site Sync V2 Operations — Admin/Manager readonly monitor + CommandBus actions.
@@ -50,6 +51,9 @@ final class SiteSyncOperationsCenter extends SeoPanelPage
     }
 
     public ?int $filterSiteId = null;
+
+    #[Url(as: 'run_id')]
+    public ?int $focusRunId = null;
 
     /** @var list<array<string, mixed>> */
     public array $runs = [];
@@ -87,6 +91,13 @@ final class SiteSyncOperationsCenter extends SeoPanelPage
 
     public function mount(): void
     {
+        if ($this->focusRunId !== null && $this->focusRunId > 0) {
+            $run = SeoSiteSyncRun::query()->find($this->focusRunId);
+            if ($run instanceof SeoSiteSyncRun) {
+                $this->filterSiteId = (int) $run->site_id;
+            }
+        }
+
         $this->refreshData();
     }
 
@@ -99,15 +110,18 @@ final class SiteSyncOperationsCenter extends SeoPanelPage
             $eventsQuery->where('site_id', $this->filterSiteId);
         }
 
-        $this->runs = $runsQuery->get()->map(static fn (SeoSiteSyncRun $run): array => [
-            'id' => (int) $run->id,
-            'site_id' => (int) $run->site_id,
-            'public_ref' => (string) $run->public_ref,
-            'status' => (string) $run->status,
-            'mode' => (string) $run->mode,
-            'current_step' => (string) ($run->current_step ?? ''),
-            'error' => (string) ($run->error_message ?? ''),
-        ])->all();
+        $this->runs = $runsQuery->get()->map(function (SeoSiteSyncRun $run): array {
+            return [
+                'id' => (int) $run->id,
+                'site_id' => (int) $run->site_id,
+                'public_ref' => (string) $run->public_ref,
+                'status' => (string) $run->status,
+                'mode' => (string) $run->mode,
+                'current_step' => (string) ($run->current_step ?? ''),
+                'error' => (string) ($run->error_message ?? ''),
+                'focused' => $this->focusRunId !== null && (int) $run->id === (int) $this->focusRunId,
+            ];
+        })->all();
 
         $this->events = $eventsQuery->get()->map(static fn (SeoSiteSyncInboundEvent $event): array => [
             'id' => (int) $event->id,

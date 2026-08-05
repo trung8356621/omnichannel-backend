@@ -48,7 +48,7 @@ final class WorkspaceMediaPickerController extends Controller
                 null,
                 $page,
                 $search !== '' ? $search : null,
-                24,
+                28,
                 restrictToArticleIds: $restrictArticleIds,
             );
             $images = $articleResolver->enrichImages(
@@ -60,7 +60,7 @@ final class WorkspaceMediaPickerController extends Controller
                 $site,
                 null,
                 $page,
-                24,
+                28,
                 $search !== '' ? $search : null,
                 includeAttachmentIds: $restrictWpAttachmentIds,
             );

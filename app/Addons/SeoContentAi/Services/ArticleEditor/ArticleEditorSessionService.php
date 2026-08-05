@@ -16,6 +16,7 @@ use App\Addons\SeoContentAi\Support\ArticleEditorSessionErrorCode;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\User;
 use App\Support\RuntimeLogger;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -756,21 +757,63 @@ final class ArticleEditorSessionService
         }
 
         $now = now();
-        $expired = SeoArticleEditorSession::query()
-            ->where('article_id', $articleId)
-            ->where('status', ArticleEditorSessionStatus::Active)
-            ->where('expires_at', '<=', $now)
-            ->update([
-                'status' => ArticleEditorSessionStatus::Expired,
-                'updated_at' => $now,
-            ]);
+        $maxAttempts = 3;
 
-        if ($expired > 0) {
-            RuntimeLogger::info('seo.editor.sessions_expired', [
-                'article_id' => $articleId,
-                'count' => $expired,
-            ]);
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            try {
+                $expired = SeoArticleEditorSession::query()
+                    ->where('article_id', $articleId)
+                    ->where('status', ArticleEditorSessionStatus::Active)
+                    ->where('expires_at', '<=', $now)
+                    ->update([
+                        'status' => ArticleEditorSessionStatus::Expired,
+                        'updated_at' => $now,
+                    ]);
+
+                if ($expired > 0) {
+                    RuntimeLogger::info('seo.editor.sessions_expired', [
+                        'article_id' => $articleId,
+                        'count' => $expired,
+                    ]);
+                }
+
+                return;
+            } catch (QueryException $exception) {
+                if ($attempt < $maxAttempts && $this->isTransientSessionLockFailure($exception)) {
+                    usleep(50_000 * $attempt);
+
+                    continue;
+                }
+
+                if ($this->isTransientSessionLockFailure($exception)) {
+                    // Best-effort sweep — never fail heartbeat/save solely because expire raced.
+                    RuntimeLogger::warning('seo.editor.sessions_expire_skipped_lock', [
+                        'article_id' => $articleId,
+                        'attempt' => $attempt,
+                        'sql_state' => (string) ($exception->errorInfo[0] ?? ''),
+                        'driver_code' => (int) ($exception->errorInfo[1] ?? 0),
+                    ]);
+
+                    return;
+                }
+
+                throw $exception;
+            }
         }
+    }
+
+    private function isTransientSessionLockFailure(QueryException $exception): bool
+    {
+        $sqlState = (string) ($exception->errorInfo[0] ?? '');
+        $driverCode = (int) ($exception->errorInfo[1] ?? 0);
+        $message = $exception->getMessage();
+
+        return $driverCode === 1205
+            || $driverCode === 1213
+            || ($sqlState === '40001')
+            || ($sqlState === 'HY000' && str_contains($message, 'Lock wait timeout'))
+            || str_contains($message, 'Deadlock found')
+            || str_contains($message, 'SQLSTATE[40001]');
     }
 
     private function findActiveSessionLocked(SeoArticle $article): ?SeoArticleEditorSession

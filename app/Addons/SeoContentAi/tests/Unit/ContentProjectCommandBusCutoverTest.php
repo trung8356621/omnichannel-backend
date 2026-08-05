@@ -75,9 +75,10 @@ final class ContentProjectCommandBusCutoverTest extends TestCase
             (new ReflectionClass(ContentProjectPublishingQueueRunner::class))->getFileName(),
         );
 
-        $usesRunner = str_contains($source, 'ProcessScheduledProjectItemPublish')
+        $usesRunner = str_contains($source, 'PublishDueItemService')
+            || str_contains($source, 'ProcessScheduledProjectItemPublish')
             || str_contains($source, 'ContentProjectCommandBus');
-        self::assertTrue($usesRunner, 'Publishing queue runner must process scheduled items via runner or CommandBus.');
+        self::assertTrue($usesRunner, 'Publishing queue runner must process scheduled items via PublishDueItemService.');
     }
 
     public function test_workspace_save_does_not_touch_publish_schedule(): void

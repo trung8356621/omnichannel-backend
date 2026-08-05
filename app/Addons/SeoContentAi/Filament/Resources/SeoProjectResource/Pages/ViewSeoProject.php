@@ -19,8 +19,10 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunPr
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunProjectItemStepCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ResumeProjectItemFromFailedStepCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AcknowledgeProjectItemGenerationErrorCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\BlockProjectItemGenerationCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\DebugOverrideProjectItemLifecycleCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UnblockProjectItemGenerationCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectPublicRef;
 use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceDeepLink;
@@ -1102,6 +1104,45 @@ final class ViewSeoProject extends Page
         }
 
         $this->dispatchBus(new AcknowledgeProjectItemGenerationErrorCommand(
+            (int) $project->id,
+            [(int) $taskId],
+        ));
+        $this->resetPage();
+    }
+
+    /**
+     * Operator skip — durable exclude from Generate / Retry / resume selection.
+     */
+    public function skipGenerationOne(int $taskId): void
+    {
+        $project = $this->requireProject();
+        if (! SeoAccessControl::canAccessContentProjectRun($project)) {
+            Notification::make()->title('Forbidden')->danger()->send();
+
+            return;
+        }
+
+        $this->dispatchBus(new BlockProjectItemGenerationCommand(
+            (int) $project->id,
+            [(int) $taskId],
+            'operator_skip_generation',
+        ));
+        $this->resetPage();
+    }
+
+    /**
+     * Clear generation block — allow Generate / Retry again.
+     */
+    public function allowGenerationOne(int $taskId): void
+    {
+        $project = $this->requireProject();
+        if (! SeoAccessControl::canAccessContentProjectRun($project)) {
+            Notification::make()->title('Forbidden')->danger()->send();
+
+            return;
+        }
+
+        $this->dispatchBus(new UnblockProjectItemGenerationCommand(
             (int) $project->id,
             [(int) $taskId],
         ));

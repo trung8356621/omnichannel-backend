@@ -120,6 +120,7 @@ import {
     galleryFromSnapshot,
     setFeaturedViaApi,
     subscribeMediaSnapshot,
+    normalizeFeaturedMediaItem,
 } from '../utils/articleEditorMediaSnapshot';
 import { openMediaPicker } from '../editor/runtime/editorMediaPickerStore';
 import { DEFAULT_WIKI_TRUST_DOMAINS } from '../utils/wikiTrustDomains';
@@ -217,6 +218,7 @@ import {
     setEditorConflictTokens,
     applyEditorDocumentAck,
     logArticleEditorVersionDebug,
+    previewSeoScoreViaApi,
 } from '../utils/articleEditorApi';
 import { buildEditorDocumentEnvelope, blocksFromEditorDocumentEnvelope, isUsableTipTapDocument } from '../utils/articleEditorDocument';
 import {
@@ -2879,6 +2881,13 @@ export default function SeoArticleEditor({
     const hasHydratedSeoFromServerRef = useRef(false);
     const [focusKeyword, setFocusKeyword] = useState(initialSeo?.focus_keyword ?? null);
     const [analysis, setAnalysis] = useState(initialSeo?.analysis ?? null);
+    const [savedSeoScore, setSavedSeoScore] = useState(() => (
+        initialSeo?.score === null || initialSeo?.score === undefined
+            ? null
+            : Number(initialSeo.score)
+    ));
+    const [seoScoreSource, setSeoScoreSource] = useState('saved');
+    const seoPreviewAbortRef = useRef(null);
     const [mediaHealthTick, setMediaHealthTick] = useState(0);
     const [featuredHealthSnapshot, setFeaturedHealthSnapshot] = useState(() => loadFeaturedImage(articleId));
 
@@ -3511,7 +3520,7 @@ export default function SeoArticleEditor({
         };
     }, [articleId, parseGalleryItems]);
 
-    const applySeoAnalysisResult = useCallback((result) => {
+    const applySeoAnalysisResult = useCallback((result, source = 'live') => {
         if (!result || typeof result !== 'object') {
             setAnalyzing(false);
             return;
@@ -3521,10 +3530,12 @@ export default function SeoArticleEditor({
         lastSeoAnalysisRef.current = payload;
 
         const violations = result.violations ?? payload?.violations ?? [];
-        const score = scoreFromViolations(
-            sanitizeViolations(violations, seoScoringRules),
-            seoScoringRules,
-        );
+        const score = Number.isFinite(Number(result.total_score ?? result.score ?? result.seo_score))
+            ? Number(result.total_score ?? result.score ?? result.seo_score)
+            : scoreFromViolations(
+                sanitizeViolations(violations, seoScoringRules),
+                seoScoringRules,
+            );
 
         setAnalysis({
             violations,
@@ -3533,7 +3544,11 @@ export default function SeoArticleEditor({
             errors: result.errors ?? [],
             good: result.good ?? [],
             warnings: result.warnings ?? [],
+            score_version: result.score_version ?? null,
+            content_hash: result.content_hash ?? null,
+            calculated_at: result.calculated_at ?? null,
         });
+        setSeoScoreSource(source);
         setAnalyzing(false);
 
 
@@ -3642,6 +3657,41 @@ export default function SeoArticleEditor({
         wikiTrustDomains,
     ]);
 
+    const runPhpSeoPreview = useCallback(async () => {
+        if (!articleId) {
+            return;
+        }
+        if (seoPreviewAbortRef.current) {
+            seoPreviewAbortRef.current.abort();
+        }
+        const controller = new AbortController();
+        seoPreviewAbortRef.current = controller;
+        const meta = seoMetaRef.current;
+        try {
+            setAnalyzing(true);
+            setSeoAnalyzeError(null);
+            const data = await previewSeoScoreViaApi(articleId, {
+                title: meta.seoTitle || articleTitle,
+                slug: meta.slug,
+                meta_description: meta.metaDescription,
+                focus_keyword: focusKeyword,
+                content: getExportHtml(),
+            }, { signal: controller.signal });
+            if (controller.signal.aborted) {
+                return;
+            }
+            applySeoAnalysisResult(data, 'live');
+            setSeoStale(false);
+        } catch (error) {
+            if (error?.name === 'AbortError') {
+                return;
+            }
+            // Keep local JS score; surface soft error.
+            setSeoAnalyzeError(error?.message ?? 'seo_preview_failed');
+            setAnalyzing(false);
+        }
+    }, [applySeoAnalysisResult, articleId, articleTitle, focusKeyword, getExportHtml]);
+
     const requestAnalyze = useCallback(() => {
         try {
             setAnalyzing(true);
@@ -3649,12 +3699,12 @@ export default function SeoArticleEditor({
             runLocalSeoAnalysis();
             analyzedBlocksRef.current = blocksRef.current;
             setSeoStale(false);
-            setAnalyzing(false);
+            void runPhpSeoPreview();
         } catch (error) {
             setAnalyzing(false);
             setSeoAnalyzeError(error?.message ?? 'seo_analyze_failed');
         }
-    }, [runLocalSeoAnalysis]);
+    }, [runLocalSeoAnalysis, runPhpSeoPreview]);
 
     requestAnalyzeRef.current = requestAnalyze;
 
@@ -3667,7 +3717,7 @@ export default function SeoArticleEditor({
         setSeoAnalyzeError(null);
         scheduler.schedule({
             id: 'seo-idle-analyze',
-            debounceMs: 250,
+            debounceMs: 600,
             priority: 'normal',
             run: ({ version, signal }) => {
                 if (signal.aborted || version !== scheduler.getVersion()) {
@@ -3686,17 +3736,14 @@ export default function SeoArticleEditor({
                     }
                     analyzedBlocksRef.current = blocksRef.current;
                     setSeoStale(false);
-                    setAnalyzing(false);
+                    void runPhpSeoPreview();
                 } catch (error) {
-                    if (signal.aborted || version !== scheduler.getVersion()) {
-                        return;
-                    }
                     setAnalyzing(false);
                     setSeoAnalyzeError(error?.message ?? 'seo_analyze_failed');
                 }
             },
         });
-    }, [runLocalSeoAnalysis]);
+    }, [runLocalSeoAnalysis, runPhpSeoPreview]);
 
     useEffect(() => {
         const onMediaSnapshotAnalyze = (event) => {
@@ -7150,9 +7197,26 @@ export default function SeoArticleEditor({
                     mode: 'featured',
                     selection: 'single',
                     onConfirm: async (items) => {
-                        const item = items?.[0];
+                        const item = normalizeFeaturedMediaItem(items?.[0]);
                         if (!item?.url) return;
-                        await setFeaturedViaApi(articleId, item);
+                        try {
+                            await setFeaturedViaApi(articleId, item);
+                            window.dispatchEvent(new CustomEvent('seo-article-editor-notify', {
+                                detail: {
+                                    title: t('make_featured_image_success'),
+                                    body: t('make_featured_image_success_body'),
+                                    status: 'success',
+                                },
+                            }));
+                        } catch (error) {
+                            window.dispatchEvent(new CustomEvent('seo-article-editor-notify', {
+                                detail: {
+                                    title: t('make_featured_image_failed'),
+                                    body: String(error?.message || 'error'),
+                                    status: 'warning',
+                                },
+                            }));
+                        }
                     },
                 });
                 return;
@@ -9495,8 +9559,17 @@ export default function SeoArticleEditor({
             requestAnalyze();
         };
 
-        const handleServerAnalyzeResult = () => {
-            // Save/API may emit seo_analysis patch — recompute local immediate analysis; do not adopt server score as UI SoT.
+        const handleServerAnalyzeResult = (event) => {
+            const result = event?.detail?.result;
+            if (result && typeof result === 'object') {
+                applySeoAnalysisResult(result, 'saved');
+                const score = Number(result.total_score ?? result.score ?? result.seo_score);
+                if (Number.isFinite(score)) {
+                    setSavedSeoScore(score);
+                }
+                setSeoStale(false);
+                return;
+            }
             requestAnalyze();
         };
 
@@ -11472,6 +11545,8 @@ export default function SeoArticleEditor({
             stale: seoStale,
             analyzeError: seoAnalyzeError,
             error: seoSummaryError,
+            savedScore: savedSeoScore,
+            scoreSource: seoScoreSource,
             onRetry: () => {
                 seoSummaryLoadedRef.current = false;
                 setSeoSummaryError(null);
@@ -11540,6 +11615,8 @@ export default function SeoArticleEditor({
         analyzing,
         seoStale,
         seoAnalyzeError,
+        savedSeoScore,
+        seoScoreSource,
         seoSummaryError,
         requestAnalyze,
         handleSeoViolationAction,

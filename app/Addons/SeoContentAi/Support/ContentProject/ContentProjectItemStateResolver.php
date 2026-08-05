@@ -17,6 +17,7 @@ use App\Addons\SeoContentAi\Enums\SeoProjectTaskStatus;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishingActiveProcessing;
 
 /**
  * Single canonical Content Project item state resolver (Batch D).
@@ -36,9 +37,14 @@ final class ContentProjectItemStateResolver
 {
     private readonly ContentProjectItemActionGuard $actionGuard;
 
-    public function __construct(?ContentProjectItemActionGuard $actionGuard = null)
-    {
+    private readonly PublishingActiveProcessing $activeProcessing;
+
+    public function __construct(
+        ?ContentProjectItemActionGuard $actionGuard = null,
+        ?PublishingActiveProcessing $activeProcessing = null,
+    ) {
         $this->actionGuard = $actionGuard ?? new ContentProjectItemActionGuard;
+        $this->activeProcessing = $activeProcessing ?? new PublishingActiveProcessing;
     }
 
     /**
@@ -91,6 +97,7 @@ final class ContentProjectItemStateResolver
         );
 
         $displayPublish = $hasPublished ? ContentProjectItemPublishState::Published : $publish;
+        $isActivelyPublishing = $this->activeProcessing->isActivelyPublishing($task);
 
         $actions = $this->actionGuard->availableActions(
             $lifecycle,
@@ -101,9 +108,10 @@ final class ContentProjectItemStateResolver
             $hasPublished,
             $latestPublishAttemptFailed,
             $queue,
+            $isActivelyPublishing,
         );
 
-        $blocking = $this->blockingReason($archive, $lifecycle, $generation, $publish);
+        $blocking = $this->blockingReason($archive, $lifecycle, $generation, $isActivelyPublishing);
 
         return new ContentProjectItemState(
             lifecycleState: $lifecycle,
@@ -392,7 +400,7 @@ final class ContentProjectItemStateResolver
         ContentProjectItemArchiveState $archive,
         ContentProjectLifecyclePhase $lifecycle,
         ContentProjectItemGenerationState $generation,
-        ContentProjectItemPublishState $publish,
+        bool $isActivelyPublishing,
     ): ?string {
         if ($archive === ContentProjectItemArchiveState::ContentArchived) {
             return 'Item or project is content-archived.';
@@ -402,7 +410,9 @@ final class ContentProjectItemStateResolver
         ) {
             return 'Generation is running.';
         }
-        if ($publish === ContentProjectItemPublishState::Queued) {
+        // Only canonical active processing blocks Retry / Publish Now.
+        // retry_wait / scheduled waiting map to Queued for display but are NOT active.
+        if ($isActivelyPublishing) {
             return 'Publish queue is active.';
         }
 

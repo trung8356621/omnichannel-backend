@@ -108,6 +108,21 @@
         <p class="text-sm text-gray-600 dark:text-gray-300">
             {{ $this->editorPreparingMessage }}
         </p>
+        <button
+            type="button"
+            wire:click="forceOpenEditorWhilePreparing"
+            wire:loading.attr="disabled"
+            wire:target="forceOpenEditorWhilePreparing"
+            class="mt-2 inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 shadow-sm transition hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700"
+        >
+            <span wire:loading.remove wire:target="forceOpenEditorWhilePreparing">
+                {{ __('seo-content-ai::filament.projects.article_editor_preparing_open_anyway') }}
+            </span>
+            <span wire:loading wire:target="forceOpenEditorWhilePreparing" class="inline-flex items-center gap-2">
+                <x-filament::loading-indicator class="h-4 w-4" />
+                {{ __('seo-content-ai::filament.projects.article_editor_preparing_opening') }}
+            </span>
+        </button>
     </div>
 @else
 @if ($this->recordDomainDiffersFromGlobal)
@@ -535,11 +550,34 @@
                     }
                 });
             } else if (action === 'sync') {
-                @if (
-                    ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager()
-                    && ! \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsInContentProject($record)
-                )
+                @php
+                    $syncIsContentManager = \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager();
+                    $syncInContentProject = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsInContentProject($record);
+                    $syncPostPublishEligible = $syncInContentProject
+                        && app(\App\Addons\SeoContentAi\Services\ContentProject\Publishing\PostPublishWordPressSyncEligibility::class)
+                            ->isEligible($record);
+                @endphp
+                @if (! $syncIsContentManager && ! $syncInContentProject)
                     window.dispatchEvent(new CustomEvent('seo-publish-tab-request-sync'));
+                @elseif (! $syncIsContentManager && $syncPostPublishEligible)
+                    {{-- CP Published: UPDATE existing WP post via sync-wp API (not publish tab). --}}
+                    (async () => {
+                        try {
+                            if (typeof window.__seoExecuteHeavyArticleAction !== 'function') {
+                                throw new Error('Editor chưa sẵn sàng — tải lại trang rồi thử lại.');
+                            }
+                            await window.__seoExecuteHeavyArticleAction('sync', null);
+                        } catch (error) {
+                            window.__seoEndArticleHeavyActionClient?.();
+                            if (typeof FilamentNotification !== 'undefined') {
+                                new FilamentNotification()
+                                    .title('Không đồng bộ được WordPress')
+                                    .body(error?.message ?? 'Đồng bộ thất bại.')
+                                    .danger()
+                                    .send();
+                            }
+                        }
+                    })();
                 @endif
             } else if (action === 'preview') {
                 const url = @js($this->getArticlePreviewUrl());

@@ -235,8 +235,10 @@ final class ArticleEditorDocumentWriter
     public function ensureDerivedBodyForPublish(SeoArticle $article, bool $persistRefresh = true): string
     {
         $body = trim((string) ($article->body ?? ''));
+        $boundary = new InlineMarkBoundaryWhitespace;
+
         if (! $this->publishFromJsonEnabled() || ! $this->columnsReady($article)) {
-            return $body;
+            return $boundary->repair($body);
         }
 
         $status = (string) ($article->editor_document_status ?? '');
@@ -246,15 +248,17 @@ final class ArticleEditorDocumentWriter
             || $status === ArticleEditorDocumentSchema::STATUS_MANUAL_REVIEW
             || ! is_array($article->editor_document)
         ) {
-            return $body;
+            return $boundary->repair($body);
         }
 
         try {
             $prepared = $this->prepareCanonicalDocument($article->editor_document);
             $rendered = trim($prepared['html']);
             if ($rendered === '') {
-                return $body;
+                return $boundary->repair($body);
             }
+
+            $rendered = $boundary->repair($rendered);
 
             $bodyHash = hash('sha256', $body);
             $renderedHash = hash('sha256', $rendered);
@@ -273,7 +277,7 @@ final class ArticleEditorDocumentWriter
                 'error' => $exception->getMessage(),
             ]);
 
-            return $body;
+            return $boundary->repair($body);
         }
     }
 

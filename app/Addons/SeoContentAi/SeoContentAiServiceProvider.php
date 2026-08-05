@@ -34,6 +34,8 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
     {
         $this->app->singleton(PromptMediaStorageService::class);
         $this->app->singleton(SeoDatabaseConnectionService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Support\ArticleFeaturedImageResolver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ArticleFeaturedImageProjection::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\SeoDatabaseBackupService::class);
         $this->app->singleton(TeamChatAttachmentService::class);
 
@@ -141,6 +143,7 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectQueueHealthService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectTimelineService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueRunner::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishDueItemService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\ContentPublisherRegistry::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\PublisherResolver::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\ContentProject\Application\Events\ContentProjectDomainEvents::class);
@@ -525,6 +528,7 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
         $this->mergeConfigFrom(__DIR__.'/config/keyword_intelligence.php', 'seo-content-ai.keyword_intelligence');
         $this->mergeConfigFrom(__DIR__.'/config/gsc_intelligence.php', 'seo-content-ai.gsc_intelligence');
         $this->mergeConfigFrom(__DIR__.'/config/article_editor.php', 'seo-content-ai.article_editor');
+        $this->mergeConfigFrom(__DIR__.'/config/article_list.php', 'seo-content-ai.article_list');
         $this->registerExtensionSdk();
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationInputMapper::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Platform\Registry\AutomationConditionRegistry::class);
@@ -651,6 +655,8 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 CleanCtaKeywordsCommand::class,
                 ExtractOldArticleTocsCommand::class,
                 PublishScheduledArticlesCommand::class,
+                \App\Addons\SeoContentAi\Console\ReconcileStuckPublishingCommand::class,
+                \App\Addons\SeoContentAi\Console\ReconcilePublishingQueueTasksCommand::class,
                 AuditSeoDatabaseConnectionsCommand::class,
                 \App\Addons\SeoContentAi\Console\RunSiteSyncCommand::class,
                 \App\Addons\SeoContentAi\Console\ReconcileSiteSyncCommand::class,
@@ -714,6 +720,13 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                 \App\Addons\SeoContentAi\Console\WorkflowDoctorCommand::class,
                 \App\Addons\SeoContentAi\Console\InstallDefaultImprovePromptCommand::class,
                 \App\Addons\SeoContentAi\Console\ArticleEditorDocumentBackfillCommand::class,
+                \App\Addons\SeoContentAi\Console\BackfillArticleFeaturedImageProjectionCommand::class,
+                \App\Addons\SeoContentAi\Console\ArticleMetaAuditCommand::class,
+                \App\Addons\SeoContentAi\Console\ArticleMetaCleanupCommand::class,
+                \App\Addons\SeoContentAi\Console\ReconcileActiveOperationalNotificationsCommand::class,
+                \App\Addons\SeoContentAi\Console\CheckOperationalRunnerHealthCommand::class,
+                \App\Addons\SeoContentAi\Console\RequeueOverduePublishingCommand::class,
+                \App\Addons\SeoContentAi\Console\RepairUnprojectedPublishingCommand::class,
             ];
 
             // Agent Workspace commands — optional so partial deploy never kills publish cron (exit 255).
@@ -882,6 +895,20 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
                     ->withoutOverlapping();
             }
 
+            $runnerHealthName = 'seo-content-ai:operational-runner-health';
+            $runnerHealthRegistered = collect($schedule->events())
+                ->contains(static fn ($event): bool => $event->description === $runnerHealthName);
+            if (
+                ! $runnerHealthRegistered
+                && class_exists(\App\Addons\SeoContentAi\Console\CheckOperationalRunnerHealthCommand::class)
+            ) {
+                $schedule
+                    ->command(\App\Addons\SeoContentAi\Console\CheckOperationalRunnerHealthCommand::class)
+                    ->everyFiveMinutes()
+                    ->name($runnerHealthName)
+                    ->withoutOverlapping();
+            }
+
             $automationCleanupName = 'seo-content-ai:automation-cleanup-execution-logs';
             $automationCleanupRegistered = collect($schedule->events())
                 ->contains(static fn ($event): bool => $event->description === $automationCleanupName);
@@ -919,8 +946,12 @@ class SeoContentAiServiceProvider extends ServiceProvider implements DeclaresDat
             $agentPolicyDispatchRegistered = collect($schedule->events())
                 ->contains(static fn ($event): bool => $event->description === $agentPolicyDispatchName);
             if (! $agentPolicyDispatchRegistered) {
+                // Schedule::job() second arg = queue (CallbackEvent has no onQueue()).
                 $schedule
-                    ->job(\App\Addons\SeoContentAi\Jobs\DispatchContentProjectAutomationPoliciesJob::class)
+                    ->job(
+                        new \App\Addons\SeoContentAi\Jobs\DispatchContentProjectAutomationPoliciesJob,
+                        \App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationQueueName::Policy->value,
+                    )
                     ->hourly()
                     ->name($agentPolicyDispatchName)
                     ->withoutOverlapping();

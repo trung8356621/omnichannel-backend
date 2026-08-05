@@ -75,16 +75,32 @@ final class ScheduleProjectItemsHandler extends AbstractPublishingHandler
             return $this->businessLock->withLock(
                 $this->businessLock->projectSchedule($projectId),
                 function () use ($project, $projectId, $itemIds, $command): ContentProjectActionResult {
-                    $affected = $this->queueService->schedule($project, $itemIds, $command->scheduledAt);
+                    $report = $this->queueService->scheduleWithReport($project, $itemIds, $command->scheduledAt);
+                    $message = sprintf(
+                        'Đã đổi lịch %d bài. Bỏ qua %d bài đang xuất bản.',
+                        (int) $report['scheduled'],
+                        (int) $report['skipped_active'],
+                    );
+                    if ((int) $report['cancelled_pending'] > 0) {
+                        $message .= sprintf(' Đã hủy %d lần chờ worker.', (int) $report['cancelled_pending']);
+                    }
+                    if ((int) $report['failed'] > 0) {
+                        $message .= sprintf(' %d không đổi được.', (int) $report['failed']);
+                    }
 
                     return ContentProjectActionResult::ok(
                         ContentProjectActionCodes::ITEMS_SCHEDULED,
-                        "{$affected} item(s) scheduled.",
+                        $message,
                         $projectId,
                         $itemIds,
                         metadata: [
-                            'affected_count' => $affected,
+                            'affected_count' => (int) $report['scheduled'],
+                            'scheduled' => (int) $report['scheduled'],
+                            'skipped_active' => (int) $report['skipped_active'],
+                            'cancelled_pending' => (int) $report['cancelled_pending'],
+                            'failed' => (int) $report['failed'],
                             'scheduled_at' => $command->scheduledAt->toIso8601String(),
+                            'report' => $report,
                         ],
                     );
                 },

@@ -56,6 +56,25 @@ final class ContentProjectGenerationRecoveryService
             $details[] = $result;
         }
 
+        if ($recovered !== []) {
+            try {
+                $batchId = 'recovery-'.now()->format('YmdHi').'-'.(int) $project->getKey();
+                app(\App\Addons\SeoContentAi\Services\Notifications\Publishers\GenerationStuckNotificationPublisher::class)
+                    ->notifyRecoveryBatch(
+                        $project,
+                        $batchId,
+                        $recovered,
+                        [],
+                        exhausted: false,
+                    );
+            } catch (\Throwable $notificationError) {
+                RuntimeLogger::warning('seo.operational_notification.generation_stuck_hook_failed', [
+                    'project_id' => (int) $project->getKey(),
+                    'error' => $notificationError->getMessage(),
+                ]);
+            }
+        }
+
         return [
             'recovered_task_ids' => $recovered,
             'skipped_task_ids' => $skipped,

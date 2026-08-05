@@ -6,12 +6,14 @@ namespace App\Addons\SeoContentAi\Services\ContentProject\Application\Support;
 
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionCodes;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResult;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\PublishingRetryPolicy;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 /**
  * Idempotency store — retention 7 ngày.
+ * Stale "processing" (lease TTL) được giải phóng để retry không bị kẹt.
  */
 final class ContentProjectIdempotencyStore
 {
@@ -32,15 +34,33 @@ final class ContentProjectIdempotencyStore
             ->first();
 
         if ($existing !== null) {
-            if ((string) $existing->status === 'processing') {
-                return ContentProjectActionResult::ok(
-                    ContentProjectActionCodes::PROCESSING,
+            $status = (string) ($existing->status ?? '');
+
+            if ($status === 'processing') {
+                $updatedAt = isset($existing->updated_at) ? strtotime((string) $existing->updated_at) : false;
+                $staleSeconds = PublishingRetryPolicy::LEASE_MINUTES * 60;
+                $isStale = $updatedAt === false || (time() - $updatedAt) >= $staleSeconds;
+                if ($isStale) {
+                    $this->release($tenantKey, $action, $key);
+
+                    return $this->begin($tenantKey, $action, $key);
+                }
+
+                return ContentProjectActionResult::fail(
+                    ContentProjectActionCodes::OPERATION_ALREADY_PROCESSING,
                     'Request trước đó đang processing.',
                     metadata: ['idempotent' => true, 'status' => 'processing'],
                 );
             }
 
-            if ((string) $existing->status === 'succeeded' && is_string($existing->result_payload)) {
+            if ($status === 'failed') {
+                // Failed attempts must be retryable with a new begin (same or new key).
+                $this->release($tenantKey, $action, $key);
+
+                return $this->begin($tenantKey, $action, $key);
+            }
+
+            if ($status === 'succeeded' && is_string($existing->result_payload)) {
                 $payload = json_decode($existing->result_payload, true);
                 if (is_array($payload)) {
                     return new ContentProjectActionResult(
@@ -97,6 +117,42 @@ final class ContentProjectIdempotencyStore
                 'expires_at' => now()->addDays(self::RETENTION_DAYS),
                 'updated_at' => now(),
             ]);
+    }
+
+    /**
+     * Drop store row so a later attempt may begin again.
+     */
+    public function release(string $tenantKey, string $action, string $key): void
+    {
+        if ($key === '' || ! $this->ready()) {
+            return;
+        }
+
+        DB::connection('omi_seo_ai')->table('seo_content_project_idempotency_keys')
+            ->where('tenant_key', $tenantKey)
+            ->where('action', $action)
+            ->where('idempotency_key', $key)
+            ->delete();
+    }
+
+    /**
+     * Release bare operation key + all attempt-scoped keys for one publish lifecycle.
+     */
+    public function releasePublishOperation(string $tenantKey, string $action, string $operationKey): void
+    {
+        $operationKey = trim($operationKey);
+        if ($operationKey === '' || ! $this->ready()) {
+            return;
+        }
+
+        DB::connection('omi_seo_ai')->table('seo_content_project_idempotency_keys')
+            ->where('tenant_key', $tenantKey)
+            ->where('action', $action)
+            ->where(static function ($q) use ($operationKey): void {
+                $q->where('idempotency_key', $operationKey)
+                    ->orWhere('idempotency_key', 'like', $operationKey.':attempt:%');
+            })
+            ->delete();
     }
 
     private function ready(): bool

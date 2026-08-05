@@ -19,6 +19,7 @@ use App\Addons\SeoContentAi\Http\Controllers\ArticleOutlineController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticlePreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleRevisionController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoPreviewController;
+use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoScorePreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleWpEditRedirectController;
 use App\Addons\SeoContentAi\Http\Controllers\GoogleSearchConsoleOAuthController;
 use App\Addons\SeoContentAi\Http\Controllers\KeywordReviewController;
@@ -400,6 +401,9 @@ class SeoPanelProvider extends PanelProvider
                 Route::post('/{article}/seo-meta', [ArticleEditorSyncController::class, 'saveSeoMeta'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.seo-meta');
+                Route::post('/{article}/seo-score/preview', ArticleSeoScorePreviewController::class)
+                    ->whereNumber('article')
+                    ->name('seo.articles.seo-score.preview');
                 Route::get('/{article}/editor-seo-payload', [ArticleEditorSyncController::class, 'seoPayload'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.seo-payload');

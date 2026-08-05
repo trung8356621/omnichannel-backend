@@ -4,29 +4,29 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\ContentProject;
 
-use App\Addons\SeoContentAi\Enums\ContentProjectPublishQueueStatus;
-use App\Addons\SeoContentAi\Models\SeoProjectTask;
-use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
-use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ProcessScheduledProjectItemPublishCommand;
-use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionCodes;
-use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
-use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectIdempotencyKeyFactory;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\DispatchClaimResult;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishDueItemOutcome;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishDueItemService;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishingActiveProcessing;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishingDueItemSelector;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Support\RuntimeLogger;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 /**
- * Publishing Queue cho Content Project — dispatch due tasks qua Command Bus.
+ * Publishing Queue cho Content Project — dispatch due tasks qua PublishDueItemService.
  * Assumes caller already bootstrapped+verified SEO DB via SeoDatabaseConnectionService.
  */
 final class ContentProjectPublishingQueueRunner
 {
     public function __construct(
         private readonly ContentProjectQueueHealthService $health,
-        private readonly ContentProjectCommandBus $commandBus,
         private readonly SeoDatabaseConnectionService $databaseConnection,
+        private readonly PublishDueItemService $dueItemService,
+        private readonly PublishingDueItemSelector $dueSelector = new PublishingDueItemSelector,
+        private readonly PublishingActiveProcessing $activeProcessing = new PublishingActiveProcessing,
     ) {}
 
     public function health(): ContentProjectQueueHealthService
@@ -36,15 +36,30 @@ final class ContentProjectPublishingQueueRunner
 
     /**
      * @param  array<string, mixed>  $connectionMeta  safe bootstrap metadata from canonical resolver
-     * @return array{processed: int, published: int, failed: int, skipped: int}
+     * @return array{
+     *     processed: int,
+     *     published: int,
+     *     failed: int,
+     *     skipped: int,
+     *     outcomes: list<array<string, mixed>>
+     * }
      */
     public function dispatchDue(array $connectionMeta = []): array
     {
         $stats = [
             'processed' => 0,
-            'published' => 0,
+            'published' => 0, // legacy alias = published_confirmed (kept for callers)
+            'published_confirmed' => 0,
+            'dispatched' => 0,
+            'claimed' => 0,
+            'publisher_started' => 0,
+            'retry_scheduled' => 0,
             'failed' => 0,
             'skipped' => 0,
+            'recovered_published' => 0,
+            'recovered_retry' => 0,
+            'recovered_failed' => 0,
+            'outcomes' => [],
         ];
 
         $connectionName = $this->databaseConnection->connectionName();
@@ -62,7 +77,6 @@ final class ContentProjectPublishingQueueRunner
                 return $stats;
             }
         } catch (Throwable $e) {
-            // Auth/bootstrap failures must not be labeled as schema missing.
             if ($this->looksLikeConnectionFailure($e)) {
                 RuntimeLogger::warning('publishing.connection_bootstrap_failed', [
                     'phase' => 'schema_probe',
@@ -95,107 +109,217 @@ final class ContentProjectPublishingQueueRunner
 
         $scopedConnectionId = (int) ($connectionMeta['connection_id'] ?? 0) ?: null;
 
-        // Heartbeat only after verified connection + schema — never on bootstrap failure.
-        $this->health->rememberWorkerRun($scopedConnectionId);
+        $this->health->rememberScannerRun($scopedConnectionId);
 
-        $this->dueTasks($connectionName)->each(function (SeoProjectTask $task) use (&$stats, $scopedConnectionId, $connectionMeta): void {
-            $stats['processed']++;
-            $projectId = (int) ($task->project_id ?? 0) ?: null;
+        $recoveryStats = ['scanned' => 0, 'published' => 0, 'retry_wait' => 0, 'failed' => 0, 'in_flight' => 0];
+        try {
+            $recoveryStats = app(\App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishingStuckRecoveryService::class)
+                ->recoverExpiredLeases($connectionMeta);
+            $stats['recovered_published'] = (int) ($recoveryStats['published'] ?? 0);
+            $stats['recovered_retry'] = (int) ($recoveryStats['retry_wait'] ?? 0);
+            $stats['recovered_failed'] = (int) ($recoveryStats['failed'] ?? 0);
+        } catch (Throwable $e) {
+            RuntimeLogger::warning('publishing.stuck_recovery_failed', [
+                'connection_id' => $scopedConnectionId,
+                'error' => $e->getMessage(),
+            ]);
+        }
 
-            try {
-                $itemId = (int) $task->getKey();
-                $idemKey = $task->scheduled_publish_at !== null
-                    ? ContentProjectIdempotencyKeyFactory::scheduler(
-                        $itemId,
-                        $task->scheduled_publish_at->toIso8601String(),
-                    )
-                    : null;
+        $dueCounts = $this->dueSelector->counts($connectionName);
+        $dueTasks = $this->dueSelector->dueTasks($connectionName);
 
-                $actor = new ActorContext(
-                    actorType: 'queue',
-                    actorId: null,
-                    siteId: (int) ($task->site_id ?? $task->project?->site_id ?? 0) ?: null,
-                    idempotencyKey: $idemKey,
-                    correlationId: 'cp-publish-'.$itemId,
-                );
-
-                RuntimeLogger::info('publishing.due_item_dispatch', [
-                    'project_id' => $projectId,
-                    'task_id' => $itemId,
-                    'expected_connection_id' => $scopedConnectionId,
-                    'expected_hash_id' => $connectionMeta['hash_id'] ?? null,
-                    'resolved_connection_id' => $scopedConnectionId,
-                    'resolved_hash_id' => $connectionMeta['hash_id'] ?? null,
-                    'database' => $connectionMeta['database'] ?? null,
-                ]);
-
-                $result = $this->commandBus->dispatch(
-                    new ProcessScheduledProjectItemPublishCommand(
-                        itemRef: $itemId,
-                        projectRef: $projectId,
-                    ),
-                    $actor,
-                );
-
-                if ($result->success) {
-                    $stats['published']++;
-                } elseif ($result->code === ContentProjectActionCodes::OPERATION_ALREADY_PROCESSING) {
-                    $stats['skipped']++;
-                } else {
-                    $stats['failed']++;
-                    $this->health->rememberFailure($result->message, $scopedConnectionId);
-                }
-            } catch (Throwable $e) {
-                $stats['failed']++;
-                $this->health->rememberFailure($e->getMessage(), $scopedConnectionId);
-                RuntimeLogger::warning('content_project_publishing_queue_failed', [
-                    'task_id' => (int) $task->id,
-                    'project_id' => $projectId,
-                    'connection_id' => $scopedConnectionId,
-                    'hash_id' => $connectionMeta['hash_id'] ?? null,
-                    'database' => $connectionMeta['database'] ?? null,
-                    'message' => $e->getMessage(),
-                ]);
+        $dueScheduledIds = [];
+        $dueRetryIds = [];
+        foreach ($dueTasks as $task) {
+            $id = (int) $task->getKey();
+            $status = (string) ($task->publish_queue_status ?? '');
+            if ($status === 'retrying') {
+                $dueRetryIds[] = $id;
+            } else {
+                $dueScheduledIds[] = $id;
             }
-        });
+        }
 
-        $this->health->rememberSuccess(
-            (int) $stats['processed'],
+        $claimAttemptedIds = [];
+        $claimSuccessIds = [];
+        $claimRejectedIds = [];
+        /** @var array<int, string> $claimRejectionReasons */
+        $claimRejectionReasons = [];
+        $publisherInvokedIds = [];
+        $dispatchSuccessIds = [];
+        $dispatchFailedIds = [];
+        /** @var array<string, int> $skipReasonCounts */
+        $skipReasonCounts = [];
+
+        RuntimeLogger::info('publishing.due_scan', [
+            'connection_id' => $scopedConnectionId,
+            'hash_id' => $connectionMeta['hash_id'] ?? null,
+            'database' => $connectionMeta['database'] ?? null,
+            'queue_connection' => 'sync-command-bus',
+            'queue_name' => 'inline',
+            'due_scheduled_count' => $dueCounts['due_scheduled_count'],
+            'due_retry_count' => $dueCounts['due_retry_count'],
+            'due_scheduled_ids' => $dueScheduledIds,
+            'due_retry_ids' => $dueRetryIds,
+            'now_utc' => $dueCounts['now_utc'],
+            'selected_count' => $dueTasks->count(),
+        ]);
+
+        $this->health->rememberDueBacklog(
+            (int) $dueCounts['due_scheduled_count'],
+            (int) $dueCounts['due_retry_count'],
             $scopedConnectionId,
         );
+
+        /** @var list<PublishDueItemOutcome> $outcomes */
+        $outcomes = [];
+
+        $dueTasks->each(function (SeoProjectTask $task) use (
+            &$stats,
+            &$claimAttemptedIds,
+            &$claimSuccessIds,
+            &$claimRejectedIds,
+            &$claimRejectionReasons,
+            &$publisherInvokedIds,
+            &$dispatchSuccessIds,
+            &$dispatchFailedIds,
+            &$skipReasonCounts,
+            &$outcomes,
+            $scopedConnectionId,
+        ): void {
+            $stats['processed']++;
+            $itemId = (int) $task->getKey();
+            $claimAttemptedIds[] = $itemId;
+
+            $outcome = $this->dueItemService->execute($itemId, PublishDueItemService::TRIGGER_SCHEDULER);
+            $outcomes[] = $outcome;
+            $stats['outcomes'][] = $outcome->toLogArray();
+
+            if ($outcome->claimSuccess) {
+                $claimSuccessIds[] = $itemId;
+                $stats['claimed']++;
+            } elseif ($outcome->claimCode !== '') {
+                $claimRejectedIds[] = $itemId;
+                $claimRejectionReasons[$itemId] = $outcome->claimCode;
+                $skipReasonCounts[$outcome->claimCode] = ($skipReasonCounts[$outcome->claimCode] ?? 0) + 1;
+            } elseif ($outcome->outcome === PublishDueItemOutcome::SKIPPED) {
+                $claimRejectedIds[] = $itemId;
+                $reason = $outcome->reason !== '' ? $outcome->reason : 'other';
+                $claimRejectionReasons[$itemId] = $reason;
+                $skipReasonCounts[$reason] = ($skipReasonCounts[$reason] ?? 0) + 1;
+            }
+
+            if ($outcome->publisherInvoked) {
+                $publisherInvokedIds[] = $itemId;
+                $stats['publisher_started']++;
+            }
+
+            match ($outcome->outcome) {
+                PublishDueItemOutcome::PUBLISHED => (function () use (&$stats, &$dispatchSuccessIds, $itemId, $scopedConnectionId): void {
+                    $stats['published_confirmed']++;
+                    $stats['published']++; // legacy alias = confirmed only
+                    $dispatchSuccessIds[] = $itemId;
+                    $this->health->rememberSuccess(1, $scopedConnectionId);
+                    $this->health->rememberPublisherProcessed(1, $scopedConnectionId);
+                })(),
+                PublishDueItemOutcome::AWAITING_DELIVERY => (function () use (&$stats, &$dispatchSuccessIds, $itemId): void {
+                    $stats['dispatched']++;
+                    $dispatchSuccessIds[] = $itemId;
+                    // Health success = confirmed publish only — not dispatch acceptance.
+                })(),
+                PublishDueItemOutcome::RETRY_WAIT => (function () use (&$stats, &$dispatchSuccessIds, $itemId): void {
+                    $stats['retry_scheduled']++;
+                    $dispatchSuccessIds[] = $itemId;
+                })(),
+                PublishDueItemOutcome::FAILED => (function () use (&$stats, &$dispatchFailedIds, $itemId, $outcome, $scopedConnectionId): void {
+                    $stats['failed']++;
+                    $dispatchFailedIds[] = $itemId;
+                    $this->health->rememberFailure($outcome->reason !== '' ? $outcome->reason : 'failed', $scopedConnectionId);
+                })(),
+                PublishDueItemOutcome::SKIPPED => (function () use (&$stats): void {
+                    $stats['skipped']++;
+                })(),
+                default => (function () use (&$stats, &$dispatchFailedIds, $itemId, $outcome, $scopedConnectionId): void {
+                    $stats['failed']++;
+                    $dispatchFailedIds[] = $itemId;
+                    $this->health->rememberFailure(
+                        $outcome->exceptionMessage ?? $outcome->reason ?: 'error',
+                        $scopedConnectionId,
+                    );
+                })(),
+            };
+        });
+
+        $dominantRejection = $this->dominantReason($skipReasonCounts);
+        $completePayload = [
+            'connection_id' => $scopedConnectionId,
+            'due_scheduled_ids' => $dueScheduledIds,
+            'due_retry_ids' => $dueRetryIds,
+            'claim_attempted_ids' => $claimAttemptedIds,
+            'claim_success_ids' => $claimSuccessIds,
+            'claim_rejected_ids' => $claimRejectedIds,
+            'claim_rejection_reason' => $claimRejectionReasons,
+            'publisher_invoked_ids' => $publisherInvokedIds,
+            'dispatch_success_ids' => $dispatchSuccessIds,
+            'dispatch_failed_ids' => $dispatchFailedIds,
+            'claimed_count' => count($claimSuccessIds),
+            'dispatched_count' => (int) $stats['dispatched'],
+            'publisher_started_count' => (int) $stats['publisher_started'],
+            'published_confirmed_count' => (int) $stats['published_confirmed'],
+            'retry_wait_count' => (int) $stats['retry_scheduled'],
+            'failed_count' => (int) $stats['failed'],
+            'skipped_count' => (int) $stats['skipped'],
+            'published' => (int) $stats['published_confirmed'], // legacy: confirmed only
+            'failed' => $stats['failed'],
+            'due_scheduled_count' => $dueCounts['due_scheduled_count'],
+            'due_retry_count' => $dueCounts['due_retry_count'],
+            'skip_reason_counts' => $skipReasonCounts,
+            'dominant_rejection_reason' => $dominantRejection,
+        ];
+
+        RuntimeLogger::info('publishing.due_scan_complete', $completePayload);
+
+        $dueTotal = (int) $dueCounts['due_scheduled_count'] + (int) $dueCounts['due_retry_count'];
+        $progressCount = count($claimSuccessIds) + count($publisherInvokedIds);
+        if ($dueTotal > 0 && $progressCount === 0) {
+            RuntimeLogger::warning('publishing.due_scan_no_progress', [
+                'connection_id' => $scopedConnectionId,
+                'due_total' => $dueTotal,
+                'dominant_rejection_reason' => $dominantRejection,
+                'skip_reason_counts' => $skipReasonCounts,
+            ]);
+            $this->health->rememberScanNoProgress(
+                $dueTotal,
+                $dominantRejection,
+                $skipReasonCounts,
+                $scopedConnectionId,
+            );
+        }
+
+        if (count($claimSuccessIds) > 0 || (int) $stats['published'] > 0) {
+            $this->health->rememberSuccess(
+                max(count($claimSuccessIds), (int) $stats['published']),
+                $scopedConnectionId,
+            );
+        }
+
+        $this->health->rememberWorkerRun($scopedConnectionId);
 
         return $stats;
     }
 
     /**
-     * @return Collection<int, SeoProjectTask>
+     * @param  array<string, int>  $counts
      */
-    private function dueTasks(string $connectionName): Collection
+    private function dominantReason(array $counts): ?string
     {
-        $query = SeoProjectTask::query()
-            ->active()
-            ->whereNotNull('scheduled_publish_at')
-            ->where('scheduled_publish_at', '<=', now())
-            ->where('article_id', '>', 0)
-            ->whereHas('project', static function ($query): void {
-                $query->whereNull('archived_at');
-            })
-            ->with(['article', 'project'])
-            ->orderBy('scheduled_publish_at')
-            ->orderBy('id')
-            ->limit(50);
-
-        if (Schema::connection($connectionName)->hasColumn('seo_project_tasks', 'publish_queue_status')) {
-            $query->where(static function ($q): void {
-                $q->whereIn('publish_queue_status', [
-                    ContentProjectPublishQueueStatus::Waiting->value,
-                    ContentProjectPublishQueueStatus::Retrying->value,
-                    ContentProjectPublishQueueStatus::None->value,
-                ])->orWhereNull('publish_queue_status');
-            });
+        if ($counts === []) {
+            return null;
         }
+        arsort($counts);
+        $key = array_key_first($counts);
 
-        return $query->get();
+        return is_string($key) ? $key : null;
     }
 
     private function looksLikeConnectionFailure(Throwable $e): bool

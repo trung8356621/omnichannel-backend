@@ -13,6 +13,9 @@
     } elseif ($seo['score'] !== null) {
         $scoreLabel = $seo['score'] . ' / 100';
         $scoreTone = $seo['score_tone'];
+        if (! empty($seo['score_stale'])) {
+            $scoreLabel .= ' · '.__('seo-content-ai::filament.article_list.seo_score_stale');
+        }
     } else {
         $scoreLabel = '— / 100';
         $scoreTone = 'muted';

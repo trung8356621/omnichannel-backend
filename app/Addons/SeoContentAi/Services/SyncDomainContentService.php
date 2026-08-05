@@ -1365,6 +1365,8 @@ class SyncDomainContentService
                 'wp_featured_image_url',
                 'wp_product_gallery',
             ])->delete();
+            $article->unsetRelation('articleMetas');
+            app(\App\Addons\SeoContentAi\Services\ArticleFeaturedImageProjection::class)->rebuildAndPersist($article);
 
             return;
         }
@@ -1388,6 +1390,9 @@ class SyncDomainContentService
         } elseif ($forceOverwrite) {
             $article->articleMetas()->where('meta_key', 'wp_product_gallery')->delete();
         }
+
+        $article->unsetRelation('articleMetas');
+        app(\App\Addons\SeoContentAi\Services\ArticleFeaturedImageProjection::class)->rebuildAndPersist($article);
     }
 
     /**

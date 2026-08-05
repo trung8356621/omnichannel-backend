@@ -112,5 +112,6 @@ final class WordpressCutoverCouplingTest extends TestCase
         self::assertStringContainsString('AutomationQueueName::External', $source);
         self::assertSame('automation-external', AutomationQueueName::External->value);
         self::assertSame('automation-critical', AutomationQueueName::Critical->value);
+        self::assertSame('automation-policy', AutomationQueueName::Policy->value);
     }
 }

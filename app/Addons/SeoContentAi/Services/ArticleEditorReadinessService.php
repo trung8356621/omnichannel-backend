@@ -53,6 +53,9 @@ final class ArticleEditorReadinessService
         $article->refresh();
         $article->loadMissing('articleMetas');
 
+        // Job AI crash / worker chết có thể để media.status=processing mãi → khóa editor.
+        app(ArticleEditorMediaAiService::class)->reconcileStaleAiMediaJobs((int) $article->id);
+
         $payload = $this->readPayload($article);
         $expectedHash = trim((string) ($payload['expected_body_sha256'] ?? ''));
         $processingMedia = $this->countProcessingMedia((int) $article->id);
@@ -141,6 +144,37 @@ final class ArticleEditorReadinessService
         }
 
         return __('seo-content-ai::filament.projects.article_editor_preparing_body');
+    }
+
+    /**
+     * User bỏ qua màn chuẩn bị: fail job AI đang treo + khớp body hash hiện tại.
+     */
+    public function abandonPreparingGate(SeoArticle $article, string $reason = ''): ArticleEditorReadinessResult
+    {
+        $reason = trim($reason);
+        if ($reason === '') {
+            $reason = 'Người dùng mở editor khi job AI vẫn đang treo.';
+        }
+
+        app(ArticleEditorMediaAiService::class)->failAllProcessingAiMediaJobs((int) $article->id, $reason);
+
+        $article->refresh();
+        $currentHash = $this->bodyHash($article);
+        $payload = $this->readPayload($article);
+        $payload['status'] = 'ready';
+        $payload['expected_body_sha256'] = $currentHash;
+        $payload['pending_reasons'] = [];
+        $payload['abandoned_at'] = now()->toIso8601String();
+        $payload['abandon_reason'] = mb_substr($reason, 0, 500);
+        $payload['ready_at'] = now()->toIso8601String();
+        $payload['evaluated_at'] = now()->toIso8601String();
+
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => self::META_KEY],
+            ['meta_value' => json_encode($payload, JSON_UNESCAPED_UNICODE)],
+        );
+
+        return $this->evaluate($article->fresh() ?? $article);
     }
 
     /**

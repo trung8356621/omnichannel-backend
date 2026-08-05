@@ -10,36 +10,52 @@ use RuntimeException;
 /**
  * Publish queue lifecycle — map ContentProjectPublishQueueStatus.
  *
- * none≈unscheduled, waiting≈scheduled/queued, retrying≈retry_wait.
+ * none≈unscheduled, waiting≈scheduled, queued_for_delivery≈awaiting worker,
+ * processing≈publisher started, retrying≈retry_wait.
  */
 final class ContentProjectPublishTransitionGuard
 {
     private const ALLOWED = [
         'none' => [
             ContentProjectPublishQueueStatus::Waiting,
-            // Runner claim due Scheduled (execution none) → Publishing.
+            ContentProjectPublishQueueStatus::QueuedForDelivery,
             ContentProjectPublishQueueStatus::Processing,
         ],
         'waiting' => [
+            ContentProjectPublishQueueStatus::QueuedForDelivery,
             ContentProjectPublishQueueStatus::Processing,
             ContentProjectPublishQueueStatus::Cancelled,
             ContentProjectPublishQueueStatus::Skipped,
-            ContentProjectPublishQueueStatus::None, // reschedule / recover plan
+            ContentProjectPublishQueueStatus::None,
+        ],
+        'queued_for_delivery' => [
+            ContentProjectPublishQueueStatus::Processing,
+            ContentProjectPublishQueueStatus::Published,
+            ContentProjectPublishQueueStatus::Failed,
+            ContentProjectPublishQueueStatus::Retrying,
+            ContentProjectPublishQueueStatus::Waiting,
+            ContentProjectPublishQueueStatus::None,
+            ContentProjectPublishQueueStatus::Cancelled,
         ],
         'processing' => [
             ContentProjectPublishQueueStatus::Published,
             ContentProjectPublishQueueStatus::Failed,
-            // Normal Cancel KHÔNG được — dùng recoverStuckPublishing.
+            ContentProjectPublishQueueStatus::Retrying,
+            ContentProjectPublishQueueStatus::Waiting,
+            ContentProjectPublishQueueStatus::QueuedForDelivery,
+            ContentProjectPublishQueueStatus::None,
         ],
         'failed' => [
             ContentProjectPublishQueueStatus::Retrying,
             ContentProjectPublishQueueStatus::Waiting,
+            ContentProjectPublishQueueStatus::QueuedForDelivery,
             ContentProjectPublishQueueStatus::Cancelled,
             ContentProjectPublishQueueStatus::Skipped,
             ContentProjectPublishQueueStatus::None,
         ],
         'retrying' => [
             ContentProjectPublishQueueStatus::Waiting,
+            ContentProjectPublishQueueStatus::QueuedForDelivery,
             ContentProjectPublishQueueStatus::Processing,
             ContentProjectPublishQueueStatus::Cancelled,
             ContentProjectPublishQueueStatus::None,
@@ -53,8 +69,8 @@ final class ContentProjectPublishTransitionGuard
             ContentProjectPublishQueueStatus::None,
         ],
         'published' => [
-            // Republish / update existing WordPress post after local edits.
             ContentProjectPublishQueueStatus::Waiting,
+            ContentProjectPublishQueueStatus::QueuedForDelivery,
         ],
     ];
 

@@ -11,10 +11,13 @@ use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\BusinessEventName;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\BusinessHookErrorCode;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueService;
 use App\Addons\SeoContentAi\Services\WordPress\SideEffect\AutomationWordPressContext;
 use App\Addons\SeoContentAi\Services\WordPress\SyncArticleToWordPressPipeline;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\SeoQueueContext;
+use App\Support\RuntimeLogger;
 use Illuminate\Support\Str;
 
 /**
@@ -25,6 +28,7 @@ final class SyncArticleToWordPressHookAction implements AutomationActionHandler
     public function __construct(
         private readonly SyncArticleToWordPressPipeline $pipeline,
         private readonly BusinessHookEmitter $emitter,
+        private readonly ?ContentProjectPublishingQueueService $publishingQueue = null,
     ) {}
 
     public function handle(AutomationActionContext $context, array $input, array $settings): AutomationActionResult
@@ -54,11 +58,41 @@ final class SyncArticleToWordPressHookAction implements AutomationActionHandler
             );
         }
 
+        $taskId = (int) ($input['task_id'] ?? $context->execution->context['task_id'] ?? 0);
+        if ($taskId <= 0) {
+            $taskId = (int) ($context->businessEvent?->payload['task_id'] ?? 0);
+        }
+        $attemptToken = trim((string) (
+            $input['publish_attempt_token']
+            ?? $context->execution->context['publish_attempt_token']
+            ?? $context->businessEvent?->payload['publish_attempt_token']
+            ?? $input['attempt_ref']
+            ?? ''
+        ));
+        $reconciledTokenMismatch = false;
+        if ($taskId > 0) {
+            $queue = $this->publishingQueue ?? app(ContentProjectPublishingQueueService::class);
+            $task = SeoProjectTask::query()->find($taskId);
+            if ($task instanceof SeoProjectTask) {
+                $start = $queue->beginPublisherAttempt($task, $attemptToken !== '' ? $attemptToken : null);
+                if ($start === 'superseded') {
+                    // Do not silently discard: if WP already has this article's post, reconcile later after sync.
+                    RuntimeLogger::info('publishing.wp_sync_token_mismatch_continue', [
+                        'task_id' => $taskId,
+                        'article_id' => $articleId,
+                        'execution_id' => (int) $context->execution->id,
+                    ]);
+                    $reconciledTokenMismatch = true;
+                }
+            }
+        }
+
         $idempotencyKey = hash(
             'sha256',
             ($context->execution->context['idempotency_key'] ?? $context->execution->idempotency_key)
             .'|wordpress.article.sync|'
-            .$articleId,
+            .$articleId
+            .($attemptToken !== '' ? '|'.$attemptToken : ''),
         );
 
         $eventUuid = (string) ($context->businessEvent->event_uuid
@@ -138,7 +172,17 @@ final class SyncArticleToWordPressHookAction implements AutomationActionHandler
         }
 
         $article = $article->fresh() ?? $article;
+        $article->loadMissing('articleMetas');
         $wpPostId = (int) ($result['wp_post_id'] ?? $article->wp_post_id ?? 0);
+
+        // Ensure CP queue leaves waiting/queued_for_delivery after confirmed WP success.
+        app(\App\Addons\SeoContentAi\Services\WordPressArticleSyncService::class)
+            ->confirmContentProjectPublishDelivery(
+                $article,
+                $taskId > 0 ? $taskId : null,
+                $attemptToken !== '' ? $attemptToken : null,
+                $reconciledTokenMismatch,
+            );
 
         $this->emitter->emitOutcomeSafely(BusinessEventName::WordpressSynced, $article, [
             'article_id' => $articleId,
@@ -148,6 +192,7 @@ final class SyncArticleToWordPressHookAction implements AutomationActionHandler
             'origin' => (string) ($context->execution->trigger_type ?? 'event'),
             'automation_execution_id' => (int) $context->execution->id,
             'sync_operation_id' => $idempotencyKey,
+            'task_id' => $taskId > 0 ? $taskId : null,
         ], [], $idempotencyKey);
 
         return AutomationActionResult::success(
@@ -161,6 +206,8 @@ final class SyncArticleToWordPressHookAction implements AutomationActionHandler
                 'mode' => $mode,
                 'idempotency_key' => $idempotencyKey,
                 'wp_success' => true,
+                'task_id' => $taskId > 0 ? $taskId : null,
+                'reconciled_token_mismatch' => $reconciledTokenMismatch,
             ],
             message: 'WordPress article sync completed.',
         );

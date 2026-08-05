@@ -334,8 +334,42 @@ function occurrenceCount(item) {
     return Number.isFinite(value) && value > 1 ? Math.floor(value) : 1;
 }
 
+/** Stable row key — suggestion keys must not depend on editable anchor text. */
+function keywordRowKey(variant, target, item, index) {
+    if (variant === 'suggestion') {
+        const keywordId = Number(item?.keyword_id ?? 0);
+        if (keywordId > 0) {
+            return `${variant}-${target}-kw-${keywordId}`;
+        }
+        const href = String(item?.href ?? item?.target_url ?? '').trim();
+
+        return `${variant}-${target}-s-${href || 'none'}-${index}`;
+    }
+
+    return `${variant}-${target}-${item.text}-${index}`;
+}
+
+function patchSuggestionAnchorInList(list, item, nextText) {
+    const keywordId = Number(item?.keyword_id ?? 0);
+    const href = String(item?.href ?? item?.target_url ?? '').trim();
+    const prevText = String(item?.text ?? '');
+
+    return (Array.isArray(list) ? list : []).map((entry) => {
+        const sameKeyword = keywordId > 0 && Number(entry?.keyword_id ?? 0) === keywordId;
+        const sameHrefAnchor =
+            href !== ''
+            && String(entry?.href ?? entry?.target_url ?? '').trim() === href
+            && String(entry?.text ?? '') === prevText;
+        if (!sameKeyword && !sameHrefAnchor) {
+            return entry;
+        }
+
+        return { ...entry, text: nextText };
+    });
+}
+
 /**
- * @param {{ items: Array<ExtractedLink|FaqLinkItem>, title: string, activeKey: string, target: 'editor'|'faq', variant?: 'default'|'suggestion', suggestionKind?: 'internal'|'external', hideTitle?: boolean, interactive?: boolean, hiddenRowKeys?: Set<string>, reviewLoadingKey?: string, reviewPopoverItemKey?: string, onKeywordClick: Function, onInsertSuggestion?: Function, onCopyKeyword?: Function, onRemoveInternalLink?: Function, onReviewWarning?: Function, onReviewDanger?: Function }} props
+ * @param {{ items: Array<ExtractedLink|FaqLinkItem>, title: string, activeKey: string, target: 'editor'|'faq', variant?: 'default'|'suggestion', suggestionKind?: 'internal'|'external', hideTitle?: boolean, interactive?: boolean, hiddenRowKeys?: Set<string>, reviewLoadingKey?: string, reviewPopoverItemKey?: string, onKeywordClick: Function, onInsertSuggestion?: Function, onUpdateSuggestionAnchor?: Function, onCopyKeyword?: Function, onRemoveInternalLink?: Function, onReviewWarning?: Function, onReviewDanger?: Function }} props
  */
 function KeywordList({
     items,
@@ -351,11 +385,82 @@ function KeywordList({
     reviewPopoverItemKey = '',
     onKeywordClick,
     onInsertSuggestion,
+    onUpdateSuggestionAnchor,
     onCopyKeyword,
     onRemoveInternalLink,
     onReviewWarning,
     onReviewDanger,
 }) {
+    const [editingKey, setEditingKey] = useState('');
+    const [draftAnchor, setDraftAnchor] = useState('');
+    const editOriginalRef = useRef('');
+    const skipBlurCommitRef = useRef(false);
+    const clickTimerRef = useRef(null);
+    const suppressClickRef = useRef(false);
+    const editInputRef = useRef(null);
+
+    useEffect(() => () => {
+        if (clickTimerRef.current) {
+            window.clearTimeout(clickTimerRef.current);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!editingKey || !(editInputRef.current instanceof HTMLInputElement)) {
+            return;
+        }
+        const input = editInputRef.current;
+        input.focus();
+        input.select();
+    }, [editingKey]);
+
+    const cancelAnchorEdit = () => {
+        skipBlurCommitRef.current = true;
+        setEditingKey('');
+        setDraftAnchor('');
+        editOriginalRef.current = '';
+    };
+
+    const commitAnchorEdit = (item, itemKey) => {
+        if (skipBlurCommitRef.current) {
+            skipBlurCommitRef.current = false;
+            return;
+        }
+        if (editingKey !== itemKey) {
+            return;
+        }
+        skipBlurCommitRef.current = true;
+        const trimmed = String(draftAnchor ?? '').trim();
+        const original = String(editOriginalRef.current ?? '');
+        setEditingKey('');
+        setDraftAnchor('');
+        editOriginalRef.current = '';
+        if (trimmed === '') {
+            return;
+        }
+        if (trimmed === original.trim()) {
+            return;
+        }
+        if (typeof onUpdateSuggestionAnchor === 'function') {
+            onUpdateSuggestionAnchor(item, itemKey, trimmed);
+        }
+    };
+
+    const startAnchorEdit = (item, itemKey, event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        suppressClickRef.current = true;
+        skipBlurCommitRef.current = false;
+        if (clickTimerRef.current) {
+            window.clearTimeout(clickTimerRef.current);
+            clickTimerRef.current = null;
+        }
+        const current = String(item?.text ?? '');
+        editOriginalRef.current = current;
+        setDraftAnchor(current);
+        setEditingKey(itemKey);
+    };
+
     if (!items.length) {
         return (
             <div className="wp-article-links-group">
@@ -370,13 +475,19 @@ function KeywordList({
             {!hideTitle ? <h3 className="wp-article-links-group__title">{title}</h3> : null}
             <ul className="wp-article-links-keywords">
                 {items.map((item, index) => {
-                    const itemKey = `${variant}-${target}-${item.text}-${index}`;
+                    const itemKey = keywordRowKey(variant, target, item, index);
                     const isActive = activeKey === itemKey;
                     const label = keywordLabel(item);
                     const count = occurrenceCount(item);
                     const labelWithCount = count > 1 ? `${label} (${count})` : label;
                     const insertable = variant === 'suggestion' && canInsertSuggestion(item);
                     const anchorTextPresent = hasAnchorText(item);
+                    const canEditAnchor =
+                        variant === 'suggestion'
+                        && interactive
+                        && typeof onUpdateSuggestionAnchor === 'function'
+                        && anchorTextPresent;
+                    const isEditing = editingKey === itemKey;
                     const hint =
                         variant === 'suggestion'
                             ? insertable
@@ -392,6 +503,9 @@ function KeywordList({
                               : anchorTextPresent
                                 ? t('links_find_keyword', { label })
                                 : t('links_find_link', { label });
+                    const titleHint = canEditAnchor
+                        ? `${hint}\n${t('links_suggestion_edit_anchor_hint')}`
+                        : hint;
 
                     const isRowHiding = hiddenRowKeys?.has(itemKey) === true;
                     const isReviewLoading = reviewLoadingKey === itemKey;
@@ -404,13 +518,64 @@ function KeywordList({
                             className={`wp-article-links-keyword-row${isRowHiding ? ' is-row-hiding' : ''}${isReviewLoading ? ' is-review-loading' : ''}${isReviewOpen ? ' is-review-open' : ''}`}
                             aria-hidden={isRowHiding}
                         >
-                            {interactive ? (
+                            {interactive && isEditing ? (
+                                <input
+                                    ref={editInputRef}
+                                    type="text"
+                                    className="wp-article-links-keyword-edit"
+                                    value={draftAnchor}
+                                    aria-label={t('links_suggestion_edit_anchor_aria', { label })}
+                                    title={t('links_suggestion_edit_anchor_hint')}
+                                    onChange={(e) => setDraftAnchor(e.target.value)}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onMouseDown={(e) => e.stopPropagation()}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            commitAnchorEdit(item, itemKey);
+                                            return;
+                                        }
+                                        if (e.key === 'Escape') {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            cancelAnchorEdit();
+                                        }
+                                    }}
+                                    onBlur={() => commitAnchorEdit(item, itemKey)}
+                                />
+                            ) : interactive ? (
                                 <button
                                     type="button"
-                                    className={`wp-article-links-keyword${isActive ? ' is-active' : ''}${target === 'faq' ? ' is-faq' : ''}${variant === 'suggestion' ? ' is-suggestion' : ''}`}
-                                    title={fullTitle(item, hint)}
+                                    className={`wp-article-links-keyword${isActive ? ' is-active' : ''}${target === 'faq' ? ' is-faq' : ''}${variant === 'suggestion' ? ' is-suggestion' : ''}${canEditAnchor ? ' is-editable-anchor' : ''}`}
+                                    title={fullTitle(item, titleHint)}
                                     onMouseDown={(e) => e.preventDefault()}
-                                    onClick={() => onKeywordClick(item, index, itemKey, target)}
+                                    onClick={() => {
+                                        if (variant === 'suggestion' && canEditAnchor) {
+                                            if (suppressClickRef.current) {
+                                                suppressClickRef.current = false;
+                                                return;
+                                            }
+                                            if (clickTimerRef.current) {
+                                                window.clearTimeout(clickTimerRef.current);
+                                            }
+                                            clickTimerRef.current = window.setTimeout(() => {
+                                                clickTimerRef.current = null;
+                                                if (suppressClickRef.current) {
+                                                    suppressClickRef.current = false;
+                                                    return;
+                                                }
+                                                onKeywordClick(item, index, itemKey, target);
+                                            }, 250);
+                                            return;
+                                        }
+                                        onKeywordClick(item, index, itemKey, target);
+                                    }}
+                                    onDoubleClick={
+                                        canEditAnchor
+                                            ? (e) => startAnchorEdit(item, itemKey, e)
+                                            : undefined
+                                    }
                                 >
                                     {labelWithCount}
                                 </button>
@@ -446,7 +611,7 @@ function KeywordList({
                                               )
                                             : t('links_missing_target_mapping')
                                     }
-                                    disabled={!insertable}
+                                    disabled={!insertable || isEditing}
                                     onMouseDown={(e) => e.preventDefault()}
                                     onClick={(e) => {
                                         e.stopPropagation();
@@ -464,6 +629,7 @@ function KeywordList({
                                     className={`wp-article-links-copy-btn${target === 'faq' ? ' is-faq' : ''}${variant === 'suggestion' ? ' is-suggestion' : ''}`}
                                     aria-label={t('links_copy_keyword', { label })}
                                     title={t('links_copy_title', { label })}
+                                    disabled={isEditing}
                                     onMouseDown={(e) => e.preventDefault()}
                                     onClick={(e) => {
                                         e.stopPropagation();
@@ -481,7 +647,7 @@ function KeywordList({
                                             className="wp-article-links-review-btn is-warning"
                                             aria-label={t('keyword_review_warning_button_label', { label })}
                                             title={t('keyword_review_warning_button_title')}
-                                            disabled={isReviewLoading}
+                                            disabled={isReviewLoading || isEditing}
                                             onMouseDown={(e) => e.preventDefault()}
                                             onClick={(e) => {
                                                 e.stopPropagation();
@@ -502,7 +668,7 @@ function KeywordList({
                                             className="wp-article-links-review-btn is-danger"
                                             aria-label={t('keyword_review_danger_button_label', { label })}
                                             title={t('keyword_review_danger_button_title')}
-                                            disabled={isReviewLoading}
+                                            disabled={isReviewLoading || isEditing}
                                             onMouseDown={(e) => e.preventDefault()}
                                             onClick={(e) => {
                                                 e.stopPropagation();
@@ -557,6 +723,7 @@ function InternalLinksSection({
     onKeywordClick,
     onSuggestionClick,
     onInsertSuggestion,
+    onUpdateSuggestionAnchor,
     onCopyKeyword,
     onRemoveInternalLink,
     onReviewWarning,
@@ -637,6 +804,7 @@ function InternalLinksSection({
                             reviewPopoverItemKey={reviewPopoverItemKey}
                             onKeywordClick={onSuggestionClick}
                             onInsertSuggestion={onInsertSuggestion}
+                            onUpdateSuggestionAnchor={onUpdateSuggestionAnchor}
                             onCopyKeyword={onCopyKeyword}
                             onReviewWarning={onReviewWarning}
                             onReviewDanger={onReviewDanger}
@@ -756,6 +924,7 @@ export default function ArticleLinksSidebar({
     );
     const domainCatalogRef = useRef(suggestionBootstrap.current.domainCatalog);
     const [catalogVersion, setCatalogVersion] = useState(0);
+    const [anchorEditTick, setAnchorEditTick] = useState(0);
     const stableSuggestionsRef = useRef([]);
     const stableSuggestionsKeyRef = useRef('');
     const stableExternalSuggestionsRef = useRef([]);
@@ -1425,7 +1594,7 @@ export default function ArticleLinksSidebar({
 
             return !isSuggestionExcluded(String(item?.text ?? ''), excludedSuggestionLabels);
         });
-    }, [internal, external, excludedSuggestionLabels, reviewedKeywordIds, articlePlainText, catalogVersion]);
+    }, [internal, external, excludedSuggestionLabels, reviewedKeywordIds, articlePlainText, catalogVersion, anchorEditTick]);
 
     const suggestedInternalRef = useRef(suggestedInternal);
     suggestedInternalRef.current = suggestedInternal;
@@ -1471,7 +1640,7 @@ export default function ArticleLinksSidebar({
 
             return !isSuggestionExcluded(String(item?.text ?? ''), excludedSuggestionLabels);
         });
-    }, [internal, external, excludedSuggestionLabels, reviewedKeywordIds, articlePlainText, catalogVersion]);
+    }, [internal, external, excludedSuggestionLabels, reviewedKeywordIds, articlePlainText, catalogVersion, anchorEditTick]);
 
     const copyKeyword = async (value) => {
         const text = String(value ?? '').trim();
@@ -1565,6 +1734,35 @@ export default function ArticleLinksSidebar({
             return;
         }
         window.dispatchEvent(new CustomEvent('seo-editor-remove-internal-link', { detail }));
+    };
+
+    const updateSuggestionAnchor = (item, _itemKey, nextText) => {
+        const trimmed = String(nextText ?? '').trim();
+        if (trimmed === '') {
+            return;
+        }
+
+        keywordCatalogRef.current = patchSuggestionAnchorInList(
+            keywordCatalogRef.current,
+            item,
+            trimmed,
+        );
+        externalKeywordCatalogRef.current = patchSuggestionAnchorInList(
+            externalKeywordCatalogRef.current,
+            item,
+            trimmed,
+        );
+        stableSuggestionsRef.current = patchSuggestionAnchorInList(
+            stableSuggestionsRef.current,
+            item,
+            trimmed,
+        );
+        stableExternalSuggestionsRef.current = patchSuggestionAnchorInList(
+            stableExternalSuggestionsRef.current,
+            item,
+            trimmed,
+        );
+        setAnchorEditTick((tick) => tick + 1);
     };
 
     const insertSuggestedLink = (item, _index, itemKey) => {
@@ -1744,6 +1942,7 @@ export default function ArticleLinksSidebar({
                             scrollToKeyword(item, 'internal', index, itemKey, { searchPlainText: true })
                         }
                         onInsertSuggestion={insertSuggestedLink}
+                        onUpdateSuggestionAnchor={updateSuggestionAnchor}
                         reviewLoadingKey={reviewLoadingKey}
                         reviewPopoverItemKey={reviewPopover?.itemKey ?? ''}
                         onReviewWarning={(item, _index, itemKey, anchorEl) =>
@@ -1801,6 +2000,7 @@ export default function ArticleLinksSidebar({
                                     })
                                 }
                                 onInsertSuggestion={insertSuggestedLink}
+                                onUpdateSuggestionAnchor={updateSuggestionAnchor}
                                 onCopyKeyword={copyKeyword}
                                 onReviewWarning={(item, _index, itemKey, anchorEl) =>
                                     openReviewPopover(item, itemKey, 'warning', anchorEl)

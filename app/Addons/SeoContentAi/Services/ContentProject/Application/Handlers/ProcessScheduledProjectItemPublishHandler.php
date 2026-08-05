@@ -30,7 +30,9 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentP
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueService;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectQueueHealthService;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\DispatchClaimResult;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
+use App\Support\RuntimeLogger;
 use Illuminate\Support\Facades\Schema;
 use InvalidArgumentException;
 
@@ -88,7 +90,7 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
                 $this->tenantGuard->assertCanAccessProject($project, $actor);
             }
 
-            $idemKey = $this->resolveIdempotencyKey($task, $actor);
+            $idemKey = $this->resolveCommandBusIdempotencyKey($task, $actor);
             $tenantKey = 'site:'.(string) ($project->site_id ?? 0).':queue';
             if ($idemKey !== '') {
                 $replay = $this->idempotencyStore->begin($tenantKey, $command->name(), $idemKey);
@@ -104,6 +106,8 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
                 },
             );
 
+            // Always complete — including delivery_requested — so key không kẹt "processing".
+            // Command-bus key includes attempt; WP publish_operation_key stays stable separately.
             if ($idemKey !== '') {
                 $this->idempotencyStore->complete($tenantKey, $command->name(), $idemKey, $result);
             }
@@ -129,18 +133,45 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
             );
         }
 
-        if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_queue_status')
-            && (string) ($task->publish_queue_status ?? '') === ContentProjectPublishQueueStatus::Processing->value
-        ) {
+        // Atomic claim for delivery dispatch (queued_for_delivery) — not publisher lease.
+        $claim = $this->queue->claimForDispatch($task);
+        if (! $claim->isClaimed()) {
+            $fresh = $claim->task ?? $task->fresh() ?? $task;
+            RuntimeLogger::warning('publishing.claim_rejected', [
+                'task_id' => $itemId,
+                'claim_code' => $claim->code,
+                'claim_message' => $claim->message,
+                'publish_queue_status' => (string) ($fresh->publish_queue_status ?? ''),
+            ]);
+
             return ContentProjectActionResult::fail(
                 ContentProjectActionCodes::OPERATION_ALREADY_PROCESSING,
-                'Item đang processing.',
+                $claim->message !== ''
+                    ? $claim->message
+                    : 'Item không claim được.',
                 $projectId,
                 affectedItemIds: [$itemId],
+                metadata: array_merge([
+                    'claim_code' => $claim->code,
+                    'actively_publishing' => $claim->code === DispatchClaimResult::ACTIVE_PUBLISH,
+                    'publish_queue_status' => (string) ($fresh->publish_queue_status ?? ''),
+                    'publish_lease_expires_at' => $fresh->publish_lease_expires_at?->utc()->toIso8601String(),
+                ], $claim->meta),
             );
+        }
+        $task = $claim->task;
+
+        $operationKey = trim((string) ($task->publish_operation_key ?? ''));
+        if ($operationKey === '') {
+            $operationKey = app(\App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\PublishOperationKeyFactory::class)
+                ->forTask($task, $article);
         }
 
         $attemptRef = $attemptRef ?? PublishAttemptRefs::newAttemptRef();
+        $attemptToken = trim((string) ($task->publish_attempt_token ?? ''));
+        if ($attemptToken === '') {
+            $attemptToken = $attemptRef;
+        }
         $externalRef = PublishAttemptRefs::forArticle((int) $article->id);
         $payload = new ArticlePublishPayload(
             articleId: (int) $article->id,
@@ -148,7 +179,7 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
             wpPostId: (int) ($article->wp_post_id ?? 0) ?: null,
             externalReference: $externalRef,
             attemptRef: $attemptRef,
-            idempotencyKey: 'cp_publish_task_'.$itemId,
+            idempotencyKey: $operationKey,
             projectId: $projectId,
             taskId: $itemId,
             actorUserId: null,
@@ -158,7 +189,7 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
             $publisher = $this->publisherResolver->resolveForSiteId((int) ($article->site_id ?? 0));
             $publishResult = $publisher->publish($payload);
         } catch (PublisherResolutionException $e) {
-            $this->queue->markFailed($task, $e->getMessage());
+            $this->persistPublishFailure($task, $e->getMessage(), 'publisher_resolution');
             $this->health->rememberFailure($e->getMessage());
             $this->domainEvents->dispatchAfterCommit(new ArticlePublishFailed(
                 projectId: $projectId,
@@ -173,9 +204,24 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
                 $projectId,
                 affectedItemIds: [$itemId],
             );
+        } catch (\Throwable $e) {
+            $this->persistPublishFailure($task, $e->getMessage(), 'publish_exception');
+            $this->health->rememberFailure($e->getMessage());
+            $this->domainEvents->dispatchAfterCommit(new ArticlePublishFailed(
+                projectId: $projectId,
+                itemId: $itemId,
+                articleId: (int) $article->id,
+                error: $e->getMessage(),
+            ));
+
+            return ContentProjectActionResult::fail(
+                ContentProjectActionCodes::FAILED,
+                $e->getMessage(),
+                $projectId,
+                affectedItemIds: [$itemId],
+            );
         }
 
-        // Claim Publishing chỉ sau khi publisher dispatch thành công (delivery hoặc sync).
         if ($publishResult->alreadyPublished && $publishResult->wpPostId !== null && $publishResult->wpPostId > 0) {
             $this->queue->markPublished($task->fresh() ?? $task);
             $this->health->rememberSuccess(1);
@@ -196,7 +242,7 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
         }
 
         if (! $publishResult->success) {
-            $this->queue->markFailed($task, $publishResult->message);
+            $this->persistPublishFailure($task, $publishResult->message, 'publish_result_failed');
             $this->health->rememberFailure($publishResult->message);
             $this->domainEvents->dispatchAfterCommit(new ArticlePublishFailed(
                 projectId: $projectId,
@@ -226,6 +272,7 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
                 'status' => 'publish_requested',
                 'source' => 'content_project_publishing_queue',
                 'attempt_ref' => $attemptRef,
+                'publish_attempt_token' => $attemptToken,
                 'external_reference' => $externalRef,
             ]);
 
@@ -233,7 +280,7 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
                 $message = 'Thiếu automation rule article.publish_requested → wordpress.article.sync '
                     .'(code dispatch-publish-request). Chạy: php artisan automation:seed-rules '
                     .'rồi bật/publish rule; đảm bảo queue worker chạy.';
-                $this->queue->markFailed($task->fresh() ?? $task, $message);
+                $this->persistPublishFailure($task->fresh() ?? $task, $message, 'automation_missing_rule');
                 $this->health->rememberFailure($message);
                 $this->domainEvents->dispatchAfterCommit(new ArticlePublishFailed(
                     projectId: $projectId,
@@ -257,7 +304,7 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
             if ($emitResult->isRejectedOrInvalid()) {
                 $message = 'Không dispatch được article.publish_requested: '
                     .($emitResult->message ?? $emitResult->errorCode ?? 'unknown');
-                $this->queue->markFailed($task->fresh() ?? $task, $message);
+                $this->persistPublishFailure($task->fresh() ?? $task, $message, 'automation_rejected');
                 $this->health->rememberFailure($message);
                 $this->domainEvents->dispatchAfterCommit(new ArticlePublishFailed(
                     projectId: $projectId,
@@ -278,8 +325,7 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
                 );
             }
 
-            $this->queue->markProcessing($task->fresh() ?? $task);
-
+            // Stay queued_for_delivery until WP worker calls beginPublisherAttempt.
             $this->domainEvents->dispatchAfterCommit(new ArticlePublishRequested(
                 projectId: $projectId,
                 itemId: $itemId,
@@ -289,14 +335,17 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
 
             return ContentProjectActionResult::ok(
                 ContentProjectActionCodes::ITEMS_PUBLISH_QUEUED,
-                'Publish delivery requested.',
+                'Publish delivery requested (awaiting worker).',
                 $projectId,
                 [$itemId],
                 metadata: [
                     'attempt_ref' => $attemptRef,
+                    'publish_attempt_token' => $attemptToken,
                     'delivery_requested' => true,
+                    'queued_for_delivery' => true,
                     'automation_outcome' => $emitResult->outcome->value,
                     'matched_rules' => $emitResult->matchedRules,
+                    'operation_key' => $operationKey,
                 ],
             );
         }
@@ -314,6 +363,39 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
         );
     }
 
+    private function persistPublishFailure(SeoProjectTask $task, string $message, string $code): void
+    {
+        $classifier = app(\App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\PublishFailureClassifier::class);
+        $retryPolicy = app(\App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\PublishingRetryPolicy::class);
+        $classification = $classifier->classify(null, [
+            'code' => $code,
+            'message' => $message,
+        ]);
+
+        // Missing automation / publisher resolution = permanent (do not burn retries).
+        if (in_array($code, ['automation_missing_rule', 'automation_rejected', 'publisher_resolution'], true)) {
+            $classification = new \App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\PublishFailureClassification(
+                retryable: false,
+                code: $classification->code,
+                message: $classification->message,
+                httpStatus: $classification->httpStatus,
+            );
+        }
+
+        $attempt = max(1, (int) ($task->publish_attempt_count ?? 1));
+        if ($classification->retryable && $retryPolicy->canRetry($attempt)) {
+            $this->queue->markRetryWait(
+                $task,
+                $classification,
+                $retryPolicy->nextRetryAt($attempt, $classification->retryAfter),
+            );
+
+            return;
+        }
+
+        $this->queue->markFailedFromClassification($task, $classification);
+    }
+
     private function rememberPublishedContentHash(SeoArticle $article): void
     {
         $fresh = $article->fresh() ?? $article;
@@ -323,19 +405,38 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
         );
     }
 
-    private function resolveIdempotencyKey(SeoProjectTask $task, ActorContext $actor): string
+    /**
+     * Command-bus dedupe key — scoped per attempt so retry_wait can re-enter.
+     * WordPress payload still uses stable publish_operation_key (not this key).
+     */
+    private function resolveCommandBusIdempotencyKey(SeoProjectTask $task, ActorContext $actor): string
     {
-        if ($actor->idempotencyKey !== null && trim($actor->idempotencyKey) !== '') {
-            return trim($actor->idempotencyKey);
+        $opKey = trim((string) ($task->publish_operation_key ?? ''));
+        if ($opKey === '') {
+            $opKey = trim((string) ($actor->idempotencyKey ?? ''));
         }
-
-        if ($task->scheduled_publish_at !== null) {
-            return ContentProjectIdempotencyKeyFactory::scheduler(
+        if ($opKey === '' && $task->scheduled_publish_at !== null) {
+            $opKey = ContentProjectIdempotencyKeyFactory::scheduler(
                 (int) $task->getKey(),
                 $task->scheduled_publish_at->toIso8601String(),
             );
         }
+        if ($opKey === '') {
+            return '';
+        }
 
-        return '';
+        $nextAttempt = max(1, (int) ($task->publish_attempt_count ?? 0) + 1);
+        $status = (string) ($task->publish_queue_status ?? '');
+        if ($status === ContentProjectPublishQueueStatus::Processing->value) {
+            $nextAttempt = max(1, (int) ($task->publish_attempt_count ?? 1));
+        }
+
+        return $opKey.':attempt:'.$nextAttempt;
+    }
+
+    /** @deprecated use resolveCommandBusIdempotencyKey */
+    private function resolveIdempotencyKey(SeoProjectTask $task, ActorContext $actor): string
+    {
+        return $this->resolveCommandBusIdempotencyKey($task, $actor);
     }
 }

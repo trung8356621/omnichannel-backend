@@ -45,13 +45,56 @@ final class WordPressSideEffectGuard
             return;
         }
 
+        if ($context instanceof SystemWordPressContext) {
+            $this->assertSystemReadOnly($context, $operation, $payload);
+
+            return;
+        }
+
         $this->block(
             UnauthorizedWordPressSideEffectException::ORIGIN_INVALID,
-            'WordPress context origin must be automation or manual.',
+            'WordPress context origin must be automation, manual, or system (read-only).',
             $operation,
             $payload,
             $context,
         );
+    }
+
+    /**
+     * System origin: reconcile/find probes only — never mutate WordPress.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function assertSystemReadOnly(
+        SystemWordPressContext $context,
+        string $operation,
+        array $payload,
+    ): void {
+        $allowed = [
+            'article.find_post_by_meta',
+            'article.get_post',
+            'article.find_by_operation_key',
+        ];
+
+        if (! in_array($operation, $allowed, true)) {
+            $this->block(
+                UnauthorizedWordPressSideEffectException::ORIGIN_INVALID,
+                'System WordPress context may only run read/reconcile operations.',
+                $operation,
+                $payload,
+                $context,
+            );
+        }
+
+        if ($context->articleId() === null || (int) $context->articleId() <= 0) {
+            $this->block(
+                UnauthorizedWordPressSideEffectException::ORIGIN_INVALID,
+                'System WordPress context requires article_id.',
+                $operation,
+                $payload,
+                $context,
+            );
+        }
     }
 
     /**

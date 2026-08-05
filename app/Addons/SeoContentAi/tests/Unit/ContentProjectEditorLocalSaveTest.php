@@ -32,13 +32,9 @@ final class ContentProjectEditorLocalSaveTest extends TestCase
 
         self::assertStringContainsString('belongsToContentProject', $source);
         self::assertStringContainsString('content_project_manual_sync_forbidden', $source);
-        self::assertStringContainsString('return $this->blocked(', $source);
+        self::assertStringContainsString('PostPublishWordPressSyncEligibility', $source);
+        self::assertStringContainsString('syncPublishedFromEditorBundle', $source);
         self::assertStringNotContainsString('workspaceSave->saveFromEditorBundle', $source);
-        self::assertStringNotContainsString('enqueueManual($article', $this->extractBetween(
-            $source,
-            'if ($this->contentProjectMembership->belongsToContentProject($article)) {',
-            '$bundle = $this->syncQueue->applyPublishImmediatelyToBundle($bundle);',
-        ));
     }
 
     public function test_workspace_save_returns_canonical_project_local_save_result(): void
@@ -87,6 +83,8 @@ final class ContentProjectEditorLocalSaveTest extends TestCase
         self::assertStringContainsString('data-seo-content-project-url', $actions);
         self::assertStringContainsString("action: 'save-close'", $actions);
         self::assertStringNotContainsString('project_local_save', $actions);
+        // Unpublished CP still save-close; Published CP may also show post_publish sync.
+        self::assertStringContainsString('postPublishWpSyncEligible', $actions);
         self::assertStringContainsString('data-seo-sync-mode="wordpress_sync"', $actions);
 
         $editorEntry = (string) file_get_contents(

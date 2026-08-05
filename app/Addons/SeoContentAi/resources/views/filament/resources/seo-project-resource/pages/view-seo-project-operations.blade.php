@@ -415,7 +415,11 @@
                     await $wire.notifyOptimisticFailure(this.optimisticFailureMessage);
                 } catch (e) {}
             },
-            async openNeedsReviewArticle(taskId, isNeedsReview, url) {
+            openNeedsReviewArticle(taskId, isNeedsReview, url) {
+                // Legacy alias — claim only; real anchors open editor in new tab.
+                return this.claimNeedsReviewArticle(taskId, isNeedsReview);
+            },
+            async claimNeedsReviewArticle(taskId, isNeedsReview) {
                 const tid = Number(taskId || 0);
                 if (tid <= 0) return;
                 if (this.claimBusy[tid]) return;
@@ -423,7 +427,6 @@
 
                 const deltas = this.transitionMap.mark_viewed || { needs_review: -1 };
                 const operationId = 'mark-viewed-' + tid + '-' + this.nowMs();
-                const t0 = performance.now();
                 const claimPromise = $wire.claimNeedsReviewItem(tid, !!isNeedsReview);
 
                 try {
@@ -448,16 +451,6 @@
                     if (! result?.ok) {
                         throw new Error('claim_failed');
                     }
-
-                    const target = (typeof result.url === 'string' && result.url !== '') ? result.url : url;
-                    if (typeof target !== 'string' || target === '') {
-                        throw new Error('missing_url');
-                    }
-
-                    const navBudget = this.reducedMotion() ? 160 : 300;
-                    const remain = Math.max(0, navBudget - (performance.now() - t0));
-                    await this.wait(remain);
-                    window.location.href = target;
                 } catch (e) {
                     if (isNeedsReview) {
                         this.rollbackPendingByOperationIds([operationId]);
@@ -466,6 +459,7 @@
                         await this.rollbackRowExit(tid);
                     }
                     await this.notifyFailure();
+                } finally {
                     const busy = { ...this.claimBusy };
                     delete busy[tid];
                     this.claimBusy = busy;

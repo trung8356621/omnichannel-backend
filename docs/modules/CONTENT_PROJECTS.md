@@ -26,7 +26,7 @@ Panel prefix: `/seo/{connection_hash}/`
 | `content-projects/{record}` | `ViewSeoProject` — **operations workspace** (KPI + Project Items table) |
 | `content-projects/{record}/edit` | `EditSeoProject` — settings + tasks sync |
 | `content-projects/{record}/publishing-queue` | Compat redirect (`ContentProjectPublishingQueue`) → `publishing-queue?projectId={record}` |
-| `publishing-queue` | `PublishingQueueHub` — independent top-level Publishing Queue page; optional `?projectId=` scopes to one project, otherwise cross-project (actions disabled per row) |
+| `publishing-queue` | `PublishingQueueHub` — Publishing Queue hub (route unchanged); optional `?projectId=` scopes to one project, otherwise cross-project (actions disabled per row). **Nav:** nested under Content Projects (`SeoProjectResource::getNavigationItems` + `parentItem`; hub `shouldRegisterNavigation = false`) |
 | `content-operations` | `ContentProjectOperationsCenter` (manager+) |
 | `/admin/content-operations` | Redirect → SEO ops |
 
@@ -121,6 +121,8 @@ Scheduler        ──► ProcessScheduledProjectItemPublish (internal) ──�
 4. Under `BusinessLock::projectGenerate`: `startRun` + `prepareRunQueue` (both required).
 5. Outside lock: `ContentProjectRunEngine::start($run)` (idempotent kick). Web returns immediately.
 
+**Operator skip generation (not `skip_publish`):** durable columns on `seo_project_tasks` — `generation_blocked_at` / `generation_blocked_by` / `generation_block_reason`. Canonical scope `SeoProjectTask::eligibleForGeneration()` (+ `isGenerationBlocked()`). Classifier preview uses the scope; `classifySnapshot` skips with reason `generation_blocked`; rerun/resume/Generate fail closed with message `Item đã được đánh dấu bỏ qua tạo bài.` Commands: `BlockProjectItemGenerationCommand` / `UnblockProjectItemGenerationCommand` (planner/manager via `canAccessContentProjectRun`). UI: **Bỏ qua tạo bài** / **Cho phép tạo lại** + badge Skipped. Does not delete article/content.
+
 Archived project note: Article Editor FAQ/CTA body mutations blocked via session `assertArticleEditable` — see [`ARTICLE_EDITOR_WIDGETS_OWNERSHIP.md`](../architecture/ARTICLE_EDITOR_WIDGETS_OWNERSHIP.md).
 
 ### Rerun / Resume
@@ -176,9 +178,9 @@ Require explicit `item_refs` (fail-closed — empty selection never expands to a
 
 **KPI / summary cards (SSOT):** Normal → Pending → Needs Review → In Review → Failed. **No Scheduled/Published/Approved cards** — those belong to **Publishing Queue**. Title badge shows project **total_items** (working set + Publishing Queue); a muted subtitle breaks it down as ":working in workspace · :queue in Publishing Queue". Handoff: Planner/Manager **Send to Publishing Queue** (`publishing_queued_at`) → item leaves CP working set as Unscheduled (no WP, no auto schedule).
 
-**Module boundary:** Content Project = content production only (workspace = the Normal/working-set items). Publishing Queue = schedule + WordPress publication, owned by the independent **Publishing Queue Hub** (`App\Addons\SeoContentAi\Filament\Pages\PublishingQueueHub`, slug `publishing-queue`, top-level page, optional `?projectId=` scopes to one project). The legacy nested `content-projects/{id}/publishing-queue` route (`ContentProjectPublishingQueue` page) is a compat redirect to the hub. `publishing_queued_at` ownership unchanged.
+**Module boundary:** Content Project = content production only (workspace = the Normal/working-set items). Publishing Queue = schedule + WordPress publication, owned by **Publishing Queue Hub** (`PublishingQueueHub`, slug `publishing-queue`, nested under Content Projects nav; optional `?projectId=`). Legacy nested `content-projects/{id}/publishing-queue` remains a compat redirect. `publishing_queued_at` ownership unchanged.
 
-**Shared ops UI (CP ↔ PQ):** both pages reuse `content-project-ops-styles`, `content-project-summary-cards`, `content-project-filter-toolbar` (`variant`), `content-project-bulk-selection-toolbar` (`variant`), `content-project-items-list` (`variant`), thumbnail/meta/status-badge. CP actions: `content-project-item-actions-menu` + `ContentProjectItemActionsPresenter`. PQ actions: `publishing-queue-item-actions-menu` + `PublishingQueueItemActionsPresenter`. Differ only by status chips + actions (presenter/view-model).
+**Shared ops UI (CP ↔ PQ):** both pages reuse `content-project-ops-styles`, `content-project-summary-cards`, `content-project-filter-toolbar` (`variant`), `content-project-bulk-selection-toolbar` (`variant`), `content-project-items-list` (`variant`), thumbnail/meta/status-badge. CP actions: `content-project-item-actions-menu` + `ContentProjectItemActionsPresenter`. PQ actions: `publishing-queue-item-actions-menu` + `PublishingQueueItemActionsPresenter` (includes **View on WordPress** when publish state = published and stored `wp_permalink` is a valid URL). Edit-article anchors use real `href` + `target="_blank"` / `rel="noopener noreferrer"` (claim Needs Review is side-effect only — no `preventDefault` navigation).
 
 **Counters (reporting):** CM Save `needs_review−1/review+1`; enqueue Draft→Pending `draft−1/pending+1`; approve from Needs Review `needs_review−1/approved+1`; approve In Review `review−1/approved+1`; self-edit after viewed `approved+1`; schedule from Approved `approved−1/scheduled+1`; schedule from Needs Review `needs_review−1/scheduled+1`; schedule from In Review `review−1/scheduled+1`.
 
@@ -397,7 +399,7 @@ Freeze grep invariants: no production `ContentProjectBulkRerunService`, `Content
 CreateContentProject, UpdateContentProject, SyncContentProjectItems,
 AddContentProjectItems, UpdateContentProjectItem,
 GenerateProjectItems, RerunProjectItems, RerunProjectItemStep, ResumeProjectItemFromFailedStep,
-AcknowledgeProjectItemGenerationError,
+AcknowledgeProjectItemGenerationError, BlockProjectItemGeneration, UnblockProjectItemGeneration,
 StartReview, ApproveProjectItems,
 ScheduleProjectItems, AutoScheduleProjectItems, UnscheduleProjectItems,
 MoveProjectItemSchedule, PublishProjectItemsNow, ProcessScheduledProjectItemPublish,

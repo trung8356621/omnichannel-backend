@@ -34,8 +34,8 @@ final class PublishingQueueScheduledDefinition
 
         $queue = strtolower(trim((string) ($row['publish_queue_status'] ?? $row['queue_status'] ?? '')));
 
-        // Waiting / retrying / none / empty / null = plan or queued, chưa execution claim.
-        return in_array($queue, ['waiting', 'retrying', 'none', ''], true);
+        // Waiting / none / empty = plan or queued. retrying = retry_wait (separate bucket).
+        return in_array($queue, ['waiting', 'none', ''], true);
     }
 
     /**

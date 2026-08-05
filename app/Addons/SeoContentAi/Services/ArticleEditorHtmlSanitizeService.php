@@ -74,7 +74,11 @@ final class ArticleEditorHtmlSanitizeService
      */
     public function prepareHtmlForWordPressSync(string $html): string
     {
-        return $this->stripAiUtilityClasses($this->stripTransientEditorMarkup($html));
+        $cleaned = $this->stripAiUtilityClasses($this->stripTransientEditorMarkup($html));
+
+        // TipTap hydrate can glue word↔mark boundaries; repair before WP payload.
+        return (new \App\Addons\SeoContentAi\Services\ArticleEditor\Document\InlineMarkBoundaryWhitespace)
+            ->repair($cleaned);
     }
 
     private function loadHtmlRoot(string $html): ?DOMElement

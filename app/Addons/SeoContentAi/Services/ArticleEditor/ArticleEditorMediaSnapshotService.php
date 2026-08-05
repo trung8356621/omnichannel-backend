@@ -9,6 +9,8 @@ use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
+use App\Addons\SeoContentAi\Support\ArticleFeaturedImageStatus;
+use App\Addons\SeoContentAi\Support\ArticleFeaturedImageResolver;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\User;
@@ -121,12 +123,12 @@ final class ArticleEditorMediaSnapshotService
      */
     private function buildFeatured(SeoArticle $article, bool $supportsGallery): ?array
     {
-        $url = trim((string) ($article->articleMetas
-            ->firstWhere('meta_key', ArticleMediaLocalService::META_FEATURED_URL)?->meta_value ?? ''));
+        $built = app(ArticleFeaturedImageResolver::class)->rebuildFromStoredSources($article);
+        $url = trim((string) ($built['url'] ?? ''));
         $attachmentId = (int) ($article->articleMetas
             ->firstWhere('meta_key', ArticleMediaLocalService::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0);
 
-        if ($url === '' && $supportsGallery) {
+        if ($url === '' && $supportsGallery && $built['status'] !== ArticleFeaturedImageStatus::AVAILABLE) {
             $album = $this->mediaLocal->resolveProductAlbum($article);
             if ($album !== []) {
                 $url = trim((string) ($album[0]['url'] ?? ''));
@@ -139,7 +141,7 @@ final class ArticleEditorMediaSnapshotService
         }
 
         return $this->enrichMediaItem([
-            'media_id' => null,
+            'media_id' => $built['media_id'] ?? null,
             'wp_attachment_id' => $attachmentId > 0 ? $attachmentId : null,
             'url' => $url,
             'alt' => '',

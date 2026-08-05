@@ -24,7 +24,7 @@ class SeoMediaLibraryService
         ?string $month,
         int $page = 1,
         ?string $search = null,
-        int $perPage = 48,
+        int $perPage = 50,
         ?int $articleId = null,
         ?array $restrictToArticleIds = null,
     ): array {

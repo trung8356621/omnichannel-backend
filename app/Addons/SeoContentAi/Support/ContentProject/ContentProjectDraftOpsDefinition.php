@@ -19,6 +19,9 @@ final class ContentProjectDraftOpsDefinition
      */
     public static function matches(array $row): bool
     {
+        if (! empty($row['generation_blocked'])) {
+            return false;
+        }
         if (ContentProjectPublishedDefinition::matches($row)) {
             return false;
         }

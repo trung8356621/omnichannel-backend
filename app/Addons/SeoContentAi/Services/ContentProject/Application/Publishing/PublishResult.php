@@ -13,5 +13,6 @@ final class PublishResult
         public readonly bool $alreadyPublished = false,
         public readonly ?string $externalReference = null,
         public readonly bool $deliveryRequested = false,
+        public readonly ?string $permalink = null,
     ) {}
 }

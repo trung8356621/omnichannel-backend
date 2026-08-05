@@ -585,5 +585,26 @@
             font-size: 0.75rem;
             color: rgb(156 163 175);
         }
+
+        /* Publishing Queue bulk toolbar — sticky on mobile */
+        @media (max-width: 639px) {
+            .pq-bulk-toolbar {
+                position: sticky;
+                bottom: 0.75rem;
+                z-index: 30;
+                margin-top: 0.75rem;
+                box-shadow: 0 -4px 16px rgb(0 0 0 / 0.08);
+            }
+            .pq-bulk-actions {
+                justify-content: stretch;
+            }
+            .pq-bulk-actions > .relative {
+                flex: 1 1 0;
+            }
+            .pq-bulk-actions .fi-btn {
+                width: 100%;
+                justify-content: center;
+            }
+        }
     </style>
 @endonce

@@ -13,6 +13,11 @@ use Filament\Notifications\Notification;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Schema;
 
+/**
+ * Legacy Filament DB notifications for project ownership events.
+ * Operational incidents (prompt/generation/runner/WP/site-sync/publishing) MUST use
+ * {@see \App\Addons\SeoContentAi\Services\Notifications\OperationalNotificationService}.
+ */
 final class SeoNotificationService
 {
     public function notifyProjectOwner(SeoProject $project): void

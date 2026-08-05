@@ -10,9 +10,11 @@ use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectStatusBadgePresenter;
 use App\Addons\SeoContentAi\Support\PublishingQueue\PublishingQueueStateClassifier;
+use App\Addons\SeoContentAi\Support\PublishingQueue\PublishingQueueStatusLabelBuilder;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SystemDateTime;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Publishing Queue read model — Summary ≡ List via PublishingQueueStateClassifier.
@@ -29,7 +31,10 @@ final class ContentProjectPublishingQueueReadModel
             ->where('project_id', (int) $project->getKey())
             ->inPublishingQueue()
             ->with([
-                'article.articleMetas' => static fn ($q) => $q->where('meta_key', 'wp_featured_image_url'),
+                'article.articleMetas' => static fn ($q) => $q->whereIn('meta_key', [
+                    'wp_featured_image_url',
+                    'wp_permalink',
+                ]),
             ])
             ->orderBy('id')
             ->get();
@@ -69,7 +74,10 @@ final class ContentProjectPublishingQueueReadModel
             ->whereIn('project_id', $projectIds)
             ->inPublishingQueue()
             ->with([
-                'article.articleMetas' => static fn ($q) => $q->where('meta_key', 'wp_featured_image_url'),
+                'article.articleMetas' => static fn ($q) => $q->whereIn('meta_key', [
+                    'wp_featured_image_url',
+                    'wp_permalink',
+                ]),
                 'project',
             ])
             ->orderBy('id')
@@ -96,11 +104,16 @@ final class ContentProjectPublishingQueueReadModel
             }
 
             $thumbnailUrl = null;
+            $wpPermalink = null;
             if ($article !== null && $article->relationLoaded('articleMetas')) {
                 $raw = trim((string) (
                     $article->articleMetas->firstWhere('meta_key', 'wp_featured_image_url')?->meta_value ?? ''
                 ));
                 $thumbnailUrl = $raw !== '' ? $raw : null;
+                $permalinkRaw = trim((string) (
+                    $article->articleMetas->firstWhere('meta_key', 'wp_permalink')?->meta_value ?? ''
+                ));
+                $wpPermalink = $permalinkRaw !== '' ? $permalinkRaw : null;
             }
 
             $queuedAt = $task->publishing_queued_at;
@@ -121,6 +134,7 @@ final class ContentProjectPublishingQueueReadModel
                 'slug' => $slug,
                 'thumbnail_url' => $thumbnailUrl,
                 'has_featured_image' => $thumbnailUrl !== null,
+                'wp_permalink' => $wpPermalink,
                 'scheduled_publish_at' => $task->scheduled_publish_at,
                 'scheduled_raw' => $task->scheduled_publish_at?->toIso8601String(),
                 'scheduled_at' => $scheduledAtDisplay,
@@ -132,9 +146,23 @@ final class ContentProjectPublishingQueueReadModel
                 'publish_published_at' => $task->publish_published_at?->toIso8601String(),
                 'lifecycle' => '',
                 'last_publish_error' => (string) ($task->last_publish_error ?? ''),
-                'message' => (string) ($task->last_publish_error ?? ''),
+                'last_publish_error_code' => (string) ($task->last_publish_error_code ?? ''),
+                'last_publish_error_message' => (string) ($task->last_publish_error_message ?? $task->last_publish_error ?? ''),
+                'last_publish_http_status' => (int) ($task->last_publish_http_status ?? 0) ?: null,
+                'message' => '',
                 'publishing_queued_at' => $queuedAt?->toIso8601String(),
                 'last_publish_attempt_at' => $task->last_publish_attempt_at?->toIso8601String(),
+                'publishing_started_at' => $task->publishing_started_at?->toIso8601String(),
+                'publisher_started_at' => $this->optionalIso($task, 'publisher_started_at'),
+                'delivery_dispatched_at' => $this->optionalIso($task, 'delivery_dispatched_at'),
+                'publish_attempt_token' => Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'publish_attempt_token')
+                    ? (string) ($task->publish_attempt_token ?? '')
+                    : '',
+                'publish_lease_expires_at' => $task->publish_lease_expires_at?->toIso8601String(),
+                'next_publish_retry_at' => $task->next_publish_retry_at?->toIso8601String(),
+                'publish_attempt_count' => (int) ($task->publish_attempt_count ?? 0),
+                'publish_operation_key' => (string) ($task->publish_operation_key ?? ''),
+                'last_publish_failed_at' => $task->last_publish_failed_at?->toIso8601String(),
                 'last_activity' => $lastActivity,
                 'last_activity_full' => $lastActivityFull,
                 'is_recently_completed' => false,
@@ -157,7 +185,15 @@ final class ContentProjectPublishingQueueReadModel
             $classified = PublishingQueueStateClassifier::classify($row);
             $row['publish_state'] = $classified['state'];
             $row['publish_state_label'] = $classified['label'];
+            $row['publish_status_detail'] = PublishingQueueStatusLabelBuilder::label($row);
             $row['publish_badge'] = ContentProjectStatusBadgePresenter::publishQueueState((string) $classified['state']);
+            // Keep badge label in sync with attempt/retry detail.
+            if (is_array($row['publish_badge'])) {
+                $row['publish_badge']['label'] = $classified['label'];
+            }
+
+            // Reconciliation "no matching post" is NOT a user-facing error before Published.
+            $row['message'] = $this->visiblePublishMessage($row);
 
             return $row;
         })->values();
@@ -186,5 +222,72 @@ final class ContentProjectPublishingQueueReadModel
             'stats' => PublishingQueueStateClassifier::countSummary($rows->all()),
             'rows' => $list,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function visiblePublishMessage(array $row): string
+    {
+        $state = (string) ($row['publish_state'] ?? '');
+        $code = strtoupper(trim((string) ($row['last_publish_error_code'] ?? '')));
+        $msg = trim((string) ($row['last_publish_error_message'] ?? $row['last_publish_error'] ?? ''));
+
+        if ($msg === '') {
+            return '';
+        }
+
+        $isMissingPost = $code === 'WP_PUBLISHED_POST_NOT_FOUND'
+            || str_contains(strtolower($msg), 'wordpress has no matching published post');
+
+        // Never show reconcile-missing-post as a row error before Published evidence exists.
+        if ($isMissingPost && ! in_array($state, [
+            PublishingQueueStateClassifier::PUBLISHED,
+            PublishingQueueStateClassifier::FAILED,
+        ], true)) {
+            return '';
+        }
+
+        if (in_array($state, [
+            PublishingQueueStateClassifier::UNSCHEDULED,
+            PublishingQueueStateClassifier::SCHEDULED,
+            PublishingQueueStateClassifier::PUBLISHING,
+            PublishingQueueStateClassifier::RETRY_WAIT,
+        ], true) && $isMissingPost) {
+            return '';
+        }
+
+        // Scheduled / unscheduled / publishing: hide stale errors entirely.
+        if (in_array($state, [
+            PublishingQueueStateClassifier::UNSCHEDULED,
+            PublishingQueueStateClassifier::SCHEDULED,
+            PublishingQueueStateClassifier::PUBLISHING,
+            PublishingQueueStateClassifier::AWAITING_DELIVERY,
+        ], true)) {
+            return '';
+        }
+
+        return $msg;
+    }
+
+    private function optionalIso(SeoProjectTask $task, string $column): ?string
+    {
+        try {
+            if (! Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', $column)) {
+                return null;
+            }
+        } catch (\Throwable) {
+            return null;
+        }
+
+        $raw = $task->getAttribute($column);
+        if ($raw instanceof \Carbon\CarbonInterface) {
+            return $raw->toIso8601String();
+        }
+        if (is_string($raw) && trim($raw) !== '') {
+            return $raw;
+        }
+
+        return null;
     }
 }

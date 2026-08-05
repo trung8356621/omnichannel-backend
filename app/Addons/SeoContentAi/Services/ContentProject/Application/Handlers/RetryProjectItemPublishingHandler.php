@@ -12,8 +12,8 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Contracts\Conten
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectBusinessLock;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPreviewToken;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
-use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueRunner;
-use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueService;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishDueItemOutcome;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishDueItemService;
 use InvalidArgumentException;
 
 final class RetryProjectItemPublishingHandler extends AbstractPublishingHandler
@@ -22,8 +22,7 @@ final class RetryProjectItemPublishingHandler extends AbstractPublishingHandler
         ContentProjectTenantGuard $tenantGuard,
         ContentProjectBusinessLock $businessLock,
         ContentProjectPreviewToken $previewToken,
-        private readonly ContentProjectPublishingQueueService $queueService,
-        private readonly ContentProjectPublishingQueueRunner $queueRunner,
+        private readonly PublishDueItemService $dueItemService,
     ) {
         parent::__construct($tenantGuard, $businessLock, $previewToken);
     }
@@ -52,22 +51,62 @@ final class RetryProjectItemPublishingHandler extends AbstractPublishingHandler
 
             return $this->businessLock->withLock(
                 $this->businessLock->projectSchedule($projectId),
-                function () use ($project, $projectId, $itemIds): ContentProjectActionResult {
-                    $affected = $this->queueService->retry($project, $itemIds);
-                    $dispatchStats = $this->queueRunner->dispatchDue();
+                function () use ($projectId, $itemIds): ContentProjectActionResult {
+                    $outcomes = $this->dueItemService->executeMany($itemIds, PublishDueItemService::TRIGGER_RETRY_NOW);
+                    $summary = $this->summarize($outcomes);
 
                     return ContentProjectActionResult::ok(
                         ContentProjectActionCodes::ITEMS_PUBLISH_RETRIED,
-                        "{$affected} item(s) publish retry queued.",
+                        $summary['message'],
                         $projectId,
                         $itemIds,
-                        metadata: [
-                            'affected_count' => $affected,
-                            'dispatch' => $dispatchStats,
-                        ],
+                        metadata: $summary,
                     );
                 },
             );
         });
+    }
+
+    /**
+     * @param  list<PublishDueItemOutcome>  $outcomes
+     * @return array<string, mixed>
+     */
+    private function summarize(array $outcomes): array
+    {
+        $started = 0;
+        $retryWait = 0;
+        $failed = 0;
+        $skipped = 0;
+        $published = 0;
+
+        foreach ($outcomes as $o) {
+            match ($o->outcome) {
+                PublishDueItemOutcome::AWAITING_DELIVERY => $started++,
+                PublishDueItemOutcome::PUBLISHED => $published++,
+                PublishDueItemOutcome::RETRY_WAIT => $retryWait++,
+                PublishDueItemOutcome::FAILED, PublishDueItemOutcome::ERROR => $failed++,
+                default => $skipped++,
+            };
+        }
+
+        $total = count($outcomes);
+
+        return [
+            'affected_count' => $total,
+            'started' => $started,
+            'published' => $published,
+            'retry_wait' => $retryWait,
+            'failed' => $failed,
+            'skipped' => $skipped,
+            'outcomes' => array_map(static fn (PublishDueItemOutcome $o): array => $o->toLogArray(), $outcomes),
+            'message' => sprintf(
+                'Đã thử lại %d bài: %d đang xuất bản, %d chờ thử lại, %d lỗi%s.',
+                $total,
+                $started + $published,
+                $retryWait,
+                $failed,
+                $skipped > 0 ? ", {$skipped} bỏ qua" : '',
+            ),
+        ];
     }
 }

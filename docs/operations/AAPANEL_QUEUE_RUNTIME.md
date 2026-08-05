@@ -2,7 +2,7 @@
 
 > Status: Canonical  
 > Owner: SeoContentAi (+ host ops)  
-> Last verified: 2026-08-03  
+> Last verified: 2026-08-05  
 > Host: `seo.teamviahe.com` (aaPanel cron, user root)  
 > Related: [SCHEDULER_AND_WORKERS.md](SCHEDULER_AND_WORKERS.md), [DEPLOYMENT.md](DEPLOYMENT.md), [../audits/BACKEND_RUNTIME_PERFORMANCE_AUDIT.md](../audits/BACKEND_RUNTIME_PERFORMANCE_AUDIT.md)
 
@@ -48,10 +48,72 @@ Repo defaults: `config/queue.php` database `retry_after` fallback **1200**; `.en
 
 Cadence: every minute. PHP binary: `/usr/local/lsws/lsphp83/bin/php`. Docroot: `/www/wwwroot/seo.teamviahe.com`.
 
-### 2.1 Shared Queue Worker (existing)
+### 2.1 Queue workers (split — do not mix WP publish with SEO audit)
 
-Lock: `/tmp/seo-teamviahe-queue.lock`  
-Log: `storage/logs/queue-cron.log`
+Production must **not** put `automation-external` on the same process that drains `seo-audit`, `automation-policy`, or a large `default` backlog. Prefer separate flock locks per worker class.
+
+#### automation-critical worker
+
+```bash
+cd /www/wwwroot/seo.teamviahe.com && \
+/usr/bin/flock -n /tmp/seo-teamviahe-queue-critical.lock \
+/usr/local/lsws/lsphp83/bin/php artisan queue:work \
+--stop-when-empty \
+--max-time=55 \
+--timeout=180 \
+--tries=3 \
+--sleep=1 \
+--queue=automation-critical \
+>> storage/logs/queue-critical-cron.log 2>&1
+```
+
+#### automation-external worker (WordPress / external publish only)
+
+```bash
+cd /www/wwwroot/seo.teamviahe.com && \
+/usr/bin/flock -n /tmp/seo-teamviahe-queue-external.lock \
+/usr/local/lsws/lsphp83/bin/php artisan queue:work \
+--stop-when-empty \
+--max-time=55 \
+--timeout=300 \
+--tries=3 \
+--sleep=1 \
+--queue=automation-external \
+>> storage/logs/queue-external-cron.log 2>&1
+```
+
+#### automation-policy worker
+
+```bash
+cd /www/wwwroot/seo.teamviahe.com && \
+/usr/bin/flock -n /tmp/seo-teamviahe-queue-policy.lock \
+/usr/local/lsws/lsphp83/bin/php artisan queue:work \
+--stop-when-empty \
+--max-time=55 \
+--timeout=300 \
+--tries=3 \
+--sleep=1 \
+--queue=automation-policy \
+>> storage/logs/queue-policy-cron.log 2>&1
+```
+
+#### SEO maintenance worker (low concurrency)
+
+```bash
+cd /www/wwwroot/seo.teamviahe.com && \
+/usr/bin/flock -n /tmp/seo-teamviahe-queue-seo-audit.lock \
+/usr/local/lsws/lsphp83/bin/php artisan queue:work \
+--stop-when-empty \
+--max-time=55 \
+--timeout=45 \
+--tries=2 \
+--sleep=1 \
+--max-jobs=5 \
+--queue=seo-audit \
+>> storage/logs/queue-seo-audit-cron.log 2>&1
+```
+
+#### general worker
 
 ```bash
 cd /www/wwwroot/seo.teamviahe.com && \
@@ -62,11 +124,12 @@ cd /www/wwwroot/seo.teamviahe.com && \
 --timeout=300 \
 --tries=3 \
 --sleep=1 \
---queue=automation-critical,automation,automation-external,seo,media_generation,default \
+--queue=automation,seo,media_generation,default \
 >> storage/logs/queue-cron.log 2>&1
 ```
 
-Shared worker **must not** include `seo-content-run`.
+General worker **must not** include `automation-external`, `automation-critical`, `automation-policy`, `seo-audit`, or `seo-content-run`.
+Shared / general worker **must not** include `seo-content-run`.
 
 ### 2.2 Laravel Scheduler (existing)
 
@@ -118,12 +181,14 @@ cd /www/wwwroot/seo.teamviahe.com && \
 | Queue | Runtime worker |
 |-------|----------------|
 | `seo-content-run` | Dedicated Content Project Queue Worker |
-| `automation-critical` | Shared Queue Worker |
-| `automation` | Shared Queue Worker |
-| `automation-external` | Shared Queue Worker |
-| `seo` | Shared Queue Worker |
-| `media_generation` | Shared Queue Worker |
-| `default` | Shared Queue Worker |
+| `automation-critical` | automation-critical worker |
+| `automation-external` | automation-external worker (WP publish only) |
+| `automation-policy` | automation-policy worker |
+| `seo-audit` | SEO maintenance worker (low concurrency) |
+| `automation` | general worker |
+| `seo` | general worker |
+| `media_generation` | general worker |
+| `default` | general worker |
 
 ---
 
@@ -212,7 +277,7 @@ Do not merge a new queue only because a row appeared in `jobs`.
 
 | File | Writer | Rotation |
 |------|--------|----------|
-| `storage/logs/queue-cron.log` | Shared Queue Worker redirect | Not Laravel daily; **pending** host logrotate |
+| `storage/logs/queue-cron.log` | general worker redirect | Not Laravel daily; **pending** host logrotate |
 | `storage/logs/cron-schedule.log` | Scheduler redirect | Same |
 | `storage/logs/content-run-queue-cron.log` | Dedicated CP worker redirect | Same |
 

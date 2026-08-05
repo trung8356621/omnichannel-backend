@@ -21,6 +21,9 @@ use RuntimeException;
  * Block Archived / Generating / Draft / Failed / busy. Reporting states are not hard gates
  * against each other — Approved is optional marker, not required before Schedule.
  * Archive blocked while generation or publish-queue busy (matches ArchiveProjectItemsHandler).
+ *
+ * Actively publishing = PublishingActiveProcessing::isActivelyPublishing only.
+ * retry_wait / scheduled waiting are NOT actively publishing.
  */
 final class ContentProjectItemActionGuard
 {
@@ -36,6 +39,7 @@ final class ContentProjectItemActionGuard
         bool $hasPublished,
         bool $latestPublishAttemptFailed = false,
         ?ContentProjectPublishQueueStatus $queue = null,
+        bool $isActivelyPublishing = false,
     ): array {
         if ($archive === ContentProjectItemArchiveState::ContentArchived) {
             // Option B: item-level Restore is not offered — restoring content-archived
@@ -47,12 +51,13 @@ final class ContentProjectItemActionGuard
 
         $genBusy = $generation === ContentProjectItemGenerationState::Writing
             || $generation === ContentProjectItemGenerationState::Processing;
-        $queueBusy = $publish === ContentProjectItemPublishState::Queued
-            || $queue === ContentProjectPublishQueueStatus::Processing
+        $inPublishPipeline = $queue === ContentProjectPublishQueueStatus::Processing
+            || $queue === ContentProjectPublishQueueStatus::QueuedForDelivery
             || $queue === ContentProjectPublishQueueStatus::Retrying
-            || $queue === ContentProjectPublishQueueStatus::Waiting;
+            || $queue === ContentProjectPublishQueueStatus::Waiting
+            || $publish === ContentProjectItemPublishState::Queued;
 
-        if (! $genBusy && ! $queueBusy) {
+        if (! $genBusy && ! $inPublishPipeline) {
             $actions[] = ContentProjectItemAction::Archive;
 
             // Generate-pending: draft or generation-failed only (not review/publish-failed).
@@ -102,7 +107,7 @@ final class ContentProjectItemActionGuard
             $actions[] = ContentProjectItemAction::Approve;
         }
 
-        $scheduleEligible = $this->queueScheduleEligible($lifecycle, $genBusy, $queueBusy);
+        $scheduleEligible = $this->queueScheduleEligible($lifecycle, $genBusy, $isActivelyPublishing);
 
         if ($scheduleEligible) {
             if (in_array($publish, [
@@ -119,14 +124,35 @@ final class ContentProjectItemActionGuard
             }
         }
 
-        // Waiting/Retrying: unschedule + cancel/skip. Processing: không Cancel thường —
-        // cần Recover stuck publishing (tránh lifecycle.invalid_transition processing→cancelled).
-        if ($queue === ContentProjectPublishQueueStatus::Waiting
-            || $queue === ContentProjectPublishQueueStatus::Retrying
-        ) {
+        // Waiting / retry_wait: unschedule + cancel/skip + publish/retry when not actively publishing.
+        // Processing with valid lease: no Cancel — use Recover stuck publishing.
+        if ($queue === ContentProjectPublishQueueStatus::Waiting && ! $isActivelyPublishing) {
             $actions[] = ContentProjectItemAction::Unschedule;
             $actions[] = ContentProjectItemAction::CancelPublish;
             $actions[] = ContentProjectItemAction::SkipPublish;
+            $actions[] = ContentProjectItemAction::PublishNow;
+        }
+
+        if ($queue === ContentProjectPublishQueueStatus::QueuedForDelivery && ! $isActivelyPublishing) {
+            $actions[] = ContentProjectItemAction::Unschedule;
+            $actions[] = ContentProjectItemAction::CancelPublish;
+            $actions[] = ContentProjectItemAction::SkipPublish;
+            $actions[] = ContentProjectItemAction::PublishNow;
+            $actions[] = ContentProjectItemAction::Schedule;
+        }
+
+        if ($queue === ContentProjectPublishQueueStatus::Retrying && ! $isActivelyPublishing) {
+            $actions[] = ContentProjectItemAction::Unschedule;
+            $actions[] = ContentProjectItemAction::CancelPublish;
+            $actions[] = ContentProjectItemAction::SkipPublish;
+            $actions[] = ContentProjectItemAction::RetryPublish;
+            $actions[] = ContentProjectItemAction::PublishNow;
+        }
+
+        if ($queue === ContentProjectPublishQueueStatus::Processing && ! $isActivelyPublishing) {
+            // Expired / stale processing — allow explicit Retry / Publish Now; Recover stuck remains.
+            $actions[] = ContentProjectItemAction::RetryPublish;
+            $actions[] = ContentProjectItemAction::PublishNow;
         }
 
         if ($publish === ContentProjectItemPublishState::PublishFailed || $latestPublishAttemptFailed) {
@@ -146,6 +172,12 @@ final class ContentProjectItemActionGuard
     ): void {
         $resolver ??= new ContentProjectItemStateResolver($this);
         $state = $resolver->resolve($task, $article, $hints);
+        if (
+            in_array($action, [ContentProjectItemAction::Generate, ContentProjectItemAction::Rerun], true)
+            && $task->isGenerationBlocked()
+        ) {
+            throw new RuntimeException('Item đã được đánh dấu bỏ qua tạo bài.');
+        }
         if (! in_array($action, $state->availableActions, true)) {
             $blocking = $state->blockingReason ?? 'n/a';
             if (
@@ -175,9 +207,9 @@ final class ContentProjectItemActionGuard
     private function queueScheduleEligible(
         ContentProjectLifecyclePhase $lifecycle,
         bool $genBusy,
-        bool $queueBusy,
+        bool $isActivelyPublishing,
     ): bool {
-        if ($genBusy || $queueBusy) {
+        if ($genBusy || $isActivelyPublishing) {
             return false;
         }
 

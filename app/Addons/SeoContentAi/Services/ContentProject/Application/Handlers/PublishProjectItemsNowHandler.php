@@ -12,8 +12,9 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Contracts\Conten
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectBusinessLock;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPreviewToken;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
-use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueRunner;
-use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueService;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\DispatchClaimResult;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishDueItemOutcome;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishDueItemService;
 use InvalidArgumentException;
 
 final class PublishProjectItemsNowHandler extends AbstractPublishingHandler
@@ -22,8 +23,7 @@ final class PublishProjectItemsNowHandler extends AbstractPublishingHandler
         ContentProjectTenantGuard $tenantGuard,
         ContentProjectBusinessLock $businessLock,
         ContentProjectPreviewToken $previewToken,
-        private readonly ContentProjectPublishingQueueService $queueService,
-        private readonly ContentProjectPublishingQueueRunner $queueRunner,
+        private readonly PublishDueItemService $dueItemService,
     ) {
         parent::__construct($tenantGuard, $businessLock, $previewToken);
     }
@@ -80,27 +80,71 @@ final class PublishProjectItemsNowHandler extends AbstractPublishingHandler
                 return $confirmationFailure;
             }
 
-            $affected = 0;
+            $outcomes = [];
             foreach ($itemIds as $itemId) {
-                $affected += (int) $this->businessLock->withLock(
+                $outcomes[] = $this->businessLock->withLock(
                     $this->businessLock->itemPublish($itemId),
-                    fn (): int => $this->queueService->publishNow($project, [$itemId]),
+                    fn (): PublishDueItemOutcome => $this->dueItemService->execute(
+                        $itemId,
+                        PublishDueItemService::TRIGGER_PUBLISH_NOW,
+                    ),
                 );
             }
 
-            $dispatchStats = $this->queueRunner->dispatchDue();
             $this->consumeConfirmationToken($command->confirmationToken ?? $actor->confirmationToken);
+            $summary = $this->summarize($outcomes);
 
             return ContentProjectActionResult::ok(
                 ContentProjectActionCodes::ITEMS_PUBLISH_QUEUED,
-                "{$affected} item(s) queued for immediate publish.",
+                $summary['message'],
                 $projectId,
                 $itemIds,
-                metadata: [
-                    'affected_count' => $affected,
-                    'dispatch' => $dispatchStats,
-                ],
+                metadata: $summary,
             );
         });
+    }
+
+    /**
+     * @param  list<PublishDueItemOutcome>  $outcomes
+     * @return array<string, mixed>
+     */
+    private function summarize(array $outcomes): array
+    {
+        $started = 0;
+        $alreadyActive = 0;
+        $failed = 0;
+        $skipped = 0;
+
+        foreach ($outcomes as $o) {
+            if ($o->outcome === PublishDueItemOutcome::AWAITING_DELIVERY
+                || $o->outcome === PublishDueItemOutcome::PUBLISHED
+            ) {
+                $started++;
+            } elseif ($o->claimCode === DispatchClaimResult::ACTIVE_PUBLISH
+                || $o->reason === DispatchClaimResult::ACTIVE_PUBLISH
+            ) {
+                $alreadyActive++;
+            } elseif (in_array($o->outcome, [PublishDueItemOutcome::FAILED, PublishDueItemOutcome::ERROR], true)) {
+                $failed++;
+            } else {
+                $skipped++;
+            }
+        }
+
+        return [
+            'affected_count' => count($outcomes),
+            'started' => $started,
+            'already_active' => $alreadyActive,
+            'failed' => $failed,
+            'skipped' => $skipped,
+            'outcomes' => array_map(static fn (PublishDueItemOutcome $o): array => $o->toLogArray(), $outcomes),
+            'message' => sprintf(
+                'Publish now: %d bắt đầu, %d đang xuất bản, %d lỗi, %d bỏ qua.',
+                $started,
+                $alreadyActive,
+                $failed,
+                $skipped,
+            ),
+        ];
     }
 }

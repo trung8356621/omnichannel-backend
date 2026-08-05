@@ -24,11 +24,14 @@
             @if ($isPublishingQueue)
                 <x-select wire:model.live="stateFilter" wrapClass="cp-ops-select" aria-label="Publish state filter">
                     <option value="">All</option>
-                    <option value="unscheduled">Unscheduled</option>
-                    <option value="scheduled">Scheduled</option>
-                    <option value="publishing">Publishing</option>
-                    <option value="published">Published</option>
-                    <option value="failed">Failed</option>
+                    <option value="unscheduled">Chưa lên lịch</option>
+                    <option value="scheduled">Đã lên lịch</option>
+                    <option value="awaiting_delivery">Chờ xử lý</option>
+                    <option value="publishing">Đang xuất bản</option>
+                    <option value="retry_wait">Thử lại sau</option>
+                    <option value="published">Đã xuất bản</option>
+                    <option value="failed">Không thể xuất bản</option>
+                    <option value="needs_attention">Cần xử lý</option>
                 </x-select>
             @else
                 <x-select wire:model.live="workflowFilter" wrapClass="cp-ops-select" aria-label="{{ __('seo-content-ai::filament.projects.ops_workflow_filter') }}">

@@ -12,9 +12,9 @@ namespace App\Addons\SeoContentAi\Services\ArticleEditor\Document;
  */
 final class InlineMarkBoundaryWhitespace
 {
-    private const MARK_OPEN = 'strong|b|em|i|a|u|s|code|mark';
+    private const MARK_OPEN = 'strong|b|em|i|a|u|s|code|mark|span|small|sup|sub';
 
-    private const MARK_CLOSE = 'strong|b|em|i|a|u|s|code|mark';
+    private const MARK_CLOSE = 'strong|b|em|i|a|u|s|code|mark|span|small|sup|sub';
 
     public function countGluedBoundaries(string $html): int
     {

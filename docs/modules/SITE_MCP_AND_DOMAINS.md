@@ -105,7 +105,7 @@ Generate/Regenerate → `SiteMcpGenerator` modes (`news_manual` / `production_ca
 | Metadata resync | `RunMetadataDomainSyncJob` → `MetadataDomainSyncRunner` |
 | Keyword rescrape | `RunKeywordDomainResyncJob` → `KeywordDomainResyncService` |
 | Score backfill | `SeoArticleScoringQueueService` / `AnalyzeArticleSeoJob` |
-| Link health | `AuditLinkStatusJob` via `LinkMapStatusAuditService` |
+| Link health | `AuditLinkStatusJob` on queue `seo-audit` via `LinkMapStatusAuditService` (not WP publish worker) |
 
 Site Sync V2 button/flow: see `SITE_SYNC.md` (not legacy incremental alone).
 

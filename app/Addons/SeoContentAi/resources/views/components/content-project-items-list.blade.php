@@ -172,7 +172,9 @@
                                             <x-seo-content-ai::content-project-status-badge :badge="$row['publish_badge'] ?? null" />
                                         @endif
                                     </div>
-                                    @if (! empty($row['last_publish_error']) && ! $rowPending)
+                                    @if (! empty($row['publish_status_detail']) && ! $rowPending)
+                                        <div class="cp-ops-step" title="{{ $row['last_publish_error_message'] ?? $row['last_publish_error'] ?? $row['publish_status_detail'] }}">{{ \Illuminate\Support\Str::limit((string) $row['publish_status_detail'], 80) }}</div>
+                                    @elseif (! empty($row['last_publish_error']) && ! $rowPending)
                                         <div class="cp-ops-step" title="{{ $row['last_publish_error'] }}">{{ \Illuminate\Support\Str::limit((string) $row['last_publish_error'], 60) }}</div>
                                     @endif
                                 </td>

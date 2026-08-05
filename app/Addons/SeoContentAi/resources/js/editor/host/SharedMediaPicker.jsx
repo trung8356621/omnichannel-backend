@@ -22,18 +22,47 @@ import {
 const CACHE_TTL_MS = 45_000;
 
 function imageKey(image) {
-    const id = Number(image?.seo_media_id || image?.wp_attachment_id || 0);
-    const url = String(image?.url || '').trim();
+    const id = Number(
+        image?.seo_media_id
+        || image?.seoMediaId
+        || image?.wp_attachment_id
+        || image?.wpAttachmentId
+        || image?.id
+        || 0,
+    );
+    const url = String(image?.url || image?.src || '').trim();
     return id > 0 ? `id:${id}` : `url:${url}`;
 }
 
 function normalizePickerItem(image) {
+    const url = String(image?.url || image?.src || image?.thumb_url || '').trim();
+    const wpAttachmentId = Number(
+        image?.wp_attachment_id
+        ?? image?.wpAttachmentId
+        ?? image?.attachment_id
+        ?? image?.attachmentId
+        ?? 0,
+    ) || 0;
+    const seoMediaId = Number(
+        image?.seo_media_id
+        ?? image?.seoMediaId
+        ?? image?.media_id
+        ?? image?.mediaId
+        ?? 0,
+    ) || 0;
+    // Prefer real media identity; never invent from array index alone.
+    const rawId = Number(image?.id ?? 0) || 0;
+    const id = wpAttachmentId > 0
+        ? wpAttachmentId
+        : (seoMediaId > 0 ? seoMediaId : rawId);
+
     return {
-        url: String(image?.url || '').trim(),
+        url,
         alt: String(image?.alt || '').trim(),
         slug: String(image?.slug || '').trim(),
-        wp_attachment_id: Number(image?.wp_attachment_id || 0) || 0,
-        seo_media_id: Number(image?.seo_media_id || 0) || 0,
+        id: id > 0 ? id : 0,
+        wp_attachment_id: wpAttachmentId,
+        seo_media_id: seoMediaId,
         media_type: String(image?.media_type || 'image').toLowerCase() === 'video' ? 'video' : 'image',
         source: String(image?.source || '').trim(),
     };
@@ -295,7 +324,8 @@ export function SharedMediaPicker({
             ? customTabsRef.current.find((row) => `custom:${row.id}` === nextTab)
             : null;
         const search = custom ? String(custom.keyword || '') : (tabStates[nextTab]?.search || '');
-        const page = tabStates[nextTab]?.page || 1;
+        // Tab change always resets to page 1 (same contract as search).
+        const page = 1;
         const key = cacheKey(id, nextTab, page, search);
         const cached = cacheRef.current.get(key);
         if (cached) {

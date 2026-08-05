@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Support\PublishingQueue;
 
 /**
- * Publishing Queue "Unscheduled" bucket — handed off, no schedule time yet,
- * not published/failed/publishing/scheduled. Default catch-all bucket.
+ * Unscheduled — in Publishing Queue, no schedule time yet.
+ * Not a catch-all; unknown statuses go to needs_attention.
  */
 final class PublishingQueueUnscheduledDefinition
 {
@@ -17,9 +17,22 @@ final class PublishingQueueUnscheduledDefinition
      */
     public static function matches(array $row): bool
     {
-        return ! PublishingQueuePublishedDefinition::matches($row)
-            && ! PublishingQueueFailedDefinition::matches($row)
-            && ! PublishingQueuePublishingDefinition::matches($row)
-            && ! PublishingQueueScheduledDefinition::matches($row);
+        if (PublishingQueuePublishedDefinition::matches($row)
+            || PublishingQueueFailedDefinition::matches($row)
+            || PublishingQueuePublishingDefinition::matches($row)
+            || PublishingQueueAwaitingWorkerDefinition::matches($row)
+            || PublishingQueueRetryWaitDefinition::matches($row)
+            || PublishingQueueScheduledDefinition::matches($row)
+            || PublishingQueueNeedsAttentionDefinition::matches($row)
+        ) {
+            return false;
+        }
+
+        $queued = $row['publishing_queued_at'] ?? null;
+        $hasQueue = $queued !== null && $queued !== '';
+        $at = PublishingQueueScheduledDefinition::scheduledAt($row);
+        $queue = strtolower(trim((string) ($row['publish_queue_status'] ?? $row['queue_status'] ?? '')));
+
+        return $hasQueue && $at === null && in_array($queue, ['none', ''], true);
     }
 }

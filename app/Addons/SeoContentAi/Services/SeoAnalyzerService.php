@@ -116,10 +116,13 @@ class SeoAnalyzerService
         ?string $slug = null,
         ?string $metaDescription = null,
         ?string $domainOverride = null,
+        ?string $focusKeywordOverride = null,
     ): array {
-        $focusKeyword = $this->resolveFocusKeyword($article);
+        $focusKeyword = $focusKeywordOverride !== null && trim($focusKeywordOverride) !== ''
+            ? trim($focusKeywordOverride)
+            : $this->resolveFocusKeyword($article);
 
-        if ($focusKeyword === null) {
+        if ($focusKeyword === null || $focusKeyword === '') {
             $emptyLinks = ['internal' => [], 'external' => []];
             $domain = $this->resolveArticleDomain($article, $domainOverride);
             $emptyLinks = $this->extractLinks($content, $domain);
@@ -165,6 +168,98 @@ class SeoAnalyzerService
     }
 
     /**
+     * Preview contract for editor live score — no DB write, no WordPress HTTP.
+     *
+     * @return array{
+     *   total_score: int,
+     *   grade: string,
+     *   score_version: string,
+     *   content_hash: string,
+     *   violations: list<string>,
+     *   rules: list<array{rule_id: string, deduction: int, failed: bool, message: string}>,
+     *   calculated_at: string,
+     *   score: int,
+     *   seo_score: int,
+     *   good: array<int, string>,
+     *   errors: array<int, string>,
+     *   warnings: array<int, string>
+     * }
+     */
+    public function previewScoreContract(
+        SeoArticle $article,
+        string $content,
+        ?string $seoTitle = null,
+        ?string $slug = null,
+        ?string $metaDescription = null,
+        ?string $focusKeyword = null,
+    ): array {
+        $raw = $this->analyzePreview(
+            $article,
+            $content,
+            $seoTitle,
+            $slug,
+            $metaDescription,
+            null,
+            $focusKeyword,
+        );
+
+        $violations = SeoScoringRulesRegistry::sanitizeViolations($raw['violations'] ?? []);
+        $score = SeoScoringCalculator::scoreFromViolations($violations);
+        $lines = SeoScoringCalculator::violationLines($violations);
+        $contentHash = hash('sha256', trim($content));
+        $failedKeys = array_fill_keys($violations, true);
+
+        $rules = [];
+        foreach ($lines as $line) {
+            $rules[] = [
+                'rule_id' => (string) $line['key'],
+                'deduction' => (int) $line['deduction'],
+                'failed' => true,
+                'message' => (string) $line['message'],
+            ];
+        }
+
+        foreach (SeoScoringRulesRegistry::publicRulesForClient() as $rule) {
+            $key = (string) ($rule['key'] ?? '');
+            if ($key === '' || isset($failedKeys[$key]) || ! ($rule['enabled'] ?? true)) {
+                continue;
+            }
+            $rules[] = [
+                'rule_id' => $key,
+                'deduction' => 0,
+                'failed' => false,
+                'message' => '',
+            ];
+        }
+
+        return [
+            'total_score' => $score,
+            'grade' => $this->scoreGrade($score),
+            'score_version' => SeoScoringRulesRegistry::SCORE_VERSION,
+            'content_hash' => $contentHash,
+            'violations' => $violations,
+            'rules' => $rules,
+            'calculated_at' => now()->toIso8601String(),
+            'score' => $score,
+            'seo_score' => $score,
+            'good' => $raw['good'] ?? [],
+            'errors' => $raw['errors'] ?? [],
+            'warnings' => $raw['warnings'] ?? [],
+            'extracted_links' => $raw['extracted_links'] ?? ['internal' => [], 'external' => []],
+        ];
+    }
+
+    private function scoreGrade(int $score): string
+    {
+        return match (true) {
+            $score >= 90 => 'excellent',
+            $score >= 70 => 'good',
+            $score >= 50 => 'fair',
+            default => 'poor',
+        };
+    }
+
+    /**
      * Chấm và lưu điểm bằng nội dung editor vừa submit.
      *
      * Luồng đồng bộ WordPress sẽ xóa articles.body sau khi thành công, nên không
@@ -207,7 +302,7 @@ class SeoAnalyzerService
             $extractedLinks = $computed['extractedLinks'];
         }
 
-        $persisted = $this->persistScoreResult($article, $scoreData, $extractedLinks);
+        $persisted = $this->persistScoreResult($article, $scoreData, $extractedLinks, $content);
 
         return array_merge($persisted, [
             'extracted_links' => $extractedLinks,
@@ -222,7 +317,7 @@ class SeoAnalyzerService
     }
 
     /**
-     * Lưu kết quả chấm điểm do editor JS gửi kèm khi save.
+     * Persist SEO score. Client violation payloads are ignored — PHP engine is SoT.
      *
      * @param  array<string, mixed>  $payload
      * @return array{
@@ -238,42 +333,13 @@ class SeoAnalyzerService
      */
     public function persistClientAnalysis(SeoArticle $article, string $content, array $payload): array
     {
-        $scoreData = $this->sanitizeClientScorePayload($payload);
-        $extractedLinks = $this->sanitizeClientExtractedLinks($payload['extracted_links'] ?? null, $content, $article);
-
-        $persisted = $this->persistScoreResult($article, $scoreData, $extractedLinks);
-
-        $contentBonus = is_array($payload['content_bonus'] ?? null)
-            ? $payload['content_bonus']
-            : app(ArticleContentSeoBonusService::class)->resolveFromContent($article, $content);
-
-        return array_merge($persisted, [
-            'extracted_links' => $extractedLinks,
-            'content_bonus' => $contentBonus,
-            ...$this->buildLinkSuggestionPayload(
-                $article,
-                $content,
-                $extractedLinks['internal'] ?? [],
-                $extractedLinks['external'] ?? [],
-            ),
-        ]);
-    }
-
-    /**
-     * @param  array<string, mixed>  $payload
-     * @return array{score:int,violations:list<string>,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
-     */
-    private function sanitizeClientScorePayload(array $payload): array
-    {
-        $violations = is_array($payload['violations'] ?? null)
-            ? SeoScoringRulesRegistry::sanitizeViolations($payload['violations'])
-            : [];
-
-        if ($violations === [] && is_array($payload['reason_keys'] ?? null)) {
-            $violations = SeoScoringRulesRegistry::sanitizeViolations($payload['reason_keys']);
-        }
-
-        return $this->buildScoreResult($violations);
+        return $this->analyzeSubmittedContent(
+            $article,
+            $content,
+            isset($payload['seo_title']) ? trim((string) $payload['seo_title']) : null,
+            isset($payload['slug']) ? trim((string) $payload['slug']) : null,
+            isset($payload['meta_description']) ? trim((string) $payload['meta_description']) : null,
+        );
     }
 
     /**
@@ -405,6 +471,7 @@ class SeoAnalyzerService
             $article,
             $computed['scoreData'],
             $computed['extractedLinks'],
+            $content,
         );
     }
 
@@ -469,10 +536,23 @@ class SeoAnalyzerService
     /**
      * @param  array{score:int,violations:list<string>,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}  $scoreData
      * @param  array{internal: array<int, mixed>, external: array<int, mixed>}|null  $extractedLinks
-     * @return array{score:int,violations:list<string>,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
+     * @return array{
+     *   score:int,
+     *   violations:list<string>,
+     *   good:array<int,string>,
+     *   errors:array<int,string>,
+     *   warnings:array<int,string>,
+     *   score_version?: string,
+     *   content_hash?: string,
+     *   calculated_at?: string
+     * }
      */
-    private function persistScoreResult(SeoArticle $article, array $scoreData, ?array $extractedLinks = null): array
-    {
+    private function persistScoreResult(
+        SeoArticle $article,
+        array $scoreData,
+        ?array $extractedLinks = null,
+        ?string $content = null,
+    ): array {
         if (! $article->countsTowardSeoScore()) {
             return $scoreData;
         }
@@ -480,8 +560,13 @@ class SeoAnalyzerService
         $links = $extractedLinks ?? ['internal' => [], 'external' => []];
         $violations = SeoScoringRulesRegistry::sanitizeViolations($scoreData['violations'] ?? []);
         $score = SeoScoringCalculator::scoreFromViolations($violations);
+        $contentHash = hash('sha256', trim((string) ($content ?? $article->body ?? '')));
+        $calculatedAt = now()->toIso8601String();
 
         $this->storeMeta($article, SeoScoringRulesRegistry::META_KEY_VIOLATIONS, $violations);
+        $this->storeMetaScalar($article, SeoScoringRulesRegistry::META_KEY_ANALYZED_CONTENT_HASH, $contentHash);
+        $this->storeMetaScalar($article, SeoScoringRulesRegistry::META_KEY_SCORE_VERSION, SeoScoringRulesRegistry::SCORE_VERSION);
+        $this->storeMetaScalar($article, SeoScoringRulesRegistry::META_KEY_SCORE_CALCULATED_AT, $calculatedAt);
         $this->persistExtractedLinks($article, $links);
 
         $updatePayload = [
@@ -497,7 +582,21 @@ class SeoAnalyzerService
 
         $article->update($updatePayload);
 
-        return $scoreData;
+        return array_merge($scoreData, [
+            'score' => $score,
+            'violations' => $violations,
+            'score_version' => SeoScoringRulesRegistry::SCORE_VERSION,
+            'content_hash' => $contentHash,
+            'calculated_at' => $calculatedAt,
+        ]);
+    }
+
+    private function storeMetaScalar(SeoArticle $article, string $key, string $value): void
+    {
+        $this->resolveMetaRelation($article)->updateOrCreate(
+            ['meta_key' => $key],
+            ['meta_value' => $value],
+        );
     }
 
     /**

@@ -159,6 +159,46 @@ class SeoProjectResource extends SeoPanelResource
         return __('seo-content-ai::filament.nav.content_projects');
     }
 
+    /**
+     * Parent stays active on project list/detail and nested Publishing Queue.
+     * Publishing Queue child is registered here (hub page does not self-register)
+     * so parentItem label always matches.
+     *
+     * @return array<int, \Filament\Navigation\NavigationItem>
+     */
+    public static function getNavigationItems(): array
+    {
+        if (! static::shouldRegisterNavigation()) {
+            return [];
+        }
+
+        $parentLabel = static::getNavigationLabel();
+
+        $items = [
+            \Filament\Navigation\NavigationItem::make($parentLabel)
+                ->icon(static::getNavigationIcon())
+                ->group(static::getNavigationGroup())
+                ->sort(static::getNavigationSort())
+                ->url(static::getUrl())
+                ->isActiveWhen(fn (): bool => request()->routeIs([
+                    'filament.seo.resources.content-projects.*',
+                    'filament.seo.pages.publishing-queue',
+                ])),
+        ];
+
+        if (PublishingQueueHub::canAccess()) {
+            $items[] = \Filament\Navigation\NavigationItem::make(PublishingQueueHub::getNavigationLabel())
+                ->icon('heroicon-o-queue-list')
+                ->group(null)
+                ->parentItem($parentLabel)
+                ->isActiveWhen(fn (): bool => request()->routeIs('filament.seo.pages.publishing-queue'))
+                ->sort(5)
+                ->url(PublishingQueueHub::getUrl());
+        }
+
+        return $items;
+    }
+
     public static function getModelLabel(): string
     {
         return __('seo-content-ai::filament.nav.content_project');

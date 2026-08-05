@@ -62,6 +62,16 @@ final class ArticleEditorMountNoRemoteWpTest extends TestCase
         self::assertStringContainsString('protected string $bootstrapEditorHtml', $source);
         self::assertStringNotContainsString('public string $editorHtml', $source);
         self::assertStringContainsString('forEditorBootstrap', $source);
+
+        $forceOpenBlock = $this->extractMethodBody($source, 'public function forceOpenEditorWhilePreparing(): void');
+        self::assertNotSame('', $forceOpenBlock);
+        foreach (['syncTitleFromWordPressWhenAllowed', 'syncWordPressCategoriesOnLoad', 'importFaqsFromWordPressOnLoad'] as $forbidden) {
+            self::assertStringNotContainsString(
+                '$this->'.$forbidden.'(',
+                $forceOpenBlock,
+                "forceOpenEditorWhilePreparing() must not call {$forbidden}",
+            );
+        }
     }
 
     /**

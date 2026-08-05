@@ -10,8 +10,10 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\Approve
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ArchiveProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\AutoScheduleProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\BlockProjectItemGenerationCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CancelProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\DebugOverrideProjectItemLifecycleCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ReconcilePublishingQueueRemoteTasksCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RecoverStuckPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\CreateContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\GenerateProjectItemsCommand;
@@ -31,6 +33,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SkipPro
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StopProjectExecutionCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SyncContentProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UnblockProjectItemGenerationCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UnscheduleProjectItemsCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UpdateContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UpdateContentProjectItemCommand;
@@ -40,7 +43,9 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\Approve
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ArchiveContentProjectHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ArchiveProjectItemsHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\AutoScheduleProjectItemsHandler;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\BlockProjectItemGenerationHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\CancelProjectItemPublishingHandler;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ReconcilePublishingQueueRemoteTasksHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\CreateContentProjectHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\RecoverStuckPublishingHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\DebugOverrideProjectItemLifecycleHandler;
@@ -61,6 +66,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\SkipPro
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\StartReviewHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\StopProjectExecutionHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\SyncContentProjectItemsHandler;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\UnblockProjectItemGenerationHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\UnscheduleProjectItemsHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\UpdateContentProjectHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\UpdateContentProjectItemHandler;
@@ -147,6 +153,8 @@ final class ContentProjectCommandBusRegistrar
             RerunProjectItemStepCommand::class => RerunProjectItemStepHandler::class,
             ResumeProjectItemFromFailedStepCommand::class => ResumeProjectItemFromFailedStepHandler::class,
             AcknowledgeProjectItemGenerationErrorCommand::class => AcknowledgeProjectItemGenerationErrorHandler::class,
+            BlockProjectItemGenerationCommand::class => BlockProjectItemGenerationHandler::class,
+            UnblockProjectItemGenerationCommand::class => UnblockProjectItemGenerationHandler::class,
             StartReviewCommand::class => StartReviewHandler::class,
             ApproveProjectItemsCommand::class => ApproveProjectItemsHandler::class,
             ScheduleProjectItemsCommand::class => ScheduleProjectItemsHandler::class,
@@ -162,8 +170,13 @@ final class ContentProjectCommandBusRegistrar
             RetryProjectItemPublishingCommand::class => RetryProjectItemPublishingHandler::class,
             SkipProjectItemPublishingCommand::class => SkipProjectItemPublishingHandler::class,
             CancelProjectItemPublishingCommand::class => CancelProjectItemPublishingHandler::class,
+            ReconcilePublishingQueueRemoteTasksCommand::class => ReconcilePublishingQueueRemoteTasksHandler::class,
             RecoverStuckPublishingCommand::class => RecoverStuckPublishingHandler::class,
             DebugOverrideProjectItemLifecycleCommand::class => DebugOverrideProjectItemLifecycleHandler::class,
+            \App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SyncPublishedArticleToWordPressCommand::class
+                => \App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\SyncPublishedArticleToWordPressHandler::class,
+            \App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\BulkResyncPublishedArticlesToWordPressCommand::class
+                => \App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\BulkResyncPublishedArticlesToWordPressHandler::class,
             ArchiveContentProjectCommand::class => ArchiveContentProjectHandler::class,
             ArchiveProjectItemsCommand::class => ArchiveProjectItemsHandler::class,
             RestoreContentProjectCommand::class => RestoreContentProjectHandler::class,
