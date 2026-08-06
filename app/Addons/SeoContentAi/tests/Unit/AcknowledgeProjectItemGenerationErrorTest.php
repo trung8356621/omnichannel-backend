@@ -89,6 +89,26 @@ final class AcknowledgeProjectItemGenerationErrorTest extends TestCase
         self::assertTrue($flags['run_again']);
     }
 
+    public function test_presenter_hides_acknowledge_for_failed_item_without_article(): void
+    {
+        $flags = ContentProjectItemActionsPresenter::forRow([
+            'lifecycle' => 'draft',
+            'queue_status' => 'none',
+            'generation_badge' => ['key' => 'failed'],
+            'generation_status' => 'failed',
+            'can_generate' => true,
+            'can_regen' => true,
+            'article_edit_url' => null,
+            'is_generation_stale' => false,
+            'is_genuinely_running' => false,
+            'message' => 'Không tìm thấy đầy đủ dàn ý và hướng dẫn viết để tạo lại bài.',
+        ]);
+
+        self::assertFalse($flags['acknowledge_error']);
+        self::assertFalse($flags['prefer_acknowledge_error']);
+        self::assertTrue($flags['run_again']);
+    }
+
     public function test_badge_labels_fallback_english_without_translator(): void
     {
         $failed = ContentProjectStatusBadgePresenter::generation('completed', 'failed');
@@ -100,5 +120,13 @@ final class AcknowledgeProjectItemGenerationErrorTest extends TestCase
 
         $life = ContentProjectStatusBadgePresenter::lifecycle('published');
         self::assertSame('Published', $life['label']);
+
+        $badgeBlade = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/views/components/content-project-status-badge.blade.php',
+        );
+        self::assertStringContainsString("'success', 'generated', 'approved'", $badgeBlade);
+        self::assertStringContainsString("'pending', 'draft', 'none'", $badgeBlade);
+        self::assertStringContainsString("'skipped', 'cancelled', 'archived'", $badgeBlade);
+        self::assertStringContainsString("'skipped', 'cancelled', 'archived' => 'background:#e2e8f0;", $badgeBlade);
     }
 }

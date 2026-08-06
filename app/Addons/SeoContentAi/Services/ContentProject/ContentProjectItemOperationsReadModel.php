@@ -37,6 +37,7 @@ final class ContentProjectItemOperationsReadModel
         private readonly ContentProjectExecutionStalenessPolicy $staleness,
         private readonly ContentProjectGenerationRecoveryService $generationRecovery,
         private readonly ContentProjectGenerationReadStateStore $generationReadStates,
+        private readonly ContentProjectItemGenerationClassifier $generationClassifier,
     ) {}
 
     /**
@@ -93,6 +94,10 @@ final class ContentProjectItemOperationsReadModel
             $projectId,
             $taskIds,
         );
+        $generatePendingRunnable = array_fill_keys(
+            $this->generationClassifier->preview($project)->runnableTaskIds(),
+            true,
+        );
 
         $latestRun = SeoProjectRun::query()
             ->where('project_id', $projectId)
@@ -113,6 +118,7 @@ final class ContentProjectItemOperationsReadModel
                 $index,
                 $latestByTask[$tid] ?? null,
                 $viewed?->toIso8601String(),
+                isset($generatePendingRunnable[$tid]),
             );
         }
 
@@ -267,8 +273,13 @@ final class ContentProjectItemOperationsReadModel
      * @param  array<string, mixed>|null  $exec
      * @return array<string, mixed>
      */
-    private function mapRow(SeoProjectTask $task, int $index, ?array $exec, ?string $viewedGenerationCompletedAt = null): array
-    {
+    private function mapRow(
+        SeoProjectTask $task,
+        int $index,
+        ?array $exec,
+        ?string $viewedGenerationCompletedAt = null,
+        bool $isGeneratePendingRunnable = false,
+    ): array {
         $tid = (int) $task->id;
         $article = $task->article;
         $staleEval = $this->staleness->evaluateTask($task);
@@ -469,6 +480,7 @@ final class ContentProjectItemOperationsReadModel
             'is_in_review_reporting' => $classified['is_in_review_reporting'],
             'show_reporting_chip' => $classified['show_reporting_chip'],
             'can_generate' => (bool) $rowBase['can_generate'],
+            'is_generate_pending_runnable' => $isGeneratePendingRunnable,
             'can_regen' => $articleId > 0
                 && $type !== SeoProjectTask::TYPE_IMPROVE
                 && ! $task->isGenerationBlocked()

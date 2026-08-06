@@ -38,7 +38,12 @@ final class SeoIssueProjectTaskAssignmentService
             $this->normalizeAssignTaskType($data['type'] ?? null),
             is_string($data['rewrite_mode'] ?? null) ? $data['rewrite_mode'] : null,
             is_string($data['rewrite_notes'] ?? null) ? $data['rewrite_notes'] : null,
+            is_string($data['focus_keyword'] ?? null)
+                ? $data['focus_keyword']
+                : (is_string($data['keyword'] ?? null) ? $data['keyword'] : null),
+            is_string($data['title'] ?? null) ? $data['title'] : null,
             $dryRun,
+            (bool) ($data['ignore_monthly_capacity'] ?? false),
         );
     }
 
@@ -52,7 +57,10 @@ final class SeoIssueProjectTaskAssignmentService
         string $taskType = SeoProjectTask::TYPE_REWRITE,
         ?string $rewriteMode = null,
         ?string $rewriteNotes = null,
+        ?string $keywordOverride = null,
+        ?string $titleOverride = null,
         bool $dryRun = false,
+        bool $ignoreMonthlyCapacity = false,
     ): array {
         $empty = static fn (int $overflow): array => [
             'added' => 0,
@@ -64,10 +72,6 @@ final class SeoIssueProjectTaskAssignmentService
 
         $project = SeoProject::query()->find($projectId);
         if (! $project instanceof SeoProject) {
-            return $empty($records->count());
-        }
-
-        if (! $project->isExecutionMonthOpen()) {
             return $empty($records->count());
         }
 
@@ -87,6 +91,8 @@ final class SeoIssueProjectTaskAssignmentService
         $normalizedRewriteNotes = $normalizedRewriteMode === SeoProjectTask::REWRITE_MODE_CONTENT
             ? (trim((string) ($rewriteNotes ?? '')) !== '' ? trim((string) $rewriteNotes) : null)
             : null;
+        $normalizedKeywordOverride = trim((string) ($keywordOverride ?? ''));
+        $normalizedTitleOverride = trim((string) ($titleOverride ?? ''));
 
         DB::connection($project->getConnectionName())->transaction(function () use (
             $project,
@@ -96,7 +102,10 @@ final class SeoIssueProjectTaskAssignmentService
             $normalizedTaskType,
             $normalizedRewriteMode,
             $normalizedRewriteNotes,
+            $normalizedKeywordOverride,
+            $normalizedTitleOverride,
             $dryRun,
+            $ignoreMonthlyCapacity,
             &$added,
             &$duplicate,
             &$overflow,
@@ -115,7 +124,7 @@ final class SeoIssueProjectTaskAssignmentService
             $existingMap = array_fill_keys($existingKeys, true);
 
             foreach ($records as $record) {
-                if ($currentTotal >= $max) {
+                if (! $ignoreMonthlyCapacity && $currentTotal >= $max) {
                     $overflow++;
 
                     continue;
@@ -174,8 +183,12 @@ final class SeoIssueProjectTaskAssignmentService
                         $payload['article_id'] = (int) $record->id;
                         $focusKeyword = trim((string) ($this->analyzer->resolveFocusKeywordForArticle($record) ?? ''));
                         $articleTitle = $this->resolveArticleProjectSourceContent($record);
-                        $payload['keyword'] = $focusKeyword !== '' ? $focusKeyword : $articleTitle;
-                        $payload['title'] = $articleTitle !== '' ? $articleTitle : null;
+                        $payload['keyword'] = $normalizedKeywordOverride !== ''
+                            ? $normalizedKeywordOverride
+                            : ($focusKeyword !== '' ? $focusKeyword : $articleTitle);
+                        $payload['title'] = $normalizedTitleOverride !== ''
+                            ? $normalizedTitleOverride
+                            : ($articleTitle !== '' ? $articleTitle : null);
                         $payload['source_content'] = $articleTitle;
                     }
 

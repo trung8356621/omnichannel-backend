@@ -138,6 +138,7 @@ export function rowRequiresLocalSlugFix(row) {
     }
 
     return /^(image|img|photo|untitled|download|dsc|img_)[-_]?\d*$/i.test(slug)
+        || /^(paste|clipboard|import)-[a-f0-9]{8,}$/i.test(slug)
         || /placeholder/i.test(slug);
 }
 

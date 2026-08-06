@@ -553,14 +553,14 @@
                 @php
                     $syncIsContentManager = \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager();
                     $syncInContentProject = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsInContentProject($record);
-                    $syncPostPublishEligible = $syncInContentProject
-                        && app(\App\Addons\SeoContentAi\Services\ContentProject\Publishing\PostPublishWordPressSyncEligibility::class)
-                            ->isEligible($record);
+                    $syncEligibility = app(\App\Addons\SeoContentAi\Services\ArticleWordPressSyncEligibility::class)
+                        ->evaluate($record);
+                    $syncContentProjectEligible = $syncInContentProject && ($syncEligibility['allowed'] ?? false);
                 @endphp
                 @if (! $syncIsContentManager && ! $syncInContentProject)
                     window.dispatchEvent(new CustomEvent('seo-publish-tab-request-sync'));
-                @elseif (! $syncIsContentManager && $syncPostPublishEligible)
-                    {{-- CP Published: UPDATE existing WP post via sync-wp API (not publish tab). --}}
+                @elseif (! $syncIsContentManager && $syncContentProjectEligible)
+                    {{-- CP update-existing: Published or rewrite/improve with wp_post_id. --}}
                     (async () => {
                         try {
                             if (typeof window.__seoExecuteHeavyArticleAction !== 'function') {

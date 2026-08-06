@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Models\SeoImageOptimizationSetting;
 use App\Addons\SeoContentAi\Models\SeoMediaProcessingHistory;
 use App\Addons\SeoContentAi\Models\SeoWatermarkSetting;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressWriteReadinessGuard;
 use App\Models\Site;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -232,7 +233,7 @@ final class WordPressMediaWatermarkService
         $mime = filled($history->mime_type) ? (string) $history->mime_type : $this->guessMimeFromUrl($url);
         $replaceUrl = str_replace('{id}', (string) $attachmentId, $replaceUrlTemplate);
 
-        $upload = $this->postReplacementBinary($writeToken, $replaceUrl, $backupAbsolute, $mime);
+        $upload = $this->postReplacementBinary($site, $writeToken, $replaceUrl, $backupAbsolute, $mime);
 
         if (! $upload->successful() || ! ($upload->json('success') ?? false)) {
             return [
@@ -298,7 +299,7 @@ final class WordPressMediaWatermarkService
         $mime = $mime !== '' ? $mime : $this->guessMimeFromUrl($absolutePath);
         $replaceUrl = str_replace('{id}', (string) $attachmentId, $replaceUrlTemplate);
 
-        $upload = $this->postReplacementBinary($writeToken, $replaceUrl, $absolutePath, $mime);
+        $upload = $this->postReplacementBinary($site, $writeToken, $replaceUrl, $absolutePath, $mime);
 
         if (! $upload->successful() || ! ($upload->json('success') ?? false)) {
             return [
@@ -411,7 +412,7 @@ final class WordPressMediaWatermarkService
             $mime = $this->optimization->mimeFromPath($workingPath);
             $replaceUrl = str_replace('{id}', (string) $attachmentId, $replaceUrlTemplate);
 
-            $upload = $this->postReplacementBinary($writeToken, $replaceUrl, $workingPath, $mime);
+            $upload = $this->postReplacementBinary($site, $writeToken, $replaceUrl, $workingPath, $mime);
 
             if ($upload->successful() && ($upload->json('success') ?? false)) {
                 $newUrl = (string) ($upload->json('url') ?? $url);
@@ -468,11 +469,14 @@ final class WordPressMediaWatermarkService
     }
 
     private function postReplacementBinary(
+        Site $site,
         string $writeToken,
         string $replaceUrl,
         string $path,
         string $mime,
     ): \Illuminate\Http\Client\Response {
+        app(WordPressWriteReadinessGuard::class)->assertCanWriteToWordPress($site, 'media.watermark_replace');
+
         $mime = $mime !== '' ? $mime : 'image/jpeg';
         $binary = (string) file_get_contents($path);
 

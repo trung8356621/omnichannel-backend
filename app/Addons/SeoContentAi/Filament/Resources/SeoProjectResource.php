@@ -361,27 +361,7 @@ class SeoProjectResource extends SeoPanelResource
                                 ->send();
                         })
                         ->visible(fn (?SeoProject $record): bool => ! ($record instanceof SeoProject && $record->isArchive()))
-                        ->dehydrated(fn (?SeoProject $record): bool => ! ($record instanceof SeoProject && $record->isArchive()))
-                        ->rules([
-                            fn (Get $get, ?SeoProject $record): \Closure => function (string $attribute, mixed $value, \Closure $fail) use ($get, $record): void {
-                                if ($value === null || $value === '') {
-                                    return;
-                                }
-
-                                $siteId = (int) ($get('site_id') ?? 0);
-                                if ($siteId <= 0) {
-                                    return;
-                                }
-
-                                if (static::monthlyProjectExistsForSiteMonth(
-                                    $siteId,
-                                    (string) $value,
-                                    $record instanceof SeoProject ? (int) $record->getKey() : null,
-                                )) {
-                                    $fail(__('seo-content-ai::filament.projects.month_already_exists'));
-                                }
-                            },
-                        ]),
+                        ->dehydrated(fn (?SeoProject $record): bool => ! ($record instanceof SeoProject && $record->isArchive())),
 
                     Forms\Components\Hidden::make('status')
                         ->default(SeoProject::STATUS_MANUAL)
@@ -430,15 +410,11 @@ class SeoProjectResource extends SeoPanelResource
 
                             $carbon = Carbon::parse($month)->startOfMonth();
                             $max = $carbon->daysInMonth;
-                            $monthOpen = now()->lte($carbon->copy()->endOfMonth()->endOfDay());
-
                             return __('seo-content-ai::filament.projects.month_limit_hint', [
                                 'month' => $carbon->format('m/Y'),
                                 'max' => $max,
                                 'count' => $count,
-                            ]).($monthOpen
-                                ? ''
-                                : ' '.__('seo-content-ai::filament.projects.execution_month_closed_short'));
+                            ]);
                         })
                         ->columnSpanFull(),
 
@@ -668,6 +644,9 @@ class SeoProjectResource extends SeoPanelResource
                         ->columns(2)
                         ->defaultItems(1)
                         ->addActionLabel(__('seo-content-ai::filament.projects.add_article'))
+                        ->addAction(fn (Action $action): Action => $action
+                            ->disabled(fn (Get $get, ?SeoProject $record): bool => ! static::canAddTaskRowToForm($get, $record))
+                            ->tooltip(fn (Get $get, ?SeoProject $record): ?string => static::addTaskRowTooltip($get, $record)))
                         ->reorderable()
                         ->collapsible()
                         ->collapsed()
@@ -1980,6 +1959,45 @@ class SeoProjectResource extends SeoPanelResource
             ->title(__('seo-content-ai::filament.projects.added_keywords', ['count' => count($keywords)]))
             ->success()
             ->send();
+    }
+
+    public static function canAddTaskRowToForm(Get $get, ?SeoProject $record = null): bool
+    {
+        if ($record instanceof SeoProject && $record->isArchive()) {
+            return true;
+        }
+
+        $month = $get('month');
+        if (! $month) {
+            return true;
+        }
+
+        try {
+            $max = app(SeoProjectTaskSyncService::class)->maxTasksForMonth($month);
+        } catch (\Throwable) {
+            return true;
+        }
+
+        $tasksData = is_array($get('tasks_data')) ? $get('tasks_data') : [];
+        $count = app(SeoProjectTaskSyncService::class)->countEffectiveTasks($tasksData);
+
+        return $count < $max;
+    }
+
+    public static function addTaskRowTooltip(Get $get, ?SeoProject $record = null): ?string
+    {
+        if (static::canAddTaskRowToForm($get, $record)) {
+            return null;
+        }
+
+        $month = $get('month');
+        try {
+            $max = $month ? app(SeoProjectTaskSyncService::class)->maxTasksForMonth($month) : 0;
+        } catch (\Throwable) {
+            $max = 0;
+        }
+
+        return __('seo-content-ai::filament.projects.maximum_items', ['max' => $max]);
     }
 
     /**

@@ -7,6 +7,8 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoImageOptimizationSetting;
 use App\Addons\SeoContentAi\Models\SeoMedia;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressSlugFixRequiredException;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressWriteReadinessGuard;
 use App\Models\Site;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -395,6 +397,18 @@ final class WordPressLocalMediaSyncService
      */
     private function syncMedia(SeoArticle $article, SeoMedia $media): array
     {
+        try {
+            app(WordPressWriteReadinessGuard::class)->assertCanWriteToWordPress($article, 'media.sync');
+        } catch (WordPressSlugFixRequiredException) {
+            return [
+                'success' => false,
+                'attachment_id' => 0,
+                'wp_url' => '',
+                'seo_media_id' => (int) ($media->id ?? 0) ?: null,
+                'message' => WordPressSlugFixRequiredException::MESSAGE,
+            ];
+        }
+
         $article->loadMissing('site');
         $site = $article->site;
         $media = $this->hydrateMediaUsageForArticle($media, $article);

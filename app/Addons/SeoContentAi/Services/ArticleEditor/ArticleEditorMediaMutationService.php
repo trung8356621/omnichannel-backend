@@ -136,6 +136,8 @@ final class ArticleEditorMediaMutationService
             $album[] = [
                 'id' => $this->resolveRefId($article, $item, $url),
                 'url' => $url,
+                'source' => $this->resolveSource($item, $url),
+                'asset_key' => $this->resolveAssetKey($item),
             ];
         }
 
@@ -182,6 +184,8 @@ final class ArticleEditorMediaMutationService
             $reordered[] = [
                 'id' => (int) ($row['wp_attachment_id'] ?? $row['media_id'] ?? 0),
                 'url' => (string) ($row['url'] ?? ''),
+                'source' => (string) ($row['source'] ?? ''),
+                'asset_key' => (string) ($row['asset_key'] ?? $row['id'] ?? ''),
             ];
             unset($byId[$key]);
         }
@@ -189,6 +193,8 @@ final class ArticleEditorMediaMutationService
             $reordered[] = [
                 'id' => (int) ($row['wp_attachment_id'] ?? $row['media_id'] ?? 0),
                 'url' => (string) ($row['url'] ?? ''),
+                'source' => (string) ($row['source'] ?? ''),
+                'asset_key' => (string) ($row['asset_key'] ?? $row['id'] ?? ''),
             ];
         }
 
@@ -250,6 +256,39 @@ final class ArticleEditorMediaMutationService
         }
 
         return $this->mediaLocal->resolveLocalRefIdFromImageUrl((int) ($article->site_id ?? 0), $url);
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function resolveAssetKey(array $item): string
+    {
+        return trim((string) ($item['asset_key'] ?? $item['assetKey'] ?? ''));
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function resolveSource(array $item, string $url): string
+    {
+        $source = strtolower(trim((string) ($item['source'] ?? '')));
+        if ($source === 'wp') {
+            return 'wordpress';
+        }
+        if (in_array($source, ['wordpress', 'local', 'generated', 'uploaded'], true)) {
+            return $source;
+        }
+        if (str_contains($url, '/wp-content/uploads/')) {
+            return 'wordpress';
+        }
+        if (str_contains($url, '/storage/uploads/seo_media/')
+            || str_contains($url, '/storage/seo/')
+            || str_contains($url, '/seo-media/')
+            || str_contains($url, '/storage/')) {
+            return 'local';
+        }
+
+        return 'uploaded';
     }
 
     private function supportsProductGallery(SeoArticle $article): bool

@@ -205,7 +205,7 @@ final class ArticleEditorSyncController extends Controller
                     'status' => 'success',
                 ];
             }
-        } elseif ($dispatchStatus === 'post_publish_synced') {
+        } elseif (in_array($dispatchStatus, ['post_publish_synced', 'rewrite_existing_synced'], true)) {
             $result['queued'] = false;
             $result['already_queued'] = false;
             $result['workspace_only'] = false;

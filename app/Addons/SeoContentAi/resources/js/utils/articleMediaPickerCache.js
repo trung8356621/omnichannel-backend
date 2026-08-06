@@ -149,4 +149,8 @@ export function clearArticleMediaPickerCache(siteId) {
         }
     }
     keys.forEach((key) => localStorage.removeItem(key));
+
+    window.dispatchEvent(new CustomEvent('seo-article-media-picker-cache-invalidated', {
+        detail: { siteId: id },
+    }));
 }

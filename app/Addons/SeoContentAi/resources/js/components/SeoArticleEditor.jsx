@@ -55,6 +55,7 @@ import { EDITOR_COMMAND_CODES } from '../utils/editorCommands/editorCommandResul
 import { collectContentImagesFromArticle } from '../utils/contentImageCounter';
 import {
     buildUnifiedArticleImagesInventory,
+    rowRequiresLocalSlugFix,
     unifiedInventorySlugFixCandidates,
     unifiedInventoryToImageRows,
 } from '../utils/unifiedArticleImagesInventory';
@@ -118,6 +119,7 @@ import {
     featuredFromSnapshot,
     fetchMediaSnapshot,
     galleryFromSnapshot,
+    refreshMediaSnapshotIfStale,
     setFeaturedViaApi,
     subscribeMediaSnapshot,
     normalizeFeaturedMediaItem,
@@ -2444,7 +2446,7 @@ export default function SeoArticleEditor({
         setMediaPickerRoot(document.getElementById('article-editor-media-picker-root'));
         discardLegacyMediaLocalStorage(articleId);
         if (Number(articleId) > 0) {
-            void fetchMediaSnapshot(articleId).catch(() => {});
+            void refreshMediaSnapshotIfStale(articleId).catch(() => {});
         }
         const unsubNav = subscribeEditorNavigation((panelId) => {
             const normalized = normalizeHeavyModuleId(panelId);
@@ -5135,6 +5137,33 @@ export default function SeoArticleEditor({
         [focusKeyword, articleTitle, unifiedImageRows, unifiedImagesInventory],
     );
 
+    const assertNoLocalSlugFixBeforeWpSync = useCallback(() => {
+        const context = buildQuickFixContext();
+        if (!context) {
+            return;
+        }
+
+        const pendingRows = (context.sourceRows ?? []).filter((row) => rowRequiresLocalSlugFix(row));
+        if (pendingRows.length === 0) {
+            return;
+        }
+
+        const preview = pendingRows
+            .slice(0, 3)
+            .map((row) => String(row?.slug ?? slugFromUrl(row?.src ?? row?.url ?? '') ?? '').trim())
+            .filter(Boolean)
+            .join(', ');
+        const body = preview
+            ? `Còn ${pendingRows.length} ảnh local chưa chuẩn slug (${preview}). Bấm Fix slug all trước khi Sync WP.`
+            : `Còn ${pendingRows.length} ảnh local chưa chuẩn slug. Bấm Fix slug all trước khi Sync WP.`;
+
+        notifyEditor('Chưa thể Sync WP', body, 'warning');
+
+        const error = new Error(body);
+        error.code = 'local_image_slug_fix_required';
+        throw error;
+    }, [buildQuickFixContext, notifyEditor]);
+
     const applyQuickFixSlugPreview = useCallback(
         (preview, keyword, options = {}) => {
             const renameCount = preview.renameQueue.length;
@@ -5240,10 +5269,12 @@ export default function SeoArticleEditor({
             ? rawWpRenamed
             : ensureWpRenameResultsCoverQueue(pendingWpRenameRequestRef.current, rawWpRenamed);
         pendingWpRenameRequestRef.current = [];
-        const localResults = ensureLocalRenameResultsCoverQueue(
-            pendingLocalRenameQueueRef.current,
-            pendingLocalRenameResultsRef.current ?? [],
-        );
+        const localResults = detail?.skipLocalQueueRecovery
+            ? (pendingLocalRenameResultsRef.current ?? [])
+            : ensureLocalRenameResultsCoverQueue(
+                pendingLocalRenameQueueRef.current,
+                pendingLocalRenameResultsRef.current ?? [],
+            );
         pendingLocalRenameResultsRef.current = [];
         pendingLocalRenameQueueRef.current = [];
         pendingQuickFixKeywordRef.current = '';
@@ -5692,7 +5723,10 @@ export default function SeoArticleEditor({
                     apiReplacements,
                     mergedPreview.localRenameQueue ?? [],
                 );
-                const applied = applySlugRenameFinished(wpDetail ?? { success: true, renamed: [] });
+                const applied = applySlugRenameFinished({
+                    ...(wpDetail ?? { success: true, renamed: [] }),
+                    skipLocalQueueRecovery: true,
+                });
                 finalizeSlugRenameSideEffects(applied?.wpRenamed ?? [], applied?.localResults ?? []);
 
                 cancelLocalDraftSave();
@@ -10162,11 +10196,12 @@ export default function SeoArticleEditor({
     useEffect(() => {
         window.__seoCollectEditorHeavyBundle = async ({
             renameImagesBeforeWpSync = false,
+            validateLocalImageSlugsBeforeWpSync = false,
         } = {}) => {
             blockFlushRef.current?.();
 
-            if (renameImagesBeforeWpSync) {
-                await prepareImageSlugsBeforeWpSync();
+            if (validateLocalImageSlugsBeforeWpSync || renameImagesBeforeWpSync) {
+                assertNoLocalSlugFixBeforeWpSync();
                 window.__seoArticleHeavyActionOverlay?.setStatusMessage?.(
                     'Đang đồng bộ WordPress…',
                 );
@@ -10220,7 +10255,7 @@ export default function SeoArticleEditor({
         assertWritableDocumentNotWhitespaceCorrupted,
         clearTempMerge,
         getExportHtml,
-        prepareImageSlugsBeforeWpSync,
+        assertNoLocalSlugFixBeforeWpSync,
         resolveArticleFaqsSnapshot,
         runLocalSeoAnalysis,
     ]);

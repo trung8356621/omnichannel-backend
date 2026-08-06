@@ -30,8 +30,12 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentP
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueService;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectQueueHealthService;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\ContentPublishingStrategy;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\ContentPublishingStrategyResolver;
 use App\Addons\SeoContentAi\Services\ContentProject\Publishing\DispatchClaimResult;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressSlugFixRequiredException;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressWriteReadinessGuard;
 use App\Support\RuntimeLogger;
 use Illuminate\Support\Facades\Schema;
 use InvalidArgumentException;
@@ -49,6 +53,7 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
         private readonly ContentProjectDomainEvents $domainEvents,
         private readonly ContentProjectIdempotencyStore $idempotencyStore,
         private readonly ArticleWordPressSyncFlagService $syncFlags,
+        private readonly ContentPublishingStrategyResolver $strategyResolver = new ContentPublishingStrategyResolver,
     ) {
         parent::__construct($tenantGuard, $businessLock, $previewToken);
     }
@@ -134,6 +139,48 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
         }
 
         // Atomic claim for delivery dispatch (queued_for_delivery) — not publisher lease.
+        $strategy = $this->strategyResolver->resolve($task, $article);
+        if ($strategy->isMissingRemote()) {
+            $message = 'Khong tim thay bai WordPress goc de cap nhat.';
+            $this->persistPublishFailure($task, $message, 'missing_remote_post');
+
+            return ContentProjectActionResult::fail(
+                ContentProjectActionCodes::FAILED,
+                $message,
+                $projectId,
+                affectedItemIds: [$itemId],
+                metadata: [
+                    'publishing_mode' => ContentPublishingStrategy::FAILED_MISSING_REMOTE,
+                    'scheduled_publish_at' => null,
+                ],
+            );
+        }
+
+        try {
+            app(WordPressWriteReadinessGuard::class)->assertCanWriteToWordPress($article, 'publishing_queue.process');
+        } catch (WordPressSlugFixRequiredException $e) {
+            RuntimeLogger::info('publishing.prerequisite_blocked', [
+                'task_id' => $itemId,
+                'article_id' => (int) $article->id,
+                'site_id' => (int) ($article->site_id ?? 0),
+                'error_code' => WordPressSlugFixRequiredException::ERROR_CODE,
+                'pending_count' => (int) ($e->context['pending_count'] ?? 0),
+            ]);
+
+            return ContentProjectActionResult::fail(
+                WordPressSlugFixRequiredException::ERROR_CODE,
+                WordPressSlugFixRequiredException::MESSAGE,
+                $projectId,
+                affectedItemIds: [$itemId],
+                metadata: [
+                    'blocked_prerequisite' => true,
+                    'retry_count_unchanged' => true,
+                    'publisher_invoked' => false,
+                    'media_upload_started' => false,
+                ],
+            );
+        }
+
         $claim = $this->queue->claimForDispatch($task);
         if (! $claim->isClaimed()) {
             $fresh = $claim->task ?? $task->fresh() ?? $task;
@@ -271,6 +318,8 @@ final class ProcessScheduledProjectItemPublishHandler extends AbstractPublishing
                 'scheduled_publish_at' => $task->scheduled_publish_at?->toIso8601String(),
                 'status' => 'publish_requested',
                 'source' => 'content_project_publishing_queue',
+                'publish_mode' => $strategy->isImmediateUpdate() ? 'update_existing' : 'publish',
+                'remote_post_id' => $strategy->remotePostId,
                 'attempt_ref' => $attemptRef,
                 'publish_attempt_token' => $attemptToken,
                 'external_reference' => $externalRef,

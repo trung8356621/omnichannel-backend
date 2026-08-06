@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Support\PublishingQueue;
 
 use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishingActiveProcessing;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
 
 /**
  * Presentation-only action visibility for Publishing Queue row / bulk UX.
@@ -61,6 +62,11 @@ final class PublishingQueueItemActionsPresenter
         $isAwaiting = $state === PublishingQueueStateClassifier::AWAITING_DELIVERY;
         $isPublishing = $state === PublishingQueueStateClassifier::PUBLISHING;
         $isNeedsAttention = $state === PublishingQueueStateClassifier::NEEDS_ATTENTION;
+        $itemType = SeoProjectTask::normalizeType($row['item_type'] ?? null);
+        $isUpdateExisting = in_array($itemType, [
+            SeoProjectTask::TYPE_REWRITE,
+            SeoProjectTask::TYPE_IMPROVE,
+        ], true);
 
         $viewOnWordpress = $state === PublishingQueueStateClassifier::PUBLISHED
             && $wpPermalink !== ''
@@ -91,14 +97,14 @@ final class PublishingQueueItemActionsPresenter
         $immediateDisabled = ($activelyPublishing || $isPublishing) && ! $stuckActive;
         $immediateDisabledReason = $immediateDisabled ? 'Bài đang được xuất bản.' : null;
 
-        $schedule = ! $activelyPublishing && ! $isAwaiting && ! $isPublishing && in_array($state, [
+        $schedule = ! $isUpdateExisting && ! $activelyPublishing && ! $isAwaiting && ! $isPublishing && in_array($state, [
             PublishingQueueStateClassifier::UNSCHEDULED,
             PublishingQueueStateClassifier::SCHEDULED,
             PublishingQueueStateClassifier::RETRY_WAIT,
             PublishingQueueStateClassifier::NEEDS_ATTENTION,
         ], true);
 
-        $unschedule = $state === PublishingQueueStateClassifier::SCHEDULED && ! $activelyPublishing;
+        $unschedule = ! $isUpdateExisting && $state === PublishingQueueStateClassifier::SCHEDULED && ! $activelyPublishing;
 
         $cancelPendingDelivery = $isAwaiting;
 

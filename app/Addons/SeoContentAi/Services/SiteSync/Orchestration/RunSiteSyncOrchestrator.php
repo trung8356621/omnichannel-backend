@@ -72,9 +72,11 @@ final class RunSiteSyncOrchestrator
                     'error_message' => 'Superseded by force_full run',
                 ])->save();
             } else {
+                ProcessSiteSyncStepJob::dispatch((int) $active->id);
+
                 return [
                     'success' => true,
-                    'message' => 'Sync đang chạy — resume.',
+                    'message' => 'Sync đang chạy — đã kiểm tra lại queue.',
                     'run_id' => (int) $active->id,
                     'public_ref' => (string) $active->public_ref,
                 ];

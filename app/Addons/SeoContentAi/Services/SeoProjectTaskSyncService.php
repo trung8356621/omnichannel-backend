@@ -67,14 +67,6 @@ final class SeoProjectTaskSyncService
     {
         $carbonMonth = $this->normalizeMonth($month);
 
-        if (now()->gt($carbonMonth->copy()->endOfMonth()->endOfDay())) {
-            throw ValidationException::withMessages([
-                'tasks_data' => __('seo-content-ai::filament.projects.execution_month_closed', [
-                    'month' => $carbonMonth->format('m/Y'),
-                ]),
-            ]);
-        }
-
         $count = $this->countEffectiveTasks($tasksData);
         $max = $carbonMonth->daysInMonth;
 

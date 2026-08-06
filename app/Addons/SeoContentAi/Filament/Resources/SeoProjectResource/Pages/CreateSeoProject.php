@@ -93,13 +93,8 @@ class CreateSeoProject extends SeoCreateRecord
             $data['name'] = SeoProject::defaultNameFromMonth($data['month']);
         }
 
-        $siteId = isset($data['site_id']) ? (int) $data['site_id'] : 0;
         $month = (string) ($data['month'] ?? '');
-        if ($siteId > 0 && $month !== '' && SeoProjectResource::monthlyProjectExistsForSiteMonth($siteId, $month)) {
-            throw ValidationException::withMessages([
-                'data.month' => __('seo-content-ai::filament.projects.month_already_exists'),
-            ]);
-        }
+        $siteId = isset($data['site_id']) ? (int) $data['site_id'] : 0;
 
         $userId = (int) ($data['user_id'] ?? 0);
         $fromUnassigned = filter_var($data['assign_from_unassigned'] ?? false, FILTER_VALIDATE_BOOLEAN);

@@ -23,7 +23,6 @@ use Carbon\Carbon;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Validation\ValidationException;
 use RuntimeException;
 
 class EditSeoProject extends SeoEditRecord
@@ -84,20 +83,6 @@ class EditSeoProject extends SeoEditRecord
         if (! empty($data['month'])) {
             $data['month'] = Carbon::parse($data['month'])->startOfMonth()->format('Y-m-d');
             $data['name'] = SeoProject::defaultNameFromMonth($data['month']);
-        }
-
-        if (! $record->isArchive()) {
-            $siteId = isset($data['site_id']) ? (int) $data['site_id'] : (int) ($record->site_id ?? 0);
-            $month = (string) ($data['month'] ?? $record->month?->format('Y-m-d') ?? '');
-            if ($siteId > 0 && $month !== '' && SeoProjectResource::monthlyProjectExistsForSiteMonth(
-                $siteId,
-                $month,
-                (int) $record->getKey(),
-            )) {
-                throw ValidationException::withMessages([
-                    'data.month' => __('seo-content-ai::filament.projects.month_already_exists'),
-                ]);
-            }
         }
 
         $projectSiteId = isset($data['site_id']) ? (int) $data['site_id'] : null;

@@ -58,10 +58,6 @@ final class CreateProjectTaskAction implements BusinessAction
             return ActionResult::failure('project_not_found', "Project [{$projectId}] not found.");
         }
 
-        if (! $project->isExecutionMonthOpen()) {
-            return ActionResult::failure('project_month_closed', 'Project execution month is not open.');
-        }
-
         if (! $project->canRegisterMoreTasks()) {
             return ActionResult::failure('project_capacity_full', 'Project has no remaining task capacity.');
         }

@@ -12,6 +12,22 @@ const LEGACY_ALBUM_KEY = (articleId) => `seo_product_album_list_${articleId}`;
 const snapshotsByArticle = Object.create(null);
 /** @type {Set<(detail: { articleId: number, snapshot: object }) => void>} */
 const snapshotListeners = new Set();
+/** @type {Map<string, Promise<object|null>>} */
+const inFlightRequests = new Map();
+/** @type {Record<number, number>} */
+const requestSequencesByArticle = Object.create(null);
+export const MEDIA_SNAPSHOT_REFRESH_TTL_MS = 4 * 60 * 1000;
+
+function nextRequestSequence(articleId) {
+    const id = Number(articleId) || 0;
+    requestSequencesByArticle[id] = (Number(requestSequencesByArticle[id]) || 0) + 1;
+
+    return requestSequencesByArticle[id];
+}
+
+function isCurrentRequest(articleId, sequence) {
+    return (Number(requestSequencesByArticle[Number(articleId) || 0]) || 0) === Number(sequence);
+}
 
 /**
  * Phase 6C.3 — React panels subscribe without Alpine mirror.
@@ -96,7 +112,7 @@ export function getMediaSnapshot(articleId) {
  * Apply server snapshot if version is not older than current.
  * @returns {object|null} applied snapshot or null if ignored as stale
  */
-export function applyMediaSnapshot(articleId, snapshot, { force = false } = {}) {
+export function applyMediaSnapshot(articleId, snapshot, { force = false, emitLegacyGallery = false } = {}) {
     const id = Number(articleId ?? snapshot?.article_id ?? 0);
     if (!Number.isFinite(id) || id <= 0 || !snapshot || typeof snapshot !== 'object') {
         return null;
@@ -147,17 +163,21 @@ export function applyMediaSnapshot(articleId, snapshot, { force = false } = {}) 
         },
     }));
 
-    window.dispatchEvent(new CustomEvent('seo-product-gallery-updated', {
-        detail: {
-            article_id: id,
-            articleId: id,
-            gallery: (next.gallery?.items || []).map((row) => ({
-                id: Number(row.wp_attachment_id || row.media_id || 0) || 0,
-                url: String(row.url || ''),
-            })),
-            from_snapshot: true,
-        },
-    }));
+    if (emitLegacyGallery) {
+        window.dispatchEvent(new CustomEvent('seo-product-gallery-updated', {
+            detail: {
+                article_id: id,
+                articleId: id,
+                gallery: (next.gallery?.items || []).map((row) => ({
+                    id: Number(row.wp_attachment_id || row.media_id || 0) || 0,
+                    asset_key: String(row.asset_key || row.id || ''),
+                    source: String(row.source || ''),
+                    url: String(row.url || ''),
+                })),
+                from_snapshot: true,
+            },
+        }));
+    }
 
     return next;
 }
@@ -172,6 +192,8 @@ export function featuredFromSnapshot(articleId) {
         url: String(featured.url),
         wp_attachment_id: Number(featured.wp_attachment_id) || 0,
         seo_media_id: Number(featured.media_id) || 0,
+        asset_key: String(featured.asset_key || featured.id || ''),
+        source: String(featured.source || ''),
         alt: String(featured.alt || ''),
         slug: String(featured.filename || ''),
     };
@@ -186,6 +208,8 @@ export function galleryFromSnapshot(articleId) {
     return items
         .map((row) => ({
             id: Number(row.wp_attachment_id || row.media_id || 0) || 0,
+            asset_key: String(row.asset_key || row.id || ''),
+            source: String(row.source || ''),
             url: String(row.url || '').trim(),
             stable_id: String(row.id || ''),
         }))
@@ -220,7 +244,7 @@ function sessionBodyExtras(articleId) {
     };
 }
 
-async function parseSnapshotResponse(response, articleId) {
+async function parseSnapshotResponse(response, articleId, { apply = true, sequence = null, emitLegacyGallery = false } = {}) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok || data?.success === false) {
         const error = new Error(data?.message || `HTTP ${response.status}`);
@@ -230,8 +254,8 @@ async function parseSnapshotResponse(response, articleId) {
     }
 
     const snapshot = data.media_snapshot || data.data?.media_snapshot;
-    if (snapshot) {
-        applyMediaSnapshot(articleId, snapshot);
+    if (snapshot && apply && (sequence === null || isCurrentRequest(articleId, sequence))) {
+        applyMediaSnapshot(articleId, snapshot, { emitLegacyGallery });
     }
 
     return snapshot || getMediaSnapshot(articleId);
@@ -239,14 +263,80 @@ async function parseSnapshotResponse(response, articleId) {
 
 export async function fetchMediaSnapshot(articleId, endpoint) {
     const id = Number(articleId);
+    const key = `article:${id}:snapshot:refresh`;
+    if (inFlightRequests.has(key)) {
+        return inFlightRequests.get(key);
+    }
+
     const url = endpoint || `/api/seo/articles/${id}/editor/media-snapshot`;
-    const response = await fetch(url, {
+    const sequence = nextRequestSequence(id);
+    const task = fetch(url, {
         method: 'GET',
         credentials: 'same-origin',
         headers: sessionHeaders(),
-    });
+    }).then((response) => parseSnapshotResponse(response, id, { sequence }));
 
-    return parseSnapshotResponse(response, id);
+    inFlightRequests.set(key, task);
+    try {
+        return await task;
+    } finally {
+        inFlightRequests.delete(key);
+    }
+}
+
+export function mediaSnapshotAgeMs(articleId, nowMs = Date.now()) {
+    const generatedAt = String(getMediaSnapshot(articleId)?.generated_at || '').trim();
+    const timestamp = generatedAt !== '' ? Date.parse(generatedAt) : NaN;
+    if (!Number.isFinite(timestamp) || timestamp <= 0) {
+        return Number.POSITIVE_INFINITY;
+    }
+
+    return Math.max(0, Number(nowMs) - timestamp);
+}
+
+export async function refreshMediaSnapshotIfStale(articleId, endpoint, minAgeMs = MEDIA_SNAPSHOT_REFRESH_TTL_MS) {
+    if (mediaSnapshotAgeMs(articleId) < minAgeMs) {
+        return getMediaSnapshot(articleId);
+    }
+
+    return fetchMediaSnapshot(articleId, endpoint);
+}
+
+function mediaSnapshotMutationKey(articleId, kind) {
+    return `article:${Number(articleId) || 0}:media:${kind}`;
+}
+
+function shouldRefreshOnConflict(error) {
+    return error?.code === 'media_snapshot_version_conflict'
+        || Number(error?.data?.conflict?.snapshot_version || 0) > 0;
+}
+
+async function runMediaMutation(articleId, kind, request) {
+    const id = Number(articleId);
+    const key = mediaSnapshotMutationKey(id, kind);
+    if (inFlightRequests.has(key)) {
+        return inFlightRequests.get(key);
+    }
+
+    const previous = getMediaSnapshot(id);
+    const sequence = nextRequestSequence(id);
+    const task = request()
+        .then((response) => parseSnapshotResponse(response, id, { sequence, emitLegacyGallery: kind === 'gallery' }))
+        .catch(async (error) => {
+            if (shouldRefreshOnConflict(error)) {
+                await fetchMediaSnapshot(id);
+            } else {
+                applyMediaSnapshot(id, previous, { force: true });
+            }
+            throw error;
+        });
+
+    inFlightRequests.set(key, task);
+    try {
+        return await task;
+    } finally {
+        inFlightRequests.delete(key);
+    }
 }
 
 /**
@@ -294,6 +384,9 @@ export function normalizeFeaturedMediaItem(item) {
         url,
         wp_attachment_id: wpAttachmentId,
         seo_media_id: seoMediaId,
+        asset_key: String(item.asset_key ?? item.assetKey ?? '').trim()
+            || (wpAttachmentId > 0 ? `wp:${wpAttachmentId}` : (seoMediaId > 0 ? `local:${seoMediaId}` : '')),
+        source: String(item.source ?? (wpAttachmentId > 0 ? 'wordpress' : (seoMediaId > 0 ? 'local' : ''))).trim(),
         id: id > 0 ? id : 0,
         alt: String(item.alt ?? '').trim(),
         slug: String(item.slug ?? item.filename ?? '').trim(),
@@ -303,13 +396,18 @@ export function normalizeFeaturedMediaItem(item) {
 export async function setFeaturedViaApi(articleId, item, endpoint) {
     const id = Number(articleId);
     const url = endpoint || `/api/seo/articles/${id}/editor/media/featured`;
-    const previous = getMediaSnapshot(id);
     const normalized = normalizeFeaturedMediaItem(item);
     if (!normalized) {
         throw new Error('Featured image URL is required.');
     }
 
-    const response = await fetch(url, {
+    if (getMediaSnapshot(id)?.gallery?.required) {
+        const error = new Error('Product posts use the first gallery item as featured.');
+        error.code = 'featured_managed_by_gallery';
+        throw error;
+    }
+
+    return runMediaMutation(id, 'featured', () => fetch(url, {
         method: 'PUT',
         credentials: 'same-origin',
         headers: sessionHeaders(),
@@ -321,40 +419,30 @@ export async function setFeaturedViaApi(articleId, item, endpoint) {
             seo_media_id: normalized.seo_media_id || undefined,
             id: normalized.id || undefined,
         }),
-    });
-
-    try {
-        return await parseSnapshotResponse(response, id);
-    } catch (error) {
-        applyMediaSnapshot(id, previous, { force: true });
-        throw error;
-    }
+    }));
 }
 
 export async function clearFeaturedViaApi(articleId, endpoint) {
     const id = Number(articleId);
     const url = endpoint || `/api/seo/articles/${id}/editor/media/featured`;
-    const previous = getMediaSnapshot(id);
-    const response = await fetch(url, {
+    if (getMediaSnapshot(id)?.gallery?.required) {
+        const error = new Error('Clear product featured by clearing the product album.');
+        error.code = 'featured_managed_by_gallery';
+        throw error;
+    }
+
+    return runMediaMutation(id, 'featured', () => fetch(url, {
         method: 'DELETE',
         credentials: 'same-origin',
         headers: sessionHeaders(),
         body: JSON.stringify(sessionBodyExtras(id)),
-    });
-
-    try {
-        return await parseSnapshotResponse(response, id);
-    } catch (error) {
-        applyMediaSnapshot(id, previous, { force: true });
-        throw error;
-    }
+    }));
 }
 
 export async function replaceGalleryViaApi(articleId, items, endpoint) {
     const id = Number(articleId);
     const url = endpoint || `/api/seo/articles/${id}/editor/media/gallery`;
-    const previous = getMediaSnapshot(id);
-    const response = await fetch(url, {
+    return runMediaMutation(id, 'gallery', () => fetch(url, {
         method: 'PUT',
         credentials: 'same-origin',
         headers: sessionHeaders(),
@@ -362,21 +450,13 @@ export async function replaceGalleryViaApi(articleId, items, endpoint) {
             ...sessionBodyExtras(id),
             items,
         }),
-    });
-
-    try {
-        return await parseSnapshotResponse(response, id);
-    } catch (error) {
-        applyMediaSnapshot(id, previous, { force: true });
-        throw error;
-    }
+    }));
 }
 
 export async function reorderGalleryViaApi(articleId, orderedIds, endpoint) {
     const id = Number(articleId);
     const url = endpoint || `/api/seo/articles/${id}/editor/media/gallery/reorder`;
-    const previous = getMediaSnapshot(id);
-    const response = await fetch(url, {
+    return runMediaMutation(id, 'gallery', () => fetch(url, {
         method: 'POST',
         credentials: 'same-origin',
         headers: sessionHeaders(),
@@ -384,14 +464,7 @@ export async function reorderGalleryViaApi(articleId, orderedIds, endpoint) {
             ...sessionBodyExtras(id),
             ordered_ids: orderedIds,
         }),
-    });
-
-    try {
-        return await parseSnapshotResponse(response, id);
-    } catch (error) {
-        applyMediaSnapshot(id, previous, { force: true });
-        throw error;
-    }
+    }));
 }
 
 export default {

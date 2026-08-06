@@ -88,11 +88,8 @@ function FeaturedImagePanel({ articleId = null, active = false }) {
                     </div>
                 </header>
                 <div className="seo-assistant-widget__body text-center">
-                    <button
-                        type="button"
+                    <div
                         className="wp-featured-image-picker"
-                        onClick={openPicker}
-                        disabled={!mutable}
                         title="Chọn ảnh từ thư viện"
                     >
                         {featured?.url ? (
@@ -103,12 +100,23 @@ function FeaturedImagePanel({ articleId = null, active = false }) {
                                 <span className="wp-featured-image-picker__label">Đặt ảnh đại diện</span>
                             </span>
                         )}
-                    </button>
+                    </div>
                     <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
                         {featured?.url
                             ? `${featured.filename || featured.alt || 'Featured'} · snapshot v${media.snapshotVersion}`
                             : 'Bấm để chọn từ Shared Media Picker'}
                     </p>
+                    {mutable ? (
+                        <button
+                            type="button"
+                            className="mt-2 inline-flex items-center gap-1 text-sm text-primary-600"
+                            onClick={openPicker}
+                            title="Chon anh tu thu vien"
+                        >
+                            <ImagePlus size={14} />
+                            {featured?.url ? 'Thay anh dai dien' : 'Chon anh dai dien'}
+                        </button>
+                    ) : null}
                     {featured?.url && mutable ? (
                         <button type="button" className="mt-2 inline-flex items-center gap-1 text-sm text-danger-600" onClick={() => void clear()}>
                             <Trash2 size={14} /> Clear

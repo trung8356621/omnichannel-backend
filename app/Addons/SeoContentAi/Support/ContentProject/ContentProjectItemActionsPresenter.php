@@ -64,6 +64,7 @@ final class ContentProjectItemActionsPresenter
         $queue = strtolower((string) ($row['queue_status'] ?? 'none'));
         $genKey = strtolower((string) (($row['generation_badge']['key'] ?? '')));
         $canGenerate = (bool) ($row['can_generate'] ?? false);
+        $isGeneratePendingRunnable = (bool) ($row['is_generate_pending_runnable'] ?? false);
         $canRegen = (bool) ($row['can_regen'] ?? false);
         $isImprove = (bool) ($row['is_improve'] ?? false);
         $hasArticle = ! empty($row['article_edit_url']);
@@ -77,7 +78,11 @@ final class ContentProjectItemActionsPresenter
             || in_array($lifecycle, ['review', 'approved', 'waiting_publish', 'published'], true);
 
         $openArticle = $hasArticle;
-        $generate = $canGenerate && $genKey === 'pending' && $generationStatus === 'pending' && ! $generationBlocked;
+        $generate = $canGenerate
+            && $isGeneratePendingRunnable
+            && $genKey === 'pending'
+            && $generationStatus === 'pending'
+            && ! $generationBlocked;
         $runAgain = (! $isGenuineRunning)
             && ! $generationBlocked
             && (
@@ -102,7 +107,8 @@ final class ContentProjectItemActionsPresenter
         $debugRerunFromStart = $canRegen && ! $runAgain && ! $isImprove && ! $isGenuineRunning && ! $generationBlocked;
         $improveNote = $isImprove;
         $message = trim((string) ($row['message'] ?? ''));
-        $acknowledgeError = (! $isGenuineRunning)
+        $acknowledgeError = $hasArticle
+            && (! $isGenuineRunning)
             && (
                 $genKey === 'failed'
                 || $generationStatus === 'failed'

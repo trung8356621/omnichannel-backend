@@ -174,12 +174,7 @@ final class CreateArticlesFromTaskService
     ): array {
         $projectType = SeoProjectTask::normalizeType((string) ($context->projectTaskType ?? ''));
         if ($projectType === SeoProjectTask::TYPE_IMPROVE) {
-            return [
-                'success' => false,
-                'article_id' => $context->article?->id,
-                'steps' => [],
-                'message' => 'Improve items are manual-only — automatic rerun blocked.',
-            ];
+            return $this->runPublishWorkflowForContext($context, $siteId);
         }
 
         if ($fromStep === \App\Addons\SeoContentAi\Enums\ContentProjectRerunFromStep::Article) {

@@ -130,10 +130,6 @@ final class ContentProjectRerunEligibilityGuard
             return 'Cancelled item cannot be rerun.';
         }
 
-        if (SeoProjectTask::normalizeType((string) $task->type) === SeoProjectTask::TYPE_IMPROVE) {
-            return 'Improve items are manual-only — automatic rerun blocked.';
-        }
-
         $phase = $this->lifecycle->resolvePhase($task);
         if ($phase === ContentProjectLifecyclePhase::Archived) {
             return 'Archived lifecycle — rerun blocked.';

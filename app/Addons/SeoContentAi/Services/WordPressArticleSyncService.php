@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
 use App\Addons\SeoContentAi\Services\WordPress\SideEffect\UnauthorizedWordPressSideEffectException;
 use App\Addons\SeoContentAi\Services\WordPress\SideEffect\WordPressExecutionContext;
 use App\Addons\SeoContentAi\Services\WordPress\SideEffect\WordPressGateway;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressSlugFixRequiredException;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoQueueContext;
@@ -202,6 +203,8 @@ final class WordPressArticleSyncService
                 'wp_post_id' => $wpPostId,
                 'permalink' => $permalink,
             ];
+        } catch (WordPressSlugFixRequiredException $e) {
+            return $this->slugFixRequiredResponse();
         } catch (Throwable $e) {
             Log::warning('WordPress article create exception', [
                 'article_id' => $article->id,
@@ -423,6 +426,8 @@ final class WordPressArticleSyncService
             }
 
             return $this->syncForArticle($article, $sideEffect, $seoOverride);
+        } catch (WordPressSlugFixRequiredException $e) {
+            return $this->slugFixRequiredResponse();
         } finally {
             $lock->release();
         }
@@ -503,6 +508,8 @@ final class WordPressArticleSyncService
                 'success' => true,
                 'message' => (string) ($decoded['message'] ?? 'Đã cập nhật slug trên WordPress.'),
             ];
+        } catch (WordPressSlugFixRequiredException $e) {
+            return $this->slugFixRequiredResponse();
         } catch (Throwable $e) {
             Log::warning('WordPress slug sync exception', [
                 'article_id' => $article->id,
@@ -619,6 +626,8 @@ final class WordPressArticleSyncService
                 'message' => (string) ($decoded['message'] ?? 'Đã đồng bộ SEO meta lên WordPress.'),
                 'seo_applied' => true,
             ];
+        } catch (WordPressSlugFixRequiredException $e) {
+            return $this->slugFixRequiredResponse();
         } catch (Throwable $e) {
             Log::warning('WordPress SEO meta sync exception', [
                 'article_id' => $article->id,
@@ -673,7 +682,11 @@ final class WordPressArticleSyncService
             ];
         }
 
-        $httpResult = $this->executeEditorSyncRequest($article, $sideEffect, $context, $prepared);
+        try {
+            $httpResult = $this->executeEditorSyncRequest($article, $sideEffect, $context, $prepared);
+        } catch (WordPressSlugFixRequiredException) {
+            return $this->slugFixRequiredResponse();
+        }
         if (! ($httpResult['success'] ?? false)) {
             return $httpResult;
         }
@@ -757,7 +770,15 @@ final class WordPressArticleSyncService
             }
 
             $outgoingContent = (string) ($prepared['post_content'] ?? '');
-            $httpResult = $this->executeEditorSyncRequest($article, $sideEffect, $context, $prepared);
+            try {
+                $httpResult = $this->executeEditorSyncRequest($article, $sideEffect, $context, $prepared);
+            } catch (WordPressSlugFixRequiredException) {
+                return array_merge($this->slugFixRequiredResponse(), [
+                    'create_post_called' => false,
+                    'outgoing_post_content' => $outgoingContent,
+                    'canonical_wp_post_id' => $canonicalWpPostId,
+                ]);
+            }
             if (! ($httpResult['success'] ?? false)) {
                 return array_merge($httpResult, [
                     'create_post_called' => false,
@@ -1423,6 +1444,10 @@ final class WordPressArticleSyncService
             unset($payload['status'], $payload['post_date'], $payload['post_date_gmt']);
         }
 
+        if ($wpTaxonomy === null && $this->shouldPreserveLinkedPostSlug($article, $syncOptions)) {
+            unset($payload['slug']);
+        }
+
         // FAQ rỗng thật trên Laravel → cho phép WP xóa meta; tránh giữ FAQ cũ lệch.
         if ($faqs === []) {
             $payload['clear_faqs'] = true;
@@ -1448,6 +1473,21 @@ final class WordPressArticleSyncService
             'skip_editor_sync' => $skipCheck['skip'],
             'skip_editor_sync_reason' => $skipCheck['reason'],
         ];
+    }
+
+    /**
+     * Existing WordPress posts keep their public URL identity during content/SEO rewrites.
+     * Intentional permalink edits must use syncSlugForArticle(), not the full editor-sync payload.
+     *
+     * @param  array<string, mixed>  $syncOptions
+     */
+    private function shouldPreserveLinkedPostSlug(SeoArticle $article, array $syncOptions): bool
+    {
+        if (($syncOptions['allow_slug_update'] ?? false) === true) {
+            return false;
+        }
+
+        return (int) ($article->wp_post_id ?? 0) > 0;
     }
 
     /**
@@ -2173,6 +2213,18 @@ final class WordPressArticleSyncService
             'error_code' => 'WORDPRESS_SYNC_FORBIDDEN_ROLE',
             'failed_stage' => 'permission_gate',
             'message' => 'Vai trò Quản lý nội dung chỉ được lưu trên Laravel, không đồng bộ WordPress.',
+        ];
+    }
+
+    /**
+     * @return array{success: false, message: string, error_code: string}
+     */
+    private function slugFixRequiredResponse(): array
+    {
+        return [
+            'success' => false,
+            'message' => WordPressSlugFixRequiredException::MESSAGE,
+            'error_code' => WordPressSlugFixRequiredException::ERROR_CODE,
         ];
     }
 

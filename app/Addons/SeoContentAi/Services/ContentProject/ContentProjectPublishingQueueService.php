@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\Publi
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\PublishOperationKeyFactory;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\PublishingRetryPolicy;
 use App\Addons\SeoContentAi\Services\ContentProject\Publishing\DispatchClaimResult;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\ContentPublishingStrategyResolver;
 use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishingActiveProcessing;
 use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishingProcessingMarkerClearer;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemActionGuard;
@@ -37,6 +38,7 @@ final class ContentProjectPublishingQueueService
         private readonly ?PublishingRetryPolicy $retryPolicy = null,
         private readonly ?PublishingActiveProcessing $activeProcessing = null,
         private readonly ?PublishingProcessingMarkerClearer $markerClearer = null,
+        private readonly ContentPublishingStrategyResolver $strategyResolver = new ContentPublishingStrategyResolver,
     ) {}
 
     private function operationKeys(): PublishOperationKeyFactory
@@ -159,6 +161,11 @@ final class ContentProjectPublishingQueueService
         foreach ($tasks as $task) {
             $id = (int) $task->getKey();
             try {
+                if ($this->strategyResolver->resolve($task, $task->article)->isImmediateUpdate()) {
+                    $report['failed']++;
+                    continue;
+                }
+
                 if ($this->activeProcessing()->isActivelyPublishing($task)) {
                     $report['skipped_active']++;
                     $report['skipped_active_ids'][] = $id;
@@ -232,6 +239,51 @@ final class ContentProjectPublishingQueueService
             'publish_queue_status' => ContentProjectPublishQueueStatus::None->value,
             'last_publish_error' => null,
         ], onlyStatuses: null, onlyWherePublishingQueued: false);
+    }
+
+    /**
+     * Rewrite/improve handoff: queue membership + immediate update intent, without fake schedule.
+     *
+     * @param  list<int>  $taskIds
+     */
+    public function enqueueImmediateUpdateHandoff(SeoProject $project, array $taskIds, ?int $actorUserId): int
+    {
+        $this->assertProjectActive($project);
+        $ids = $this->normalizeIds($taskIds);
+        if ($ids === []) {
+            return 0;
+        }
+
+        return $this->batchUpdate($project, $ids, $this->markerClearer()->mergeInto([
+            'publishing_queued_at' => now(),
+            'publishing_queued_by' => $actorUserId,
+            'scheduled_publish_at' => null,
+            'publish_queue_status' => ContentProjectPublishQueueStatus::Waiting->value,
+            'last_publish_error' => null,
+        ]), onlyStatuses: null, onlyWherePublishingQueued: false);
+    }
+
+    /**
+     * Rewrite/improve must fail closed when the source WP post is missing.
+     *
+     * @param  list<int>  $taskIds
+     */
+    public function failMissingRemotePostHandoff(SeoProject $project, array $taskIds, ?int $actorUserId): int
+    {
+        $this->assertProjectActive($project);
+        $ids = $this->normalizeIds($taskIds);
+        if ($ids === []) {
+            return 0;
+        }
+
+        return $this->batchUpdate($project, $ids, $this->markerClearer()->mergeInto([
+            'publishing_queued_at' => now(),
+            'publishing_queued_by' => $actorUserId,
+            'scheduled_publish_at' => null,
+            'publish_queue_status' => ContentProjectPublishQueueStatus::Failed->value,
+            'last_publish_error' => 'Khong tim thay bai WordPress goc de cap nhat.',
+            'last_publish_attempt_at' => now(),
+        ]), onlyStatuses: null, onlyWherePublishingQueued: false);
     }
 
     /**
@@ -1020,6 +1072,10 @@ final class ContentProjectPublishingQueueService
         foreach ($tasks as $task) {
             $status = ContentProjectPublishQueueStatus::tryFrom((string) ($task->publish_queue_status ?? ''))
                 ?? ContentProjectPublishQueueStatus::None;
+
+            if ($this->strategyResolver->resolve($task, $task->article)->isImmediateUpdate()) {
+                throw new RuntimeException('publishing.update_existing_not_schedulable: Bai viet lai se cap nhat ngay, khong len lich.');
+            }
 
             if ($this->activeProcessing()->isActivelyPublishing($task)) {
                 throw new RuntimeException(

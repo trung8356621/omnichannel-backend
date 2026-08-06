@@ -7,7 +7,7 @@ import { useEditorNotifications } from '../../host/hooks/useEditorNotifications'
 import { t } from '../../../utils/i18n';
 
 function stableId(item, index) {
-    return String(item?.id || item?.stable_id || `idx-${index}`);
+    return String(item?.asset_key || item?.id || item?.stable_id || `idx-${index}`);
 }
 
 /**
@@ -39,6 +39,8 @@ export function GallerySidebarPanel({ articleId = null, active = false }) {
                         url: row.url,
                         wp_attachment_id: row.wp_attachment_id,
                         media_id: row.seo_media_id,
+                        asset_key: row.asset_key,
+                        source: row.source,
                         alt: row.alt,
                     }));
                 if (mapped.length === 0) return;
@@ -47,6 +49,8 @@ export function GallerySidebarPanel({ articleId = null, active = false }) {
                         url: row.url,
                         wp_attachment_id: row.wp_attachment_id,
                         media_id: row.media_id,
+                        asset_key: row.asset_key,
+                        source: row.source,
                         alt: row.alt,
                         id: row.id,
                     })),

@@ -19,17 +19,33 @@ import {
     removeCustomPickerTab,
 } from '../../utils/articleMediaPickerCustomTabs';
 
-const CACHE_TTL_MS = 45_000;
+export const MEDIA_PICKER_CACHE_TTL_MS = 4 * 60 * 1000;
+const MEDIA_PICKER_CACHE_MAX_ENTRIES = 30;
+const MEDIA_PICKER_SEARCH_DEBOUNCE_MS = 300;
+
+const mediaPickerResultCache = new Map();
+const mediaPickerInFlight = new Map();
+const mediaPickerUiState = new Map();
+const mediaPickerScrollState = new Map();
 
 function imageKey(image) {
-    const id = Number(
-        image?.seo_media_id
-        || image?.seoMediaId
-        || image?.wp_attachment_id
-        || image?.wpAttachmentId
-        || image?.id
-        || 0,
-    );
+    const explicit = String(image?.asset_key || image?.assetKey || '').trim();
+    if (explicit !== '') {
+        return explicit;
+    }
+    const source = String(image?.source || '').toLowerCase();
+    const wpId = Number(image?.wp_attachment_id || image?.wpAttachmentId || 0) || 0;
+    const seoId = Number(image?.seo_media_id || image?.seoMediaId || image?.media_id || image?.mediaId || 0) || 0;
+    if ((source === 'wordpress' || source === 'wp') && wpId > 0) {
+        return `wp:${wpId}`;
+    }
+    if (seoId > 0) {
+        return `local:${seoId}`;
+    }
+    if (wpId > 0) {
+        return `wp:${wpId}`;
+    }
+    const id = Number(image?.id || 0);
     const url = String(image?.url || image?.src || '').trim();
     return id > 0 ? `id:${id}` : `url:${url}`;
 }
@@ -55,16 +71,22 @@ function normalizePickerItem(image) {
     const id = wpAttachmentId > 0
         ? wpAttachmentId
         : (seoMediaId > 0 ? seoMediaId : rawId);
+    const source = String(image?.source || (wpAttachmentId > 0 ? 'wordpress' : (seoMediaId > 0 ? 'local' : ''))).trim();
+    const assetKey = String(image?.asset_key || image?.assetKey || '').trim()
+        || ((source === 'wordpress' || source === 'wp') && wpAttachmentId > 0
+            ? `wp:${wpAttachmentId}`
+            : (seoMediaId > 0 ? `local:${seoMediaId}` : ''));
 
     return {
         url,
         alt: String(image?.alt || '').trim(),
         slug: String(image?.slug || '').trim(),
         id: id > 0 ? id : 0,
+        asset_key: assetKey,
         wp_attachment_id: wpAttachmentId,
         seo_media_id: seoMediaId,
         media_type: String(image?.media_type || 'image').toLowerCase() === 'video' ? 'video' : 'image',
-        source: String(image?.source || '').trim(),
+        source,
     };
 }
 
@@ -80,8 +102,65 @@ function dedupePickerImages(list) {
     return out;
 }
 
+function normalizeSearch(search) {
+    return String(search || '').trim().toLowerCase();
+}
+
+function cacheScope(articleId) {
+    const picker = typeof window !== 'undefined' ? window.__SEO_ARTICLE_MEDIA_PICKER__ : null;
+    const configuredScope = picker && typeof picker === 'object' ? String(picker.cacheScope || '').trim() : '';
+    return configuredScope || `article:${Number(articleId || 0)}`;
+}
+
+export function mediaPickerCacheKey({ articleId, source, query = '', page = 1, perPage = 28 }) {
+    return [
+        `scope:${cacheScope(articleId)}`,
+        `article:${Number(articleId || 0)}`,
+        `source:${String(source || 'article')}`,
+        `q:${normalizeSearch(query)}`,
+        `page:${Math.max(1, Number(page) || 1)}`,
+        `perPage:${Math.max(1, Number(perPage) || 28)}`,
+    ].join('|');
+}
+
 function cacheKey(articleId, tab, page, search) {
-    return `${articleId}|${tab}|${page}|${String(search || '').trim().toLowerCase()}`;
+    return mediaPickerCacheKey({ articleId, source: tab, query: search, page, perPage: 28 });
+}
+
+function touchCacheEntry(key, entry) {
+    if (mediaPickerResultCache.has(key)) {
+        mediaPickerResultCache.delete(key);
+    }
+    mediaPickerResultCache.set(key, entry);
+    while (mediaPickerResultCache.size > MEDIA_PICKER_CACHE_MAX_ENTRIES) {
+        const oldestKey = mediaPickerResultCache.keys().next().value;
+        mediaPickerResultCache.delete(oldestKey);
+    }
+}
+
+function readCachedMedia(key) {
+    const cached = mediaPickerResultCache.get(key);
+    if (!cached) return null;
+    mediaPickerResultCache.delete(key);
+    mediaPickerResultCache.set(key, cached);
+    return cached;
+}
+
+function setCachedMedia(key, payload) {
+    if (!payload || !Array.isArray(payload.images)) return;
+    touchCacheEntry(key, payload);
+}
+
+export function invalidateMediaCache(scope = {}) {
+    const articleId = Number(scope.articleId || 0);
+    const source = scope.source ? String(scope.source) : '';
+    const scopePrefix = articleId > 0 ? `scope:${cacheScope(articleId)}|article:${articleId}|` : '';
+
+    for (const key of [...mediaPickerResultCache.keys()]) {
+        if (scopePrefix && !key.startsWith(scopePrefix)) continue;
+        if (source && !key.includes(`|source:${source}|`)) continue;
+        mediaPickerResultCache.delete(key);
+    }
 }
 
 function emptyTabState() {
@@ -116,14 +195,15 @@ export function SharedMediaPicker({
     const [customTabs, setCustomTabs] = useState([]);
 
     const wasOpenRef = useRef(false);
-    const cacheRef = useRef(new Map());
-    const inFlightRef = useRef(new Map());
     const requestSeqRef = useRef(0);
     const customTabsRef = useRef([]);
     const tabRef = useRef(tab);
+    const gridRef = useRef(null);
+    const searchDebounceRef = useRef(null);
 
     const id = Number(articleId ?? getEditorCommandHost()?.articleId ?? 0) || 0;
     const domain = normalizeArticleDomain(articleDomain || window.__SEO_ARTICLE_DOMAIN__ || '');
+    const uiScopeKey = cacheScope(id);
 
     useEffect(() => {
         tabRef.current = tab;
@@ -153,21 +233,32 @@ export function SharedMediaPicker({
         });
     }, [patchTabState]);
 
+    const persistUiState = useCallback((patch = {}) => {
+        mediaPickerUiState.set(uiScopeKey, {
+            ...(mediaPickerUiState.get(uiScopeKey) || {}),
+            activeTab: tabRef.current,
+            tabStates,
+            selectedKeys,
+            selectedItems,
+            ...patch,
+        });
+    }, [selectedItems, selectedKeys, tabStates, uiScopeKey]);
+
     const fetchRemote = useCallback(async (apiTab, tabId, nextPage, nextSearch, { skipCache = false } = {}) => {
         if (!id) return;
         const key = cacheKey(id, tabId, nextPage, nextSearch);
-        const cached = cacheRef.current.get(key);
-        const fresh = cached && (Date.now() - cached.loadedAt) < CACHE_TTL_MS;
+        const cached = readCachedMedia(key);
+        const fresh = cached && (Date.now() - cached.loadedAt) <= MEDIA_PICKER_CACHE_TTL_MS;
 
         if (!skipCache && cached) {
             applyCachedToTab(tabId, cached);
             if (fresh) return;
         }
 
-        if (inFlightRef.current.has(key) && !skipCache) {
+        if (mediaPickerInFlight.has(key)) {
             patchTabState(tabId, { loading: !cached });
             try {
-                await inFlightRef.current.get(key);
+                await mediaPickerInFlight.get(key);
             } catch {
                 // ignore
             }
@@ -205,10 +296,10 @@ export function SharedMediaPicker({
             };
         })();
 
-        inFlightRef.current.set(key, promise);
+        mediaPickerInFlight.set(key, promise);
         try {
             const entry = await promise;
-            cacheRef.current.set(key, entry);
+            setCachedMedia(key, entry);
             setTabStates((prev) => {
                 const current = prev[tabId] || emptyTabState();
                 if (current.requestId !== requestId && current.requestId > requestId) {
@@ -249,17 +340,22 @@ export function SharedMediaPicker({
                 };
             });
         } finally {
-            inFlightRef.current.delete(key);
+            mediaPickerInFlight.delete(key);
         }
     }, [applyCachedToTab, id, patchTabState]);
 
     const fetchArticle = useCallback((tabId, { skipCache = false } = {}) => {
         const key = cacheKey(id, 'article', 1, '');
-        const cached = cacheRef.current.get(key);
-        const fresh = cached && (Date.now() - cached.loadedAt) < CACHE_TTL_MS;
+        const cached = readCachedMedia(key);
+        const fresh = cached && (Date.now() - cached.loadedAt) <= MEDIA_PICKER_CACHE_TTL_MS;
         if (!skipCache && cached) {
             applyCachedToTab(tabId, cached);
             if (fresh) return;
+        }
+
+        if (mediaPickerInFlight.has(key)) {
+            patchTabState(tabId, { loading: !cached });
+            return;
         }
 
         const requestId = ++requestSeqRef.current;
@@ -274,7 +370,7 @@ export function SharedMediaPicker({
                 search: '',
                 loadedAt: Date.now(),
             };
-            cacheRef.current.set(key, entry);
+            setCachedMedia(key, entry);
             setTabStates((prev) => {
                 const current = prev[tabId] || emptyTabState();
                 if (current.requestId !== requestId && current.requestId > requestId) {
@@ -293,10 +389,17 @@ export function SharedMediaPicker({
             });
         };
 
-        window.addEventListener('seo-editor-images-catalog', onCatalog, { once: true });
-        window.dispatchEvent(new CustomEvent('seo-request-editor-images-catalog'));
+        const promise = new Promise((resolve) => {
+            window.addEventListener('seo-editor-images-catalog', (event) => {
+                onCatalog(event);
+                resolve();
+            }, { once: true });
+            window.dispatchEvent(new CustomEvent('seo-request-editor-images-catalog'));
+        });
+        mediaPickerInFlight.set(key, promise);
         window.setTimeout(() => {
             window.removeEventListener('seo-editor-images-catalog', onCatalog);
+            mediaPickerInFlight.delete(key);
             patchTabState(tabId, { loading: false });
         }, 2500);
     }, [applyCachedToTab, id, patchTabState]);
@@ -327,7 +430,7 @@ export function SharedMediaPicker({
         // Tab change always resets to page 1 (same contract as search).
         const page = 1;
         const key = cacheKey(id, nextTab, page, search);
-        const cached = cacheRef.current.get(key);
+        const cached = readCachedMedia(key);
         if (cached) {
             applyCachedToTab(nextTab, cached);
         } else {
@@ -355,24 +458,28 @@ export function SharedMediaPicker({
         }
 
         setSessionId((value) => value + 1);
-        setSelectedKeys([]);
-        setSelectedItems({});
-        setTab('article');
-        setTabStates({});
-        cacheRef.current.clear();
-        inFlightRef.current.clear();
+        const saved = mediaPickerUiState.get(uiScopeKey) || {};
+        const savedTab = saved.activeTab || 'article';
+        setSelectedKeys(Array.isArray(saved.selectedKeys) ? saved.selectedKeys : []);
+        setSelectedItems(saved.selectedItems && typeof saved.selectedItems === 'object' ? saved.selectedItems : {});
+        setTab(savedTab);
+        tabRef.current = savedTab;
+        setTabStates(saved.tabStates && typeof saved.tabStates === 'object' ? saved.tabStates : {});
         const tabs = loadCustomPickerTabs(
             normalizeArticleDomain(articleDomain || window.__SEO_ARTICLE_DOMAIN__ || ''),
             Number(articleId ?? 0) || 0,
         );
         setCustomTabs(tabs);
         customTabsRef.current = tabs;
-    }), [articleDomain, articleId]);
+    }), [articleDomain, articleId, uiScopeKey]);
 
     // Load/prefetch only on new picker session (not selection patches).
     useEffect(() => {
         if (!picker?.open || !sessionId) return undefined;
-        loadTab('article', 1, '', { skipCache: false });
+        const saved = mediaPickerUiState.get(uiScopeKey) || {};
+        const initialTab = saved.activeTab || 'article';
+        const initialState = saved.tabStates?.[initialTab] || {};
+        loadTab(initialTab, initialState.page || 1, initialState.search || '', { skipCache: false });
         const timer = window.setTimeout(() => {
             if (wordpressAvailable) {
                 void fetchRemote('original', 'original', 1, '', { skipCache: false });
@@ -380,7 +487,24 @@ export function SharedMediaPicker({
             void fetchRemote('local', 'local', 1, '', { skipCache: false });
         }, 120);
         return () => window.clearTimeout(timer);
-    }, [sessionId, picker?.open, loadTab, fetchRemote, wordpressAvailable]);
+    }, [sessionId, picker?.open, loadTab, fetchRemote, wordpressAvailable, uiScopeKey]);
+
+    useEffect(() => {
+        persistUiState();
+    }, [persistUiState]);
+
+    useEffect(() => {
+        if (!picker?.open) return;
+        patchMediaPickerSelection(selectedKeys, selectedItems);
+    }, [picker?.open, selectedItems, selectedKeys]);
+
+    useEffect(() => {
+        const onInvalidate = () => {
+            invalidateMediaCache({ articleId: id });
+        };
+        window.addEventListener('seo-article-media-picker-cache-invalidated', onInvalidate);
+        return () => window.removeEventListener('seo-article-media-picker-cache-invalidated', onInvalidate);
+    }, [id]);
 
     const active = tabStates[tab] || emptyTabState();
     const multi = picker?.selection === 'multiple';
@@ -400,14 +524,29 @@ export function SharedMediaPicker({
     };
 
     const refreshActiveTab = () => {
-        const keyPrefix = `${id}|${tab}|`;
-        for (const key of [...cacheRef.current.keys()]) {
-            if (key.startsWith(keyPrefix)) {
-                cacheRef.current.delete(key);
-            }
-        }
-        loadTab(tab, 1, active.search || '', { skipCache: true });
+        loadTab(tab, active.page || 1, active.search || '', { skipCache: true });
     };
+
+    useEffect(() => {
+        if (!picker?.open || tab === 'article') return undefined;
+        window.clearTimeout(searchDebounceRef.current);
+        searchDebounceRef.current = window.setTimeout(() => {
+            loadTab(tab, 1, active.search || '', { skipCache: false });
+        }, MEDIA_PICKER_SEARCH_DEBOUNCE_MS);
+        return () => window.clearTimeout(searchDebounceRef.current);
+    }, [active.search, loadTab, picker?.open, tab]);
+
+    const scrollKey = cacheKey(id, tab, active.page || 1, active.search || '');
+
+    useEffect(() => {
+        if (!picker?.open || !gridRef.current) return;
+        const savedScroll = Number(mediaPickerScrollState.get(scrollKey) || 0);
+        requestAnimationFrame(() => {
+            if (gridRef.current) {
+                gridRef.current.scrollTop = savedScroll;
+            }
+        });
+    }, [active.images, picker?.open, scrollKey]);
 
     const toggleSelect = (image) => {
         if (readOnly) return;
@@ -596,7 +735,13 @@ export function SharedMediaPicker({
                     ) : null}
                     {active.error ? <p className="seo-shared-media-picker__error">{active.error}</p> : null}
                     {readOnly ? <p className="seo-shared-media-picker__hint">{t('media_picker_readonly_hint')}</p> : null}
-                    <div className="seo-shared-media-picker__grid">
+                    <div
+                        className="seo-shared-media-picker__grid"
+                        ref={gridRef}
+                        onScroll={(event) => {
+                            mediaPickerScrollState.set(scrollKey, event.currentTarget.scrollTop);
+                        }}
+                    >
                         {active.loading && active.images.length === 0 ? (
                             <p className="seo-module-loading p-3 text-sm">{t('editor_module_loading')}</p>
                         ) : active.images.length === 0 ? (

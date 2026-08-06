@@ -69,7 +69,10 @@ final class ContentProjectItemActionGuard
                 $actions[] = ContentProjectItemAction::Generate;
             }
 
-            if (in_array($lifecycle, [
+            $canRerunFailedDraft = $lifecycle === ContentProjectLifecyclePhase::Draft
+                && $generation === ContentProjectItemGenerationState::Failed;
+
+            if ($canRerunFailedDraft || in_array($lifecycle, [
                 ContentProjectLifecyclePhase::Review,
                 ContentProjectLifecyclePhase::Approved,
                 ContentProjectLifecyclePhase::Published,

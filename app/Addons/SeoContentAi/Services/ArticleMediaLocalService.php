@@ -69,7 +69,7 @@ final class ArticleMediaLocalService
     }
 
     /**
-     * @return list<array{id: int, url: string}>
+     * @return list<array{id: int, url: string, source?: string, asset_key?: string}>
      */
     public function appendGalleryLocal(SeoArticle $article, int $attachmentId, string $url): array
     {
@@ -120,6 +120,8 @@ final class ArticleMediaLocalService
             $album[] = [
                 'id' => max(0, $featuredId),
                 'url' => $featuredUrl,
+                'source' => $this->sourceFromUrl($featuredUrl),
+                'asset_key' => $this->assetKeyFromParts(max(0, $featuredId), $featuredUrl, $this->sourceFromUrl($featuredUrl)),
             ];
         }
 
@@ -141,6 +143,8 @@ final class ArticleMediaLocalService
             $album[] = [
                 'id' => max(0, $id),
                 'url' => $url,
+                'source' => $item['source'] ?? $this->sourceFromUrl($url),
+                'asset_key' => $item['asset_key'] ?? $this->assetKeyFromParts(max(0, $id), $url, (string) ($item['source'] ?? $this->sourceFromUrl($url))),
             ];
         }
 
@@ -328,8 +332,8 @@ final class ArticleMediaLocalService
     }
 
     /**
-     * @param  list<array{id?: int, url?: string}>  $album
-     * @return list<array{id: int, url: string}>
+     * @param  list<array{id?: int, url?: string, source?: string, asset_key?: string}>  $album
+     * @return list<array{id: int, url: string, source: string, asset_key: string}>
      */
     public function saveProductAlbumLocal(SeoArticle $article, array $album): array
     {
@@ -348,8 +352,13 @@ final class ArticleMediaLocalService
             }
 
             $id = $this->resolveIncomingProductAlbumRefId($item, $url, $existingIdsByUrl, $siteId);
+            $source = $this->normalizeMediaSource((string) ($item['source'] ?? $this->sourceFromUrl($url)));
+            $assetKey = trim((string) ($item['asset_key'] ?? $item['assetKey'] ?? ''));
+            if ($assetKey === '') {
+                $assetKey = $this->assetKeyFromParts($id, $url, $source);
+            }
             $exists = collect($normalized)->contains(
-                static fn (array $row): bool => ($id > 0 && (int) ($row['id'] ?? 0) === $id)
+                static fn (array $row): bool => (string) ($row['asset_key'] ?? '') === $assetKey
                     || (string) ($row['url'] ?? '') === $url
             );
             if ($exists) {
@@ -359,6 +368,8 @@ final class ArticleMediaLocalService
             $normalized[] = [
                 'id' => $id,
                 'url' => $url,
+                'source' => $source,
+                'asset_key' => $assetKey,
             ];
         }
 
@@ -715,6 +726,52 @@ final class ArticleMediaLocalService
             ['meta_key' => self::META_MEDIA_PENDING_SYNC],
             ['meta_value' => '1'],
         );
+    }
+
+    private function normalizeMediaSource(string $source): string
+    {
+        $source = strtolower(trim($source));
+
+        return match ($source) {
+            'wp' => 'wordpress',
+            'wordpress', 'local', 'generated', 'uploaded' => $source,
+            default => 'unknown',
+        };
+    }
+
+    private function sourceFromUrl(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return 'unknown';
+        }
+
+        if (str_contains($url, '/wp-content/uploads/')) {
+            return 'wordpress';
+        }
+
+        if (str_contains($url, '/storage/uploads/seo_media/')
+            || str_contains($url, '/storage/seo/')
+            || str_contains($url, '/seo-media/')
+            || str_contains($url, '/storage/')) {
+            return 'local';
+        }
+
+        return 'uploaded';
+    }
+
+    private function assetKeyFromParts(int $id, string $url, string $source): string
+    {
+        $source = $this->normalizeMediaSource($source);
+        if ($source === 'wordpress' && $id > 0) {
+            return 'wp:'.$id;
+        }
+
+        if (in_array($source, ['local', 'generated', 'uploaded'], true) && $id > 0) {
+            return 'local:'.$id;
+        }
+
+        return 'url:'.substr(hash('sha256', $url), 0, 16);
     }
 
     private function clearMediaPendingSync(SeoArticle $article): void

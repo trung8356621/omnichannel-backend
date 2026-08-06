@@ -15,7 +15,7 @@ use ReflectionMethod;
 
 final class WordPressMediaSafeRenameContractTest extends TestCase
 {
-    public function test_fix_slug_all_never_bulk_renames_wordpress_media(): void
+    public function test_fix_slug_all_skips_true_wordpress_media_but_syncs_dual_owned_local_media(): void
     {
         $batch = $this->methodSource(
             new ReflectionMethod(WordPressAttachmentRenameService::class, 'renameBatch'),
@@ -31,6 +31,8 @@ final class WordPressMediaSafeRenameContractTest extends TestCase
             (new ReflectionClass(SeoMediaArticleSlugFixService::class))->getFileName(),
         );
         self::assertStringContainsString('wordpress_media_requires_explicit_rename', $localFix);
+        self::assertStringContainsString('renameForSite($site, $wpItems)', $localFix);
+        self::assertStringContainsString('resolveWordPressRenameOldUrl', $localFix);
 
         $js = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/js/utils/articleImagesUtils.js',
@@ -87,7 +89,7 @@ final class WordPressMediaSafeRenameContractTest extends TestCase
             dirname(__DIR__, 2).'/resources/js/components/WordPressMediaRenameModal.jsx',
         );
         self::assertStringContainsString('/api/seo/media/wordpress/rename', $modal);
-        self::assertStringContainsString("phrase.trim() === 'RENAME'", $modal);
+        self::assertStringContainsString("confirmation_phrase: 'RENAME'", $modal);
 
         $editor = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/js/article-editor.jsx',

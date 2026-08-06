@@ -28,9 +28,9 @@
         'reviewGenericError' => __('seo-content-ai::filament.article_review.errors.invalid_transition'),
     ];
     $inContentProject = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsInContentProject($record);
-    $postPublishWpSyncEligible = $inContentProject
-        && app(\App\Addons\SeoContentAi\Services\ContentProject\Publishing\PostPublishWordPressSyncEligibility::class)
-            ->isEligible($record);
+    $wpSyncEligibility = app(\App\Addons\SeoContentAi\Services\ArticleWordPressSyncEligibility::class)
+        ->evaluate($record);
+    $contentProjectWpSyncEligible = $inContentProject && ($wpSyncEligibility['allowed'] ?? false);
     $isContentArchived = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsContentArchived($record);
     $contentProjectUrl = $inContentProject
         ? \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleContentProjectUrl($record)
@@ -289,15 +289,15 @@
         </button>
 
         @if (! $isContentManager)
-            @if ($inContentProject && $postPublishWpSyncEligible)
-                {{-- Published CP: local Save + post-publish UPDATE sync (never create). --}}
+            @if ($inContentProject && $contentProjectWpSyncEligible)
+                {{-- CP update-existing: Published or rewrite/improve with wp_post_id; never create. --}}
                 <button
                     type="button"
                     class="seo-editor-toolbar-btn seo-editor-toolbar-btn--accent seo-editor-toolbar-btn--labeled"
                     title="{{ $syncTitle }}"
                     aria-label="{{ $syncTitle }}"
                     data-seo-page-action="sync"
-                    data-seo-sync-mode="post_publish_wordpress_sync"
+                    data-seo-sync-mode="{{ $wpSyncEligibility['mode'] ?? 'post_publish_wordpress_sync' }}"
                     x-bind:disabled="!canMutateDocument()"
                     x-on:click="if (!canMutateDocument()) { notifyReadOnly(); return; } window.dispatchEvent(new CustomEvent('article-editor-shortcut', { detail: { action: 'sync' } }))"
                 >

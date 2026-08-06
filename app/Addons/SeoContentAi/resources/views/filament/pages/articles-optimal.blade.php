@@ -1,11 +1,12 @@
 ﻿@php
     $projectOptions = $this->getContentProjectOptions();
-    $projectSiteOptions = $this->getSidebarProjectSiteOptions();
-    $writerOptions = $this->getWriterOptions();
+    $contentProjectsUrl = \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource::getUrl('index');
     $assignTypeOptions = $this->getAssignTypeOptions();
     $rewriteModeOptions = $this->getRewriteModeOptions();
     $scoringFilters = $this->getScoringRuleFilterDefinitions();
     $aggregateFilters = $this->getAggregateFilterDefinitions();
+    $selectedSiteId = (int) ($filterSiteId ?? 0);
+    $canScan = $selectedSiteId > 0;
     $paginator = $hasScanned ? $this->resultsPaginator : new \Illuminate\Pagination\LengthAwarePaginator([], 0, 15);
     $visibleIds = collect($paginator->items())->pluck('id')->map(fn ($id) => (int) $id)->values()->all();
     $articleFocusMap = collect($paginator->items())
@@ -34,16 +35,12 @@
         selectedArticleIds: @entangle('selectedArticleIds'),
         sidebarCollapsed: @entangle('sidebarCollapsed'),
         bulkMenuOpen: false,
-        quickCreateOpen: false,
         assignArticleId: null,
         assignType: 'rewrite',
         rewriteMode: 'keyword',
         rewriteNotes: '',
         assignFocusKeyword: '',
         assignNeedsKeyword: false,
-        quickSiteId: @js((int) ($filterSiteId ?: \App\Addons\SeoContentAi\Support\SeoAccessControl::globalSiteId() ?: 0)),
-        quickWriterId: '',
-        quickCreateSubmitting: false,
         visibleIds: @js($visibleIds),
         articleFocusMap: @js($articleFocusMap),
         removedIds: [],
@@ -128,15 +125,6 @@
                 && this.assignTargetIds().length > 0
                 && (! this.assignNeedsKeyword || String(this.assignFocusKeyword || '').trim() !== '');
         },
-        hideFullProject(projectId) {
-            const id = Number(projectId);
-            const option = this.$refs.projectSelect?.querySelector(`option[value='${id}']`);
-            option?.remove();
-
-            if (Number(this.sidebarProjectId) === id) {
-                this.sidebarProjectId = null;
-            }
-        },
         submitSidebarAssign() {
             const ids = this.assignTargetIds();
             if (ids.length === 0 || ! this.sidebarProjectId) {
@@ -158,19 +146,7 @@
 
             this.hideRows(ids);
             this.clearAssignTarget();
-            this.$wire.assignFromSidebar(ids, payload).then((capacity) => {
-                if (Number(capacity?.remaining) <= 0) {
-                    this.hideFullProject(capacity?.project_id);
-                }
-            });
-        },
-        submitQuickCreate() {
-            this.quickCreateSubmitting = true;
-            this.$wire.quickCreateSidebarProject({ site_id: this.quickSiteId, user_id: this.quickWriterId }).then(() => {
-                this.quickCreateOpen = false;
-            }).finally(() => {
-                this.quickCreateSubmitting = false;
-            });
+            this.$wire.assignFromSidebar(ids, payload);
         },
         runSkipSelected() {
             this.bulkMenuOpen = false;
@@ -216,16 +192,26 @@
                     <div>
                         <label class="text-sm font-medium text-gray-700 dark:text-gray-200">
                             {{ __('seo-content-ai::filament.articles_optimal.domain_label') }}
+                            <span class="text-rose-600">*</span>
                         </label>
                         <x-select
                             wire:model.live="filterSiteId"
+                            required
                             class="mt-1 block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-white/10 dark:bg-gray-900"
                         >
-                            <option value="">{{ __('seo-content-ai::filament.articles_optimal.domain_all') }}</option>
+                            <option value="">{{ __('seo-content-ai::filament.articles_optimal.domain_placeholder') }}</option>
                             @foreach ($this->getSiteFilterOptions() as $siteId => $domainLabel)
                                 <option value="{{ $siteId }}">{{ $domainLabel }}</option>
                             @endforeach
                         </x-select>
+                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            {{ __('seo-content-ai::filament.articles_optimal.domain_help') }}
+                        </p>
+                        @if (! $canScan)
+                            <p class="mt-1 text-xs text-danger-600 dark:text-danger-400">
+                                {{ __('seo-content-ai::filament.articles_optimal.domain_required') }}
+                            </p>
+                        @endif
                     </div>
                     <div>
                         <label class="text-sm font-medium text-gray-700 dark:text-gray-200">
@@ -307,7 +293,13 @@
                 </div>
 
                 <div>
-                    <x-filament::button type="submit" wire:loading.attr="disabled" wire:target="runScan">
+                    <x-filament::button
+                        type="submit"
+                        wire:loading.attr="disabled"
+                        wire:target="runScan"
+                        x-bind:disabled="@js(! $canScan)"
+                        @class(['opacity-50 pointer-events-none' => ! $canScan])
+                    >
                         @if ($scanState === 'failed')
                             <span>{{ __('seo-content-ai::filament.articles_optimal.scan_retry') }}</span>
                         @else
@@ -329,7 +321,7 @@
                     @if ($scanNotice)
                         <p class="mt-2 text-sm text-warning-600 dark:text-warning-400">{{ $scanNotice }}</p>
                     @endif
-                    @if ($scanState === 'empty' && $filterSiteId)
+                    @if ($scanState === 'empty' && $selectedSiteId > 0)
                         <div class="mt-3">
                             <x-filament::button
                                 type="button"
@@ -559,7 +551,15 @@
                         @endforeach
                     </x-select>
                 </div>
-                <x-filament::icon-button type="button" icon="heroicon-o-plus" color="success" x-on:click="quickCreateOpen = true" tooltip="{{ __('seo-content-ai::filament.article_list.quick_create_content_project') }}" />
+                <x-filament::icon-button
+                    tag="a"
+                    href="{{ $contentProjectsUrl }}"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    icon="heroicon-o-arrow-top-right-on-square"
+                    color="gray"
+                    tooltip="{{ __('seo-content-ai::filament.articles_optimal.open_content_projects') }}"
+                />
             </div>
 
             <div>
@@ -609,42 +609,4 @@
         </div>
     </aside>
 
-    <div x-show="quickCreateOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-        <form x-on:submit.prevent="submitQuickCreate()" class="w-full max-w-xl rounded-xl bg-white p-6 shadow-2xl dark:bg-gray-900">
-            <h3 class="text-lg font-semibold leading-6">{{ __('seo-content-ai::filament.article_list.quick_create_content_project') }}</h3>
-            <div class="mt-5 space-y-4">
-                <div>
-                    <label class="block text-sm font-medium">{{ __('seo-content-ai::filament.projects.domain') }}</label>
-                    <x-select x-model="quickSiteId" required class="mt-1 block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-white/10 dark:bg-gray-950">
-                        <option value="">-- Choose domain --</option>
-                        @foreach ($projectSiteOptions as $siteId => $domain)
-                            <option value="{{ $siteId }}">{{ $domain }}</option>
-                        @endforeach
-                    </x-select>
-                </div>
-                <div>
-                    <label class="block text-sm font-medium">{{ __('seo-content-ai::filament.projects.assign_writer') }}</label>
-                    <x-select x-model="quickWriterId" required class="mt-1 block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-white/10 dark:bg-gray-950">
-                        <option value="">-- Choose writer --</option>
-                        @foreach ($writerOptions as $writerId => $writerLabel)
-                            <option value="{{ $writerId }}">{{ $writerLabel }}</option>
-                        @endforeach
-                    </x-select>
-                </div>
-            </div>
-            <div class="mt-6 flex justify-end gap-2">
-                <x-filament::button type="button" color="gray" x-on:click="quickCreateOpen = false" x-bind:disabled="quickCreateSubmitting">Cancel</x-filament::button>
-                <x-filament::button type="submit" color="success" x-bind:disabled="quickCreateSubmitting">
-                    <span x-show="! quickCreateSubmitting">Create</span>
-                    <span x-show="quickCreateSubmitting" class="inline-flex items-center gap-2">
-                        <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
-                        </svg>
-                        Creating...
-                    </span>
-                </x-filament::button>
-            </div>
-        </form>
-    </div>
 </div>

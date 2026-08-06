@@ -133,7 +133,7 @@ final class ContentProjectRerunUnifyTest extends TestCase
 
         $create = $this->source(CreateArticlesFromTaskService::class);
         self::assertStringContainsString('function runRerunFromStepForContext', $create);
-        self::assertStringContainsString('Improve items are manual-only', $create);
+        self::assertStringContainsString('runPublishWorkflowForContext($context, $siteId)', $create);
     }
 
     public function test_engine_dispatches_worker_once_with_optional_sync(): void
@@ -153,7 +153,7 @@ final class ContentProjectRerunUnifyTest extends TestCase
     {
         $src = $this->source(ContentProjectRerunEligibilityGuard::class);
         self::assertStringContainsString('Archived item cannot be rerun', $src);
-        self::assertStringContainsString('Improve items are manual-only', $src);
+        self::assertStringNotContainsString('Improve items are manual-only', $src);
         self::assertStringContainsString('Article-only rerun requires a usable outline', $src);
         self::assertStringContainsString('Active conflicting execution', $src);
     }

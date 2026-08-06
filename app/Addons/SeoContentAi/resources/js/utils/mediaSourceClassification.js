@@ -66,6 +66,25 @@ function hasTrustedWordPressUrl(row) {
     return false;
 }
 
+/**
+ * Primary display URL evidence. After WP sync, an image can still carry local
+ * seo_media metadata, but src/url already points at the WP attachment.
+ *
+ * @param {Record<string, unknown>|null|undefined} row
+ * @returns {boolean}
+ */
+function hasPrimaryWordPressUrl(row) {
+    const candidates = [row?.src, row?.url];
+    for (const candidate of candidates) {
+        const value = String(candidate ?? '').trim();
+        if (value !== '' && /\/wp-content\/uploads\//i.test(value)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 function resolveExplicitSourceType(row) {
     return String(
         row?.source_type
@@ -86,6 +105,11 @@ export function classifyMediaSource(row) {
     }
 
     const sourceType = resolveExplicitSourceType(row);
+    const primaryWpUrl = hasPrimaryWordPressUrl(row);
+    if (primaryWpUrl) {
+        return 'wordpress';
+    }
+
     if (sourceType === 'wordpress' || sourceType === 'wp') {
         // Explicit WP label still loses to pure Laravel storage URL without WP uploads path
         // when a stale attachment id was written into featured meta (seo media PK).
@@ -105,12 +129,11 @@ export function classifyMediaSource(row) {
         return 'local';
     }
 
-    const trustedWpUrl = hasTrustedWordPressUrl(row);
-    if (trustedWpUrl) {
+    if (hasTrustedWordPressUrl(row)) {
         return 'wordpress';
     }
 
-    // Local Laravel file evidence wins over bare/stale wp_attachment_id
+    // Local/SEO media evidence wins over bare/stale wp_attachment_id
     // (featured meta often stores SeoMedia PK in wp_featured_attachment_id before WP sync).
     if (hasLocalLaravelEvidence(row)) {
         return classifyLocalKind(row);

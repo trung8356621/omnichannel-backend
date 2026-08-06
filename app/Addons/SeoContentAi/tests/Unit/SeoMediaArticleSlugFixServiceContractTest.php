@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Tests\Unit;
 use App\Addons\SeoContentAi\Services\SeoMediaArticleSlugFixService;
 use App\Addons\SeoContentAi\Services\SeoMediaStorageService;
 use App\Addons\SeoContentAi\Services\SeoMediaUrlReplacementService;
+use App\Addons\SeoContentAi\Services\WordPressAttachmentRenameService;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 
@@ -90,7 +91,8 @@ final class SeoMediaArticleSlugFixServiceContractTest extends TestCase
 
         $storage = $this->createMock(SeoMediaStorageService::class);
         $urlReplacement = new SeoMediaUrlReplacementService();
-        $service = new SeoMediaArticleSlugFixService($storage, $urlReplacement);
+        $wpRename = new WordPressAttachmentRenameService();
+        $service = new SeoMediaArticleSlugFixService($storage, $urlReplacement, $wpRename);
         self::assertInstanceOf(SeoMediaArticleSlugFixService::class, $service);
     }
 

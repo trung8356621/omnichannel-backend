@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\SeoMediaArticleSlugFixAllSer
 use App\Addons\SeoContentAi\Services\SeoMediaArticleSlugFixService;
 use App\Addons\SeoContentAi\Services\SeoMediaStorageService;
 use App\Addons\SeoContentAi\Services\SeoMediaUrlReplacementService;
+use App\Addons\SeoContentAi\Services\WordPressAttachmentRenameService;
 use PHPUnit\Framework\TestCase;
 
 final class SeoMediaArticleSlugFixAllServiceTest extends TestCase
@@ -90,6 +91,7 @@ final class SeoMediaArticleSlugFixAllServiceTest extends TestCase
         $slugFix = new SeoMediaArticleSlugFixService(
             $this->createMock(SeoMediaStorageService::class),
             $urlReplacement,
+            new WordPressAttachmentRenameService(),
         );
 
         return new SeoMediaArticleSlugFixAllService($slugFix, $urlReplacement);

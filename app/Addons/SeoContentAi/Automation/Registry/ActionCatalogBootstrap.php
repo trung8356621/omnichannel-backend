@@ -142,6 +142,8 @@ final class ActionCatalogBootstrap
                 inputSchema: [
                     'project_id' => ['type' => 'integer', 'required' => true],
                     'article_id' => ['type' => 'integer', 'required' => true],
+                    'keyword' => ['type' => 'string', 'required' => false],
+                    'title' => ['type' => 'string', 'required' => false],
                 ],
                 emittedEvents: ['project.task_created'],
             ),

@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\Automation\Data\ActionContext;
 use App\Addons\SeoContentAi\Jobs\ManualWordPressSyncJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleEditorBundleApplyService;
+use App\Addons\SeoContentAi\Services\ArticleWordPressSyncEligibility;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncLeaseService;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ActorContext;
@@ -18,6 +19,8 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectAc
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectArticleMembership;
 use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PostPublishWordPressSyncEligibility;
+use App\Addons\SeoContentAi\Services\WordPress\SideEffect\ManualWordPressContext;
+use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\User;
@@ -41,6 +44,8 @@ final class WordPressManualSyncService
         private readonly BusinessActionDispatcher $actions,
         private readonly ContentProjectArticleMembership $contentProjectMembership,
         private readonly ContentProjectCommandBus $contentProjectCommandBus,
+        private readonly ArticleWordPressSyncEligibility $syncEligibility,
+        private readonly WordPressArticleSyncService $articleSync,
     ) {}
 
     /**
@@ -54,20 +59,22 @@ final class WordPressManualSyncService
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
         abort_unless($actor->getKey() > 0, 403);
 
-        // Content Project: before first publish → fail-closed (Publishing Queue owns create).
-        // After confirmed Published → SyncPublishedArticleToWordPressCommand (UPDATE only).
+        // Content Project create items wait for Publishing Queue; rewrite/improve updates existing WP posts only.
         if ($this->contentProjectMembership->belongsToContentProject($article)) {
-            $eligibility = app(\App\Addons\SeoContentAi\Services\ContentProject\Publishing\PostPublishWordPressSyncEligibility::class)
-                ->evaluate($article);
+            $eligibility = $this->syncEligibility->evaluate($article);
             if (! ($eligibility['allowed'] ?? false)) {
                 return $this->blocked(
-                    'content_project_manual_sync_forbidden',
-                    (string) __('seo-content-ai::filament.automation.content_project_manual_sync_forbidden'),
+                    (string) ($eligibility['reason'] ?? 'content_project_manual_sync_forbidden'),
+                    (string) ($eligibility['message'] ?? __('seo-content-ai::filament.automation.content_project_manual_sync_forbidden')),
                     [
-                        'block_code' => (string) ($eligibility['code'] ?? 'not_published'),
+                        'block_code' => (string) ($eligibility['reason'] ?? 'not_published'),
                         'post_publish_eligible' => false,
                     ],
                 );
+            }
+
+            if (($eligibility['mode'] ?? null) === ArticleWordPressSyncEligibility::MODE_REWRITE_UPDATE_EXISTING) {
+                return $this->syncRewriteExistingFromEditorBundle($article, $bundle, $actor, $initiatedFrom, $eligibility);
             }
 
             return $this->syncPublishedFromEditorBundle($article, $bundle, $actor, $initiatedFrom, $eligibility);
@@ -565,6 +572,149 @@ final class WordPressManualSyncService
         );
 
         return $this->mapPostPublishCommandResult($result, $article);
+    }
+
+    /**
+     * @param  array<string, mixed>  $bundle
+     * @param  array<string, mixed>  $eligibility
+     * @return array<string, mixed>
+     */
+    private function syncRewriteExistingFromEditorBundle(
+        SeoArticle $article,
+        array $bundle,
+        User $actor,
+        string $initiatedFrom,
+        array $eligibility,
+    ): array {
+        $context = ArticleEditorSaveContext::fromBundle($article, $bundle);
+        $this->bundleApply->apply($article, $bundle, $context);
+
+        $html = (string) ($bundle['html'] ?? '');
+        $fresh = $article->fresh() ?? $article;
+        $persist = $this->actions->dispatch(
+            'article.content.update',
+            [
+                'article_id' => (int) $fresh->id,
+                'content' => $html,
+                'title' => $context->title,
+                'slug' => $context->slug,
+                'status' => $context->status,
+                'post_type' => $context->postType,
+                'visibility' => $context->visibility,
+                'publish_day' => $context->publishDay,
+                'publish_month' => $context->publishMonth,
+                'publish_year' => $context->publishYear,
+                'publish_hour' => $context->publishHour,
+                'publish_minute' => $context->publishMinute,
+                'seo_meta_description' => $context->seoMetaDescription,
+                'focus_keyword' => $context->focusKeyword,
+            ],
+            ActionContext::fromArray([
+                'origin' => 'rewrite_existing_wordpress_sync',
+                'correlation_id' => Str::uuid()->toString(),
+                'actor_id' => (int) $actor->id,
+                'site_id' => (int) ($fresh->site_id ?? 0) ?: null,
+            ]),
+        );
+
+        if (! $persist->success) {
+            return [
+                'success' => false,
+                'status' => 'blocked',
+                'queued' => false,
+                'workspace_only' => false,
+                'message' => (string) ($persist->error['message'] ?? 'Không lưu được bài trước khi đồng bộ WordPress.'),
+            ];
+        }
+
+        $article = $fresh->fresh() ?? $fresh;
+        $remotePostId = (int) ($eligibility['remote_post_id'] ?? $article->wp_post_id ?? 0);
+        if ($remotePostId <= 0 || (int) ($article->wp_post_id ?? 0) !== $remotePostId) {
+            return $this->blocked(
+                'missing_remote_post',
+                'Không tìm thấy bài WordPress gốc để đồng bộ.',
+                [
+                    'block_code' => 'missing_remote_post',
+                    'post_publish_eligible' => false,
+                    'create_post_called' => false,
+                ],
+            );
+        }
+
+        $operationId = (string) Str::uuid();
+        $sideEffect = new ManualWordPressContext(
+            userId: max(1, (int) $actor->id),
+            requestId: $operationId,
+            articleId: (int) $article->id,
+            siteId: (int) ($article->site_id ?? 0),
+            reason: 'rewrite_existing_sync:'.$operationId,
+            correlationId: $operationId,
+        );
+
+        $syncResult = $this->articleSync->updatePublishedArticleOnly(
+            $article,
+            $sideEffect,
+            $context->seoPayloadForWordPress(),
+        );
+
+        if (! ($syncResult['success'] ?? false)) {
+            return [
+                'success' => false,
+                'status' => 'blocked',
+                'queued' => false,
+                'workspace_only' => false,
+                'close_editor' => false,
+                'message' => (string) ($syncResult['message'] ?? 'Không thể đồng bộ thay đổi lên WordPress.'),
+                'data' => [
+                    'article_id' => (int) $article->id,
+                    'wp_post_id' => $remotePostId,
+                    'mode' => ArticleWordPressSyncEligibility::MODE_REWRITE_UPDATE_EXISTING,
+                    'operation_id' => $operationId,
+                    'create_post_called' => false,
+                    'publish_queue_status_unchanged' => true,
+                    'error_code' => $syncResult['error_code'] ?? null,
+                ],
+                'notification' => [
+                    'title' => __('seo-content-ai::filament.automation.wp_sync_blocked_title'),
+                    'body' => (string) ($syncResult['message'] ?? 'Không thể đồng bộ thay đổi lên WordPress.'),
+                    'status' => 'danger',
+                ],
+            ];
+        }
+
+        RuntimeLogger::info('rewrite_existing_wp.synced', [
+            'article_id' => (int) $article->id,
+            'wp_post_id' => $remotePostId,
+            'task_id' => (int) (($eligibility['task'] ?? null)?->id ?? 0) ?: null,
+            'item_type' => (string) ($eligibility['item_type'] ?? ''),
+            'create_post_called' => false,
+            'initiated_from' => $initiatedFrom,
+            'operation_id' => $operationId,
+        ]);
+
+        return [
+            'success' => true,
+            'status' => 'rewrite_existing_synced',
+            'queued' => false,
+            'already_queued' => false,
+            'workspace_only' => false,
+            'close_editor' => false,
+            'reload' => false,
+            'message' => 'Đã đồng bộ bài viết lại lên WordPress.',
+            'data' => [
+                'article_id' => (int) $article->id,
+                'wp_post_id' => $remotePostId,
+                'mode' => ArticleWordPressSyncEligibility::MODE_REWRITE_UPDATE_EXISTING,
+                'operation_id' => $operationId,
+                'create_post_called' => false,
+                'publish_queue_status_unchanged' => true,
+            ],
+            'notification' => [
+                'title' => 'Đã đồng bộ bài viết lên WordPress.',
+                'body' => 'Đã cập nhật đúng bài WordPress hiện có.',
+                'status' => 'success',
+            ],
+        ];
     }
 
     /**

@@ -17,6 +17,10 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentP
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPreviewToken;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPublishingQueueService;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\ContentPublishingStrategy;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\ContentPublishingStrategyResolver;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishDueItemOutcome;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\PublishDueItemService;
 use InvalidArgumentException;
 
 /**
@@ -29,6 +33,8 @@ final class SendToPublishingQueueHandler extends AbstractPublishingHandler
         ContentProjectBusinessLock $businessLock,
         ContentProjectPreviewToken $previewToken,
         private readonly ContentProjectPublishingQueueService $queueService,
+        private readonly PublishDueItemService $dueItemService,
+        private readonly ContentPublishingStrategyResolver $strategyResolver = new ContentPublishingStrategyResolver,
     ) {
         parent::__construct($tenantGuard, $businessLock, $previewToken);
     }
@@ -119,27 +125,90 @@ final class SendToPublishingQueueHandler extends AbstractPublishingHandler
             return $this->businessLock->withLock(
                 $this->businessLock->projectSchedule($projectId),
                 function () use ($project, $projectId, $eligible, $actor, $warnings): ContentProjectActionResult {
-                    $affected = $this->queueService->acceptHandoff(
-                        $project,
-                        $eligible,
-                        $actor->actorId !== null ? (int) $actor->actorId : null,
+                    $tasks = SeoProjectTask::query()
+                        ->where('project_id', $projectId)
+                        ->whereIn('id', $eligible)
+                        ->whereNull('archived_at')
+                        ->with(['article'])
+                        ->get();
+
+                    $scheduledCreateIds = [];
+                    $immediateUpdateIds = [];
+                    $missingRemoteIds = [];
+
+                    foreach ($tasks as $task) {
+                        $strategy = $this->strategyResolver->resolve(
+                            $task,
+                            $task->relationLoaded('article') ? $task->article : null,
+                        );
+
+                        if ($strategy->isImmediateUpdate()) {
+                            $immediateUpdateIds[] = (int) $task->getKey();
+                        } elseif ($strategy->isMissingRemote()) {
+                            $missingRemoteIds[] = (int) $task->getKey();
+                        } else {
+                            $scheduledCreateIds[] = (int) $task->getKey();
+                        }
+                    }
+
+                    $actorId = $actor->actorId !== null ? (int) $actor->actorId : null;
+                    $affected = 0;
+                    $affected += $this->queueService->acceptHandoff($project, $scheduledCreateIds, $actorId);
+                    $affected += $this->queueService->enqueueImmediateUpdateHandoff($project, $immediateUpdateIds, $actorId);
+                    $affected += $this->queueService->failMissingRemotePostHandoff($project, $missingRemoteIds, $actorId);
+
+                    $publishOutcomes = $this->dueItemService->executeMany(
+                        $immediateUpdateIds,
+                        PublishDueItemService::TRIGGER_SCHEDULER,
                     );
 
                     return ContentProjectActionResult::ok(
                         ContentProjectActionCodes::ITEMS_SENT_TO_PUBLISHING_QUEUE,
-                        'Sent to Publishing Queue (Unscheduled).',
+                        $this->handoffMessage(
+                            count($scheduledCreateIds),
+                            count($immediateUpdateIds),
+                            count($missingRemoteIds),
+                        ),
                         $projectId,
                         $eligible,
                         $warnings,
                         metadata: [
                             'affected_count' => $affected,
-                            'publish_state' => 'unscheduled',
-                            'wordpress_called' => false,
+                            'publish_state' => $immediateUpdateIds !== [] ? 'awaiting_delivery' : 'unscheduled',
+                            'wordpress_called' => $immediateUpdateIds !== [],
                             'scheduled' => false,
+                            'strategy_counts' => [
+                                ContentPublishingStrategy::SCHEDULED_CREATE => count($scheduledCreateIds),
+                                ContentPublishingStrategy::IMMEDIATE_UPDATE => count($immediateUpdateIds),
+                                ContentPublishingStrategy::FAILED_MISSING_REMOTE => count($missingRemoteIds),
+                            ],
+                            'scheduled_create_ids' => $scheduledCreateIds,
+                            'immediate_update_ids' => $immediateUpdateIds,
+                            'missing_remote_ids' => $missingRemoteIds,
+                            'publish_outcomes' => array_map(
+                                static fn (PublishDueItemOutcome $outcome): array => $outcome->toLogArray(),
+                                $publishOutcomes,
+                            ),
                         ],
                     );
                 },
             );
         });
+    }
+
+    private function handoffMessage(int $scheduledCreate, int $immediateUpdate, int $missingRemote): string
+    {
+        $parts = [];
+        if ($immediateUpdate > 0) {
+            $parts[] = sprintf('%d bai viet lai se duoc cap nhat ngay.', $immediateUpdate);
+        }
+        if ($scheduledCreate > 0) {
+            $parts[] = sprintf('%d bai viet moi da dua vao hang doi len lich.', $scheduledCreate);
+        }
+        if ($missingRemote > 0) {
+            $parts[] = sprintf('%d bai viet lai thieu WP post ID da chuyen sang loi.', $missingRemote);
+        }
+
+        return $parts !== [] ? implode(' ', $parts) : 'Sent to Publishing Queue.';
     }
 }

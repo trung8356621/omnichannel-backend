@@ -216,6 +216,11 @@ class EditArticle extends SeoEditRecord
     /** True when article linked to WP but mount skipped remote refresh (Phase 1 perf). */
     public bool $wordpressMetadataStale = false;
 
+    public string $manualWpPostId = '';
+
+    /** @var array{wp_post_id?: int, duplicates?: list<array{id: int, title: string, edit_url: string, current: bool}>, remote_found?: bool|null, message?: string}|null */
+    public ?array $manualWpPostLookup = null;
+
     public ?int $reviewsCountForEditor = null;
 
     public bool $editorPreparing = false;
@@ -282,6 +287,10 @@ class EditArticle extends SeoEditRecord
         $perf = app(ArticleEditorPerfDebug::class);
         $perf->start('edit_article_mount');
         $this->hydrateArticleState();
+        $this->manualWpPostId = (int) ($this->record->wp_post_id ?? 0) > 0
+            ? (string) ((int) $this->record->wp_post_id)
+            : '';
+        $this->manualWpPostLookup = null;
 
         if ((int) ($this->record->wp_post_id ?? 0) > 0) {
             $this->wordpressMetadataStale = true;
@@ -371,6 +380,10 @@ class EditArticle extends SeoEditRecord
         $this->editorPreparingMessage = '';
         // Same as mount: hydrate from local DB only, no remote WP HTTP.
         $this->hydrateArticleState();
+        $this->manualWpPostId = (int) ($this->record->wp_post_id ?? 0) > 0
+            ? (string) ((int) $this->record->wp_post_id)
+            : '';
+        $this->manualWpPostLookup = null;
 
         if ((int) ($this->record->wp_post_id ?? 0) > 0) {
             $this->wordpressMetadataStale = true;
@@ -395,6 +408,10 @@ class EditArticle extends SeoEditRecord
         $this->editorPreparing = false;
         $this->editorPreparingMessage = '';
         $this->hydrateArticleState();
+        $this->manualWpPostId = (int) ($this->record->wp_post_id ?? 0) > 0
+            ? (string) ((int) $this->record->wp_post_id)
+            : '';
+        $this->manualWpPostLookup = null;
 
         if ((int) ($this->record->wp_post_id ?? 0) > 0) {
             $this->wordpressMetadataStale = true;
@@ -2111,6 +2128,170 @@ class EditArticle extends SeoEditRecord
 
         return app(WordPressArticleContentService::class)
             ->resolveStoredWordPressPermalink($this->record);
+    }
+
+    public function lookupManualWordPressPostId(): void
+    {
+        $wpPostId = $this->normalizeManualWpPostId();
+        if ($wpPostId <= 0) {
+            $this->manualWpPostLookup = [
+                'duplicates' => [],
+                'remote_found' => false,
+                'message' => 'Nhập WP ID dạng số để kiểm tra.',
+            ];
+
+            return;
+        }
+
+        $duplicates = $this->manualWpPostIdDuplicateRows($wpPostId);
+
+        $this->manualWpPostId = (string) $wpPostId;
+
+        $this->manualWpPostLookup = [
+            'wp_post_id' => $wpPostId,
+            'duplicates' => $duplicates,
+            'remote_found' => null,
+            'message' => $duplicates !== []
+                ? 'Tìm thấy bài local đang dùng WP ID này. Mở bài trùng để kiểm tra/xóa trước khi nối.'
+                : 'Chưa thấy bài local nào đang dùng WP ID này. Bấm Nối WP ID để kiểm tra WordPress và liên kết.',
+        ];
+    }
+
+    public function linkManualWordPressPostId(): void
+    {
+        if (! SeoAccessControl::canMutateInSeoPanel()) {
+            Notification::make()
+                ->title('Không có quyền cập nhật WP ID')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $wpPostId = $this->normalizeManualWpPostId();
+        if ($wpPostId <= 0) {
+            Notification::make()
+                ->title('WP ID không hợp lệ')
+                ->body('Nhập ID bài viết WordPress dạng số, ví dụ 1234.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $duplicates = $this->manualWpPostIdDuplicateRows($wpPostId);
+        $blockingDuplicate = collect($duplicates)
+            ->first(static fn (array $row): bool => ! (bool) ($row['current'] ?? false));
+
+        if (is_array($blockingDuplicate)) {
+            $this->manualWpPostLookup = [
+                'wp_post_id' => $wpPostId,
+                'duplicates' => $duplicates,
+                'remote_found' => null,
+                'message' => 'WP ID này đang được nối với bài local khác. Mở bài trùng để xóa/sửa trước khi nối.',
+            ];
+
+            Notification::make()
+                ->title('WP ID đã được nối với bài khác')
+                ->body(sprintf('Article #%d: %s', (int) $blockingDuplicate['id'], Str::limit((string) $blockingDuplicate['title'], 80)))
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $previousWpPostId = (int) ($this->record->wp_post_id ?? 0);
+        $this->record->forceFill(['wp_post_id' => $wpPostId])->save();
+        $this->record->refresh();
+        $this->record->loadMissing('articleMetas', 'site');
+
+        $post = app(WordPressArticleContentService::class)
+            ->fetchFromWordPress($this->record, importFaqs: false);
+
+        if ($post === []) {
+            $this->record->forceFill([
+                'wp_post_id' => $previousWpPostId > 0 ? $previousWpPostId : null,
+            ])->save();
+            $this->record->refresh();
+            $this->manualWpPostId = $previousWpPostId > 0 ? (string) $previousWpPostId : '';
+
+            RuntimeLogger::warning('article_editor.manual_wp_id_link_failed', [
+                'article_id' => (int) $this->record->getKey(),
+                'site_id' => (int) ($this->record->site_id ?? 0),
+                'wp_post_id' => $wpPostId,
+            ]);
+
+            Notification::make()
+                ->title('Không nối được WP ID')
+                ->body('Không fetch được bài WordPress với ID này. Kiểm tra đúng domain, token bridge và WP ID rồi thử lại.')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        app(WordPressArticleContentService::class)
+            ->refreshSlugAndPermalinkFromWordPress($this->record);
+
+        $this->record->refresh();
+        $this->record->loadMissing('articleMetas', 'site');
+        $this->manualWpPostId = (string) $wpPostId;
+        $this->manualWpPostLookup = [
+            'wp_post_id' => $wpPostId,
+            'duplicates' => $this->manualWpPostIdDuplicateRows($wpPostId),
+            'remote_found' => true,
+            'message' => 'Đã nối WP ID thành công.',
+        ];
+        $this->wordpressMetadataStale = false;
+        $this->articleSlug = trim((string) ($this->record->slug ?? $this->articleSlug));
+        $this->dispatchGoogleSerpPreviewUpdated();
+
+        RuntimeLogger::info('article_editor.manual_wp_id_linked', [
+            'article_id' => (int) $this->record->getKey(),
+            'site_id' => (int) ($this->record->site_id ?? 0),
+            'wp_post_id' => $wpPostId,
+            'previous_wp_post_id' => $previousWpPostId > 0 ? $previousWpPostId : null,
+        ]);
+
+        Notification::make()
+            ->title('Đã nối WP ID')
+            ->body('Article đã liên kết lại với bài WordPress #'.$wpPostId.'.')
+            ->success()
+            ->send();
+    }
+
+    private function normalizeManualWpPostId(): int
+    {
+        return (int) preg_replace('/\D+/', '', trim($this->manualWpPostId));
+    }
+
+    /**
+     * @return list<array{id: int, title: string, edit_url: string, current: bool}>
+     */
+    private function manualWpPostIdDuplicateRows(int $wpPostId): array
+    {
+        if ($wpPostId <= 0) {
+            return [];
+        }
+
+        $currentId = (int) $this->record->getKey();
+        $siteId = (int) ($this->record->site_id ?? 0);
+
+        return SeoArticle::query()
+            ->where('site_id', $siteId)
+            ->where('wp_post_id', $wpPostId)
+            ->orderByRaw('id = ? desc', [$currentId])
+            ->orderByDesc('id')
+            ->limit(10)
+            ->get(['id', 'title', 'wp_post_id'])
+            ->map(static fn (SeoArticle $article): array => [
+                'id' => (int) $article->id,
+                'title' => trim((string) $article->title) !== '' ? (string) $article->title : 'Untitled',
+                'edit_url' => ArticleResource::getUrl('edit', ['record' => $article]),
+                'current' => (int) $article->id === $currentId,
+            ])
+            ->values()
+            ->all();
     }
 
     public function getStatusLabel(): string
@@ -4236,7 +4417,8 @@ class EditArticle extends SeoEditRecord
                 ->values()
                 ->all(),
             'preview_url' => $this->getArticlePreviewUrl(),
-            'can_sync_wp' => filled($this->record->wp_post_id),
+            'can_sync_wp' => app(\App\Addons\SeoContentAi\Services\ArticleWordPressSyncEligibility::class)
+                ->isAllowed($this->record),
             'loai_san_pham' => $this->supportsProductGallery()
                 ? trim((string) $metaMap->get('loai_san_pham', ''))
                 : '',

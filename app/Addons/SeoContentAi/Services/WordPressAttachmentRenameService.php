@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressSlugFixRequiredException;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressWriteReadinessGuard;
 use App\Models\Site;
 use App\Support\RuntimeLogger;
 use Illuminate\Support\Facades\Http;
@@ -37,6 +39,10 @@ final class WordPressAttachmentRenameService
      */
     public function renameExplicitSingle(Site $site, array $item): array
     {
+        if ($blocked = $this->blockWhenSlugFixRequired($site, 'attachment.rename_explicit_single')) {
+            return $blocked;
+        }
+
         $site->loadMissing('metas');
         $writeToken = trim((string) ($site->getMeta('seo_migration_token') ?? ''));
         if ($writeToken === '') {
@@ -144,6 +150,10 @@ final class WordPressAttachmentRenameService
      */
     public function renameForSite(Site $site, array $items): array
     {
+        if ($blocked = $this->blockWhenSlugFixRequired($site, 'attachment.rename')) {
+            return $blocked;
+        }
+
         $normalized = $this->normalizeItems($items);
         if ($normalized === []) {
             return [
@@ -274,5 +284,23 @@ final class WordPressAttachmentRenameService
         }
 
         return $base . '/wp-json/omi-seo-ai/v1/attachments/rename';
+    }
+
+    /**
+     * @return array{success: false, message: string, error_code: string}|null
+     */
+    private function blockWhenSlugFixRequired(Site $site, string $operation): ?array
+    {
+        try {
+            app(WordPressWriteReadinessGuard::class)->assertCanWriteToWordPress($site, $operation);
+
+            return null;
+        } catch (WordPressSlugFixRequiredException) {
+            return [
+                'success' => false,
+                'message' => WordPressSlugFixRequiredException::MESSAGE,
+                'error_code' => WordPressSlugFixRequiredException::ERROR_CODE,
+            ];
+        }
     }
 }

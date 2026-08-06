@@ -83,6 +83,26 @@ final class SiteSyncStepRunner
             ->first();
 
         if ($step === null) {
+            $runningStep = SeoSiteSyncRunStep::query()
+                ->where('run_id', $runId)
+                ->where('status', 'running')
+                ->orderBy('step_order')
+                ->first();
+
+            if ($runningStep !== null) {
+                $lastTouchedAt = $runningStep->updated_at ?? $runningStep->started_at;
+                if ($lastTouchedAt !== null && $lastTouchedAt->greaterThan(now()->subMinutes(10))) {
+                    $this->persistClaimResult($run, $runningStep, SiteSyncStepClaimResult::OwnedByOtherWorker);
+
+                    return;
+                }
+
+                $this->persistClaimResult($run, $runningStep, SiteSyncStepClaimResult::StaleLock, 'Reclaiming stale running step');
+                $step = $runningStep;
+            }
+        }
+
+        if ($step === null) {
             $this->persistClaimResult($run, null, SiteSyncStepClaimResult::AlreadyCompleted);
             $run->forceFill([
                 'status' => 'completed',

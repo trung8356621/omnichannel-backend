@@ -49,8 +49,9 @@ final class PostPublishWordPressSyncContractTest extends TestCase
             new ReflectionMethod(WordPressManualSyncService::class, 'enqueueFromEditorBundle'),
         );
         self::assertStringContainsString('belongsToContentProject', $source);
-        self::assertStringContainsString('PostPublishWordPressSyncEligibility', $source);
-        self::assertStringContainsString('content_project_manual_sync_forbidden', $source);
+        self::assertStringContainsString('syncEligibility->evaluate', $source);
+        self::assertStringContainsString('MODE_REWRITE_UPDATE_EXISTING', $source);
+        self::assertStringContainsString('syncRewriteExistingFromEditorBundle', $source);
         self::assertStringContainsString('syncPublishedFromEditorBundle', $source);
     }
 
@@ -85,6 +86,27 @@ final class PostPublishWordPressSyncContractTest extends TestCase
         );
         self::assertStringContainsString("omit_publication_fields", $source);
         self::assertStringContainsString("unset(\$payload['status'], \$payload['post_date']", $source);
+    }
+
+    public function test_linked_wordpress_post_payload_preserves_remote_slug(): void
+    {
+        $source = $this->methodSource(
+            new ReflectionMethod(WordPressArticleSyncService::class, 'buildEditorSyncPayload'),
+        );
+        self::assertStringContainsString('shouldPreserveLinkedPostSlug', $source);
+        self::assertStringContainsString("unset(\$payload['slug']);", $source);
+
+        $guard = $this->methodSource(
+            new ReflectionMethod(WordPressArticleSyncService::class, 'shouldPreserveLinkedPostSlug'),
+        );
+        self::assertStringContainsString('allow_slug_update', $guard);
+        self::assertStringContainsString('wp_post_id', $guard);
+
+        $slugSync = $this->methodSource(
+            new ReflectionMethod(WordPressArticleSyncService::class, 'syncSlugForArticle'),
+        );
+        self::assertStringContainsString("'article.sync_slug'", $slugSync);
+        self::assertStringContainsString("['slug' => \$slug]", $slugSync);
     }
 
     public function test_handler_preserves_published_queue_status_on_success_and_failure(): void
@@ -123,7 +145,7 @@ final class PostPublishWordPressSyncContractTest extends TestCase
         self::assertStringContainsString('ContentProjectPublishQueueStatus::Published', $source);
         self::assertStringContainsString('publish_published_at', $source);
         self::assertStringContainsString('isActivelyPublishing', $source);
-        self::assertStringNotContainsString("articles.status", $source);
+        self::assertStringContainsString("articles.status", $source);
         self::assertStringNotContainsString("'status' === 'published'", $source);
     }
 
@@ -211,14 +233,16 @@ final class PostPublishWordPressSyncContractTest extends TestCase
         $actions = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/views/filament/resources/article-resource/pages/partials/article-editor-page-actions.blade.php',
         );
-        self::assertStringContainsString('postPublishWpSyncEligible', $actions);
-        self::assertStringContainsString('data-seo-sync-mode="post_publish_wordpress_sync"', $actions);
+        self::assertStringContainsString('ArticleWordPressSyncEligibility::class', $actions);
+        self::assertStringContainsString('contentProjectWpSyncEligible', $actions);
+        self::assertStringContainsString('data-seo-sync-mode="{{ $wpSyncEligibility', $actions);
         self::assertStringContainsString('data-seo-page-action="save"', $actions);
 
         $editPage = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/views/filament/resources/article-resource/pages/edit-article.blade.php',
         );
-        self::assertStringContainsString('syncPostPublishEligible', $editPage);
+        self::assertStringContainsString('ArticleWordPressSyncEligibility::class', $editPage);
+        self::assertStringContainsString('syncContentProjectEligible', $editPage);
         self::assertStringContainsString("__seoExecuteHeavyArticleAction('sync'", $editPage);
     }
 

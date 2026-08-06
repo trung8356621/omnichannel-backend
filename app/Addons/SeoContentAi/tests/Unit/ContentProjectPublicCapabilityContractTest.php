@@ -162,6 +162,22 @@ final class ContentProjectPublicCapabilityContractTest extends TestCase
         self::assertSame([], $state->availableActions);
     }
 
+    public function test_item_action_guard_allows_rerun_for_draft_generation_failed(): void
+    {
+        $guard = new ContentProjectItemActionGuard;
+        $actions = $guard->availableActions(
+            lifecycle: ContentProjectLifecyclePhase::Draft,
+            archive: ContentProjectItemArchiveState::None,
+            publish: ContentProjectItemPublishState::None,
+            generation: ContentProjectItemGenerationState::Failed,
+            review: ContentProjectItemReviewState::None,
+            hasPublished: false,
+        );
+
+        self::assertContains(ContentProjectItemAction::Generate, $actions);
+        self::assertContains(ContentProjectItemAction::Rerun, $actions);
+    }
+
     public function test_bulk_rerun_service_file_does_not_exist(): void
     {
         self::assertFileDoesNotExist(

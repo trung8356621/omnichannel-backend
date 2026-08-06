@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
-use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
@@ -22,6 +21,7 @@ use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
+use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Url;
 use Livewire\WithPagination;
@@ -112,6 +112,7 @@ final class ArticlesOptimal extends SeoPanelPage
 
     public function updatedFilterSiteId(): void
     {
+        $this->filterSiteId = $this->validatedFilterSiteId(throw: false);
         $this->invalidateScanResults();
     }
 
@@ -216,8 +217,10 @@ final class ArticlesOptimal extends SeoPanelPage
             ->whereNotNull('type')
             ->where('type', '!=', '');
 
-        if ($this->filterSiteId !== null && $this->filterSiteId > 0) {
-            $query->where('site_id', $this->filterSiteId);
+        $siteId = $this->validatedFilterSiteId(throw: false);
+
+        if ($siteId !== null) {
+            $query->where('site_id', $siteId);
         } elseif (SeoAccessControl::shouldScopeToAccountOwner()) {
             $siteIds = array_map('intval', array_keys($this->getSiteFilterOptions()));
             if ($siteIds !== []) {
@@ -274,12 +277,7 @@ final class ArticlesOptimal extends SeoPanelPage
         $this->scanning = true;
 
         try {
-            if (SeoAccessControl::shouldScopeToAccountOwner()) {
-                $siteIds = array_map('intval', array_keys($this->getSiteFilterOptions()));
-                if ($siteIds === []) {
-                    throw new \RuntimeException(__('seo-content-ai::filament.articles_optimal.scan_no_accessible_sites'));
-                }
-            }
+            $this->filterSiteId = $this->validatedFilterSiteId();
 
             $scanService = app(SeoAuditScanService::class);
             $this->cacheStatusCounts = $scanService->cacheStatusCounts($this->baseArticleQuery());
@@ -324,11 +322,16 @@ final class ArticlesOptimal extends SeoPanelPage
                 ]);
             }
         } catch (Throwable $exception) {
-            report($exception);
             $this->scanState = 'failed';
-            $this->scanError = __('seo-content-ai::filament.articles_optimal.scan_failed');
+            $this->scanError = $exception instanceof ValidationException
+                ? (string) ($exception->errors()['domain_ids'][0] ?? __('seo-content-ai::filament.articles_optimal.domain_required'))
+                : __('seo-content-ai::filament.articles_optimal.scan_failed');
             $this->hasScanned = false;
             $this->cacheStatusCounts = null;
+
+            if (! $exception instanceof ValidationException) {
+                report($exception);
+            }
         } finally {
             $this->scanning = false;
         }
@@ -336,7 +339,8 @@ final class ArticlesOptimal extends SeoPanelPage
 
     public function mount(): void
     {
-        $this->loadDefaultAuditResults();
+        $this->filterSiteId = $this->validatedFilterSiteId(throw: false);
+        $this->invalidateScanResults();
     }
 
     public function loadDefaultAuditResults(): void
@@ -374,39 +378,13 @@ final class ArticlesOptimal extends SeoPanelPage
      */
     public function getContentProjectOptions(): array
     {
-        $siteId = $this->filterSiteId !== null && $this->filterSiteId > 0
-            ? $this->filterSiteId
-            : SeoAccessControl::globalSiteId();
-
-        if ($siteId !== null && $siteId > 0) {
-            return ArticleResource::contentProjectOptions($siteId);
-        }
-
         $options = [];
-        foreach (SeoAccessControl::accessibleSiteIds() as $accessibleSiteId) {
-            $options += ArticleResource::contentProjectOptions((int) $accessibleSiteId);
+        $siteId = $this->validatedFilterSiteId(throw: false);
+        if ($siteId !== null) {
+            $options += ArticleResource::contentProjectOptionsForSeoAudit((int) $siteId);
         }
 
         return $options;
-    }
-
-    /**
-     * @return array<int, string>
-     */
-    public function getWriterOptions(): array
-    {
-        return SeoProjectResource::userSelectOptions();
-    }
-
-    /**
-     * @return array<int, string>
-     */
-    public function getSidebarProjectSiteOptions(): array
-    {
-        return SeoAccessControl::accessibleSitesQuery()
-            ->orderBy('domain')
-            ->pluck('domain', 'id')
-            ->all();
     }
 
     /**
@@ -461,46 +439,6 @@ final class ArticlesOptimal extends SeoPanelPage
     }
 
     /**
-     * @param  array<string, mixed>  $data
-     */
-    public function quickCreateSidebarProject(array $data): void
-    {
-        $siteId = (int) ($data['site_id'] ?? 0);
-        if ($siteId <= 0) {
-            $siteId = (int) ($this->filterSiteId ?: SeoAccessControl::globalSiteId() ?: 0);
-        }
-
-        if ($siteId <= 0 || ! SeoAccessControl::canAccessSite($siteId)) {
-            Notification::make()
-                ->title(__('seo-content-ai::filament.article_list.quick_create_content_project_failed'))
-                ->body(__('seo-content-ai::filament.article_list.assign_projects_mixed_domains'))
-                ->danger()
-                ->send();
-
-            return;
-        }
-
-        try {
-            $project = ArticleResource::quickCreateContentProject($siteId, (int) ($data['user_id'] ?? 0));
-            $this->sidebarProjectId = (int) $project->id;
-
-            Notification::make()
-                ->title(__('seo-content-ai::filament.article_list.quick_create_content_project_success'))
-                ->body(__('seo-content-ai::filament.article_list.quick_create_content_project_success_body', [
-                    'name' => $project->name,
-                ]))
-                ->success()
-                ->send();
-        } catch (\InvalidArgumentException $exception) {
-            Notification::make()
-                ->title(__('seo-content-ai::filament.article_list.quick_create_content_project_failed'))
-                ->body($exception->getMessage())
-                ->danger()
-                ->send();
-        }
-    }
-
-    /**
      * @param  array<int, int|string>  $articleIds
      * @param  array<string, mixed>  $data
      */
@@ -512,6 +450,8 @@ final class ArticlesOptimal extends SeoPanelPage
         if (! isset($data['project_id']) || (int) $data['project_id'] <= 0) {
             $data['project_id'] = $this->sidebarProjectId;
         }
+
+        $data['ignore_monthly_capacity'] = true;
 
         $this->assignArticlesToContentProject($articleIds, $data);
 
@@ -562,6 +502,7 @@ final class ArticlesOptimal extends SeoPanelPage
             'project_id' => $this->sidebarProjectId,
             'type' => SeoProjectTask::TYPE_REWRITE,
             'rewrite_mode' => SeoProjectTask::REWRITE_MODE_KEYWORD,
+            'ignore_monthly_capacity' => true,
         ]);
     }
 
@@ -571,6 +512,7 @@ final class ArticlesOptimal extends SeoPanelPage
             'project_id' => $projectId !== null && (int) $projectId > 0 ? (int) $projectId : $this->sidebarProjectId,
             'type' => SeoProjectTask::TYPE_REWRITE,
             'rewrite_mode' => SeoProjectTask::REWRITE_MODE_KEYWORD,
+            'ignore_monthly_capacity' => true,
         ]);
     }
 
@@ -820,6 +762,8 @@ final class ArticlesOptimal extends SeoPanelPage
      */
     private function baseArticleQuery(): Builder
     {
+        $siteId = $this->validatedFilterSiteId();
+
         $query = SeoArticle::query()
             ->countsTowardSeoScore()
             ->whereNotIn('type', ['category', 'product_category'])
@@ -828,14 +772,7 @@ final class ArticlesOptimal extends SeoPanelPage
 
         ArticleResource::applySeoAuditCandidateScope($query);
 
-        if ($this->filterSiteId !== null && $this->filterSiteId > 0) {
-            $query->where('site_id', $this->filterSiteId);
-        } elseif (SeoAccessControl::shouldScopeToAccountOwner()) {
-            $siteIds = array_map('intval', array_keys($this->getSiteFilterOptions()));
-            if ($siteIds !== []) {
-                $query->whereIn('site_id', $siteIds);
-            }
-        }
+        $query->where('site_id', $siteId);
 
         if ($this->filterLanguage !== null && $this->filterLanguage !== '') {
             $query->where('language', $this->filterLanguage);
@@ -847,6 +784,31 @@ final class ArticlesOptimal extends SeoPanelPage
         }
 
         return $query;
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function validatedFilterSiteId(bool $throw = true): ?int
+    {
+        $siteId = (int) ($this->filterSiteId ?? 0);
+        $valid = $siteId > 0 && array_key_exists($siteId, $this->getSiteFilterOptions());
+
+        if (! $valid) {
+            if (! $throw) {
+                return null;
+            }
+
+            $message = $siteId <= 0
+                ? __('seo-content-ai::filament.articles_optimal.domain_required')
+                : __('seo-content-ai::filament.articles_optimal.domain_invalid');
+
+            throw ValidationException::withMessages([
+                'domain_ids' => [$message],
+            ]);
+        }
+
+        return $siteId;
     }
 
     private function findAccessibleArticle(int $articleId): ?SeoArticle
@@ -861,8 +823,10 @@ final class ArticlesOptimal extends SeoPanelPage
     {
         $query = SeoArticle::query();
 
-        if ($this->filterSiteId !== null && $this->filterSiteId > 0) {
-            $query->where('site_id', $this->filterSiteId);
+        $siteId = $this->validatedFilterSiteId(throw: false);
+
+        if ($siteId !== null) {
+            $query->where('site_id', $siteId);
 
             return $query;
         }

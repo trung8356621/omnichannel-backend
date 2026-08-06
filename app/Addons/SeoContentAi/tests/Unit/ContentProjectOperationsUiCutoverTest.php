@@ -122,6 +122,7 @@ final class ContentProjectOperationsUiCutoverTest extends TestCase
             'queue_status' => 'none',
             'generation_badge' => ['key' => 'pending'],
             'generation_status' => 'pending',
+            'is_generate_pending_runnable' => true,
             'can_generate' => true,
             'can_regen' => false,
             'article_edit_url' => null,
@@ -131,6 +132,19 @@ final class ContentProjectOperationsUiCutoverTest extends TestCase
         self::assertFalse($pending['approve']);
         self::assertFalse($pending['publish_now']);
         self::assertFalse($pending['schedule']);
+
+        $notRunnable = ContentProjectItemActionsPresenter::forRow([
+            'lifecycle' => 'draft',
+            'queue_status' => 'none',
+            'generation_badge' => ['key' => 'pending'],
+            'generation_status' => 'pending',
+            'is_generate_pending_runnable' => false,
+            'can_generate' => true,
+            'can_regen' => false,
+            'article_edit_url' => '/a/2',
+            'is_scheduled' => false,
+        ]);
+        self::assertFalse($notRunnable['generate']);
     }
 
     public function test_status_badge_semantic_colors(): void

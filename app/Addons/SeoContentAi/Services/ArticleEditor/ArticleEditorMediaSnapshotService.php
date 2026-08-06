@@ -172,7 +172,6 @@ final class ArticleEditorMediaSnapshotService
             }
             $attachmentId = (int) ($row['id'] ?? 0);
             $items[] = $this->enrichMediaItem([
-                'id' => $this->stableGalleryItemId($attachmentId, $url, $index),
                 'media_id' => null,
                 'wp_attachment_id' => $attachmentId > 0 ? $attachmentId : null,
                 'url' => $url,
@@ -236,6 +235,9 @@ final class ArticleEditorMediaSnapshotService
     {
         $url = trim((string) ($base['url'] ?? ''));
         $wpId = (int) ($base['wp_attachment_id'] ?? 0);
+        if ($this->isLocalLaravelMediaUrl($url)) {
+            $wpId = 0;
+        }
         $seoMedia = $this->findSeoMedia($siteId, $wpId, $url);
 
         $mediaId = $seoMedia instanceof SeoMedia ? (int) $seoMedia->getKey() : null;
@@ -244,14 +246,13 @@ final class ArticleEditorMediaSnapshotService
         if ($seoMedia instanceof SeoMedia) {
             $realWp = (int) ($seoMedia->wp_attachment_id ?? 0);
             $wpId = $realWp > 0 ? $realWp : 0;
-        } elseif ($this->isLocalLaravelMediaUrl($url)) {
-            $wpId = 0;
         }
 
         $alt = trim((string) ($seoMedia?->alt_text ?? $seoMedia?->alt ?? $base['alt'] ?? ''));
         $title = trim((string) ($seoMedia?->title ?? $base['title'] ?? ''));
         $filename = $this->filenameFromUrl($url);
         $source = $this->classifySource($seoMedia, $wpId, $url);
+        $assetKey = $this->assetKey($source, $mediaId, $wpId, $url, (string) ($base['id'] ?? ''));
         $exists = $url !== '' && ! str_starts_with($url, 'blob:') && ! str_starts_with($url, 'data:');
         $uploadIncomplete = str_starts_with($url, 'blob:') || str_contains($url, 'placeholder-loading');
 
@@ -268,7 +269,8 @@ final class ArticleEditorMediaSnapshotService
         // WP filename ≠ keyword is NOT a hard error (Phase 2A).
 
         return [
-            'id' => $base['id'] ?? ($mediaId !== null ? 'media:'.$mediaId : ($wpId > 0 ? 'wp:'.$wpId : 'url:'.substr(hash('sha256', $url), 0, 12))),
+            'id' => $assetKey,
+            'asset_key' => $assetKey,
             'media_id' => $mediaId,
             'wp_attachment_id' => $wpId > 0 ? $wpId : null,
             'source' => $source,
@@ -515,13 +517,27 @@ final class ArticleEditorMediaSnapshotService
         return basename($path);
     }
 
-    private function stableGalleryItemId(int $attachmentId, string $url, int $index): string
+    private function assetKey(string $source, ?int $mediaId, int $wpAttachmentId, string $url, string $fallback = ''): string
     {
-        if ($attachmentId > 0) {
-            return 'wp:'.$attachmentId;
+        $source = strtolower(trim($source));
+
+        if ($source === 'wordpress' && $wpAttachmentId > 0) {
+            return 'wp:'.$wpAttachmentId;
         }
 
-        return 'url:'.substr(hash('sha256', $url.'|'.$index), 0, 16);
+        if (in_array($source, ['local', 'generated', 'uploaded'], true) && $mediaId !== null && $mediaId > 0) {
+            return 'local:'.$mediaId;
+        }
+
+        if ($source === 'wordpress' && $mediaId !== null && $mediaId > 0) {
+            return 'wp-media:'.$mediaId;
+        }
+
+        if ($fallback !== '' && str_contains($fallback, ':')) {
+            return $fallback;
+        }
+
+        return 'url:'.substr(hash('sha256', $url), 0, 16);
     }
 
     private function supportsProductGallery(SeoArticle $article): bool

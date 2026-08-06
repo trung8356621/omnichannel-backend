@@ -820,14 +820,8 @@ p.article-cta a.article-cta__value {
     padding: 0;
     border: none;
     background: transparent;
-    cursor: pointer;
+    cursor: default;
     border-radius: 6px;
-}
-
-.wp-article-edit .wp-featured-image-picker:hover .wp-featured-image-picker__img,
-.wp-article-edit .wp-featured-image-picker:hover .wp-featured-image-picker__empty {
-    outline: 2px solid #2271b1;
-    outline-offset: 2px;
 }
 
 .wp-article-edit .wp-featured-image-picker__img {

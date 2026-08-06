@@ -109,7 +109,14 @@ final class SyncArticleToWordPressHookAction implements AutomationActionHandler
             correlationId: (string) ($context->correlationId ?? $context->execution->execution_uuid ?? Str::uuid()),
         );
 
-        $mode = (string) ($settings['mode'] ?? 'sync');
+        $mode = (string) (
+            $input['publish_mode']
+            ?? $input['mode']
+            ?? $context->execution->context['publish_mode']
+            ?? $context->businessEvent?->payload['publish_mode']
+            ?? $settings['mode']
+            ?? 'sync'
+        );
         /** @var array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null $seoOverride */
         $seoOverride = is_array($settings['seo_override'] ?? null) ? $settings['seo_override'] : null;
         $slug = (string) ($settings['slug'] ?? $article->slug ?? '');

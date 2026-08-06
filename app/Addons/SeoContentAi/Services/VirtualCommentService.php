@@ -9,6 +9,8 @@ use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\CommentReviewRatingAssigner;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\WordPressRestResponseParser;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressSlugFixRequiredException;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressWriteReadinessGuard;
 use App\Models\Site;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -364,6 +366,10 @@ final class VirtualCommentService
         bool $isProduct,
         int $articleId,
     ): array {
+        if ($blocked = $this->blockWhenSlugFixRequired($articleId, $site, 'virtual_comments.sync')) {
+            return $blocked;
+        }
+
         $site->loadMissing('metas');
         $writeToken = trim((string) ($site->getMeta('seo_migration_token') ?? ''));
         if ($writeToken === '') {
@@ -504,6 +510,28 @@ final class VirtualCommentService
         }
 
         return null;
+    }
+
+    /**
+     * @return array{success: false, message: string, error_code: string}|null
+     */
+    private function blockWhenSlugFixRequired(int $articleId, Site $site, string $operation): ?array
+    {
+        try {
+            $article = SeoArticle::query()->find($articleId);
+            app(WordPressWriteReadinessGuard::class)->assertCanWriteToWordPress(
+                $article instanceof SeoArticle ? $article : $site,
+                $operation,
+            );
+
+            return null;
+        } catch (WordPressSlugFixRequiredException) {
+            return [
+                'success' => false,
+                'message' => WordPressSlugFixRequiredException::MESSAGE,
+                'error_code' => WordPressSlugFixRequiredException::ERROR_CODE,
+            ];
+        }
     }
 
     /**

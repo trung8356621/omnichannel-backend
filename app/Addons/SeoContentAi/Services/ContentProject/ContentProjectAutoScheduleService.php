@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services\ContentProject;
 use App\Addons\SeoContentAi\Enums\ContentProjectPublishQueueStatus;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\ContentProject\Publishing\ContentPublishingStrategyResolver;
 use App\Addons\SeoContentAi\Support\SystemDateTime;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Schema;
@@ -28,6 +29,7 @@ final class ContentProjectAutoScheduleService
 
     public function __construct(
         private readonly ContentProjectPublishingQueueService $queue,
+        private readonly ContentPublishingStrategyResolver $strategyResolver = new ContentPublishingStrategyResolver,
     ) {}
 
     /**
@@ -197,6 +199,11 @@ final class ContentProjectAutoScheduleService
 
         foreach ($q->get() as $task) {
             $id = (int) $task->getKey();
+            if ($this->strategyResolver->resolve($task)->isImmediateUpdate()) {
+                $excluded[] = ['id' => $id, 'reason' => 'update_existing_immediate'];
+                continue;
+            }
+
             $status = ContentProjectPublishQueueStatus::tryFrom((string) ($task->publish_queue_status ?? ''))
                 ?? ContentProjectPublishQueueStatus::None;
 

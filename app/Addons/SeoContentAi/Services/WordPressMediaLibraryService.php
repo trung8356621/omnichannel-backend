@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Support\WordPressImageUrl;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressSlugFixRequiredException;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressWriteReadinessGuard;
 use App\Models\Site;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -321,6 +323,10 @@ final class WordPressMediaLibraryService
      */
     public function deleteAttachment(Site $site, int $attachmentId): array
     {
+        if ($blocked = $this->blockWhenSlugFixRequired($site, 'attachment.delete')) {
+            return $blocked;
+        }
+
         if ($attachmentId <= 0) {
             return [
                 'success' => false,
@@ -654,5 +660,23 @@ final class WordPressMediaLibraryService
         }
 
         return $lastResponse ?? $client->delete($base.'/wp-json/omi-seo-ai/v1/attachments/'.$attachmentId);
+    }
+
+    /**
+     * @return array{success: false, message: string, error_code: string}|null
+     */
+    private function blockWhenSlugFixRequired(Site $site, string $operation): ?array
+    {
+        try {
+            app(WordPressWriteReadinessGuard::class)->assertCanWriteToWordPress($site, $operation);
+
+            return null;
+        } catch (WordPressSlugFixRequiredException) {
+            return [
+                'success' => false,
+                'message' => WordPressSlugFixRequiredException::MESSAGE,
+                'error_code' => WordPressSlugFixRequiredException::ERROR_CODE,
+            ];
+        }
     }
 }

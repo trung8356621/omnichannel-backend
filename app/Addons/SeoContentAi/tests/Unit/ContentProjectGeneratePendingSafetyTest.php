@@ -94,17 +94,19 @@ final class ContentProjectGeneratePendingSafetyTest extends TestCase
         self::assertSame('manually_edited', $d->reason);
     }
 
-    public function test_improve_never_dispatches_generation(): void
+    public function test_rewrite_and_improve_pending_run_when_no_output_exists(): void
     {
-        $d = $this->classifier->classifySnapshot([
-            'task_id' => 3,
-            'type' => SeoProjectTask::TYPE_IMPROVE,
-            'status' => SeoProjectTask::STATUS_PENDING,
-            'lifecycle_phase' => ContentProjectLifecyclePhase::Draft->value,
-        ]);
+        foreach ([SeoProjectTask::TYPE_REWRITE, SeoProjectTask::TYPE_IMPROVE] as $type) {
+            $d = $this->classifier->classifySnapshot([
+                'task_id' => 3,
+                'type' => $type,
+                'status' => SeoProjectTask::STATUS_PENDING,
+                'lifecycle_phase' => ContentProjectLifecyclePhase::Draft->value,
+            ]);
 
-        self::assertFalse($d->shouldRun());
-        self::assertSame('improve_manual_only', $d->reason);
+            self::assertTrue($d->shouldRun(), $type.' should be generated through the rewrite workflow.');
+            self::assertSame('never_generated', $d->reason);
+        }
     }
 
     public function test_only_truly_pending_runs(): void
@@ -126,6 +128,21 @@ final class ContentProjectGeneratePendingSafetyTest extends TestCase
         self::assertTrue($pending->shouldRun());
         self::assertSame('never_generated', $pending->reason);
         self::assertFalse($done->shouldRun());
+    }
+
+    public function test_acknowledged_error_without_output_remains_generate_eligible(): void
+    {
+        $decision = $this->classifier->classifySnapshot([
+            'task_id' => 6,
+            'type' => SeoProjectTask::TYPE_CREATE,
+            'status' => SeoProjectTask::STATUS_PENDING,
+            'last_run_item_status' => 'acknowledged_error',
+            'lifecycle_phase' => ContentProjectLifecyclePhase::Draft->value,
+        ]);
+
+        self::assertTrue($decision->shouldRun());
+        self::assertSame('failed_without_output', $decision->reason);
+        self::assertContains('last_run_item:acknowledged_error', $decision->evidence);
     }
 
     public function test_preview_counts_match_dispatch_ids(): void

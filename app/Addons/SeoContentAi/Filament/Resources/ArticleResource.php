@@ -2082,6 +2082,11 @@ class ArticleResource extends SeoPanelResource
             static::normalizeAssignTaskType($data['type'] ?? null),
             is_string($data['rewrite_mode'] ?? null) ? $data['rewrite_mode'] : null,
             is_string($data['rewrite_notes'] ?? null) ? $data['rewrite_notes'] : null,
+            is_string($data['focus_keyword'] ?? null)
+                ? $data['focus_keyword']
+                : (is_string($data['keyword'] ?? null) ? $data['keyword'] : null),
+            is_string($data['title'] ?? null) ? $data['title'] : null,
+            (bool) ($data['ignore_monthly_capacity'] ?? false),
         );
     }
 
@@ -2186,6 +2191,53 @@ class ArticleResource extends SeoPanelResource
                         $writer !== '' ? $writer : '—',
                         $project->monthCarbon()->format('m/Y'),
                         $remaining,
+                    ),
+                ];
+            })
+            ->all();
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public static function contentProjectOptionsForSeoAudit(?int $siteId = null): array
+    {
+        if ($siteId === null || $siteId <= 0) {
+            return [];
+        }
+
+        if (! SeoAccessControl::canAccessSite($siteId)) {
+            return [];
+        }
+
+        $query = SeoProject::query()
+            ->with(['site', 'user'])
+            ->orderByDesc('month')
+            ->orderBy('id')
+            ->where('site_id', $siteId)
+            ->where(function ($builder): void {
+                $builder->where('kind', SeoProject::KIND_MONTHLY)->orWhereNull('kind');
+            });
+
+        if (SeoAccessControl::isContentManager()) {
+            $query->where('user_id', (int) auth()->id());
+        }
+
+        return $query
+            ->get()
+            ->mapWithKeys(function (SeoProject $project): array {
+                $domain = trim((string) ($project->site?->domain ?? ''));
+                $writer = $project->user instanceof User
+                    ? SeoProjectResource::formatUserSelectLabel($project->user)
+                    : '';
+
+                return [
+                    (int) $project->id => sprintf(
+                        '%s - %s - %s (%s)',
+                        (string) $project->name,
+                        $domain !== '' ? $domain : '-',
+                        $writer !== '' ? $writer : '-',
+                        $project->monthCarbon()->format('m/Y'),
                     ),
                 ];
             })
@@ -2307,6 +2359,9 @@ class ArticleResource extends SeoPanelResource
         string $taskType = SeoProjectTask::TYPE_REWRITE,
         ?string $rewriteMode = null,
         ?string $rewriteNotes = null,
+        ?string $keywordOverride = null,
+        ?string $titleOverride = null,
+        bool $ignoreMonthlyCapacity = false,
     ): array {
         return app(\App\Addons\SeoContentAi\Automation\Migration\AssignmentCallerBridge::class)
             ->assignArticlesToContentProject(
@@ -2316,6 +2371,9 @@ class ArticleResource extends SeoPanelResource
                 $rewriteMode,
                 $rewriteNotes,
                 auth()->id() !== null ? (int) auth()->id() : null,
+                $keywordOverride,
+                $titleOverride,
+                $ignoreMonthlyCapacity,
             );
     }
 

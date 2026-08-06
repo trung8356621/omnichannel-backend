@@ -221,13 +221,26 @@ final class ArticleEditorDocumentHtmlRenderer
         $caption = trim((string) ($attrs['caption'] ?? ''));
         $safeSrc = htmlspecialchars($src, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
         $titleAttr = $title !== '' ? ' title="'.$title.'"' : '';
+        $alignClass = $this->imageAlignClass(trim((string) ($attrs['align'] ?? 'none')));
+        $figureClass = trim('wp-block-image '.$alignClass);
         $img = '<img src="'.$safeSrc.'" alt="'.$alt.'"'.$titleAttr.' />';
         if ($caption !== '') {
             $safeCaption = htmlspecialchars($caption, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
-            return '<figure class="wp-block-image">'.$img.'<figcaption>'.$safeCaption.'</figcaption></figure>';
+            return '<figure class="'.$figureClass.'">'.$img.'<figcaption>'.$safeCaption.'</figcaption></figure>';
         }
 
-        return '<figure class="wp-block-image">'.$img.'</figure>';
+        return '<figure class="'.$figureClass.'">'.$img.'</figure>';
+    }
+
+    private function imageAlignClass(string $align): string
+    {
+        return match ($align) {
+            'left' => 'alignleft',
+            'center' => 'aligncenter',
+            'right' => 'alignright',
+            'full' => 'alignfull',
+            default => '',
+        };
     }
 }

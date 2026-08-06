@@ -204,6 +204,7 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
         }
 
         const editorBundle = await collect({
+            validateLocalImageSlugsBeforeWpSync: normalizedAction === 'sync',
             renameImagesBeforeWpSync:
                 normalizedAction === 'sync' && renameImagesBeforeWpSync === true,
         });
@@ -366,11 +367,18 @@ async function runArticleEditorApiAction(action, wire, editorDetail = {}) {
         siteId = 0;
     }
 
-    const editorBundle = {
+    let editorBundle = {
         articleId,
         html,
         seoAnalysis: editorDetail.seoAnalysis ?? null,
     };
+
+    if (normalizedAction === 'sync' && typeof window.__seoCollectEditorHeavyBundle === 'function') {
+        editorBundle = await window.__seoCollectEditorHeavyBundle({
+            validateLocalImageSlugsBeforeWpSync: true,
+            renameImagesBeforeWpSync: false,
+        });
+    }
 
     const apiPayload = buildArticleEditorApiPayload(editorBundle, wire);
 

@@ -6,8 +6,10 @@ namespace App\Addons\SeoContentAi\Tests\Unit;
 
 use App\Addons\SeoContentAi\Automation\Actions\Keyword\AssignKeywordToProjectAction;
 use App\Addons\SeoContentAi\Automation\Actions\Seo\CreateProjectTaskFromSeoIssueAction;
+use App\Addons\SeoContentAi\Automation\Migration\AssignmentCallerBridge;
 use App\Addons\SeoContentAi\Services\KeywordProjectAssignmentService;
 use App\Addons\SeoContentAi\Services\SeoIssueProjectTaskAssignmentService;
+use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 
@@ -51,5 +53,20 @@ final class AutomationDomainAssignmentServiceTest extends TestCase
         $kwParams = $kwCtor->getParameters();
         self::assertCount(1, $kwParams);
         self::assertSame(KeywordProjectAssignmentService::class, $kwParams[0]->getType()?->getName());
+    }
+
+    public function test_seo_issue_assignment_preserves_manual_keyword_override(): void
+    {
+        $resource = (string) file_get_contents((new ReflectionClass(ArticleResource::class))->getFileName());
+        $bridge = (string) file_get_contents((new ReflectionClass(AssignmentCallerBridge::class))->getFileName());
+        $action = (string) file_get_contents((new ReflectionClass(CreateProjectTaskFromSeoIssueAction::class))->getFileName());
+        $service = (string) file_get_contents((new ReflectionClass(SeoIssueProjectTaskAssignmentService::class))->getFileName());
+
+        self::assertStringContainsString("\$data['focus_keyword']", $resource);
+        self::assertStringContainsString('$keywordOverride', $bridge);
+        self::assertStringContainsString("'keyword' => \$keywordOverride", $bridge);
+        self::assertStringContainsString("'keyword' => \$input['keyword'] ?? null", $action);
+        self::assertStringContainsString('$normalizedKeywordOverride', $service);
+        self::assertStringContainsString('$normalizedKeywordOverride !== \'\'', $service);
     }
 }

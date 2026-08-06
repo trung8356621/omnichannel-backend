@@ -38,6 +38,9 @@ final class AssignmentCallerBridge
         ?string $rewriteMode,
         ?string $rewriteNotes,
         ?int $actorId = null,
+        ?string $keywordOverride = null,
+        ?string $titleOverride = null,
+        bool $ignoreMonthlyCapacity = false,
     ): array {
         $articles = $records->filter(static fn (mixed $r): bool => $r instanceof SeoArticle)->values();
         $correlationId = Str::uuid()->toString();
@@ -51,8 +54,11 @@ final class AssignmentCallerBridge
                 $taskType,
                 $rewriteMode,
                 $rewriteNotes,
+                $keywordOverride,
+                $titleOverride,
+                ignoreMonthlyCapacity: $ignoreMonthlyCapacity,
             ),
-            actionWrite: function () use ($articles, $projectId, $taskType, $rewriteMode, $rewriteNotes, $actorId): ActionResult {
+            actionWrite: function () use ($articles, $projectId, $taskType, $rewriteMode, $rewriteNotes, $actorId, $keywordOverride, $titleOverride, $ignoreMonthlyCapacity): ActionResult {
                 $aggregate = [
                     'added' => 0,
                     'duplicate' => 0,
@@ -75,6 +81,9 @@ final class AssignmentCallerBridge
                             'type' => $taskType,
                             'rewrite_mode' => $rewriteMode,
                             'rewrite_notes' => $rewriteNotes,
+                            'keyword' => $keywordOverride,
+                            'title' => $titleOverride,
+                            'ignore_monthly_capacity' => $ignoreMonthlyCapacity,
                         ],
                     );
                     if (! $one->success) {
@@ -98,7 +107,10 @@ final class AssignmentCallerBridge
                 $taskType,
                 $rewriteMode,
                 $rewriteNotes,
+                $keywordOverride,
+                $titleOverride,
                 dryRun: true,
+                ignoreMonthlyCapacity: $ignoreMonthlyCapacity,
             ),
             normalizeLegacy: static fn (mixed $v): array => $normalizer->assignment($v, $projectId),
             normalizeExpected: static fn (array $v): array => $normalizer->assignment($v, $projectId),

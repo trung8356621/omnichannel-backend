@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services\WordPress\SideEffect;
 
 use App\Addons\SeoContentAi\Services\WordPress\WpSyncLeaseHeartbeat;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressWriteReadinessGuard;
+use App\Addons\SeoContentAi\Models\SeoArticle;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 
@@ -17,6 +19,7 @@ final class WordPressGateway
     public function __construct(
         private readonly WordPressSideEffectGuard $guard,
         private readonly WordPressSideEffectLedger $ledger,
+        private readonly WordPressWriteReadinessGuard $writeReadiness,
     ) {}
 
     /**
@@ -88,6 +91,13 @@ final class WordPressGateway
         ]);
 
         assert($context instanceof WordPressExecutionContext);
+        $articleIdForGuard = (int) ($articleId ?? $context->articleId() ?? 0);
+        if ($articleIdForGuard > 0) {
+            $articleForGuard = SeoArticle::query()->find($articleIdForGuard);
+            if ($articleForGuard instanceof SeoArticle) {
+                $this->writeReadiness->assertCanWriteToWordPress($articleForGuard, $operation);
+            }
+        }
 
         $attemptId = $this->ledger->begin($operation, $context);
 

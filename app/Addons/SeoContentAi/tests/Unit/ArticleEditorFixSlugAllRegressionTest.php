@@ -30,7 +30,9 @@ final class ArticleEditorFixSlugAllRegressionTest extends TestCase
         self::assertStringContainsString('wp-content\\/uploads', $source);
         // Bare https must not classify as WordPress.
         self::assertStringNotContainsString('/^https?:', $source);
-        self::assertStringContainsString('Local/SEO media before WP URL heuristics', $source);
+        self::assertStringContainsString('hasPrimaryWordPressUrl', $source);
+        self::assertStringContainsString('const primaryWpUrl = hasPrimaryWordPressUrl(row);', $source);
+        self::assertStringContainsString('Local/SEO media evidence wins over bare/stale wp_attachment_id', $source);
         self::assertStringContainsString('seoMediaId > 0', $source);
     }
 
@@ -72,5 +74,19 @@ final class ArticleEditorFixSlugAllRegressionTest extends TestCase
         self::assertStringContainsString('isWordPressProtectedMedia(row) || !isBulkSlugRenameSafeMedia(row)', $utils);
         self::assertStringContainsString('WordPress media: never enqueue for Fix Slug All', $utils);
         self::assertStringContainsString('includeWordPressRenames: false', $utils);
+    }
+
+    public function test_sync_wp_blocks_when_local_images_still_need_slug_fix(): void
+    {
+        $editor = $this->readAddon('resources/js/components/SeoArticleEditor.jsx');
+        $bridge = $this->readAddon('resources/js/article-editor.jsx');
+
+        self::assertStringContainsString('rowRequiresLocalSlugFix', $editor);
+        self::assertStringContainsString('assertNoLocalSlugFixBeforeWpSync', $editor);
+        self::assertStringContainsString('local_image_slug_fix_required', $editor);
+        self::assertStringContainsString('validateLocalImageSlugsBeforeWpSync || renameImagesBeforeWpSync', $editor);
+        self::assertStringNotContainsString('if (renameImagesBeforeWpSync) {'."\n".'                await prepareImageSlugsBeforeWpSync();', $editor);
+        self::assertStringContainsString('validateLocalImageSlugsBeforeWpSync: normalizedAction === \'sync\'', $bridge);
+        self::assertStringContainsString('validateLocalImageSlugsBeforeWpSync: true', $bridge);
     }
 }

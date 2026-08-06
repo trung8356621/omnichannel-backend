@@ -45,10 +45,6 @@ final class KeywordProjectAssignmentService
             return $empty($records->count());
         }
 
-        if (! $project->isExecutionMonthOpen()) {
-            return $empty($records->count());
-        }
-
         $records = $records
             ->filter(fn (mixed $record): bool => $record instanceof Keyword && $this->canAssignKeyword($record))
             ->values();

@@ -27,6 +27,20 @@ final class SeoMediaUrlReplacementServiceTest extends TestCase
         );
     }
 
+    public function test_storage_path_from_url_ignores_cache_bust_query_and_hash(): void
+    {
+        $service = new SeoMediaUrlReplacementService();
+
+        $this->assertSame(
+            'uploads/seo_media/old-slug.jpg',
+            $service->storagePathFromUrl('/storage/uploads/seo_media/old-slug.jpg?seo_reload=123#preview'),
+        );
+        $this->assertSame(
+            'uploads/seo_media/old-slug.jpg',
+            $service->storagePathFromUrl('https://seo.example.com/storage/uploads/seo_media/old-slug.jpg?seo_reload=123'),
+        );
+    }
+
     public function test_replace_in_text_updates_src_and_srcset_fragments(): void
     {
         $service = new SeoMediaUrlReplacementService();

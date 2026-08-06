@@ -64,6 +64,22 @@ final class ArticleEditorRuntimeMediaPhase6c3Test extends TestCase
         self::assertStringNotContainsString('window.dispatchEvent', $panel);
     }
 
+    public function test_featured_navigation_does_not_open_picker_and_product_gallery_is_multi_select(): void
+    {
+        $featured = (string) file_get_contents($this->js('editor/modules/featured/FeaturedSidebarPanel.jsx'));
+        self::assertStringContainsString('className="wp-featured-image-picker"', $featured);
+        self::assertStringNotContainsString('className="wp-featured-image-picker"'."\n".'                        onClick={openPicker}', $featured);
+        self::assertStringContainsString('onClick={openPicker}', $featured);
+        self::assertStringContainsString("mode: 'featured'", $featured);
+        self::assertStringContainsString("selection: 'single'", $featured);
+
+        $gallery = (string) file_get_contents($this->js('editor/modules/gallery/GallerySidebarPanel.jsx'));
+        self::assertStringContainsString("mode: 'gallery'", $gallery);
+        self::assertStringContainsString("selection: 'multiple'", $gallery);
+        self::assertStringContainsString('await media.replaceGallery(merged)', $gallery);
+        self::assertStringNotContainsString('setFeatured', $gallery);
+    }
+
     public function test_shared_media_picker_single_portal_and_modes(): void
     {
         self::assertFileExists($this->js('editor/host/SharedMediaPicker.jsx'));
@@ -97,6 +113,42 @@ final class ArticleEditorRuntimeMediaPhase6c3Test extends TestCase
         self::assertStringContainsString('seo-article-featured-root', $host);
     }
 
+    public function test_shared_media_picker_preserves_session_cache_between_reopens(): void
+    {
+        $picker = (string) file_get_contents($this->js('editor/host/SharedMediaPicker.jsx'));
+
+        self::assertStringContainsString('MEDIA_PICKER_CACHE_TTL_MS = 4 * 60 * 1000', $picker);
+        self::assertStringContainsString('MEDIA_PICKER_CACHE_MAX_ENTRIES = 30', $picker);
+        self::assertStringContainsString('mediaPickerResultCache = new Map()', $picker);
+        self::assertStringContainsString('mediaPickerUiState = new Map()', $picker);
+        self::assertStringContainsString('mediaPickerScrollState = new Map()', $picker);
+        self::assertStringContainsString('mediaPickerInFlight.has(key)', $picker);
+        self::assertStringContainsString('setSelectedKeys(Array.isArray(saved.selectedKeys)', $picker);
+        self::assertStringContainsString('setTab(savedTab)', $picker);
+        self::assertStringContainsString('setTabStates(saved.tabStates', $picker);
+        self::assertStringContainsString('gridRef.current.scrollTop = savedScroll', $picker);
+        self::assertStringContainsString('patchMediaPickerSelection(selectedKeys, selectedItems)', $picker);
+        self::assertStringContainsString('seo-article-media-picker-cache-invalidated', $picker);
+        self::assertStringNotContainsString('cacheRef.current.clear()', $picker);
+        self::assertStringNotContainsString('inFlightRef.current.clear()', $picker);
+
+        $cache = (string) file_get_contents($this->js('utils/articleMediaPickerCache.js'));
+        self::assertStringContainsString('seo-article-media-picker-cache-invalidated', $cache);
+    }
+
+    public function test_shared_media_picker_cache_key_is_scoped_and_query_aware(): void
+    {
+        $picker = (string) file_get_contents($this->js('editor/host/SharedMediaPicker.jsx'));
+
+        self::assertStringContainsString('export function mediaPickerCacheKey', $picker);
+        self::assertStringContainsString('scope:${cacheScope(articleId)}', $picker);
+        self::assertStringContainsString('article:${Number(articleId || 0)}', $picker);
+        self::assertStringContainsString('source:${String(source ||', $picker);
+        self::assertStringContainsString('q:${normalizeSearch(query)}', $picker);
+        self::assertStringContainsString('page:${Math.max(1, Number(page) || 1)}', $picker);
+        self::assertStringContainsString('perPage:${Math.max(1, Number(perPage) || 28)}', $picker);
+    }
+
     public function test_content_image_uses_shared_picker_and_insert_command(): void
     {
         $block = (string) file_get_contents($this->js('components/ImageBlockEditor.jsx'));
@@ -116,6 +168,12 @@ final class ArticleEditorRuntimeMediaPhase6c3Test extends TestCase
         $snap = (string) file_get_contents($this->js('utils/articleEditorMediaSnapshot.js'));
         self::assertStringContainsString('expected_snapshot_version', $snap);
         self::assertStringContainsString('incoming < currentVersion', $snap);
+        self::assertStringContainsString('inFlightRequests = new Map()', $snap);
+        self::assertStringContainsString('media_snapshot_version_conflict', $snap);
+        self::assertStringContainsString('fetchMediaSnapshot(id)', $snap);
+        self::assertStringContainsString('featured_managed_by_gallery', $snap);
+        self::assertStringContainsString('emitLegacyGallery = false', $snap);
+        self::assertStringContainsString('refreshMediaSnapshotIfStale', $snap);
         self::assertStringContainsString('subscribeMediaSnapshot', $snap);
         self::assertStringContainsString('setFeaturedViaApi', $snap);
         self::assertStringContainsString('reorderGalleryViaApi', $snap);
@@ -126,6 +184,34 @@ final class ArticleEditorRuntimeMediaPhase6c3Test extends TestCase
         self::assertStringContainsString('replaceGalleryViaApi', $hook);
         self::assertStringContainsString('reorderGalleryViaApi', $hook);
         self::assertStringContainsString('canMutateEditor', $hook);
+    }
+
+    public function test_media_identity_uses_composite_asset_key_not_bare_numeric_id(): void
+    {
+        $snap = (string) file_get_contents($this->js('utils/articleEditorMediaSnapshot.js'));
+        self::assertStringContainsString('asset_key', $snap);
+        self::assertStringContainsString('wp:${wpAttachmentId}', $snap);
+        self::assertStringContainsString('local:${seoMediaId}', $snap);
+
+        $picker = (string) file_get_contents($this->js('editor/host/SharedMediaPicker.jsx'));
+        self::assertStringContainsString('function imageKey(image)', $picker);
+        self::assertStringContainsString('return `wp:${wpId}`', $picker);
+        self::assertStringContainsString('return `local:${seoId}`', $picker);
+
+        $panel = (string) file_get_contents($this->js('editor/modules/gallery/GallerySidebarPanel.jsx'));
+        self::assertStringContainsString("item?.asset_key", $panel);
+
+        $service = dirname(__DIR__, 2).'/Services/ArticleEditor/ArticleEditorMediaSnapshotService.php';
+        $source = (string) file_get_contents($service);
+        self::assertStringContainsString("'asset_key' => \$assetKey", $source);
+        self::assertStringContainsString("return 'wp:'.\$wpAttachmentId", $source);
+        self::assertStringContainsString("return 'local:'.\$mediaId", $source);
+        self::assertStringContainsString('isLocalLaravelMediaUrl($url)', $source);
+
+        $local = dirname(__DIR__, 2).'/Services/ArticleMediaLocalService.php';
+        $localSource = (string) file_get_contents($local);
+        self::assertStringContainsString("'asset_key' => \$assetKey", $localSource);
+        self::assertStringContainsString("(string) (\$row['asset_key'] ?? '') === \$assetKey", $localSource);
     }
 
     public function test_wp_protection_fix_slug_all_skips_wp_and_picker_does_not_rename(): void
@@ -141,7 +227,7 @@ final class ArticleEditorRuntimeMediaPhase6c3Test extends TestCase
 
         $health = (string) file_get_contents($this->js('utils/assistantWidgetHealth.js'));
         self::assertStringContainsString('isWordPressProtectedMedia', $health);
-        self::assertStringContainsString('featured_slug_not_fixed', $health);
+        self::assertStringContainsString('ALT / local slug integrity belong to Images unified inventory', $health);
         self::assertStringContainsString('rowHasLocalPlaceholderSlug', $health);
     }
 

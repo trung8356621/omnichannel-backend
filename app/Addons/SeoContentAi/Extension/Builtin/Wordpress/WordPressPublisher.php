@@ -9,6 +9,8 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\Artic
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\ContentPublisher;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Publishing\PublishResult;
 use App\Addons\SeoContentAi\Services\WordPress\SideEffect\ManualWordPressContext;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressSlugFixRequiredException;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressWriteReadinessGuard;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
 use App\Support\RuntimeLogger;
 use Illuminate\Support\Facades\DB;
@@ -42,6 +44,17 @@ final class WordPressPublisher implements ContentPublisher
         }
 
         $wpPostId = (int) ($article->wp_post_id ?? $payload->wpPostId ?? 0);
+
+        try {
+            app(WordPressWriteReadinessGuard::class)->assertCanWriteToWordPress($article, 'wordpress_publisher.publish');
+        } catch (WordPressSlugFixRequiredException) {
+            return new PublishResult(
+                success: false,
+                wpPostId: null,
+                message: WordPressSlugFixRequiredException::MESSAGE,
+                externalReference: $payload->externalReference,
+            );
+        }
 
         // Queue/system: emit delivery so automation pushes latest local content
         // (create OR update). Do not short-circuit on stale wp_post_id.

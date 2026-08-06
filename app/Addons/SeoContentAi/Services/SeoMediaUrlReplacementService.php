@@ -293,7 +293,7 @@ final class SeoMediaUrlReplacementService
             $path = is_string($parsed) ? $parsed : '';
         }
 
-        $path = rawurldecode(trim($path));
+        $path = rawurldecode(trim((string) preg_replace('/[?#].*$/', '', $path)));
         if (str_starts_with($path, '/storage/')) {
             return ltrim(substr($path, strlen('/storage/')), '/');
         }

@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Automation\Support\ArticleContentConflictGuard;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
+use App\Models\Site;
 use App\Support\RuntimeLogger;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -24,6 +25,7 @@ final class SeoMediaArticleSlugFixService
     public function __construct(
         private readonly SeoMediaStorageService $storage,
         private readonly SeoMediaUrlReplacementService $urlReplacement,
+        private readonly WordPressAttachmentRenameService $wpRename,
     ) {}
 
     /**
@@ -68,6 +70,7 @@ final class SeoMediaArticleSlugFixService
         $urlMap = [];
         $pendingDeletes = [];
         $skipped = [];
+        $wpRenameQueue = [];
 
         try {
             DB::connection('omi_seo_ai')->transaction(function () use (
@@ -78,6 +81,7 @@ final class SeoMediaArticleSlugFixService
                 &$urlMap,
                 &$pendingDeletes,
                 &$skipped,
+                &$wpRenameQueue,
             ): void {
                 $tempToken = 'seo-ren-'.Str::lower(Str::random(8));
                 $interim = [];
@@ -95,8 +99,9 @@ final class SeoMediaArticleSlugFixService
                         continue;
                     }
 
-                    // Fail-closed: WordPress-linked media never bulk-renamed via Fix Slug All.
-                    if ((int) ($media->wp_attachment_id ?? 0) > 0) {
+                    // Fail-closed only for true WordPress media. Local /storage evidence wins over
+                    // stale wp_attachment_id, matching editor media classification.
+                    if ((int) ($media->wp_attachment_id ?? 0) > 0 && ! $this->isLocalMediaRequest($media, $item)) {
                         $skipped[] = [
                             'index' => $index,
                             'seo_media_id' => (int) $media->id,
@@ -157,6 +162,18 @@ final class SeoMediaArticleSlugFixService
                             'old_slug' => $state['old_slug'],
                             'new_slug' => (string) $renamed->slug,
                         ];
+
+                        $wpAttachmentId = (int) ($renamed->wp_attachment_id ?? 0);
+                        $siteId = (int) ($renamed->site_id ?? $article->site_id ?? 0);
+                        if ($wpAttachmentId > 0 && $siteId > 0) {
+                            $wpRenameQueue[$siteId][] = [
+                                'attachment_id' => $wpAttachmentId,
+                                'new_slug' => (string) $renamed->slug,
+                                'old_url' => $this->resolveWordPressRenameOldUrl($state['item'], $renamed),
+                                'seo_media_id' => (int) $renamed->id,
+                                'old_slug' => $state['old_slug'],
+                            ];
+                        }
 
                         if ($state['old_url'] !== '' && $newUrl !== '') {
                             $urlMap[$state['old_url']] = $newUrl;
@@ -223,6 +240,86 @@ final class SeoMediaArticleSlugFixService
                 'eligible_count' => count($queue),
                 'renamed_count' => 0,
             ];
+        }
+
+        foreach ($wpRenameQueue as $siteId => $wpItems) {
+            $site = Site::query()->find((int) $siteId);
+            if (! $site instanceof Site) {
+                foreach ($wpItems as $item) {
+                    $skipped[] = [
+                        'seo_media_id' => (int) ($item['seo_media_id'] ?? 0),
+                        'new_slug' => (string) ($item['new_slug'] ?? ''),
+                        'reason' => 'wordpress_site_not_found',
+                    ];
+                }
+
+                continue;
+            }
+
+            $wpContextByAttachmentId = [];
+            foreach ($wpItems as $item) {
+                $attachmentId = (int) ($item['attachment_id'] ?? 0);
+                if ($attachmentId > 0) {
+                    $wpContextByAttachmentId[$attachmentId] = $item;
+                }
+            }
+
+            $wpResult = $this->wpRename->renameForSite($site, $wpItems);
+            foreach ((array) ($wpResult['renamed'] ?? []) as $row) {
+                if (! is_array($row)) {
+                    continue;
+                }
+
+                $attachmentId = (int) ($row['attachment_id'] ?? 0);
+                $contextRow = $wpContextByAttachmentId[$attachmentId] ?? [];
+
+                $wpOldUrl = trim((string) ($row['old_url'] ?? ''));
+                $wpNewUrl = trim((string) ($row['new_url'] ?? ''));
+                if ($wpOldUrl !== '' && $wpNewUrl !== '') {
+                    $urlMap[$wpOldUrl] = $wpNewUrl;
+                }
+
+                $replacements[] = [
+                    'media_id' => (int) ($contextRow['seo_media_id'] ?? 0),
+                    'image_id' => (int) ($contextRow['seo_media_id'] ?? 0),
+                    'attachment_id' => $attachmentId,
+                    'old_filename' => (string) ($row['old_filename'] ?? basename($wpOldUrl)),
+                    'new_filename' => (string) ($row['new_filename'] ?? basename($wpNewUrl)),
+                    'old_url' => $wpOldUrl,
+                    'new_url' => $wpNewUrl,
+                    'old_path' => '',
+                    'new_path' => '',
+                    'old_slug' => (string) ($row['old_slug'] ?? $contextRow['old_slug'] ?? ''),
+                    'new_slug' => (string) ($row['new_slug'] ?? ''),
+                    'source' => 'wordpress',
+                ];
+            }
+
+            foreach ((array) ($wpResult['errors'] ?? []) as $row) {
+                if (! is_array($row)) {
+                    continue;
+                }
+
+                $attachmentId = (int) ($row['attachment_id'] ?? 0);
+                $contextRow = $wpContextByAttachmentId[$attachmentId] ?? [];
+
+                $skipped[] = [
+                    'seo_media_id' => (int) ($contextRow['seo_media_id'] ?? 0),
+                    'attachment_id' => $attachmentId,
+                    'new_slug' => (string) ($row['new_slug'] ?? ''),
+                    'reason' => (string) ($row['message'] ?? $wpResult['message'] ?? 'wordpress_rename_failed'),
+                ];
+            }
+        }
+
+        if ($urlMap !== []) {
+            $rewrite = $this->urlReplacement->rewriteArticleReferences($article, $urlMap, $context);
+            if ($rewrite['remaining_old_refs'] !== []) {
+                RuntimeLogger::warning('seo_media_article_slug_fix.wp_remaining_old_refs', [
+                    'article_id' => (int) $article->id,
+                    'remaining_old_refs' => $rewrite['remaining_old_refs'],
+                ]);
+            }
         }
 
         $disk = Storage::disk('public');
@@ -405,6 +502,113 @@ final class SeoMediaArticleSlugFixService
             });
         }
 
-        return $query->first();
+        $media = $query->first();
+        if ($media instanceof SeoMedia) {
+            return $media;
+        }
+
+        $media = $this->resolveSeoMediaForStoragePath($path, $siteId);
+        if ($media instanceof SeoMedia) {
+            return $media;
+        }
+
+        if (! Storage::disk('public')->exists($path)) {
+            return null;
+        }
+
+        $filename = basename($path);
+        if ($filename === '' || $filename === '.' || $filename === '..') {
+            return null;
+        }
+
+        return SeoMedia::query()->create([
+            'site_id' => $siteId > 0 ? $siteId : null,
+            'article_id' => (int) $article->getKey(),
+            'filename' => $filename,
+            'slug' => Str::slug((string) pathinfo($filename, PATHINFO_FILENAME)),
+            'path' => $path,
+            'url' => '/storage/'.$path,
+            'source' => 'storage_adopt',
+        ]);
+    }
+
+    private function resolveSeoMediaForStoragePath(string $relativePath, int $siteId): ?SeoMedia
+    {
+        $relativePath = ltrim(str_replace('\\', '/', $relativePath), '/');
+        if ($relativePath === '') {
+            return null;
+        }
+
+        $filename = basename($relativePath);
+        if ($filename === '' || $filename === '.' || $filename === '..') {
+            return null;
+        }
+
+        $candidates = array_values(array_unique([
+            $relativePath,
+            'uploads/seo_media/'.$filename,
+        ]));
+
+        foreach ($candidates as $candidate) {
+            $query = SeoMedia::query()->where('path', $candidate);
+            if ($siteId > 0) {
+                $query->where(function ($q) use ($siteId): void {
+                    $q->where('site_id', $siteId)->orWhereNull('site_id');
+                });
+            }
+
+            $media = $query->first();
+            if ($media instanceof SeoMedia) {
+                return $media;
+            }
+        }
+
+        $filenameQuery = SeoMedia::query()->where('filename', $filename);
+        if ($siteId > 0) {
+            $filenameQuery->where(function ($q) use ($siteId): void {
+                $q->where('site_id', $siteId)->orWhereNull('site_id');
+            });
+        }
+
+        $media = $filenameQuery->orderByDesc('id')->first();
+
+        return $media instanceof SeoMedia ? $media : null;
+    }
+
+    /**
+     * @param  array{seo_media_id: int|null, url: string, new_slug: string, old_slug: string}  $item
+     */
+    private function isLocalMediaRequest(SeoMedia $media, array $item): bool
+    {
+        $mediaPath = ltrim(str_replace('\\', '/', (string) ($media->path ?? '')), '/');
+        if (str_starts_with($mediaPath, 'uploads/seo_media/')) {
+            return true;
+        }
+
+        $itemPath = $this->urlReplacement->storagePathFromUrl((string) ($item['url'] ?? ''));
+
+        return $itemPath !== '' && str_starts_with($itemPath, 'uploads/seo_media/');
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function resolveWordPressRenameOldUrl(array $item, SeoMedia $media): string
+    {
+        foreach (['wp_url', 'wpUrl', 'wordpress_url', 'source_url'] as $key) {
+            $value = trim((string) ($item[$key] ?? ''));
+            if ($value !== '' && ! str_contains($value, '/storage/uploads/seo_media/')) {
+                return $value;
+            }
+        }
+
+        foreach (['wp_url', 'wordpress_url', 'source_url'] as $key) {
+            $value = trim((string) ($media->getAttribute($key) ?? ''));
+            if ($value !== '' && ! str_contains($value, '/storage/uploads/seo_media/')) {
+                return $value;
+            }
+        }
+
+        return '';
     }
 }

@@ -38,10 +38,14 @@ final class ArticleEditorImagesHealthAndSlugSessionTest extends TestCase
         self::assertStringContainsString('rewriteArticleReferences($article, $urlMap, $context)', $fix);
         self::assertStringContainsString("'document_version'", $fix);
         self::assertStringContainsString("'content_hash'", $fix);
+        self::assertStringContainsString('storage_adopt', $fix);
+        self::assertStringContainsString('isLocalMediaRequest', $fix);
+        self::assertStringContainsString('stale wp_attachment_id', $fix);
 
         $editor = $this->readAddon('resources/js/components/SeoArticleEditor.jsx');
         self::assertStringContainsString('syncVersionAfterSlugFix', $editor);
         self::assertStringContainsString('setDocumentVersion', $editor);
+        self::assertStringContainsString('skipLocalQueueRecovery', $editor);
     }
 
     public function test_local_slug_unresolved_is_error_alt_is_warning(): void

@@ -26,6 +26,14 @@ const ALIGN_OPTIONS = [
 ];
 const IMAGE_BLOCK_CLIPBOARD_KEY = '__SEO_IMAGE_BLOCK_CLIPBOARD__';
 
+function clearImageBlockClipboard() {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    delete window[IMAGE_BLOCK_CLIPBOARD_KEY];
+}
+
 function isVideoMedia(image) {
     if (!image?.src) return false;
     const kind = String(image.mediaType ?? image.media_type ?? '').toLowerCase();
@@ -480,6 +488,7 @@ export default function ImageBlockEditor({
             ...copied,
             src: String(copied.src).trim(),
         });
+        clearImageBlockClipboard();
 
         return true;
     }, [commitImage]);

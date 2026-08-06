@@ -127,6 +127,7 @@ final class ContentProjectPublishingQueueReadModel
             $row = [
                 'task_id' => (int) $task->getKey(),
                 'project_id' => (int) ($task->project_id ?? 0),
+                'item_type' => SeoProjectTask::normalizeType($task->type ?? null),
                 'article_id' => (int) ($task->article_id ?? 0) ?: null,
                 'primary_label' => $title,
                 'title' => $title,

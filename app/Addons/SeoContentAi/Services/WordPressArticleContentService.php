@@ -218,7 +218,7 @@ class WordPressArticleContentService
     /**
      * Album ảnh sản phẩm WooCommerce (đồng bộ từ WordPress).
      *
-     * @return array<int, array{id: int, url: string}>
+     * @return array<int, array{id: int, url: string, source?: string, asset_key?: string}>
      */
     public function resolveProductGallery(SeoArticle $article): array
     {
@@ -727,10 +727,17 @@ class WordPressArticleContentService
                 continue;
             }
 
-            $gallery[] = [
+            $row = [
                 'id' => (int) ($item['id'] ?? 0),
                 'url' => $url,
             ];
+            if (isset($item['source'])) {
+                $row['source'] = (string) $item['source'];
+            }
+            if (isset($item['asset_key'])) {
+                $row['asset_key'] = (string) $item['asset_key'];
+            }
+            $gallery[] = $row;
         }
 
         return $gallery;

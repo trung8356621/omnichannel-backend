@@ -39,6 +39,9 @@ final class CreateProjectTaskFromSeoIssueAction implements BusinessAction
                 'type' => ['type' => 'string', 'required' => false],
                 'rewrite_mode' => ['type' => 'string', 'required' => false],
                 'rewrite_notes' => ['type' => 'string', 'required' => false],
+                'keyword' => ['type' => 'string', 'required' => false],
+                'title' => ['type' => 'string', 'required' => false],
+                'ignore_monthly_capacity' => ['type' => 'boolean', 'required' => false],
             ],
             outputSchema: [
                 'project_id' => ['type' => 'integer'],
@@ -73,6 +76,9 @@ final class CreateProjectTaskFromSeoIssueAction implements BusinessAction
                 'type' => $taskType,
                 'rewrite_mode' => $input['rewrite_mode'] ?? null,
                 'rewrite_notes' => $input['rewrite_notes'] ?? null,
+                'keyword' => $input['keyword'] ?? null,
+                'title' => $input['title'] ?? null,
+                'ignore_monthly_capacity' => (bool) ($input['ignore_monthly_capacity'] ?? false),
             ],
             dryRun: $context->dryRun,
         );

@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressSlugFixRequiredException;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressWriteReadinessGuard;
 use App\Models\Site;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -74,6 +76,10 @@ final class WordPressArticleMediaService
      */
     private function pushMedia(SeoArticle $article, array $payload): array
     {
+        if ($blocked = $this->blockWhenSlugFixRequired($article, 'article.media_update')) {
+            return $blocked;
+        }
+
         $wpId = (int) ($article->wp_post_id ?? 0);
         if ($wpId <= 0) {
             return [
@@ -191,5 +197,23 @@ final class WordPressArticleMediaService
         }
 
         return $base . '/wp-json/omi-seo-ai/v1/posts/' . $wpId . '/media';
+    }
+
+    /**
+     * @return array{success: false, message: string, error_code: string}|null
+     */
+    private function blockWhenSlugFixRequired(SeoArticle $article, string $operation): ?array
+    {
+        try {
+            app(WordPressWriteReadinessGuard::class)->assertCanWriteToWordPress($article, $operation);
+
+            return null;
+        } catch (WordPressSlugFixRequiredException) {
+            return [
+                'success' => false,
+                'message' => WordPressSlugFixRequiredException::MESSAGE,
+                'error_code' => WordPressSlugFixRequiredException::ERROR_CODE,
+            ];
+        }
     }
 }

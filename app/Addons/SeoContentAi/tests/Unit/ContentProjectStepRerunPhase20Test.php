@@ -32,7 +32,7 @@ final class ContentProjectStepRerunPhase20Test extends TestCase
         );
         self::assertStringContainsString('Article-only rerun requires a usable outline', $src);
         self::assertStringContainsString('ContentProjectItemIdentity', $src);
-        self::assertStringContainsString('Improve items are manual-only', $src);
+        self::assertStringNotContainsString('Improve items are manual-only', $src);
     }
 
     public function test_from_step_enum(): void

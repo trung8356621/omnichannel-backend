@@ -91,6 +91,33 @@ final class ArticleEditorJsonPersistencePhase5aTest extends TestCase
         self::assertSame(ArticleEditorDocumentErrorCode::INVALID, $validated['code']);
     }
 
+    public function test_image_block_align_center_survives_server_render(): void
+    {
+        $schema = $this->schema();
+        $doc = [
+            'schema_version' => 1,
+            'type' => 'article_document',
+            'blocks' => [[
+                'id' => 'img1',
+                'type' => 'image',
+                'image' => [
+                    'src' => 'https://example.com/wp-content/uploads/banner.webp',
+                    'alt' => 'Banner',
+                    'title' => '',
+                    'caption' => '',
+                    'align' => 'center',
+                ],
+            ]],
+        ];
+
+        $validated = $schema->validate($doc);
+        self::assertTrue($validated['ok']);
+
+        $html = $schema->renderHtml($doc);
+        self::assertStringContainsString('<figure class="wp-block-image aligncenter">', $html);
+        self::assertStringContainsString('src="https://example.com/wp-content/uploads/banner.webp"', $html);
+    }
+
     public function test_unsupported_schema_rejected(): void
     {
         $schema = $this->schema();

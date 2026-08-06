@@ -162,10 +162,6 @@ final class ContentProjectItemGenerationClassifier
             return $this->decision($taskId, ContentProjectItemGenerationDecision::ACTION_SKIP, 'cancelled', $status, $type, $evidence, $keyword, $articleId);
         }
 
-        if ($type === SeoProjectTask::TYPE_IMPROVE) {
-            return $this->decision($taskId, ContentProjectItemGenerationDecision::ACTION_SKIP, 'improve_manual_only', $status, $type, $evidence, $keyword, $articleId);
-        }
-
         if (! empty($snapshot['article_manually_edited'])) {
             $evidence[] = 'manually_edited';
 
@@ -209,6 +205,12 @@ final class ContentProjectItemGenerationClassifier
             $evidence[] = 'last_run_item:'.$lastRunStatus;
 
             return $this->decision($taskId, ContentProjectItemGenerationDecision::ACTION_SKIP, 'last_run_item_completed', $status, $type, $evidence, $keyword, $articleId);
+        }
+
+        if ($lastRunStatus === 'acknowledged_error') {
+            $evidence[] = 'last_run_item:acknowledged_error';
+
+            return $this->decision($taskId, ContentProjectItemGenerationDecision::ACTION_RUN, 'failed_without_output', $status, $type, $evidence, $keyword, $articleId > 0 ? $articleId : null);
         }
 
         if ($articleId > 0 && ! empty($snapshot['article_has_body'])) {
@@ -319,17 +321,24 @@ final class ContentProjectItemGenerationClassifier
         $rows = SeoProjectRunItem::query()
             ->whereIn('task_id', $taskIds)
             ->orderByDesc('id')
-            ->get(['id', 'task_id', 'status', 'article_id']);
+            ->get(['id', 'task_id', 'status', 'article_id', 'output_snapshot']);
 
         foreach ($rows as $row) {
             $tid = (int) $row->task_id;
             if (! isset($index[$tid])) {
                 continue;
             }
+            $snapshot = is_array($row->output_snapshot) ? $row->output_snapshot : [];
+            $wasAcknowledgedError = isset($snapshot['acknowledged_error']);
             if ($index[$tid]['last_run_item_status'] === null) {
-                $index[$tid]['last_run_item_status'] = (string) ($row->status ?? '');
+                $index[$tid]['last_run_item_status'] = $wasAcknowledgedError
+                    ? 'acknowledged_error'
+                    : (string) ($row->status ?? '');
             }
             $status = strtolower((string) ($row->status ?? ''));
+            if ($wasAcknowledgedError) {
+                continue;
+            }
             if (in_array($status, [
                 SeoProjectRunItemStatus::Success->value,
                 'completed',

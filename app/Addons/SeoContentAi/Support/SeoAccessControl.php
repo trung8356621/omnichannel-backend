@@ -225,6 +225,13 @@ final class SeoAccessControl
             return false;
         }
 
+        if (
+            request()->routeIs('filament.seo.pages.articles-optimal')
+            || request()->is('seo/*/articles/optimal', 'seo/*/articles/optimal/*')
+        ) {
+            return false;
+        }
+
         if (request()->routeIs('filament.seo.pages.performance-hub')) {
             $source = (string) request()->query('source', 'gsc');
 
@@ -700,10 +707,6 @@ final class SeoAccessControl
         }
 
         if ((int) $project->site_id !== $siteId) {
-            return false;
-        }
-
-        if (! $project->isExecutionMonthOpen()) {
             return false;
         }
 

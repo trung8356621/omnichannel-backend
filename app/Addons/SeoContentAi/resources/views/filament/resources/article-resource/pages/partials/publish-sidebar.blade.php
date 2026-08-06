@@ -400,12 +400,79 @@
     x-data="seoPublishBoxData(@js($publishBoxInitial), @js($publishBoxLabels))"
 >
         <div class="wp-publish-meta space-y-2">
-            @if ($record->wp_post_id)
-                <div class="text-xs">
-                    <span class="text-gray-500 dark:text-gray-400">WP ID:</span>
-                    <strong class="text-gray-800 dark:text-gray-100">{{ $record->wp_post_id }}</strong>
+            <div class="rounded border border-amber-200 bg-amber-50/70 p-2 text-xs dark:border-amber-900/60 dark:bg-amber-950/20">
+                <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-1.5">
+                        <span class="font-semibold text-amber-800 dark:text-amber-200">Debug WP ID</span>
+                    </div>
+                    @if ($record->wp_post_id)
+                        <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">Đã nối</span>
+                    @else
+                        <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Thiếu WP ID</span>
+                    @endif
                 </div>
-            @endif
+                <div class="mt-2 flex items-center gap-1.5">
+                    <span class="text-gray-500 dark:text-gray-400">WP ID:</span>
+                    @if ($record->wp_post_id)
+                        <strong class="text-gray-800 dark:text-gray-100">{{ $record->wp_post_id }}</strong>
+                    @else
+                        <strong class="text-amber-700 dark:text-amber-300">Chưa nối</strong>
+                    @endif
+                </div>
+                <div class="mt-2 flex flex-wrap items-center gap-2">
+                    <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        wire:model.defer="manualWpPostId"
+                        class="w-28 rounded border-gray-300 px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-900"
+                        placeholder="WP ID"
+                    />
+                    <button
+                        type="button"
+                        wire:click="lookupManualWordPressPostId"
+                        wire:loading.attr="disabled"
+                        wire:target="lookupManualWordPressPostId"
+                        class="rounded border border-gray-300 bg-white px-2 py-1 text-gray-700 hover:bg-gray-50 disabled:cursor-wait disabled:opacity-60 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
+                    >
+                        <span wire:loading.remove wire:target="lookupManualWordPressPostId">Kiểm tra trùng</span>
+                        <span wire:loading wire:target="lookupManualWordPressPostId">Đang kiểm tra...</span>
+                    </button>
+                    <button
+                        type="button"
+                        wire:click="linkManualWordPressPostId"
+                        wire:loading.attr="disabled"
+                        wire:target="linkManualWordPressPostId"
+                        class="text-sky-600 hover:underline disabled:cursor-wait disabled:opacity-60"
+                    >
+                        <span wire:loading.remove wire:target="linkManualWordPressPostId">Nối WP ID</span>
+                        <span wire:loading wire:target="linkManualWordPressPostId">Đang kiểm tra...</span>
+                    </button>
+                </div>
+                @if (is_array($this->manualWpPostLookup))
+                    <div class="mt-2 rounded border border-gray-200 bg-white p-2 text-[11px] text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200">
+                        @if (! empty($this->manualWpPostLookup['message']))
+                            <div>{{ $this->manualWpPostLookup['message'] }}</div>
+                        @endif
+                        @php($duplicates = $this->manualWpPostLookup['duplicates'] ?? [])
+                        @if (! empty($duplicates))
+                            <div class="mt-1 space-y-1">
+                                @foreach ($duplicates as $duplicate)
+                                    <div class="flex items-center justify-between gap-2">
+                                        <span class="truncate">
+                                            #{{ $duplicate['id'] }} {{ $duplicate['title'] }}
+                                            @if (! empty($duplicate['current']))
+                                                <span class="text-emerald-600 dark:text-emerald-300">(bài hiện tại)</span>
+                                            @endif
+                                        </span>
+                                        <a href="{{ $duplicate['edit_url'] }}" target="_blank" rel="noopener" class="shrink-0 text-sky-600 hover:underline">Mở</a>
+                                    </div>
+                                @endforeach
+                            </div>
+                        @endif
+                    </div>
+                @endif
+            </div>
 
             <div class="text-xs">
                 <span class="text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.article_list.author') }}:</span>

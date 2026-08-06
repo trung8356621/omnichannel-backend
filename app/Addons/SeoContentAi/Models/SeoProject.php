@@ -191,7 +191,7 @@ class SeoProject extends Model
             return true;
         }
 
-        return $this->isExecutionMonthOpen() && $this->remainingTaskCapacity() > 0;
+        return $this->remainingTaskCapacity() > 0;
     }
 
     public function syncTotalTasksCounter(): void
