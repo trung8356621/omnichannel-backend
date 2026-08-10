@@ -9,7 +9,7 @@
 
             <x-filament::button
                 tag="a"
-                :href="\App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('index')"
+                :href="\Omnichannel\Addons\Content\Filament\Resources\ArticleResource::getUrl('index')"
                 icon="heroicon-o-arrow-left"
                 color="gray"
             >

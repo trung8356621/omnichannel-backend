@@ -1,6 +1,6 @@
-﻿@php
+@php
     $projectOptions = $this->getContentProjectOptions();
-    $contentProjectsUrl = \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource::getUrl('index');
+    $contentProjectsUrl = \Omnichannel\Addons\ContentProjects\Filament\Resources\SeoProjectResource::getUrl('index');
     $assignTypeOptions = $this->getAssignTypeOptions();
     $rewriteModeOptions = $this->getRewriteModeOptions();
     $scoringFilters = $this->getScoringRuleFilterDefinitions();
@@ -283,7 +283,7 @@
                             <label wire:key="audit-aggregate-{{ $aggregate['key'] }}" class="inline-flex items-start gap-2 text-sm text-gray-700 dark:text-gray-200">
                                 <input
                                     type="checkbox"
-                                    wire:model="{{ $aggregate['key'] === \App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry::AGGREGATE_FILTER_LOW_SEO_SCORE ? 'filterLowSeoScore' : 'filterTechnicalSeoScore' }}"
+                                    wire:model="{{ $aggregate['key'] === \Omnichannel\Addons\Seo\Support\SeoScoringRulesRegistry::AGGREGATE_FILTER_LOW_SEO_SCORE ? 'filterLowSeoScore' : 'filterTechnicalSeoScore' }}"
                                     class="mt-0.5 rounded border-gray-300"
                                 >
                                 <span>{{ $aggregate['label'] }}</span>

@@ -1,7 +1,7 @@
 @push('styles')
     @vite([
-        'app/Addons/SeoContentAi/resources/js/article-media-picker-cache-bootstrap.js',
-        'app/Addons/SeoContentAi/resources/css/article-edit-page.css',
+        'addons/media/resources/js/article-media-picker-cache-bootstrap.js',
+        'addons/content/resources/css/article-edit-page.css',
     ])
     {{-- Inline fallback: topbar hide không phụ thuộc hashed CSS nếu Vite stale --}}
     <style id="article-editor-ui-revision-style">
@@ -133,12 +133,12 @@
     </div>
 @endif
 @php
-    $seoActiveArticleOperation = app(\App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService::class)
+    $seoActiveArticleOperation = app(\Omnichannel\Addons\WordPress\Services\ArticleWpSyncQueueService::class)
         ->activeOperation($record);
     $seoHasActiveArticleOperation = is_array($seoActiveArticleOperation)
         && in_array((string) ($seoActiveArticleOperation['raw_status'] ?? ''), [
-            \App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService::STATUS_PENDING,
-            \App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService::STATUS_PROCESSING,
+            \Omnichannel\Addons\WordPress\Services\ArticleWpSyncQueueService::STATUS_PENDING,
+            \Omnichannel\Addons\WordPress\Services\ArticleWpSyncQueueService::STATUS_PROCESSING,
         ], true);
 @endphp
 <script>
@@ -564,9 +564,9 @@
                     return;
                 }
                 @php
-                    $syncIsContentManager = \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager();
-                    $syncInContentProject = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsInContentProject($record);
-                    $syncEligibility = app(\App\Addons\SeoContentAi\Services\ArticleWordPressSyncEligibility::class)
+                    $syncIsContentManager = \Omnichannel\Addons\Seo\Support\SeoAccessControl::isContentManager();
+                    $syncInContentProject = \Omnichannel\Addons\Content\Filament\Resources\ArticleResource::articleIsInContentProject($record);
+                    $syncEligibility = app(\Omnichannel\Addons\WordPress\Services\ArticleWordPressSyncEligibility::class)
                         ->evaluate($record);
                     $syncContentProjectEligible = $syncInContentProject && ($syncEligibility['allowed'] ?? false);
                 @endphp
@@ -649,7 +649,7 @@
         >
             <div class="seo-article-editor-sticky-header__left">
                 <a
-                    href="{{ \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('index') }}"
+                    href="{{ \Omnichannel\Addons\Content\Filament\Resources\ArticleResource::getUrl('index') }}"
                     class="seo-article-edit-back-link seo-article-edit-back-link--icon"
                     title="{{ __('seo-content-ai::filament.article_list.back_to_articles') }}"
                     aria-label="{{ __('seo-content-ai::filament.article_list.back_to_articles') }}"
@@ -713,7 +713,7 @@
                     >
                         <span class="font-medium text-gray-700 dark:text-gray-300">Đường dẫn:</span>
                         @php($displayPermalink = trim($this->getDisplayPermalink()))
-                        @if($displayPermalink !== '' && (int) ($record->wp_post_id ?? 0) > 0)
+                        @if($displayPermalink !== '' && (int) ($record->wordpressLink?->wp_post_id ?? 0) > 0)
                             <a
                                 href="{{ $displayPermalink }}"
                                 target="_blank"
@@ -735,8 +735,8 @@
                 <script type="application/json" id="seo-article-core-bootstrap">@json($this->getEditorCoreBootstrap())</script>
                 <script>
                     window.__SEO_I18N_LOCALE__ = @js(app()->getLocale());
-                    window.__SEO_ARTICLES_LIST_URL__ = @js(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('index'));
-                    window.__SEO_ARTICLES_SYNC_QUEUE_URL__ = @js(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('index').'?tab=queue');
+                    window.__SEO_ARTICLES_LIST_URL__ = @js(\Omnichannel\Addons\Content\Filament\Resources\ArticleResource::getUrl('index'));
+                    window.__SEO_ARTICLES_SYNC_QUEUE_URL__ = @js(\Omnichannel\Addons\Content\Filament\Resources\ArticleResource::getUrl('index').'?tab=queue');
                     {{-- Minimal picker config — no focus-keyword DB resolve, no i18n bulk from server beyond static keys in JS fallback --}}
                     window.__SEO_ARTICLE_MEDIA_PICKER__ = @json($this->getArticleMediaPickerMinimalPayload());
                     window.__SEO_EDIT_ARTICLE_LIVEWIRE_ID__ = @js($this->getId());
@@ -747,7 +747,7 @@
                     @php($aiBannerTarget = (string) ($this->aiHistoryPendingBanner['target'] ?? ''))
                     @php($aiBannerRun = $this->aiHistoryPendingBanner['run_id'] ?? '-')
                     @php($aiBannerAttempt = $this->aiHistoryPendingBanner['attempt'] ?? '-')
-                    @php($aiHistoryUrl = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('prompts', ['record' => $record]))
+                    @php($aiHistoryUrl = \Omnichannel\Addons\Content\Filament\Resources\ArticleResource::getUrl('prompts', ['record' => $record]))
                     <div class="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-50">
                         <p class="font-medium">
                             @if ($aiBannerTarget === 'outline')
@@ -825,7 +825,7 @@
                                 x-cloak
                                 class="wp-article-edit-sidebar-scroll seo-assistant-host seo-assistant-sidebar space-y-3"
                                 x-data="seoAssistantNavigator(@js([
-                                    'postType' => \App\Addons\SeoContentAi\Models\SeoProjectTask::normalizePostType($this->articlePostType),
+                                    'postType' => \Omnichannel\Addons\ContentProjects\Models\SeoProjectTask::normalizePostType($this->articlePostType),
                                     'supportsProductGallery' => $this->supportsProductGallery(),
                                 ]))"
                                 x-init="initWorkspace()"
@@ -960,7 +960,7 @@
 
     @push('scripts')
         @viteReactRefresh
-        @vite('app/Addons/SeoContentAi/resources/js/article-editor.jsx')
+        @vite('addons/content/resources/js/article-editor.jsx')
     @endpush
 
     @include('seo-content-ai::filament.resources.article-resource.pages.partials.article-assign-content-project-modals', ['record' => $record])

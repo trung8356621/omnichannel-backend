@@ -21,10 +21,11 @@ Keep canonical backend docs aligned after the user explicitly signals completion
 # Workflow
 
 1. Identify changed symbols, routes, components, services, jobs, queues, or contracts.
-2. Select canonical docs from `docs/README.md`.
-3. Patch only the relevant section.
+2. Select canonical docs from `docs/README.md` (and `docs/architecture/ADDON_ARCHITECTURE.md` / `NEW_AGENT_HANDOFF.md` for ownership).
+3. Patch only the relevant section. Route feature ownership: content/media/seo/wordpress/publishing/content-projects/ai-prompt/search-intelligence/site-sync/agent — not SeoContentAi.
 4. Do not create new docs outside `docs/modules`, `docs/contracts`, `docs/architecture`, or `docs/operations` unless the user asks.
 5. Do not update `docs/archive/*` as source of truth.
+6. Do not instruct agents to add business code under `app/Addons/SeoContentAi`.
 
 # Verification
 

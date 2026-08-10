@@ -1,5 +1,5 @@
 @php
-    /** @var \App\Addons\SeoContentAi\Models\Keyword $record */
+    /** @var \Omnichannel\Addons\SearchFoundation\Models\Keyword $record */
     $record = $getRecord();
     $isChild = $record->parent_id !== null && (int) $record->parent_id > 0;
     $childCount = (int) ($record->children_count ?? 0);

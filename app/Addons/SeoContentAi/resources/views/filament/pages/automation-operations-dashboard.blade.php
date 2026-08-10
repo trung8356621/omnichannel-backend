@@ -47,7 +47,7 @@
                         {{ __('seo-content-ai::filament.automation.refresh') }}
                     </x-filament::button>
 
-                    @if (\App\Addons\SeoContentAi\Support\SeoAccessControl::canClearAutomationLogs())
+                    @if (\Omnichannel\Addons\Seo\Support\SeoAccessControl::canClearAutomationLogs())
                         <div class="relative">
                             <x-filament::button
                                 type="button"
@@ -85,7 +85,7 @@
                         </div>
                     @endif
 
-                    @if (\App\Addons\SeoContentAi\Support\SeoAccessControl::canRetryAutomationExecution())
+                    @if (\Omnichannel\Addons\Seo\Support\SeoAccessControl::canRetryAutomationExecution())
                         <x-filament::button
                             type="button"
                             color="warning"

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Middleware\Filament;
 
-use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use Omnichannel\Addons\Seo\Support\SeoAccessControl;
 use App\Models\User;
 use Closure;
 use Illuminate\Http\Request;

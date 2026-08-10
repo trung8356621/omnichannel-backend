@@ -1,6 +1,6 @@
 @once
     @vite([
-        'app/Addons/SeoContentAi/resources/css/media-library.css',
-        'app/Addons/SeoContentAi/resources/css/image-splitter.css',
+        'addons/media/resources/css/media-library.css',
+        'addons/media/resources/css/image-splitter.css',
     ])
 @endonce

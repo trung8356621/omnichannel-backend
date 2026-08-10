@@ -1,11 +1,11 @@
 <x-filament-panels::page>
     @php
-        $canDeleteMedia = \App\Addons\SeoContentAi\Support\SeoAccessControl::canDeleteSeoMedia();
+        $canDeleteMedia = \Omnichannel\Addons\Seo\Support\SeoAccessControl::canDeleteSeoMedia();
     @endphp
     @vite([
-        'app/Addons/SeoContentAi/resources/css/media-library.css',
-        'app/Addons/SeoContentAi/resources/js/media-library-actions.js',
-        'app/Addons/SeoContentAi/resources/js/media-library-page.jsx',
+        'addons/media/resources/css/media-library.css',
+        'addons/media/resources/js/media-library-actions.js',
+        'addons/media/resources/js/media-library-page.jsx',
     ])
     {{-- Inline override: rename modal above preview + actions/footer without waiting for vite rebuild. --}}
     <style>
@@ -113,20 +113,20 @@
 
         @php
             $mediaToolsSiteParams = $siteId ? ['siteId' => (int) $siteId] : [];
-            $canMediaTools = ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager();
-            $canManagerMediaTools = \App\Addons\SeoContentAi\Support\SeoAccessControl::canAccessManagerFeatures();
+            $canMediaTools = ! \Omnichannel\Addons\Seo\Support\SeoAccessControl::isContentManager();
+            $canManagerMediaTools = \Omnichannel\Addons\Seo\Support\SeoAccessControl::canAccessManagerFeatures();
         @endphp
         @if ($canManagerMediaTools || $canMediaTools)
             <div class="seo-media-library-tools mb-3 flex flex-wrap gap-2">
                 @if ($canManagerMediaTools)
                     <a
-                        href="{{ \App\Addons\SeoContentAi\Filament\Pages\WatermarkSettingsPage::getUrl($mediaToolsSiteParams) }}"
+                        href="{{ \Omnichannel\Addons\Media\Filament\Pages\WatermarkSettingsPage::getUrl($mediaToolsSiteParams) }}"
                         class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
                     >
                         {{ __('seo-content-ai::filament.nav.watermark_batch') }}
                     </a>
                     <a
-                        href="{{ \App\Addons\SeoContentAi\Filament\Pages\ImageOptimizationSettings::getUrl($mediaToolsSiteParams) }}"
+                        href="{{ \Omnichannel\Addons\Media\Filament\Pages\ImageOptimizationSettings::getUrl($mediaToolsSiteParams) }}"
                         class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
                     >
                         {{ __('seo-content-ai::filament.nav.image_optimization') }}
@@ -134,13 +134,13 @@
                 @endif
                 @if ($canMediaTools)
                     <a
-                        href="{{ \App\Addons\SeoContentAi\Filament\Pages\WatermarkEditor::getUrl($mediaToolsSiteParams) }}"
+                        href="{{ \Omnichannel\Addons\Media\Filament\Pages\WatermarkEditor::getUrl($mediaToolsSiteParams) }}"
                         class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
                     >
                         {{ __('seo-content-ai::filament.nav.watermark_designer') }}
                     </a>
                     <a
-                        href="{{ \App\Addons\SeoContentAi\Filament\Pages\ImageProcessingPage::getUrl($mediaToolsSiteParams) }}"
+                        href="{{ \Omnichannel\Addons\Media\Filament\Pages\ImageProcessingPage::getUrl($mediaToolsSiteParams) }}"
                         class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
                     >
                         {{ __('seo-content-ai::filament.nav.image_processing') }}
@@ -653,7 +653,7 @@
                                 (int) ($previewImage['wp_attachment_id'] ?? 0) > 0
                                 || ($previewImage['kind'] ?? '') === 'wordpress'
                             )
-                            && app(\App\Addons\SeoContentAi\Services\WordPress\WordPressMediaRenameService::class)->canRenameWordPressMedia();
+                            && app(\Omnichannel\Addons\WordPress\Services\WordPressMediaRenameService::class)->canRenameWordPressMedia();
                         $renameUrl = (string) ($previewImage['url'] ?? '');
                         $renamePath = (string) (parse_url($renameUrl, PHP_URL_PATH) ?: $renameUrl);
                         $renameSlug = (string) pathinfo($renamePath, PATHINFO_FILENAME);
@@ -730,7 +730,7 @@
                             $splitterSeoMediaId = (int) ($previewImage['id'] ?? 0);
                         }
                         $splitterUrl = $splitterSeoMediaId > 0
-                            ? \App\Addons\SeoContentAi\Filament\Pages\MediaImageEditor::urlForMedia($splitterSeoMediaId, 'splitter')
+                            ? \Omnichannel\Addons\Media\Filament\Pages\MediaImageEditor::urlForMedia($splitterSeoMediaId, 'splitter')
                             : null;
                     @endphp
                     @if ($splitterUrl && $previewMediaType === 'image')

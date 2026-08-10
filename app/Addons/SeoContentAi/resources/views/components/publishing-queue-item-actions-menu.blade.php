@@ -7,10 +7,10 @@
     $tid = (int) ($row['task_id'] ?? 0);
     $articleUrl = $row['article_edit_url'] ?? null;
     $wpPermalink = trim((string) ($row['wp_permalink'] ?? ''));
-    $a = \App\Addons\SeoContentAi\Support\PublishingQueue\PublishingQueueItemActionsPresenter::forRow($row);
+    $a = \Omnichannel\Addons\Publishing\Support\PublishingQueue\PublishingQueueItemActionsPresenter::forRow($row);
     $itemClass = 'cp-ops-menu__item';
     $dangerClass = 'cp-ops-menu__item cp-ops-menu__item--danger';
-    $tz = \App\Addons\SeoContentAi\Support\SystemDateTime::timezoneChip();
+    $tz = \Omnichannel\Addons\Content\Support\SystemDateTime::timezoneChip();
 @endphp
 
 <div

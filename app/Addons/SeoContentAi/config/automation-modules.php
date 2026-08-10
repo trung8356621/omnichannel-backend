@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 return [
     'modules' => [
-        \App\Addons\SeoContentAi\Automation\Modules\Core\CoreAutomationModuleProvider::class => true,
-        \App\Addons\SeoContentAi\Automation\Modules\WordPress\WordPressAutomationModuleProvider::class => true,
-        \App\Addons\SeoContentAi\Automation\Modules\Content\ContentAutomationModuleProvider::class => true,
-        \App\Addons\SeoContentAi\Automation\Modules\Seo\SeoAutomationModuleProvider::class => true,
-        \App\Addons\SeoContentAi\Automation\Modules\Media\MediaAutomationModuleProvider::class => true,
-        \App\Addons\SeoContentAi\Automation\Modules\Sample\SampleAutomationModuleProvider::class => false,
+        \Omnichannel\Addons\Agent\Automation\Modules\Core\CoreAutomationModuleProvider::class => true,
+        \Omnichannel\Addons\Agent\Automation\Modules\WordPress\WordPressAutomationModuleProvider::class => true,
+        \Omnichannel\Addons\Agent\Automation\Modules\Content\ContentAutomationModuleProvider::class => true,
+        \Omnichannel\Addons\Agent\Automation\Modules\Seo\SeoAutomationModuleProvider::class => true,
+        \Omnichannel\Addons\Agent\Automation\Modules\Media\MediaAutomationModuleProvider::class => true,
+        \Omnichannel\Addons\Agent\Automation\Modules\Sample\SampleAutomationModuleProvider::class => false,
     ],
 ];

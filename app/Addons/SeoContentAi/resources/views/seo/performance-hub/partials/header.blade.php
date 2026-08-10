@@ -1,5 +1,5 @@
 @php
-    use App\Addons\SeoContentAi\Support\SerpProviderKeys;
+    use Omnichannel\Addons\SearchIntelligence\Support\SerpProviderKeys;
 
     $isRankProvider = SerpProviderKeys::isValid($dataSource);
 @endphp

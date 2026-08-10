@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Filament\Pages;
 
-use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceDeepLink;
-use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use Omnichannel\Addons\Agent\Services\AgentWorkspace\AgentWorkspaceDeepLink;
+use Omnichannel\Addons\Seo\Support\SeoAccessControl;
 use Filament\Pages\Page;
 
 /**

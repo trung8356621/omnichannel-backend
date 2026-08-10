@@ -1,0 +1,217 @@
+{
+  "version": 2,
+  "generated": "2026-08-10",
+  "task": "Task 7 §Q/R",
+  "path": "app/Addons/SeoContentAi",
+  "status": "COMPATIBILITY_SHELL_ONLY",
+  "delete_entire_addon": false,
+  "delete_entire_addon_reason": "Filament still loads ~239 Blade views via seo-content-ai:: plus SeoPanelProvider / fat ServiceProvider / lang / config / prompt-hooks.",
+  "policy": "Do not bulk-move remaining views/lang/config in one pass. Active business belongs under addons/{content,seo,media,wordpress,publishing,content-projects,search-intelligence,ai-prompt}. Shell keeps registration + Filament views until view registration cutover. GlobalSeoBar moved to addons/seo; API route bodies to wordpress/content-projects (api.php shim).",
+  "active_business_targets": [
+    "addons/content",
+    "addons/seo",
+    "addons/media",
+    "addons/wordpress",
+    "addons/publishing",
+    "addons/content-projects",
+    "addons/search-intelligence",
+    "addons/ai-prompt"
+  ],
+  "vite": {
+    "note": "JS/CSS inputs retargeted to peer addons. SeoContentAi resources/js|css empty (0 files). Views still pending relocate but already @vite peer paths.",
+    "alias": {
+      "@seo-addon": "addons/seo/resources/js"
+    },
+    "config_file": "vite.config.js",
+    "sample_inputs": [
+      "addons/seo/resources/js/article-seo-preview.jsx",
+      "addons/content/resources/js/article-editor.jsx",
+      "addons/media/resources/js/media-library-page.jsx",
+      "addons/content-projects/resources/js/task-builder.jsx",
+      "addons/search-intelligence/resources/js/performance-hub-gsc-chart.js"
+    ]
+  },
+  "counts": {
+    "note": "Post Task 7 §Q/R filesystem inventory under app/Addons/SeoContentAi.",
+    "files_total": 287,
+    "php_blade_views": 239,
+    "non_view_files": 48,
+    "php_tests_remaining": 1,
+    "tests_compat_trait_only": true,
+    "js_jsx_under_resources_js": 0,
+    "css_under_resources_css": 0,
+    "livewire_php_classes": 0,
+    "livewire_blade_views": 0,
+    "routes_files": 2,
+    "lang_files": 6,
+    "config_php": 8,
+    "prompt_hooks_resources": 18
+  },
+  "still_temporary_under_shell": {
+    "resources_js": "empty (moved to peer addons)",
+    "resources_css": "empty (moved to peer addons)",
+    "resources_views": "app/Addons/SeoContentAi/resources/views (PENDING — Filament still loads)",
+    "resources_prompt_hooks": "app/Addons/SeoContentAi/resources/prompt-hooks",
+    "tests": "app/Addons/SeoContentAi/tests/Compat/UsesSeoDatabase.php only",
+    "livewire": "MOVED → addons/seo/src/Livewire/GlobalSeoBar.php",
+    "routes": "app/Addons/SeoContentAi/routes (api.php shim; bodies in peer addons)",
+    "providers": "app/Addons/SeoContentAi/Providers",
+    "service_provider": "app/Addons/SeoContentAi/SeoContentAiServiceProvider.php",
+    "addon_json": "app/Addons/SeoContentAi/addon.json",
+    "config": "app/Addons/SeoContentAi/config",
+    "lang": "app/Addons/SeoContentAi/lang"
+  },
+  "classification_buckets": {
+    "MOVE_CONTENT": {
+      "target": "addons/content",
+      "examples": [
+        "resources/js/article-editor.jsx",
+        "resources/js/editor/",
+        "resources/js/articleListTableLoading.js",
+        "resources/css/article-edit-page.css",
+        "resources/views/articles/",
+        "config/article_editor.php",
+        "config/article_list.php",
+        "tests/Unit/AcknowledgeProjectItemGenerationErrorTest.php",
+        "tests/Feature/ArticleOutlineApiAccessTest.php"
+      ]
+    },
+    "MOVE_SEO": {
+      "target": "addons/seo",
+      "done_this_pass": [
+        "Livewire/GlobalSeoBar.php → addons/seo/src/Livewire/GlobalSeoBar.php",
+        "resources/views/livewire/global-seo-bar.blade.php → addons/seo/resources/views/livewire/ (seo:: NS)"
+      ],
+      "examples": [
+        "resources/views/seo/",
+        "config/seo_architecture.php",
+        "config/keyword_intelligence.php",
+        "Providers/SeoPanelProvider.php"
+      ]
+    },
+    "MOVE_MEDIA": {
+      "target": "addons/media",
+      "examples": [
+        "resources/js/media-library-page.jsx",
+        "resources/js/media-library-actions.js",
+        "resources/js/media-image-editor-page.jsx",
+        "resources/js/watermark-editor-page.jsx",
+        "resources/js/magic-eraser-mount.jsx",
+        "resources/js/article-media-picker-cache-bootstrap.js",
+        "resources/css/media-library.css",
+        "resources/css/watermark-editor.css",
+        "resources/css/image-splitter.css",
+        "resources/css/image-optimization-settings.css"
+      ]
+    },
+    "MOVE_WP": {
+      "target": "addons/wordpress",
+      "done_this_pass": [
+        "routes/seo-wp-bridge.php (body; shell api.php requires it)"
+      ],
+      "examples": [
+        "resources/views/filament/ (WP sync / publish bridge blades still mixed)",
+        "Extension/Builtin/LocalSeo/plugin.json"
+      ]
+    },
+    "MOVE_PUBLISHING": {
+      "target": "addons/publishing",
+      "examples": [
+        "tests/Feature/QueueRuntimeCheckCommandRegistrationTest.php",
+        "resources/js/editor/domains/publishing/ (if present under editor tree)",
+        "resources/views/filament/ (publish-box / schedule blades still mixed)"
+      ]
+    },
+    "MOVE_CONTENT_PROJECTS": {
+      "target": "addons/content-projects",
+      "done_this_pass": [
+        "routes/api-v1.php (CP + Agent MCP; shell api.php requires it)"
+      ],
+      "examples": [
+        "config/content_project_agent.php",
+        "config/automation-modules.php",
+        "resources/views/filament/ (project/run/workflow blades still mixed)"
+      ]
+    },
+    "MOVE_SEARCH_INTEL": {
+      "target": "addons/search-intelligence",
+      "examples": [
+        "resources/js/performance-hub-gsc-chart.js",
+        "config/gsc_intelligence.php"
+      ]
+    },
+    "MOVE_AI_PROMPT": {
+      "target": "addons/ai-prompt",
+      "examples": [
+        "resources/prompt-hooks/",
+        "resources/views/prompt/",
+        "resources/css/ai-result.css",
+        "resources/css/global-ai-chat.css",
+        "lang/en/prompt_hooks.php",
+        "lang/vi/prompt_hooks.php",
+        "Extension/Builtin/AiProviders/plugin.json",
+        "tests/Unit/PromptHookFoundationTest.php",
+        "tests/Unit/PromptExecutionOrchestrationTest.php"
+      ]
+    },
+    "MOVE_CORE": {
+      "target": "app/Core or addons/agent / search-foundation as appropriate",
+      "examples": [
+        "resources/js/agent/command-catalog.js",
+        "resources/css/agent-workspace.css",
+        "config/extension_sdk.php",
+        "Extension/Builtin/ContentPipelines/plugin.json",
+        "Settings.php",
+        "scripts/check-editor-cycles.cjs"
+      ]
+    },
+    "DELETE_DEAD": {
+      "target": null,
+      "note": "Former PHP trees emptied by class move to /addons/* — empty directories removed from disk on 2026-08-10. Git may still list deleted class paths until that move is committed. Do not delete resources/tests/routes/providers yet.",
+      "examples": [
+        "Console/ (removed empty)",
+        "Contracts/ (removed empty)",
+        "database/ (removed empty)",
+        "DataTransfer/ (removed empty)",
+        "Enums/ (removed empty)",
+        "Exceptions/ (removed empty)",
+        "Filament/ (removed empty)",
+        "Http/ (removed empty)",
+        "Jobs/ (removed empty)",
+        "Models/ (removed empty)",
+        "Observers/ (removed empty)",
+        "Services/ (removed empty)",
+        "Support/ (removed empty)",
+        "Extensions/.gitkeep"
+      ]
+    },
+    "KEEP_COMPAT": {
+      "target": "app/Addons/SeoContentAi (shell)",
+      "note": "Registration + Filament views + lang/config until peer addons own panel/view wiring. See README.md remaining inventory.",
+      "examples": [
+        "addon.json",
+        "SeoContentAiServiceProvider.php",
+        "Providers/SeoPanelProvider.php",
+        "routes/web.php",
+        "routes/api.php (shim)",
+        "resources/views/** (PENDING)",
+        "lang/**",
+        "config/**",
+        "resources/prompt-hooks/**",
+        "tests/Compat/UsesSeoDatabase.php",
+        "README.md",
+        "README_ADDON_SEOCONTENTAI.md",
+        "database.local.php.example",
+        "Settings.php"
+      ]
+    }
+  },
+  "next_cutover_order_suggested": [
+    "Move Filament view registration + resources/views by peer owner (do not delete until registration moved)",
+    "Move SeoPanelProvider ownership to addons/seo (or core Filament provider)",
+    "Split lang/config keys off seo-content-ai::* namespace with caller cutover",
+    "Move prompt-hooks resources under addons/ai-prompt + retarget loaders",
+    "Peer ServiceProviders own Route::group (retire api.php shim)",
+    "Thin SeoContentAiServiceProvider to pure adapter then remove legacy slug"
+  ]
+}

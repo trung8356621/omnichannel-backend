@@ -100,12 +100,8 @@ final class RuntimeLoggerWebAppChannelTest extends TestCase
 
     public function test_editor_sync_and_lazy_controllers_use_runtime_logger_not_report(): void
     {
-        $sync = (string) file_get_contents(
-            dirname(__DIR__, 2).'/app/Addons/SeoContentAi/Http/Controllers/ArticleEditorSyncController.php',
-        );
-        $lazy = (string) file_get_contents(
-            dirname(__DIR__, 2).'/app/Addons/SeoContentAi/Http/Controllers/ArticleEditorLazyPayloadController.php',
-        );
+        $sync = \Tests\Support\LegacyAddonPath::read('Http/Controllers/ArticleEditorSyncController.php');
+        $lazy = \Tests\Support\LegacyAddonPath::read('Http/Controllers/ArticleEditorLazyPayloadController.php');
 
         self::assertStringContainsString('RuntimeLogger::report', $sync);
         self::assertStringNotContainsString('report($exception)', $sync);
@@ -115,12 +111,8 @@ final class RuntimeLoggerWebAppChannelTest extends TestCase
 
     public function test_editor_perf_debug_uses_runtime_logger(): void
     {
-        $perf = (string) file_get_contents(
-            dirname(__DIR__, 2).'/app/Addons/SeoContentAi/Support/ArticleEditorPerfDebug.php',
-        );
-        $sizer = (string) file_get_contents(
-            dirname(__DIR__, 2).'/app/Addons/SeoContentAi/Support/ArticleEditorBootstrapSizer.php',
-        );
+        $perf = \Tests\Support\LegacyAddonPath::read('Support/ArticleEditorPerfDebug.php');
+        $sizer = \Tests\Support\LegacyAddonPath::read('Support/ArticleEditorBootstrapSizer.php');
 
         self::assertStringContainsString('RuntimeLogger::', $perf);
         self::assertStringNotContainsString('Log::', $perf);

@@ -1,5 +1,5 @@
 @php
-    use App\Addons\SeoContentAi\Support\SystemDateTime;
+    use Omnichannel\Addons\Content\Support\SystemDateTime;
     $cfg = SystemDateTime::frontendConfig();
 @endphp
 <script>
@@ -18,4 +18,4 @@
         });
     });
 </script>
-@vite('app/Addons/SeoContentAi/resources/js/utils/systemDateTime.js')
+@vite('addons/content/resources/js/utils/systemDateTime.js')

@@ -1,6 +1,6 @@
 @php
     $domainOptions = $this->rankGroupDomainOptions;
-    $isCustomDomain = $groupFormTargetDomainChoice === \App\Addons\SeoContentAi\Filament\Pages\SeoPerformanceHub::TARGET_DOMAIN_CUSTOM;
+    $isCustomDomain = $groupFormTargetDomainChoice === \Omnichannel\Addons\SearchIntelligence\Filament\Pages\SeoPerformanceHub::TARGET_DOMAIN_CUSTOM;
 @endphp
 
 <div
@@ -153,7 +153,7 @@
                             @foreach ($domainOptions as $domain)
                                 <option value="{{ $domain }}">{{ $domain }}</option>
                             @endforeach
-                            <option value="{{ \App\Addons\SeoContentAi\Filament\Pages\SeoPerformanceHub::TARGET_DOMAIN_CUSTOM }}">{{ __('seo-content-ai::filament.rank_group.target_domain_custom') }}</option>
+                            <option value="{{ \Omnichannel\Addons\SearchIntelligence\Filament\Pages\SeoPerformanceHub::TARGET_DOMAIN_CUSTOM }}">{{ __('seo-content-ai::filament.rank_group.target_domain_custom') }}</option>
                         </x-select>
                         <p class="performance-hub-form-hint">{{ __('seo-content-ai::filament.rank_group.target_domain_hint') }}</p>
                     </div>

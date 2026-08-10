@@ -1,6 +1,6 @@
 @php
-    $workspaceCss = base_path('app/Addons/SeoContentAi/resources/css/keyword-workspace.css');
-    $performanceCss = base_path('app/Addons/SeoContentAi/resources/css/performance-hub.css');
+    $workspaceCss = base_path('addons/seo/resources/css/keyword-workspace.css');
+    $performanceCss = base_path('addons/search-intelligence/resources/css/performance-hub.css');
     $cannibalization = $this->cannibalizationRows;
 @endphp
 

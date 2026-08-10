@@ -18,8 +18,8 @@
         ],
     ];
     $publishBoxInitial = [
-        'postType' => \App\Addons\SeoContentAi\Models\SeoProjectTask::normalizePostType(
-            \App\Addons\SeoContentAi\Support\ArticlePostTypeResolver::resolve($this->record),
+        'postType' => \Omnichannel\Addons\ContentProjects\Models\SeoProjectTask::normalizePostType(
+            \Omnichannel\Addons\Content\Support\ArticlePostTypeResolver::resolve($this->record),
         ),
         'status' => $articleStatus,
         'visibility' => $visibility,
@@ -32,7 +32,7 @@
         'showPublishScheduleRow' => $this->shouldShowPublishScheduleRow(),
         'publishedAtSidebarLabel' => $this->getPublishedAtSidebarLabel(),
     ];
-    $articleRevisionCount = app(\App\Addons\SeoContentAi\Services\SeoArticleRevisionService::class)
+    $articleRevisionCount = app(\Omnichannel\Addons\Content\Services\SeoArticleRevisionService::class)
         ->countForArticle((int) $record->getKey());
     $publishBoxInitial['revisionCount'] = $articleRevisionCount;
 
@@ -405,7 +405,7 @@
                     <div class="flex items-center gap-1.5">
                         <span class="font-semibold text-amber-800 dark:text-amber-200">Debug WP ID</span>
                     </div>
-                    @if ($record->wp_post_id)
+                    @if ($record->wordpressLink?->wp_post_id)
                         <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">Đã nối</span>
                     @else
                         <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Thiếu WP ID</span>
@@ -413,8 +413,8 @@
                 </div>
                 <div class="mt-2 flex items-center gap-1.5">
                     <span class="text-gray-500 dark:text-gray-400">WP ID:</span>
-                    @if ($record->wp_post_id)
-                        <strong class="text-gray-800 dark:text-gray-100">{{ $record->wp_post_id }}</strong>
+                    @if ($record->wordpressLink?->wp_post_id)
+                        <strong class="text-gray-800 dark:text-gray-100">{{ $record->wordpressLink->wp_post_id }}</strong>
                     @else
                         <strong class="text-amber-700 dark:text-amber-300">Chưa nối</strong>
                     @endif
@@ -574,10 +574,10 @@
                 <span x-text="savedAtLabel"></span>
             </div>
 
-            @if (! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
+            @if (! \Omnichannel\Addons\Seo\Support\SeoAccessControl::isContentManager())
                 <div class="text-xs">
                     <span class="text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.article_list.review') }}:</span>
-                    <strong class="{{ app(\App\Addons\SeoContentAi\Services\ArticleReviewService::class)->isCanonicallyApproved($record) ? 'text-emerald-700 dark:text-emerald-300' : 'text-gray-800 dark:text-gray-100' }}">
+                    <strong class="{{ app(\Omnichannel\Addons\Content\Services\ArticleReviewService::class)->isCanonicallyApproved($record) ? 'text-emerald-700 dark:text-emerald-300' : 'text-gray-800 dark:text-gray-100' }}">
                         {{ $this->getReviewStatusLabel() }}
                     </strong>
                     @if ($this->getReviewedAtLabel())

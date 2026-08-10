@@ -46,5 +46,5 @@ Component: `resources/views/components/select.blade.php`
 - Nội dung `<option>` đặt trong slot (children).
 - **Không** chèn thêm icon mũi tên SVG bên ngoài component — component đã có chevron sẵn.
 - **Không** bọc `<x-select>` trong wrapper chỉ để thêm mũi tên.
-- Addon SEO React: tiếp tục dùng `<SeoSelect>` (`app/Addons/SeoContentAi/resources/js/components/SeoSelect.jsx`).
+- Addon SEO React: tiếp tục dùng `<SeoSelect>` (`addons/seo/resources/js/components/SeoSelect.jsx`).
 - Addon SEO Blade: ưu tiên `<x-select>`; `<x-seo-content-ai::seo-select>` chỉ khi cần size/variant SEO đặc thù.

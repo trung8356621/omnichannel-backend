@@ -1,5 +1,5 @@
 <x-filament-panels::page>
-    @vite('app/Addons/SeoContentAi/resources/css/media-library.css')
+    @vite('addons/media/resources/css/media-library.css')
 
     <div class="seo-prompt-test-layout">
         {{-- Cột 1: Prompt template --}}
@@ -347,7 +347,7 @@
                             <option value="">— Chọn bài đã đồng bộ WP —</option>
                             @foreach ($this->articlesForCommentPublish as $article)
                                 <option value="{{ $article->id }}">
-                                    [WP #{{ $article->wp_post_id }}] {{ $article->title }}
+                                    [WP #{{ $article->wordpressLink?->wp_post_id }}] {{ $article->title }}
                                     ({{ $article->type === 'product' ? 'product' : 'post' }})
                                 </option>
                             @endforeach

@@ -1,5 +1,5 @@
 @php
-    use App\Addons\SeoContentAi\DataTransfer\SeoProviderCapabilityState;
+    use Omnichannel\Addons\Seo\DataTransfer\SeoProviderCapabilityState;
 @endphp
 
 <div
@@ -46,7 +46,7 @@
                                     @php
                                         /** @var SeoProviderCapabilityState $state */
                                         $state = $row['capabilities'][$column['key']] ?? SeoProviderCapabilityState::unsupported();
-                                        $cell = app(\App\Addons\SeoContentAi\Services\SeoProviderCapabilityResolver::class)->matrixCellState($state);
+                                        $cell = app(\Omnichannel\Addons\SearchIntelligence\Services\SeoProviderCapabilityResolver::class)->matrixCellState($state);
                                     @endphp
                                     <td>
                                         @include('seo-content-ai::filament.pages.partials.api-capability-cell', [

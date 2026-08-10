@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\Filament\SeoToolsPanel\Pages;
 
-use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
-use App\Addons\SeoContentAi\Services\SeoToolsService;
-use App\Addons\SeoContentAi\Services\SitePolylangService;
-use App\Addons\SeoContentAi\Support\SeoToolsAccessControl;
+use Omnichannel\Addons\SearchFoundation\Services\SeoDatabaseConnectionService;
+use Omnichannel\Addons\Seo\Services\SeoToolsService;
+use Omnichannel\Addons\WordPress\Services\SitePolylangService;
+use Omnichannel\Addons\Seo\Support\SeoToolsAccessControl;
 use App\Models\SeoDatabaseConnection;
 use App\Models\User;
 use Filament\Forms\Components\Actions;

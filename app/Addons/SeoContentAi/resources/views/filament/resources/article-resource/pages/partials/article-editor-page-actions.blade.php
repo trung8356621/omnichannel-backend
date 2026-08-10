@@ -1,7 +1,7 @@
 @php
-    $isContentManager = \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager();
+    $isContentManager = \Omnichannel\Addons\Seo\Support\SeoAccessControl::isContentManager();
     $internalPreviewUrl = trim((string) ($this->getArticlePreviewUrl() ?? ''));
-    $wpPreviewUrl = (int) ($record->wp_post_id ?? 0) > 0 ? trim((string) $this->getArticlePermalink()) : '';
+    $wpPreviewUrl = (int) ($record->wordpressLink?->wp_post_id ?? 0) > 0 ? trim((string) $this->getArticlePermalink()) : '';
     $hasWpPreview = $wpPreviewUrl !== '';
     $hasInternalPreview = $internalPreviewUrl !== '';
     $reviewBootstrap = $this->getArticleReviewBootstrap();
@@ -27,13 +27,13 @@
         'reviewEndpoint' => $reviewActionEndpoint,
         'reviewGenericError' => __('seo-content-ai::filament.article_review.errors.invalid_transition'),
     ];
-    $inContentProject = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsInContentProject($record);
-    $wpSyncEligibility = app(\App\Addons\SeoContentAi\Services\ArticleWordPressSyncEligibility::class)
+    $inContentProject = \Omnichannel\Addons\Content\Filament\Resources\ArticleResource::articleIsInContentProject($record);
+    $wpSyncEligibility = app(\Omnichannel\Addons\WordPress\Services\ArticleWordPressSyncEligibility::class)
         ->evaluate($record);
     $contentProjectWpSyncEligible = $inContentProject && ($wpSyncEligibility['allowed'] ?? false);
-    $isContentArchived = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsContentArchived($record);
+    $isContentArchived = \Omnichannel\Addons\Content\Filament\Resources\ArticleResource::articleIsContentArchived($record);
     $contentProjectUrl = $inContentProject
-        ? \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleContentProjectUrl($record)
+        ? \Omnichannel\Addons\Content\Filament\Resources\ArticleResource::articleContentProjectUrl($record)
         : null;
     $saveLabel = __('seo-content-ai::filament.article_list.page_action_save_label');
     $saveCloseLabel = __('seo-content-ai::filament.article_list.page_action_save_close_label');
@@ -42,7 +42,7 @@
     $syncTitle = __('seo-content-ai::filament.article_list.sync_to_wordpress');
     $previewLabel = __('seo-content-ai::filament.article_list.page_action_preview_label');
     $historyUrl = route('seo.articles.revisions.compare', ['article' => $record->getKey()]);
-    $promptsUrl = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('prompts', ['record' => $record]);
+    $promptsUrl = \Omnichannel\Addons\Content\Filament\Resources\ArticleResource::getUrl('prompts', ['record' => $record]);
 @endphp
 
 @once
@@ -806,7 +806,7 @@
                 </button>
             @endif
 
-            @if (\App\Addons\SeoContentAi\Support\SeoAccessControl::canAccessManagerFeatures())
+            @if (\Omnichannel\Addons\Seo\Support\SeoAccessControl::canAccessManagerFeatures())
                 <button
                     type="button"
                     class="seo-editor-menu-item"

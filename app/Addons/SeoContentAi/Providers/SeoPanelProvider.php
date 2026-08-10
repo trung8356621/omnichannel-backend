@@ -4,41 +4,41 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Providers;
 
-use App\Addons\SeoContentAi\Filament\Pages\Auth\SeoChangePassword;
-use App\Addons\SeoContentAi\Filament\Pages\Auth\SeoEditProfile;
-use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorLazyPayloadController;
-use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorSyncController;
-use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorSessionController;
-use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorOperationController;
-use App\Addons\SeoContentAi\Http\Controllers\ArticleProductReviewReconcileController;
-use App\Addons\SeoContentAi\Http\Controllers\ArticleProductReviewStatusController;
-use App\Addons\SeoContentAi\Http\Controllers\ArticleReviewActionController;
-use App\Addons\SeoContentAi\Http\Controllers\ArticleWordPressProductReviewsController;
-use App\Addons\SeoContentAi\Http\Controllers\ArticleMediaPickerController;
-use App\Addons\SeoContentAi\Http\Controllers\ArticleOutlineController;
-use App\Addons\SeoContentAi\Http\Controllers\ArticlePreviewController;
-use App\Addons\SeoContentAi\Http\Controllers\ArticleRevisionController;
-use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoPreviewController;
-use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoScorePreviewController;
-use App\Addons\SeoContentAi\Http\Controllers\ArticleWpEditRedirectController;
-use App\Addons\SeoContentAi\Http\Controllers\GoogleSearchConsoleOAuthController;
-use App\Addons\SeoContentAi\Http\Controllers\KeywordReviewController;
-use App\Addons\SeoContentAi\Http\Controllers\PromptHookExecuteController;
-use App\Addons\SeoContentAi\Http\Controllers\SeoArticleRevisionController;
-use App\Addons\SeoContentAi\Http\Controllers\SeoMediaController;
-use App\Addons\SeoContentAi\Http\Controllers\SeoPanelLogoutController;
-use App\Addons\SeoContentAi\Http\Controllers\SeoPanelRedirectController;
-use App\Addons\SeoContentAi\Http\Controllers\SeoWatermarkController;
-use App\Addons\SeoContentAi\Http\Controllers\TeamMessageController;
-use App\Addons\SeoContentAi\Http\Controllers\WorkspaceMediaPickerController;
-use App\Addons\SeoContentAi\Http\Middleware\CheckMainRole;
-use App\Addons\SeoContentAi\Http\Middleware\SeoAuthenticate;
-use App\Addons\SeoContentAi\Http\Middleware\SeoPlannerPermissionMiddleware;
-use App\Addons\SeoContentAi\Http\Middleware\SetDynamicSeoDatabase;
-use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
-use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
-use App\Addons\SeoContentAi\Support\SeoAccessControl;
-use App\Addons\SeoContentAi\Support\SeoConnectionContext;
+use Omnichannel\Addons\Seo\Filament\Pages\Auth\SeoChangePassword;
+use Omnichannel\Addons\Seo\Filament\Pages\Auth\SeoEditProfile;
+use Omnichannel\Addons\Content\Http\Controllers\ArticleEditorLazyPayloadController;
+use Omnichannel\Addons\Content\Http\Controllers\ArticleEditorSyncController;
+use Omnichannel\Addons\Content\Http\Controllers\ArticleEditorSessionController;
+use Omnichannel\Addons\Content\Http\Controllers\ArticleEditorOperationController;
+use Omnichannel\Addons\Commerce\Http\Controllers\ArticleProductReviewReconcileController;
+use Omnichannel\Addons\Commerce\Http\Controllers\ArticleProductReviewStatusController;
+use Omnichannel\Addons\Content\Http\Controllers\ArticleReviewActionController;
+use Omnichannel\Addons\WordPress\Http\Controllers\ArticleWordPressProductReviewsController;
+use Omnichannel\Addons\Media\Http\Controllers\ArticleMediaPickerController;
+use Omnichannel\Addons\Content\Http\Controllers\ArticleOutlineController;
+use Omnichannel\Addons\Content\Http\Controllers\ArticlePreviewController;
+use Omnichannel\Addons\Content\Http\Controllers\ArticleRevisionController;
+use Omnichannel\Addons\Content\Http\Controllers\ArticleSeoPreviewController;
+use Omnichannel\Addons\Seo\Http\Controllers\ArticleSeoScorePreviewController;
+use Omnichannel\Addons\WordPress\Http\Controllers\ArticleWpEditRedirectController;
+use Omnichannel\Addons\SearchIntelligence\Http\Controllers\GoogleSearchConsoleOAuthController;
+use Omnichannel\Addons\SearchFoundation\Http\Controllers\KeywordReviewController;
+use Omnichannel\Addons\AiPrompt\Http\Controllers\PromptHookExecuteController;
+use Omnichannel\Addons\Content\Http\Controllers\SeoArticleRevisionController;
+use Omnichannel\Addons\Media\Http\Controllers\SeoMediaController;
+use Omnichannel\Addons\Seo\Http\Controllers\SeoPanelLogoutController;
+use Omnichannel\Addons\Seo\Http\Controllers\SeoPanelRedirectController;
+use Omnichannel\Addons\Media\Http\Controllers\SeoWatermarkController;
+use Omnichannel\Addons\Seo\Http\Controllers\TeamMessageController;
+use Omnichannel\Addons\Media\Http\Controllers\WorkspaceMediaPickerController;
+use Omnichannel\Addons\Seo\Http\Middleware\CheckMainRole;
+use Omnichannel\Addons\Seo\Http\Middleware\SeoAuthenticate;
+use Omnichannel\Addons\Seo\Http\Middleware\SeoPlannerPermissionMiddleware;
+use Omnichannel\Addons\SearchFoundation\Http\Middleware\SetDynamicSeoDatabase;
+use Omnichannel\Addons\AiPrompt\Services\PromptMediaStorageService;
+use Omnichannel\Addons\SearchFoundation\Services\SeoDatabaseConnectionService;
+use Omnichannel\Addons\Seo\Support\SeoAccessControl;
+use Omnichannel\Addons\Seo\Support\SeoConnectionContext;
 use App\Http\Middleware\SetDynamicSeoDatabaseByHash;
 use Filament\Facades\Filament;
 use Filament\Http\Middleware\AuthenticateSession;
@@ -63,6 +63,11 @@ use Illuminate\Support\HtmlString;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 use Livewire\Livewire;
 
+/**
+ * COMPATIBILITY BOOTSTRAP ONLY — Filament SEO panel registration.
+ * Page/resource/controller classes already live in peer Omnichannel\Addons\* packages.
+ * See app/Addons/SeoContentAi/README.md and docs/architecture/SEOCONTENTAI_CUTOVER_INVENTORY.json.
+ */
 class SeoPanelProvider extends PanelProvider
 {
     public function register(): void
@@ -77,7 +82,7 @@ class SeoPanelProvider extends PanelProvider
     {
         $addonRoot = dirname(__DIR__);
 
-        Livewire::component('global-seo-bar', \App\Addons\SeoContentAi\Livewire\GlobalSeoBar::class);
+        Livewire::component('global-seo-bar', \Omnichannel\Addons\Seo\Livewire\GlobalSeoBar::class);
 
         $this->loadViewsFrom($addonRoot.'/resources/views', 'seo-content-ai');
         $this->loadTranslationsFrom($addonRoot.'/lang', 'seo-content-ai');
@@ -210,7 +215,7 @@ class SeoPanelProvider extends PanelProvider
                 }
 
                 // Agent Workspace is the full-page chat — do not mount floating launcher/runtime.
-                if (\App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceUiContext::hidesGlobalChat()) {
+                if (\Omnichannel\Addons\Agent\Services\AgentWorkspace\AgentWorkspaceUiContext::hidesGlobalChat()) {
                     return new HtmlString(
                         view('seo-content-ai::components.workspace-media-picker')->render()
                     );
@@ -316,9 +321,9 @@ class SeoPanelProvider extends PanelProvider
                 Route::delete('/{media}/ai-job', [SeoMediaController::class, 'deleteAiJob'])
                     ->whereNumber('media')
                     ->name('seo.media.delete-ai-job');
-                Route::post('/wordpress/rename/preview', [\App\Addons\SeoContentAi\Http\Controllers\WordPressMediaRenameController::class, 'preview'])
+                Route::post('/wordpress/rename/preview', [\Omnichannel\Addons\WordPress\Http\Controllers\WordPressMediaRenameController::class, 'preview'])
                     ->name('seo.media.wordpress.rename.preview');
-                Route::post('/wordpress/rename', [\App\Addons\SeoContentAi\Http\Controllers\WordPressMediaRenameController::class, 'rename'])
+                Route::post('/wordpress/rename', [\Omnichannel\Addons\WordPress\Http\Controllers\WordPressMediaRenameController::class, 'rename'])
                     ->name('seo.media.wordpress.rename');
                 Route::post('/{media}/rename', [SeoMediaController::class, 'rename'])
                     ->whereNumber('media')
@@ -341,9 +346,9 @@ class SeoPanelProvider extends PanelProvider
         Route::middleware($seoWebApiMiddleware)
             ->prefix('api/seo')
             ->group(function (): void {
-                Route::get('/domain-cta/quick-templates', [\App\Addons\SeoContentAi\Http\Controllers\DomainCtaQuickTemplatesController::class, 'show'])
+                Route::get('/domain-cta/quick-templates', [\Omnichannel\Addons\SearchFoundation\Http\Controllers\DomainCtaQuickTemplatesController::class, 'show'])
                     ->name('seo.domain-cta.quick-templates.show');
-                Route::put('/domain-cta/quick-templates', [\App\Addons\SeoContentAi\Http\Controllers\DomainCtaQuickTemplatesController::class, 'update'])
+                Route::put('/domain-cta/quick-templates', [\Omnichannel\Addons\SearchFoundation\Http\Controllers\DomainCtaQuickTemplatesController::class, 'update'])
                     ->name('seo.domain-cta.quick-templates.update');
             });
 
@@ -420,19 +425,19 @@ class SeoPanelProvider extends PanelProvider
                 Route::get('/{article}/editor/faqs/count', [ArticleEditorLazyPayloadController::class, 'faqsCount'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.faqs-count');
-                Route::get('/{article}/editor/faq-snapshot', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorFaqSnapshotController::class, 'show'])
+                Route::get('/{article}/editor/faq-snapshot', [\Omnichannel\Addons\Content\Http\Controllers\ArticleEditorFaqSnapshotController::class, 'show'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.faq-snapshot');
-                Route::put('/{article}/editor/faq-snapshot', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorFaqSnapshotController::class, 'replace'])
+                Route::put('/{article}/editor/faq-snapshot', [\Omnichannel\Addons\Content\Http\Controllers\ArticleEditorFaqSnapshotController::class, 'replace'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.faq-snapshot.replace');
-                Route::post('/{article}/editor/faq-snapshot/generate-preview', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorFaqSnapshotController::class, 'generatePreview'])
+                Route::post('/{article}/editor/faq-snapshot/generate-preview', [\Omnichannel\Addons\Content\Http\Controllers\ArticleEditorFaqSnapshotController::class, 'generatePreview'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.faq-snapshot.generate-preview');
-                Route::post('/{article}/editor/faq-snapshot/apply', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorFaqSnapshotController::class, 'apply'])
+                Route::post('/{article}/editor/faq-snapshot/apply', [\Omnichannel\Addons\Content\Http\Controllers\ArticleEditorFaqSnapshotController::class, 'apply'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.faq-snapshot.apply');
-                Route::post('/{article}/editor/faq-snapshot/extract', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorFaqSnapshotController::class, 'extract'])
+                Route::post('/{article}/editor/faq-snapshot/extract', [\Omnichannel\Addons\Content\Http\Controllers\ArticleEditorFaqSnapshotController::class, 'extract'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.faq-snapshot.extract');
                 Route::get('/{article}/editor/meta', [ArticleEditorLazyPayloadController::class, 'meta'])
@@ -453,19 +458,19 @@ class SeoPanelProvider extends PanelProvider
                 Route::get('/{article}/editor/media-picker-config', [ArticleEditorLazyPayloadController::class, 'mediaPickerConfig'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.media-picker-config');
-                Route::get('/{article}/editor/media-snapshot', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorMediaSnapshotController::class, 'show'])
+                Route::get('/{article}/editor/media-snapshot', [\Omnichannel\Addons\Media\Http\Controllers\ArticleEditorMediaSnapshotController::class, 'show'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.media-snapshot');
-                Route::put('/{article}/editor/media/featured', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorMediaSnapshotController::class, 'setFeatured'])
+                Route::put('/{article}/editor/media/featured', [\Omnichannel\Addons\Media\Http\Controllers\ArticleEditorMediaSnapshotController::class, 'setFeatured'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.media.featured.set');
-                Route::delete('/{article}/editor/media/featured', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorMediaSnapshotController::class, 'clearFeatured'])
+                Route::delete('/{article}/editor/media/featured', [\Omnichannel\Addons\Media\Http\Controllers\ArticleEditorMediaSnapshotController::class, 'clearFeatured'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.media.featured.clear');
-                Route::put('/{article}/editor/media/gallery', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorMediaSnapshotController::class, 'replaceGallery'])
+                Route::put('/{article}/editor/media/gallery', [\Omnichannel\Addons\Media\Http\Controllers\ArticleEditorMediaSnapshotController::class, 'replaceGallery'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.media.gallery.replace');
-                Route::post('/{article}/editor/media/gallery/reorder', [\App\Addons\SeoContentAi\Http\Controllers\ArticleEditorMediaSnapshotController::class, 'reorderGallery'])
+                Route::post('/{article}/editor/media/gallery/reorder', [\Omnichannel\Addons\Media\Http\Controllers\ArticleEditorMediaSnapshotController::class, 'reorderGallery'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.media.gallery.reorder');
                 Route::post('/{article}/sync-wp', [ArticleEditorSyncController::class, 'syncWp'])
@@ -625,10 +630,10 @@ class SeoPanelProvider extends PanelProvider
 
     public function panel(Panel $panel): Panel
     {
-        return $panel
+        $panel = $panel
             ->id('seo')
             ->path('seo/{connection_hash}')
-            ->login(\App\Addons\SeoContentAi\Filament\Pages\Auth\SeoLogin::class)
+            ->login(\Omnichannel\Addons\Seo\Filament\Pages\Auth\SeoLogin::class)
             ->profile(SeoEditProfile::class, isSimple: false)
             ->userMenuItems([
                 'profile' => MenuItem::make()
@@ -654,13 +659,27 @@ class SeoPanelProvider extends PanelProvider
                 in: __DIR__.'/../Filament/Pages',
                 for: 'App\\Addons\\SeoContentAi\\Filament\\Pages'
             )
-            ->pages([
-                SeoChangePassword::class,
-            ])
             ->discoverWidgets(
                 in: __DIR__.'/../Filament/Widgets',
                 for: 'App\\Addons\\SeoContentAi\\Filament\\Widgets'
-            )
+            );
+
+        foreach ($this->peerFilamentDiscoveries() as $discovery) {
+            if (is_dir($discovery['resources'])) {
+                $panel = $panel->discoverResources(in: $discovery['resources'], for: $discovery['resourcesNs']);
+            }
+            if (is_dir($discovery['pages'])) {
+                $panel = $panel->discoverPages(in: $discovery['pages'], for: $discovery['pagesNs']);
+            }
+            if (is_dir($discovery['widgets'])) {
+                $panel = $panel->discoverWidgets(in: $discovery['widgets'], for: $discovery['widgetsNs']);
+            }
+        }
+
+        return $panel
+            ->pages([
+                SeoChangePassword::class,
+            ])
             ->widgets([])
             ->middleware([
                 EncryptCookies::class,
@@ -681,5 +700,42 @@ class SeoPanelProvider extends PanelProvider
                 CheckMainRole::class,
                 SeoPlannerPermissionMiddleware::class,
             ]);
+    }
+
+    /**
+     * @return list<array{resources:string,pages:string,widgets:string,resourcesNs:string,pagesNs:string,widgetsNs:string}>
+     */
+    private function peerFilamentDiscoveries(): array
+    {
+        $map = [
+            'search-foundation' => 'SearchFoundation',
+            'seo' => 'Seo',
+            'search-intelligence' => 'SearchIntelligence',
+            'ai-prompt' => 'AiPrompt',
+            'content' => 'Content',
+            'content-projects' => 'ContentProjects',
+            'media' => 'Media',
+            'wordpress' => 'WordPress',
+            'publishing' => 'Publishing',
+            'site-sync' => 'SiteSync',
+            'agent' => 'Agent',
+            'commerce' => 'Commerce',
+            'social' => 'Social',
+        ];
+
+        $out = [];
+        foreach ($map as $slug => $pascal) {
+            $base = base_path('addons/'.$slug.'/src/Filament');
+            $out[] = [
+                'resources' => $base.'/Resources',
+                'pages' => $base.'/Pages',
+                'widgets' => $base.'/Widgets',
+                'resourcesNs' => 'Omnichannel\\Addons\\'.$pascal.'\\Filament\\Resources',
+                'pagesNs' => 'Omnichannel\\Addons\\'.$pascal.'\\Filament\\Pages',
+                'widgetsNs' => 'Omnichannel\\Addons\\'.$pascal.'\\Filament\\Widgets',
+            ];
+        }
+
+        return $out;
     }
 }

@@ -63,5 +63,5 @@
 </section>
 
 @once
-    @vite(['app/Addons/SeoContentAi/resources/js/performance-hub-gsc-chart.js'])
+    @vite(['addons/search-intelligence/resources/js/performance-hub-gsc-chart.js'])
 @endonce

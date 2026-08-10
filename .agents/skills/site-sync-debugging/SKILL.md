@@ -13,9 +13,10 @@ Use for requests mentioning site sync, WP bridge, snapshot, delta, outbox, sync 
 
 # Required context
 
-- Backend docs: `docs/modules/SITE_SYNC.md`, `docs/modules/WORDPRESS_BRIDGE.md`, `docs/contracts/API_AND_AUTHORIZATION.md`, `docs/contracts/QUEUE_SCHEDULER_AND_IDEMPOTENCY.md`.
-- Backend routes: `app/Addons/SeoContentAi/routes/api.php`.
-- Backend controllers/services for the affected endpoint.
+- Backend docs: `docs/modules/SITE_SYNC.md`, `docs/modules/WORDPRESS_BRIDGE.md`, `docs/contracts/API_AND_AUTHORIZATION.md`, `docs/contracts/QUEUE_SCHEDULER_AND_IDEMPOTENCY.md`, `docs/architecture/NEW_AGENT_HANDOFF.md`.
+- Backend routes: `addons/wordpress/routes/seo-wp-bridge.php` (shell shim `app/Addons/SeoContentAi/routes/api.php` only requires peer files).
+- Backend site-sync code: `addons/site-sync/`.
+- Backend controllers/services for the affected endpoint under owner addons.
 - Plugin files as needed: `..\wp-seo-ai\includes\class-rest-controller.php`, `class-site-sync-v2-provider.php`, `class-site-sync-outbox.php`, `docs/site_sync_v1_contract.json`.
 
 # Workflow

@@ -1,0 +1,65 @@
+{
+  "task": "TASK_10_LOCAL_FINAL_REGRESSION_RELEASE_PREP",
+  "status": "PARTIAL",
+  "audited_at": "2026-08-10",
+  "deploy": "NOT_RUN",
+  "architecture": "CLOSED_NO_CHANGES",
+  "local_boot": {
+    "composer_dump_autoload": "PASS",
+    "optimize_clear": "PASS",
+    "artisan_about": "PASS",
+    "route_list": "PASS (293 routes)",
+    "peer_providers_class_exists": "PASS",
+    "http_localhost_8000": "200"
+  },
+  "phpunit": {
+    "round1_baseline": "3602 tests, 413 errors, 280 failures",
+    "round2_after_typehint_use_fixes": "3602 tests, 254 errors, 279 failures",
+    "round3_after_LegacyAddonPath_test_rewrites": "3602 tests, 260 errors, 278 failures",
+    "key_filters_PASS": [
+      "ArticleExtensionOwnershipContractTest",
+      "WordPressFeaturedSlugSyncContractHarnessTest",
+      "WorkflowParserService score + ImageRouting + SeoMigrationPath"
+    ],
+    "fixed_A": [
+      "SeoMigrationPath docblock */ parse error",
+      "missing peer use imports (~49 production files)",
+      "SearchIntelligence SeoProviderRegistry extends catalog use",
+      "WorkflowParserService SeoScoringCalculator use",
+      "82 tests rewritten to LegacyAddonPath for moved JS/views"
+    ],
+    "residual": "Mostly B/C: stale FQCN mocks, UI snapshot asserts, AutomationPhase4 handler cleanup (risky), env/sqlite SEO gaps — documented, not architecture redesign"
+  },
+  "frontend": {
+    "npm_build": "PASS",
+    "saveCoordinator": "PASS 6/6",
+    "check_editor_cycles": "PASS"
+  },
+  "manual_ui": {
+    "verdict": "PENDING_USER",
+    "reason": "Current .env uses omi_channel_test + omi_seo_ai_test; migrate-fresh emptied disposable DBs. Protected omi_channel (14 users) + omi_seo_ai (7851 articles) intact. Point env at imported DBs to run checklist."
+  },
+  "wp": {
+    "plugin_diff": "none",
+    "real_e2e": "PENDING",
+    "harness": "PASS (key filters)"
+  },
+  "db": {
+    "protected_omi_seo_ai_articles": 7851,
+    "fresh_test_db": "PASS (refactor:migrate-fresh on *_test)",
+    "note": "Do not fresh protected DBs"
+  },
+  "zero_search": {
+    "App\\\\Addons\\\\SeoContentAi\\\\Services_active": "TEST negative assert only",
+    "App\\\\Addons\\\\SeoContentAi\\\\Models_active": "ZERO",
+    "bridge_mutations": "ZERO",
+    "old_js_SeoContentAi_paths_active": "ZERO"
+  },
+  "release": {
+    "manifest": "docs/architecture/FINAL_LOCAL_RELEASE_MANIFEST.md",
+    "zip_script": ".secure/package-local-release.ps1",
+    "zip_generated": true,
+    "post_upload_commands_documented": true
+  },
+  "verdict": "PARTIAL — automated local gates + package ready; manual UI + real WP E2E remain user/external debt; broad PHPUnit residuals understood not cleared to zero"
+}

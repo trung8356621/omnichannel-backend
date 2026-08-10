@@ -23,6 +23,6 @@
 
     @push('scripts')
         @viteReactRefresh
-        @vite('app/Addons/SeoContentAi/resources/js/automation-workflow-builder.jsx')
+        @vite('addons/content-projects/resources/js/automation-workflow-builder.jsx')
     @endpush
 </x-filament-panels::page>

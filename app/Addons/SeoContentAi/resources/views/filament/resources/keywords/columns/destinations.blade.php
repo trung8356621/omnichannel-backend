@@ -1,5 +1,5 @@
 @php
-    /** @var \App\Addons\SeoContentAi\Models\Keyword $record */
+    /** @var \Omnichannel\Addons\SearchFoundation\Models\Keyword $record */
     $record = $getRecord();
     $linkCount = (int) ($record->site_links_count ?? $record->links?->count() ?? 0);
     $domainCount = $record->relationLoaded('links')

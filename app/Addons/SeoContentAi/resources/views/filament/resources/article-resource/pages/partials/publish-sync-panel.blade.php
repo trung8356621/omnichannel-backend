@@ -1,5 +1,5 @@
 @php
-    use App\Addons\SeoContentAi\Support\SeoDisplayTimezone;
+    use Omnichannel\Addons\Seo\Support\SeoDisplayTimezone;
 
     $publishSyncInitial = [
         'publishImmediately' => true,
@@ -10,9 +10,9 @@
         'publishMinute' => $publishMinute,
         'publishWhenLabel' => $this->getPublishWhenLabel(),
         'status' => $articleStatus,
-        'hasWpPost' => (int) ($record->wp_post_id ?? 0) > 0,
-        'canSync' => ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager()
-            && ! \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsInContentProject($record),
+        'hasWpPost' => (int) ($record->wordpressLink?->wp_post_id ?? 0) > 0,
+        'canSync' => ! \Omnichannel\Addons\Seo\Support\SeoAccessControl::isContentManager()
+            && ! \Omnichannel\Addons\Content\Filament\Resources\ArticleResource::articleIsInContentProject($record),
         'displayTimezone' => SeoDisplayTimezone::name(),
     ];
 @endphp

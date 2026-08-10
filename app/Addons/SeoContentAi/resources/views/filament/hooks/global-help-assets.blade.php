@@ -1,7 +1,7 @@
 @php
-    use App\Addons\SeoContentAi\Support\SeoHelpRegistry;
+    use Omnichannel\Addons\Seo\Support\SeoHelpRegistry;
 
-    $helpCssPath = base_path('app/Addons/SeoContentAi/resources/css/global-help.css');
+    $helpCssPath = base_path('addons/content/resources/css/global-help.css');
     $helpCss = is_file($helpCssPath) ? (string) file_get_contents($helpCssPath) : '';
     $helpPayload = SeoHelpRegistry::clientPayload();
 @endphp

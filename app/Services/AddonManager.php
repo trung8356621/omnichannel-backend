@@ -1,46 +1,50 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Services;
 
+use App\Core\Addon\AddonDiscovery;
+use App\Core\Addon\AddonRegistry;
 use App\Models\Service;
-use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Schema;
 
+/**
+ * Discovers addons via Client Core AddonDiscovery and syncs Service rows.
+ * Does not hard-code business addon class names.
+ */
 class AddonManager
 {
-    public static function discover()
+    /**
+     * @return list<string> Discovered slugs
+     */
+    public static function discover(): array
     {
-        $path = app_path('Addons');
-        if (! File::exists($path)) {
-            File::makeDirectory($path);
+        /** @var AddonDiscovery $discovery */
+        $discovery = app(AddonDiscovery::class);
+        /** @var AddonRegistry $registry */
+        $registry = app(AddonRegistry::class);
+
+        $roots = config('addons.discovery_roots', ['app/Addons', 'addons']);
+        $skip = config('addons.skip_slugs', []);
+        $manifests = $discovery->discover($roots, $skip);
+        $registry->replaceAll($manifests);
+
+        if (! Schema::hasTable('services')) {
+            return array_map(static fn ($m) => $m->slug, $manifests);
         }
 
-        $directories = File::directories($path);
         $discovered = [];
-
-        foreach ($directories as $dir) {
-            $jsonPath = $dir.'/addon.json';
-            if (File::exists($jsonPath)) {
-                $meta = json_decode(File::get($jsonPath), true);
-
-                if (! is_array($meta)) {
-                    continue;
-                }
-
-                if (in_array((string) ($meta['slug'] ?? ''), config('addons.skip_slugs', []), true)) {
-                    continue;
-                }
-
-                // Đồng bộ vào DB
-                Service::updateOrCreate(
-                    ['slug' => $meta['slug']],
-                    [
-                        'name' => $meta['name'],
-                        'addon_namespace' => $meta['provider'],
-                        'config' => $meta,
-                    ]
-                );
-                $discovered[] = $meta['slug'];
-            }
+        foreach ($manifests as $manifest) {
+            Service::updateOrCreate(
+                ['slug' => $manifest->slug],
+                [
+                    'name' => $manifest->name,
+                    'addon_namespace' => $manifest->provider,
+                    'config' => $manifest->raw,
+                ]
+            );
+            $discovered[] = $manifest->slug;
         }
 
         return $discovered;

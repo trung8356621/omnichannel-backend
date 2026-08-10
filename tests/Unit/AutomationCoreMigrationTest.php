@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
-use App\Addons\SeoContentAi\Automation\BusinessHook\Jobs\ExecuteAutomationRuleJob;
-use App\Addons\SeoContentAi\Automation\BusinessHook\Models\AutomationRule;
-use App\Addons\SeoContentAi\Automation\BusinessHook\Models\AutomationSchedulerHeartbeat;
-use App\Addons\SeoContentAi\Automation\Exceptions\AutomationException;
+use Omnichannel\Addons\Agent\Automation\BusinessHook\Jobs\ExecuteAutomationRuleJob;
+use Omnichannel\Addons\Agent\Automation\BusinessHook\Models\AutomationRule;
+use Omnichannel\Addons\Agent\Automation\BusinessHook\Models\AutomationSchedulerHeartbeat;
+use Omnichannel\Addons\Agent\Automation\Exceptions\AutomationException;
 use App\Services\Automation\AutomationCoreMigrationService;
 use App\Support\Automation\AutomationConnection;
 use App\Support\Automation\AutomationModel;

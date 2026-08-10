@@ -59,7 +59,7 @@
         .seo-preview-content td { border: 1px solid #e5e7eb; padding: 0.5rem; }
     </style>
     @php
-        $faqCssPath = app_path('Addons/SeoContentAi/resources/css/omi-faq-accordion.css');
+        $faqCssPath = base_path('addons/content/resources/css/omi-faq-accordion.css');
     @endphp
     @if (is_file($faqCssPath))
         <style>{!! file_get_contents($faqCssPath) !!}</style>

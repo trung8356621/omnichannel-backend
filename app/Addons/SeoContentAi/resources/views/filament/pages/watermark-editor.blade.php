@@ -1,6 +1,6 @@
 <x-filament-panels::page>
     @viteReactRefresh
-    @vite('app/Addons/SeoContentAi/resources/js/watermark-editor-page.jsx')
+    @vite('addons/media/resources/js/watermark-editor-page.jsx')
 
     <div class="fi-section rounded-xl bg-white shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10 p-4 mb-4">
         <div class="flex flex-wrap items-center gap-3">
@@ -30,7 +30,7 @@
                 <span class="text-xs text-gray-500">
                     Design config is saved per domain ·
                     <a
-                        href="{{ \App\Addons\SeoContentAi\Filament\Pages\WatermarkSettingsPage::getUrl(['siteId' => $siteId]) }}"
+                        href="{{ \Omnichannel\Addons\Media\Filament\Pages\WatermarkSettingsPage::getUrl(['siteId' => $siteId]) }}"
                         class="text-primary-600 hover:underline"
                     >
                         Batch apply
@@ -52,7 +52,7 @@
         data-site-domain="{{ $siteId ? ($this->sites->firstWhere('id', (int) $siteId)?->domain ?? '') : '' }}"
         data-image-url="{{ $imageUrl ?? '' }}"
         data-image-id="{{ $imageId ?? '' }}"
-        data-back-url="{{ \App\Addons\SeoContentAi\Filament\Pages\WatermarkSettingsPage::getUrl(['siteId' => $siteId]) }}"
+        data-back-url="{{ \Omnichannel\Addons\Media\Filament\Pages\WatermarkSettingsPage::getUrl(['siteId' => $siteId]) }}"
         data-initial-config='@json($this->getInitialDesignConfig())'
         data-media-samples='@json($this->getMediaSamples())'
     ></div>

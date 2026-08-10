@@ -1,5 +1,5 @@
-﻿@php
-    /** @var \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages\ViewSeoProject $this */
+@php
+    /** @var \Omnichannel\Addons\ContentProjects\Filament\Resources\SeoProjectResource\Pages\ViewSeoProject $this */
     $payload = $this->operationsPayload;
     $stats = $payload['stats'] ?? [];
     $rows = $payload['rows'] ?? [];
@@ -10,17 +10,17 @@
     $selectedCount = $this->selectedCount;
     $hasActiveFilters = $this->hasActiveFilters;
     $summarySnapshot = $this->summarySnapshot
-        ?? \App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemOperationsReadModel::normalizeSummaryStats(
+        ?? \Omnichannel\Addons\ContentProjects\Services\ContentProject\ContentProjectItemOperationsReadModel::normalizeSummaryStats(
             is_array($stats) ? $stats : [],
         );
-    $onNeedsReviewFilter = $this->workflowFilter === \App\Addons\SeoContentAi\Support\ContentProject\ContentProjectRecentlyCompletedDefinition::FILTER
-        || $this->generationFilter === \App\Addons\SeoContentAi\Support\ContentProject\ContentProjectRecentlyCompletedDefinition::FILTER
-        || $this->reportingFilter === \App\Addons\SeoContentAi\Support\ContentProject\ContentProjectRecentlyCompletedDefinition::FILTER;
+    $onNeedsReviewFilter = $this->workflowFilter === \Omnichannel\Addons\ContentProjects\Support\ContentProject\ContentProjectRecentlyCompletedDefinition::FILTER
+        || $this->generationFilter === \Omnichannel\Addons\ContentProjects\Support\ContentProject\ContentProjectRecentlyCompletedDefinition::FILTER
+        || $this->reportingFilter === \Omnichannel\Addons\ContentProjects\Support\ContentProject\ContentProjectRecentlyCompletedDefinition::FILTER;
     $projectId = (int) ($project?->getKey() ?? 0);
-    $transitionMap = \App\Addons\SeoContentAi\Support\ContentProject\ContentProjectOpsCounterTransitionMap::all();
-    $cmOps = \App\Addons\SeoContentAi\Support\SeoAccessControl::usesContentManagerOpsPresentation();
-    $canDebugLifecycle = \App\Addons\SeoContentAi\Support\SeoAccessControl::canDebugContentProjectLifecycle();
-    $failureTypes = \App\Addons\SeoContentAi\Support\ContentProject\ContentProjectFailureTypeMapper::filterKeys();
+    $transitionMap = \Omnichannel\Addons\ContentProjects\Support\ContentProject\ContentProjectOpsCounterTransitionMap::all();
+    $cmOps = \Omnichannel\Addons\Seo\Support\SeoAccessControl::usesContentManagerOpsPresentation();
+    $canDebugLifecycle = \Omnichannel\Addons\Seo\Support\SeoAccessControl::canDebugContentProjectLifecycle();
+    $failureTypes = \Omnichannel\Addons\ContentProjects\Support\ContentProject\ContentProjectFailureTypeMapper::filterKeys();
     $kpiCards = $cmOps
         ? [
             ['key' => 'normal', 'card' => 'normal', 'label' => __('seo-content-ai::filament.projects.ops_normal'), 'count_key' => 'normal', 'hint' => __('seo-content-ai::filament.projects.ops_normal_hint'), 'divider_before' => false],
@@ -54,7 +54,7 @@
             claimBusy: {},
             lazyBusy: false,
             summaryRequestId: 0,
-            graceMs: {{ \App\Addons\SeoContentAi\Support\ContentProject\ContentProjectOpsOptimisticCounterMerge::GRACE_MS }},
+            graceMs: {{ \Omnichannel\Addons\ContentProjects\Support\ContentProject\ContentProjectOpsOptimisticCounterMerge::GRACE_MS }},
             transitionMap: @js($transitionMap),
             optimisticFailureMessage: @js(__('seo-content-ai::filament.projects.ops_optimistic_update_failed')),
             debugOpen: false,

@@ -1,5 +1,5 @@
 @php
-    use App\Addons\SeoContentAi\Services\SiteDomainPromptContextService;
+    use Omnichannel\Addons\AiPrompt\Services\SiteDomainPromptContextService;
 
     /** @var \App\Models\Site $record */
     $record = $getRecord();

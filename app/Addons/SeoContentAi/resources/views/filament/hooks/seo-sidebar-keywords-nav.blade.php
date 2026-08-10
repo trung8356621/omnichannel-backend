@@ -1,8 +1,8 @@
 @php
-    use App\Addons\SeoContentAi\Filament\Pages\AiKeywordDiscovery;
-    use App\Addons\SeoContentAi\Filament\Pages\SeoPerformanceHub;
-    use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
-    use App\Addons\SeoContentAi\Support\SeoAccessControl;
+    use Omnichannel\Addons\SearchIntelligence\Filament\Pages\AiKeywordDiscovery;
+    use Omnichannel\Addons\SearchIntelligence\Filament\Pages\SeoPerformanceHub;
+    use Omnichannel\Addons\SearchIntelligence\Filament\Resources\KeywordResource;
+    use Omnichannel\Addons\Seo\Support\SeoAccessControl;
 
     $contentEditorUrl = KeywordResource::getUrl('index');
     $aiDiscoveryUrl = AiKeywordDiscovery::getUrl();

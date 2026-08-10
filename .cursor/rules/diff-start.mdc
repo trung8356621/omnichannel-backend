@@ -1,6 +1,6 @@
 ---
 description: Automatic deployment session
-alwaysApply: true
+alwaysApply: false
 ---
 
 If this task modifies project files:

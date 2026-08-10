@@ -1,8 +1,8 @@
 @php
-    use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
-    use App\Addons\SeoContentAi\Models\SeoArticle;
-    use App\Addons\SeoContentAi\Models\SeoProjectArchive;
-    use App\Addons\SeoContentAi\Models\SeoProjectArchiveItem;
+    use Omnichannel\Addons\Content\Filament\Resources\ArticleResource;
+    use Omnichannel\Addons\Content\Models\SeoArticle;
+    use Omnichannel\Addons\ContentProjects\Models\SeoProjectArchive;
+    use Omnichannel\Addons\ContentProjects\Models\SeoProjectArchiveItem;
     use Illuminate\Support\Collection;
 
     /** @var Collection<int, SeoProjectArchive> $batches */

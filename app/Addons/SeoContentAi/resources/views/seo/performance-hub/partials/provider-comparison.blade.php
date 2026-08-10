@@ -1,5 +1,5 @@
 @php
-    use App\Addons\SeoContentAi\Support\SerpProviderKeys;
+    use Omnichannel\Addons\SearchIntelligence\Support\SerpProviderKeys;
 @endphp
 
 <section class="performance-hub-panel performance-hub-comparison">

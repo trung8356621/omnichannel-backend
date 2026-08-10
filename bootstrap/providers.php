@@ -1,8 +1,8 @@
 <?php
 
 return [
+    App\Core\ClientCoreServiceProvider::class,
     App\Providers\AppServiceProvider::class,
     App\Providers\Filament\AdminPanelProvider::class,
-    App\Providers\Filament\SeoToolsPanelProvider::class,
-    App\Addons\SeoContentAi\Providers\SeoPanelProvider::class,
+    // Business Filament panels register via addon manifests (register_early / services.is_active).
 ];

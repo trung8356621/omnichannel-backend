@@ -35,7 +35,7 @@
                 </div>
                 <div class="fi-archive-preview-summary-item">
                     <div class="fi-archive-preview-summary-label">{{ __('seo-content-ai::filament.projects.archive_col_archived_at') }}</div>
-                    <div class="fi-archive-preview-summary-value">{{ \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource::formatTaskTimestamp($summary['archived_at'] ?? null) }}</div>
+                    <div class="fi-archive-preview-summary-value">{{ \Omnichannel\Addons\ContentProjects\Filament\Resources\SeoProjectResource::formatTaskTimestamp($summary['archived_at'] ?? null) }}</div>
                 </div>
                 <div class="fi-archive-preview-summary-item">
                     <div class="fi-archive-preview-summary-label">{{ __('seo-content-ai::filament.projects.archive_col_total') }}</div>

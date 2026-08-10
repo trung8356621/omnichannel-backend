@@ -21,7 +21,7 @@
                     </div>
                     <x-filament::button
                         tag="a"
-                        :href="\App\Addons\SeoContentAi\Filament\Pages\SeoSettingsRecommendations::getUrl()"
+                        :href="\Omnichannel\Addons\Seo\Filament\Pages\SeoSettingsRecommendations::getUrl()"
                         color="gray"
                         outlined
                         icon="heroicon-o-arrow-right"
@@ -191,7 +191,7 @@
                         </div>
                     @empty
                         <p class="seo-ai-models-empty">
-                            No AI connections yet. Add one in <a href="{{ \App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource::getUrl() }}" class="text-primary-600 underline">AI settings</a>.
+                            No AI connections yet. Add one in <a href="{{ \Omnichannel\Addons\AiPrompt\Filament\Resources\AiConnectionResource::getUrl() }}" class="text-primary-600 underline">AI settings</a>.
                         </p>
                     @endforelse
                 </section>

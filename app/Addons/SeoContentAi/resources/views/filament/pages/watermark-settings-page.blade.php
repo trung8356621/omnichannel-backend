@@ -26,7 +26,7 @@
             <p class="mt-2 text-xs text-gray-500">
                 Watermark design is managed in
                 <a
-                    href="{{ \App\Addons\SeoContentAi\Filament\Pages\WatermarkEditor::getUrl(['siteId' => $siteId]) }}"
+                    href="{{ \Omnichannel\Addons\Media\Filament\Pages\WatermarkEditor::getUrl(['siteId' => $siteId]) }}"
                     class="text-primary-600 hover:underline"
                 >
                     Watermark design suite
@@ -78,7 +78,7 @@
                             <span wire:loading wire:target="applyBatchToCurrentSite">Processing…</span>
                         </x-filament::button>
                         <a
-                            href="{{ \App\Addons\SeoContentAi\Filament\Pages\ImageOptimizationSettings::getUrl(['siteId' => $siteId]) }}"
+                            href="{{ \Omnichannel\Addons\Media\Filament\Pages\ImageOptimizationSettings::getUrl(['siteId' => $siteId]) }}"
                             class="text-xs text-primary-600 hover:underline"
                         >
                             Configure WebP optimization

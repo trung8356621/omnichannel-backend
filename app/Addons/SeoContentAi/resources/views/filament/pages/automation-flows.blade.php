@@ -1,7 +1,7 @@
 <x-filament-panels::page>
     @vite([
-        'app/Addons/SeoContentAi/resources/js/automation-workflow-viewer.jsx',
-        'app/Addons/SeoContentAi/resources/css/automation-workflow-viewer.css',
+        'addons/content-projects/resources/js/automation-workflow-viewer.jsx',
+        'addons/content-projects/resources/css/automation-workflow-viewer.css',
     ])
 
     <div

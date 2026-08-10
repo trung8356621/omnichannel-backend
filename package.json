@@ -4,7 +4,7 @@
     "scripts": {
         "dev": "vite",
         "build": "vite build",
-        "check:editor-cycles": "node app/Addons/SeoContentAi/scripts/check-editor-cycles.cjs"
+        "check:editor-cycles": "node addons/content/scripts/check-editor-cycles.cjs"
     },
     "devDependencies": {
         "@tailwindcss/vite": "^4.0.0",

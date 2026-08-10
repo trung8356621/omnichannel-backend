@@ -14,7 +14,9 @@ $PHP_BIN vendor/bin/phpunit --filter=PromptOwnershipModelTest
 
 $PHP_BIN vendor/bin/phpunit --filter=SomeTest::test_method_name
 
-$PHP_BIN vendor/bin/phpunit app/Addons/SeoContentAi/tests/Unit
+$PHP_BIN vendor/bin/phpunit --testsuite ContentAddon
+
+$PHP_BIN vendor/bin/phpunit addons/content/tests/Unit
 ```
 
 ## Sai (không dùng làm chuẩn dự án)
@@ -22,13 +24,15 @@ $PHP_BIN vendor/bin/phpunit app/Addons/SeoContentAi/tests/Unit
 ```bash
 php artisan test --filter=...
 php artisan test app/Addons/SeoContentAi/tests
+php artisan test addons/content/tests
 ```
 
 ## Lý do
 
 - Host production/remote chạy PHPUnit trực tiếp với `$PHP_BIN`.
-- Nhiều test SEO là pure `PHPUnit\Framework\TestCase` (không boot full Laravel app qua artisan test).
+- Nhiều test SEO/peer addon là pure `PHPUnit\Framework\TestCase` (không boot full Laravel app qua artisan test).
 - Agent **không tự chạy** test local (xem `dont-test.mdc`); chỉ in lệnh đúng convention khi cần verify.
+- Business tests sống dưới `addons/*/tests` theo owner; `app/Addons/SeoContentAi` chỉ còn Compat shell.
 
 ## Unit test không có translator
 

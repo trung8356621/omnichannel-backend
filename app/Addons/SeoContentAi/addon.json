@@ -1,10 +1,36 @@
 {
-  "name": "SEO Content AI",
+  "_registration_note": "COMPATIBILITY BOOTSTRAP ONLY — registration wires peer addons under /addons/{content,seo,media,wordpress,publishing,content-projects,search-intelligence,ai-prompt}. Do not add new business ownership here. See README.md and docs/architecture/SEOCONTENTAI_CUTOVER_INVENTORY.json.",
+  "name": "SEO Content AI (compatibility shell)",
   "slug": "seo-content-ai",
   "version": "1.0.0",
-  "description": "Quản lý prompt SEO, workflow và tích hợp AI cho nội dung.",
+  "description": "COMPATIBILITY SHELL ONLY — registration/bootstrap for peer addons. Active business under /addons/*. Leftovers: Filament views (pending), lang/config, Extension Builtin plugin.json COMPAT, SeoPanelProvider. Prompt-hooks live under addons/ai-prompt/resources/prompt-hooks.",
   "icon": "heroicon-o-sparkles",
   "provider": "App\\Addons\\SeoContentAi\\SeoContentAiServiceProvider",
+  "panel_provider": "App\\Addons\\SeoContentAi\\Providers\\SeoPanelProvider",
+  "providers": [
+    "App\\Providers\\Filament\\SeoToolsPanelProvider"
+  ],
+  "register_early": true,
+  "legacy": true,
+  "provides": [
+    "legacy.seo-content-ai"
+  ],
+  "requires": [],
+  "optional": [
+    "search.keyword",
+    "seo.audit",
+    "search.intelligence",
+    "ai.prompt",
+    "content.document",
+    "content.projects",
+    "media.library",
+    "wordpress.bridge",
+    "publishing.queue",
+    "site-sync.v2",
+    "agent.workspace",
+    "social.publish",
+    "commerce.product"
+  ],
   "external_plugins": [
     {
       "slug": "omi-seo-ai-bridge",

@@ -5,7 +5,7 @@
 
     <script>
         window.__SEO_PROMPTS__ = @json($this->getPromptsForBuilder());
-        window.__SEO_WORKFLOW_ROLES__ = @json(app(\App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionRoleRegistry::class)->builderOptions());
+        window.__SEO_WORKFLOW_ROLES__ = @json(app(\Omnichannel\Addons\ContentProjects\Services\WorkflowRoles\WorkflowExecutionRoleRegistry::class)->builderOptions());
     </script>
 
     <div
@@ -20,7 +20,7 @@
             id="seo-task-workflow-builder-root"
             data-task-id="{{ $this->taskId }}"
             data-task-name="{{ $this->getTaskName() }}"
-            data-back-url="{{ \App\Addons\SeoContentAi\Filament\Resources\TaskResource::getUrl('index') }}"
+            data-back-url="{{ \Omnichannel\Addons\ContentProjects\Filament\Resources\TaskResource::getUrl('index') }}"
             data-back-label="{{ __('seo-content-ai::filament.task.back_to_tasks') }}"
             class="w-full h-full"
         ></div>
@@ -28,6 +28,6 @@
 
     @push('scripts')
         @viteReactRefresh
-        @vite('app/Addons/SeoContentAi/resources/js/task-builder.jsx')
+        @vite('addons/content-projects/resources/js/task-builder.jsx')
     @endpush
 </x-filament-panels::page>

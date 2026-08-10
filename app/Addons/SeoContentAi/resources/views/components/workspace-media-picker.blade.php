@@ -1,5 +1,5 @@
 @php
-    use App\Addons\SeoContentAi\Support\SeoAccessControl;
+    use Omnichannel\Addons\Seo\Support\SeoAccessControl;
 
     $siteId = (int) (SeoAccessControl::globalSiteId() ?? 0);
     $pickerConfig = [
@@ -9,7 +9,7 @@
     ];
 @endphp
 
-@vite('app/Addons/SeoContentAi/resources/js/article-media-picker-cache-bootstrap.js')
+@vite('addons/media/resources/js/article-media-picker-cache-bootstrap.js')
 
 <div
     wire:ignore

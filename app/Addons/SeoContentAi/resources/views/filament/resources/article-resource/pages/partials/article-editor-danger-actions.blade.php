@@ -2,10 +2,10 @@
     $renderRestore = $renderRestore ?? true;
     $renderDelete = $renderDelete ?? true;
     $canRestoreFromWordPress = $renderRestore
-        && ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager()
-        && (int) ($record->wp_post_id ?? 0) > 0;
+        && ! \Omnichannel\Addons\Seo\Support\SeoAccessControl::isContentManager()
+        && (int) ($record->wordpressLink?->wp_post_id ?? 0) > 0;
     $canDeleteArticle = $renderDelete
-        && \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::canDelete($record);
+        && \Omnichannel\Addons\Content\Filament\Resources\ArticleResource::canDelete($record);
     $dangerActionLabels = [
         'restore' => __('seo-content-ai::filament.article_list.fetch_from_wordpress'),
         'restore_heading' => __('seo-content-ai::filament.article_list.fetch_from_wordpress_heading'),

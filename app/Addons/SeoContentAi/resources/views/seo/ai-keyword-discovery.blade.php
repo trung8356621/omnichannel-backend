@@ -1,5 +1,5 @@
 @php
-    $cssPath = base_path('app/Addons/SeoContentAi/resources/css/ai-keyword-discovery.css');
+    $cssPath = base_path('addons/seo/resources/css/ai-keyword-discovery.css');
     $suggestions = $this->suggestions;
     $selectedCount = $this->getSelectedSuggestionCount();
 @endphp

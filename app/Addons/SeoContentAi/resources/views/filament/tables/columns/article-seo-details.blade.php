@@ -1,7 +1,7 @@
 @php
-    /** @var \App\Addons\SeoContentAi\Models\SeoArticle $record */
-    use App\Addons\SeoContentAi\Support\ArticleListSeoSummary;
-    use App\Addons\SeoContentAi\Support\SeoAccessControl;
+    /** @var \Omnichannel\Addons\Content\Models\SeoArticle $record */
+    use Omnichannel\Addons\Content\Support\ArticleListSeoSummary;
+    use Omnichannel\Addons\Seo\Support\SeoAccessControl;
 
     $record = $getRecord();
     $seo = ArticleListSeoSummary::for($record);

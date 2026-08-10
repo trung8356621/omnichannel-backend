@@ -3,7 +3,7 @@
     $scoring = is_array($scoring ?? null) ? $scoring : [];
     $segments = is_array($segments ?? null) ? $segments : [];
     $donutGradient = (string) ($donut_gradient ?? '');
-    $overviewCss = base_path('app/Addons/SeoContentAi/resources/css/domain-overview.css');
+    $overviewCss = base_path('addons/content/resources/css/domain-overview.css');
 @endphp
 
 <x-filament-widgets::widget>

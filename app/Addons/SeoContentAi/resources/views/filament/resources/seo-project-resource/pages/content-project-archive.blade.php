@@ -1,5 +1,5 @@
 @php
-    /** @var \Illuminate\Contracts\Pagination\LengthAwarePaginator<int, \App\Addons\SeoContentAi\Models\SeoProjectArchive> $archives */
+    /** @var \Illuminate\Contracts\Pagination\LengthAwarePaginator<int, \Omnichannel\Addons\ContentProjects\Models\SeoProjectArchive> $archives */
     $archives = $this->archives;
     $siteFilterOptions = $this->getSiteFilterOptions();
     $ownerFilterOptions = $this->getOwnerFilterOptions();
@@ -8,7 +8,7 @@
     $yearFilterOptions = $this->getYearFilterOptions();
     $showSiteFilter = count($siteFilterOptions) > 1;
     $activeFilterCount = $this->getActiveFilterCount($showSiteFilter);
-    $vaultPresenter = \App\Addons\SeoContentAi\Support\ContentProject\ContentProjectArchiveVaultListPresenter::class;
+    $vaultPresenter = \Omnichannel\Addons\ContentProjects\Support\ContentProject\ContentProjectArchiveVaultListPresenter::class;
 @endphp
 
 <x-filament-panels::page>
@@ -223,12 +223,12 @@
                                             </div>
                                         @endif
                                     </td>
-                                    <td class="px-3 py-2 whitespace-nowrap text-gray-700 dark:text-gray-200">{{ \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource::formatTaskTimestamp($archive->archived_at) }}</td>
+                                    <td class="px-3 py-2 whitespace-nowrap text-gray-700 dark:text-gray-200">{{ \Omnichannel\Addons\ContentProjects\Filament\Resources\SeoProjectResource::formatTaskTimestamp($archive->archived_at) }}</td>
                                     <td class="truncate px-3 py-2 text-gray-700 dark:text-gray-200" title="{{ $archivedByName }}">{{ $archivedByName !== '' ? $archivedByName : '—' }}</td>
                                     <td class="px-3 py-2 whitespace-nowrap">
                                         <div class="flex flex-wrap justify-end gap-2">
                                             <a
-                                                href="{{ \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource::getUrl('archive-preview', ['archive' => $archive->id]) }}"
+                                                href="{{ \Omnichannel\Addons\ContentProjects\Filament\Resources\SeoProjectResource::getUrl('archive-preview', ['archive' => $archive->id]) }}"
                                                 class="inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-700 ring-1 ring-gray-300 hover:bg-gray-50 dark:text-gray-200 dark:ring-gray-600 dark:hover:bg-gray-800"
                                             >
                                                 {{ __('seo-content-ai::filament.projects.archive_preview') }}

@@ -1,0 +1,136 @@
+{
+  "audited_at": "2026-08-10",
+  "task": "Task 6 §6 FINAL PASS",
+  "scope": "SeoArticleEditor.jsx + editor/domains",
+  "TASK_6_EFFECTS": "PARTIAL",
+  "verdict": "NOT PASS — mega-effects and forbidden business workflows still in SeoArticleEditor",
+  "counts": {
+    "useEffect_in_SeoArticleEditor": 71,
+    "retained_external_lifecycle_sample": 18,
+    "remaining_violations": 12
+  },
+  "window_bridge": {
+    "symbol": "window.__seoEditorDomainBridge",
+    "status": "diag-only",
+    "owners": [
+      "editor/domains/index.js",
+      "editor/domains/editorDomainBridge.js"
+    ],
+    "notes": "version diag-only; mutation methods deprecated no-ops; cleanup deletes bridge on host unmount"
+  },
+  "retained_external_lifecycle": [
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_lines": [1711, 1717, 1756, 1768, 1786, 1838],
+      "reason": "TipTap editor register/flush/selection/link DOM listeners"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_lines": [1964, 2083],
+      "reason": "click-timer cleanup on unmount"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_lines": [2392, 2400, 2456],
+      "reason": "window endpoint/perf mark + registerDomainSaveOwners lifecycle"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_lines": [2505, 2615],
+      "reason": "shell/media-picker/badge bridges + portal root DOM lookup"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_lines": [2538, 2654, 3023],
+      "reason": "panel-gated initial fetch with AbortController (images/reviews/seo-summary)"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_lines": [2635, 2898, 2980, 3155, 3846, 4533, 6414, 7431, 10549, 11158, 11539],
+      "reason": "window/CustomEvent subscribe/unsubscribe only"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_lines": [2835, 4210, 4253, 4718, 4762],
+      "reason": "scheduler destroy, draft window hooks, keyboard, command-host bind, runtime context publish"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_lines": [4691],
+      "reason": "sessionReadOnly → TipTap setEditable sync"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_lines": [8802, 8934],
+      "reason": "AI job resume fetch + reconcile timer lifecycle (start/stop while processing)"
+    }
+  ],
+  "REMAINING_VIOLATION": [
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_line": 1726,
+      "reason": "sourceHtml/block hydrate mutates TipTap content from parent business state"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_line": 2843,
+      "reason": "blocks change → outline sibling state (setClientOutline chain)"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_line": 3482,
+      "reason": "blocks/analysis/focusKeyword → widget health publish (chained cross-domain mutation)"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_line": 3562,
+      "reason": "featured/gallery health rebuild from media business state"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_line": 3596,
+      "reason": "media snapshot subscribe overwrites gallery + markDirty (remote facts → local dirty)"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_line": 4326,
+      "reason": "MEGA hydrate: setBlocks/SEO stale/draft decision/business bootstrap in one effect"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_line": 7374,
+      "reason": "blocks change → extractedLinks sibling mutation"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_line": 7427,
+      "reason": "extractedLinks change → publishExtractedLinks side effect"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_line": 8338,
+      "reason": "blocks change → startMediaStatusPolling business workflow"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_line": 9688,
+      "reason": "MEGA listener effect: FAQ/revision/AI image/SEO/post-images mutate blocks+domain state (~750 lines)"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_line": 10536,
+      "reason": "FORBIDDEN: blocks change triggers scheduleAutosave + scheduleIdleSeoAnalysis"
+    },
+    {
+      "file": "components/SeoArticleEditor.jsx",
+      "approx_line": 11582,
+      "reason": "media picker selection listeners still apply featured/gallery/block image business mutations in host"
+    }
+  ],
+  "mega_effects_still_present": true,
+  "notes": [
+    "Shell still owns blocks/SEO/media workflows; domain stores not sole SoT.",
+    "Many listener effects are allowed shape but handlers inside remain business mega-workflows.",
+    "Do not claim Task 6 §6 PASS until REMAINING_VIOLATION empty and mega-effects gone."
+  ]
+}

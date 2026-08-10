@@ -1,6 +1,6 @@
 @php
-    /** @var \App\Addons\SeoContentAi\Models\Keyword $record */
-    use App\Addons\SeoContentAi\Support\KeywordLinkDetailPanelPresenter;
+    /** @var \Omnichannel\Addons\SearchFoundation\Models\Keyword $record */
+    use Omnichannel\Addons\SearchFoundation\Support\KeywordLinkDetailPanelPresenter;
 
     $presenter = app(KeywordLinkDetailPanelPresenter::class);
     $items = $presenter->buildItems($record);

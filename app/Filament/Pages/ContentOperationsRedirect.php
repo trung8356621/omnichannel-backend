@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Filament\Pages;
 
-use App\Addons\SeoContentAi\Filament\Pages\ContentProjectOperationsCenter;
-use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use Omnichannel\Addons\ContentProjects\Filament\Pages\ContentProjectOperationsCenter;
+use Omnichannel\Addons\Seo\Support\SeoAccessControl;
 use Filament\Pages\Page;
 
 /**

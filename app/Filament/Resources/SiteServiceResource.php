@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Filament\Resources;
 
-use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
-use App\Addons\SeoContentAi\Support\SeoSiteServiceDatabaseConfigurator;
+use Omnichannel\Addons\SearchFoundation\Services\SeoDatabaseConnectionService;
+use Omnichannel\Addons\SearchFoundation\Support\SeoSiteServiceDatabaseConfigurator;
 use App\Filament\Resources\SiteServiceResource\Pages;
 use App\Models\Service;
 use App\Models\Site;

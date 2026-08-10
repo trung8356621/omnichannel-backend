@@ -1,0 +1,96 @@
+{
+  "audited_at": "2026-08-10",
+  "task": "Task 6 §7 FINAL PASS",
+  "policy": "poll only while pending; cancel on unmount; no duplicate owners; ImagesTab pause when hidden/unmounted",
+  "TASK_6_TIMERS": "PARTIAL",
+  "timers": [
+    {
+      "id": "ai-media-reconcile-8s",
+      "owner_file": "app/Addons/SeoContentAi/resources/js/components/SeoArticleEditor.jsx",
+      "approx_line": 8934,
+      "interval_ms": 8000,
+      "mechanism": "setInterval",
+      "start": "articleId set AND any image block image.isProcessing",
+      "stop": "no processing placeholders OR effect cleanup (deps include blocks)",
+      "cancel_on_unmount": true,
+      "duplicate_risk": "MEDIUM — overlaps per-media 3s/5s poll + ImagesTab 60s; guarded by applyCompletedMediaToPlaceholder/dismissed ids; blocks dep restarts interval on each block edit while spinning",
+      "status": "retained-with-owner"
+    },
+    {
+      "id": "ai-media-status-poll-3s-5s",
+      "owner_file": "app/Addons/SeoContentAi/resources/js/components/SeoArticleEditor.jsx",
+      "approx_line": 8241,
+      "interval_ms": "initial 3000 then 5000 chain",
+      "mechanism": "setTimeout chain (AI_JOBS_INITIAL_POLL_MS / AI_JOBS_POLL_MS)",
+      "start": "startMediaStatusPolling(mediaId) when processing placeholder/job bound",
+      "stop": "terminal completed|failed, maxAttempts 72, clearMediaPolling, or MEGA effect cleanup clears all mediaPollTimersRef",
+      "cancel_on_unmount": true,
+      "duplicate_risk": "LOW per mediaId (Map.has guard); MEDIUM vs 8s reconcile + GenerateImageModal poll same mediaId",
+      "status": "retained-with-owner"
+    },
+    {
+      "id": "generate-image-modal-poll-3s-5s",
+      "owner_file": "app/Addons/SeoContentAi/resources/js/components/GenerateImageModal.jsx",
+      "approx_line": 450,
+      "interval_ms": "initial 3000 then 5000",
+      "mechanism": "setTimeout chain",
+      "start": "modal open + product gallery + pendingMediaId",
+      "stop": "completed|failed|maxAttempts|close/unmount cleanup",
+      "cancel_on_unmount": true,
+      "duplicate_risk": "MEDIUM — can poll same mediaId as SeoArticleEditor startMediaStatusPolling while modal open",
+      "status": "retained-with-owner"
+    },
+    {
+      "id": "editor-session-heartbeat",
+      "owner_file": "app/Addons/SeoContentAi/resources/js/utils/editorSessionClient.js",
+      "wired_by": "app/Addons/SeoContentAi/resources/js/article-editor.jsx ArticleEditorWithSession",
+      "approx_line": 325,
+      "interval_ms": "heartbeatSeconds * 1000 (default 30, min 10; server may override)",
+      "mechanism": "setInterval",
+      "start": "session acquired writable (startHeartbeat)",
+      "stop": "stopHeartbeat on lost session / destroy / re-acquire (previous.destroy)",
+      "cancel_on_unmount": true,
+      "duplicate_risk": "LOW — startHeartbeat always stopHeartbeat first; remount destroys prior client",
+      "status": "retained-with-owner"
+    },
+    {
+      "id": "images-tab-ai-jobs-60s",
+      "owner_file": "app/Addons/SeoContentAi/resources/js/components/ArticleImagesTab.jsx",
+      "approx_line": 992,
+      "interval_ms": 60000,
+      "mechanism": "setInterval (AI_JOBS_POLL_MS)",
+      "start": "articleId set AND aiJobs has status=processing",
+      "stop": "no processing jobs OR effect cleanup; tab unmount cancels",
+      "cancel_on_unmount": true,
+      "pause_when_hidden": true,
+      "duplicate_risk": "MEDIUM — overlaps host 8s reconcile + 3s/5s media status while Images panel mounted",
+      "status": "retained-with-owner",
+      "gap": "fixed Task 6 — visibilitychange pauses interval when document.hidden"
+    },
+    {
+      "id": "server-autosave-debounce",
+      "owner_file": "app/Addons/SeoContentAi/resources/js/components/SeoArticleEditor.jsx",
+      "approx_line": 4042,
+      "interval_ms": "debounce (serverAutosaveDebounceMs) via window.__seoServerAutosaveTimer",
+      "mechanism": "setTimeout",
+      "start": "scheduleServerAutosave after content dirty",
+      "stop": "cancelPendingServerAutosave / offline / read-only / suppress window",
+      "cancel_on_unmount": "partial — global window timer; depends cancel helpers",
+      "duplicate_risk": "MEDIUM — global window slot; remount race if cancel missed",
+      "status": "noted-not-canonical-AI-timer"
+    }
+  ],
+  "rules_check": {
+    "ai_poll_only_while_pending": true,
+    "media_no_poll_for_local_editable_facts": "PASS for status poll (remote job URL only)",
+    "session_one_heartbeat_globally": "PASS at client class level",
+    "images_tab_pause_when_hidden": "FAIL",
+    "all_cancel_on_unmount": "PASS for listed AI/session/ImagesTab intervals; autosave global timer weaker",
+    "no_duplicate_after_remount": "MOSTLY — Map/client destroy; 8s interval restarts with blocks deps"
+  },
+  "notes": [
+    "Former EDITOR_EFFECT_INVENTORY.json timer list moved here.",
+    "Do not delete timers without replacement owner.",
+    "Task 6 §7 PARTIAL — ImagesTab visibility pause done; cross-owner duplicate poll still MEDIUM."
+  ]
+}

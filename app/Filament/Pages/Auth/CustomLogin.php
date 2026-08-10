@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Filament\Pages\Auth;
 
-use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use Omnichannel\Addons\Seo\Support\SeoAccessControl;
 use App\Models\User;
 use DanHarrin\LivewireRateLimiting\Exceptions\TooManyRequestsException;
 use Filament\Facades\Filament;

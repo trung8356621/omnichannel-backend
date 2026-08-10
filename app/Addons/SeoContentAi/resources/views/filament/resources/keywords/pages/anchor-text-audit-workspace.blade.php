@@ -1,5 +1,5 @@
 @php
-    $cssPath = base_path('app/Addons/SeoContentAi/resources/css/keyword-workspace.css');
+    $cssPath = base_path('addons/seo/resources/css/keyword-workspace.css');
     $tabCounts = $this->getTriageTabCounts();
     $paginator = $this->getTriagePaginator();
 @endphp

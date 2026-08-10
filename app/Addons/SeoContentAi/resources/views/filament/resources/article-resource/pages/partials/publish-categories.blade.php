@@ -6,15 +6,15 @@
      * - post_type = post  → taxonomy `category`
      * - post_type = product → taxonomy `product_category` (product_cat)
      */
-    $resolvedPostType = \App\Addons\SeoContentAi\Models\SeoProjectTask::normalizePostType(
-        \App\Addons\SeoContentAi\Support\ArticlePostTypeResolver::resolve($this->record),
+    $resolvedPostType = \Omnichannel\Addons\ContentProjects\Models\SeoProjectTask::normalizePostType(
+        \Omnichannel\Addons\Content\Support\ArticlePostTypeResolver::resolve($this->record),
     );
     $publishCategoriesInitial = [
         'articleId' => (int) $this->record->getKey(),
         'selectedIds' => $this->articleCategoryIds,
         'postType' => $resolvedPostType,
         'recordType' => (string) ($this->record->type ?? ''),
-        'currentTermWpId' => (int) ($this->record->wp_post_id ?? 0),
+        'currentTermWpId' => (int) ($this->record->wordpressLink?->wp_post_id ?? 0),
         'isTaxonomy' => $this->isTaxonomyEntityForPublish(),
         'categoryTaxonomy' => $this->resolvePublishCategoryTaxonomy($resolvedPostType),
         // Phase 2: empty on SSR — Alpine loads via $wire.getPublishCategoryOptions() (no publishing taxonomy query on editor shell).

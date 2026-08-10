@@ -21,6 +21,11 @@ Root `/README.md` = repository landing.
 | Doc | Role |
 |-----|------|
 | [SYSTEM_OVERVIEW.md](architecture/SYSTEM_OVERVIEW.md) | System map |
+| [ADDON_ARCHITECTURE.md](architecture/ADDON_ARCHITECTURE.md) | Peer-addon rules (Core protocol-only; SeoContentAi compat) |
+| [NEW_AGENT_HANDOFF.md](architecture/NEW_AGENT_HANDOFF.md) | Post-refactor operational handoff for new agents |
+| [SEO_CONTENT_AI_COMPAT_SHELL.md](architecture/SEO_CONTENT_AI_COMPAT_SHELL.md) | SeoContentAi shell retained categories + consumers |
+| [POST_REFACTOR_MANUAL_CHECKLIST.md](architecture/POST_REFACTOR_MANUAL_CHECKLIST.md) | USER browser / WP E2E checklist (refactor CLOSED) |
+| [FINAL_LOCAL_RELEASE_MANIFEST.md](architecture/FINAL_LOCAL_RELEASE_MANIFEST.md) | One-time ZIP inventory + post-upload commands (no deploy) |
 | [DATA_AND_RUNTIME_BOUNDARIES.md](architecture/DATA_AND_RUNTIME_BOUNDARIES.md) | DB / logging / addon boundaries |
 | [ARCHITECTURE_FREEZE_V1.md](architecture/ARCHITECTURE_FREEZE_V1.md) | Frozen public contracts |
 | [ARCHITECTURE_DECISIONS.md](architecture/ARCHITECTURE_DECISIONS.md) | ADR-001.. |
@@ -34,6 +39,7 @@ Root `/README.md` = repository landing.
 | [ARTICLE_EDITOR_JSON_PERSISTENCE.md](architecture/ARTICLE_EDITOR_JSON_PERSISTENCE.md) | Phase 5A TipTap JSON persistence + derived HTML body |
 | [ARTICLE_EDITOR_RUNTIME.md](architecture/ARTICLE_EDITOR_RUNTIME.md) | Phase 6A internal editor runtime (built-in modules, not public SDK) |
 | [ARTICLE_EDITOR_LEGACY_CLEANUP.md](architecture/ARTICLE_EDITOR_LEGACY_CLEANUP.md) | Post-cutover dead-code cleanup inventory + deleted/kept paths |
+| [SEOCONTENTAI_CUTOVER_INVENTORY.json](architecture/SEOCONTENTAI_CUTOVER_INVENTORY.json) | SeoContentAi compatibility-shell cutover counts + MOVE_* buckets |
 
 ## Modules
 

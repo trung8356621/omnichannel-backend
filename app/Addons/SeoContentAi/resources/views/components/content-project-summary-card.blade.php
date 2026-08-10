@@ -8,7 +8,7 @@
 ])
 
 @php
-    $accent = \App\Addons\SeoContentAi\Support\ContentProject\ContentProjectStatusBadgePresenter::summaryAccent((string) $card);
+    $accent = \Omnichannel\Addons\ContentProjects\Support\ContentProject\ContentProjectStatusBadgePresenter::summaryAccent((string) $card);
     $live = filled($countKey);
     $title = filled($hint) ? (string) $hint : ((string) $label).': '.(int) $value;
 @endphp

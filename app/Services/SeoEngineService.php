@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\Services;
 
-use App\Addons\SeoContentAi\Services\SeoScoringCalculator;
-use App\Addons\SeoContentAi\Services\SeoScoringEngine;
-use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
+use Omnichannel\Addons\Seo\Services\SeoScoringCalculator;
+use Omnichannel\Addons\Seo\Services\SeoScoringEngine;
+use Omnichannel\Addons\Seo\Support\SeoScoringRulesRegistry;
 
 final class SeoEngineService
 {

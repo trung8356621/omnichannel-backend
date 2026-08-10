@@ -23,7 +23,7 @@
                         </x-filament::button>
                         <x-filament::button
                             tag="a"
-                            :href="\App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource::getUrl('index')"
+                            :href="\Omnichannel\Addons\AiPrompt\Filament\Resources\AiConnectionResource::getUrl('index')"
                             color="gray"
                         >
                             {{ __('seo-content-ai::filament.api_connections.cancel') }}

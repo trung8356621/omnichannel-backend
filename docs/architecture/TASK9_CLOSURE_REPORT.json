@@ -1,0 +1,63 @@
+{
+  "task": "TASK_9_REFACTOR_CLOSURE",
+  "status": "PASS",
+  "audited_at": "2026-08-10",
+  "note": "Architecture refactor CLOSED. Manual browser UI + real WP E2E remain USER/external debt only. No Task 10.",
+  "phpunit_discovery": {
+    "phpunit_xml_suites": ["Unit", "Feature", "ContentAddon", "MediaAddon", "SeoAddon", "WordPressAddon", "PublishingAddon", "ContentProjectsAddon", "SearchIntelligenceAddon", "AiPromptAddon", "SiteSyncAddon", "AgentAddon"],
+    "composer_autoload_dev": "Omnichannel\\Addons\\*\\Tests\\ → addons/*/tests",
+    "legacy_seo_content_ai_tests": "0 Test.php (Compat trait only)",
+    "helper_added": "tests/Support/LegacyAddonPath.php"
+  },
+  "phpunit_results": {
+    "RuntimeLoggerWebAppChannelTest": "PASS",
+    "ArticleExtensionOwnershipContractTest": "PASS",
+    "WordPressFeaturedSlugSyncContractHarnessTest": "PASS",
+    "WpSyncLeaseContractTest": "PASS",
+    "PublishingStateInvariantsContractTest": "PASS",
+    "ExtensionCutoverAiPipelineTest": "PASS",
+    "ImageRoutingStrategyTest": "PASS",
+    "core_key_filter_batch_51": "PASS",
+    "WordPressPermalinkBuilderTest": "ERRORS residual B/C Mockery",
+    "broad_addon_suites": "residual B stale FQCN/env — documented, not architecture blockers"
+  },
+  "failures_fixed_now": [
+    "A: Media ImageRoutingStrategy Seo Support use imports",
+    "A: AiPrompt VisionValidationModelRouter Media/Seo Support use imports",
+    "A/B: WordPress ServicesFoo typo → Services\\WordPressFoo",
+    "B: RuntimeLoggerWebAppChannelTest via LegacyAddonPath",
+    "B: phpunit.xml source include addons"
+  ],
+  "active_runtime_zero_search": {
+    "article_column_facade_on_articles_model": "ZERO unexplained ACTIVE",
+    "wp_post_id_via_wordpressLink": "ACTIVE correct (extension SoT)",
+    "bridge_business_mutations": "ZERO",
+    "SeoContentAi_Services_Models_business": "COMPAT shell only",
+    "typed_meta_high_pri_writers": "HISTORICAL/COMPAT documented"
+  },
+  "seocontentai_role": "compatibility shell — SEO_CONTENT_AI_COMPAT_SHELL.md",
+  "remaining_shell": "~263 files (~239 views + ~24 non-view)",
+  "architecture_docs": [
+    "docs/architecture/ADDON_ARCHITECTURE.md",
+    "docs/architecture/SEO_CONTENT_AI_COMPAT_SHELL.md",
+    "docs/architecture/NEW_AGENT_HANDOFF.md",
+    "docs/architecture/POST_REFACTOR_MANUAL_CHECKLIST.md",
+    "docs/architecture/TASK9_CLOSURE_REPORT.json"
+  ],
+  "agents_rules_skills": {
+    "AGENTS.md": "updated",
+    ".cursorrules": "updated",
+    "phpunit-remote.mdc": "updated",
+    "x-select.mdc": "updated",
+    "remote-test-selection": "updated",
+    "site-sync-debugging": "updated",
+    "docs-update-on-xong": "updated"
+  },
+  "codebase_memory": "fast reindex D-work-omnichannel-backend done; verify symbols on disk before trust",
+  "npm_build": "PASS",
+  "migrate_idempotent": "PASS x2",
+  "save_coordinator": "PASS 6/6",
+  "manual_debt": "POST_REFACTOR_MANUAL_CHECKLIST.md",
+  "wp_e2e_debt": "no local WP — harness only",
+  "verdict": "PASS"
+}

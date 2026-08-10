@@ -2,10 +2,11 @@
 
 ## Repository Role
 
-- This repository is the canonical Laravel SaaS backend for the Omnichannel workspace.
+- **Staging split (Task 11):** canonical trees under `D:\work\_split\` — see `SPLIT_STAGING.md` and `_split/omnichannel-client/docs/architecture/REPO_SPLIT.md`.
+- This repository (`omnichannel-backend`) is the **pre-split** Laravel SaaS backend retained until cutover.
 - Stack: Laravel 12, PHP 8.2+, Filament 3, React, Vite, Tailwind CSS, MySQL.
-- It owns canonical business workflows for sites, services, subscriptions, wallets, payments, orders, invoices, SEO Content AI, publishing, site sync, Agent/MCP, and plugin update delivery.
-- The sibling WordPress plugin lives at `..\wp-seo-ai`. For REST/API/auth/site-sync/publishing/article/media/capability contract work, Codex MUST inspect both repositories.
+- Peer addons (post-split): `omnichannel-addons/{slug}`; Client Core: `omnichannel-client-core`; Shell: `omnichannel-client`.
+- The sibling WordPress plugin lives at `..\wp-seo-ai`.
 
 ## Source Of Truth
 
@@ -73,10 +74,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".secure\deploy-diff.ps1
 - Prefer typed properties, return types, enums, constructor promotion, match, nullsafe, early returns, Form Requests, thin controllers, and focused Service/Action classes.
 - Business logic MUST use injection over `app()` resolution unless an existing local pattern requires otherwise.
 - Core models use default `mysql`.
-- SEO Content AI uses runtime connection `omi_seo_ai`, bootstrapped by `SeoDatabaseConnectionService` from core table `seo_database_connections`; it does not use addon static DB config.
-- Features that can be isolated MUST live under `app/Addons/{PascalCaseName}/`.
+- SEO domain DB uses runtime connection `omi_seo_ai`, bootstrapped by `SeoDatabaseConnectionService` from core table `seo_database_connections`.
+- **Peer addons live under `addons/{slug}/`** (content, seo, media, wordpress, publishing, content-projects, ai-prompt, search-intelligence, search-foundation, site-sync, agent, social, commerce). See `docs/architecture/ADDON_ARCHITECTURE.md`.
+- `app/Addons/SeoContentAi` is **compatibility shell only** (Filament views/lang/panel bootstrap). Do NOT add new business Models/Services/JS there. See `docs/architecture/SEO_CONTENT_AI_COMPAT_SHELL.md`.
+- New agents: start from `docs/architecture/NEW_AGENT_HANDOFF.md`.
 - Addons MUST NOT be statically registered in `config/app.php`; active addons are registered dynamically.
 - Avoid cross-database foreign keys; use scalar IDs and application-level enforcement.
+- `articles` table is Content-owned only. Sibling addons use extension tables (`seo_article_profiles`, `wordpress_article_links`, `article_media_states`, `publishing_article_states`, `seo_content_archive_items`).
+- Do NOT restore Article addon compatibility accessors. Do NOT mutate via `window.__seoEditorDomainBridge`.
 
 ## Canonical Architecture Rules
 
@@ -85,9 +90,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".secure\deploy-diff.ps1
 - MCP write surface is stricter than Agent write surface; do not expose internal scheduler commands as MCP tools.
 - Publishing schedule is owned by SaaS/Laravel. WordPress MUST NOT be treated as schedule source of truth.
 - Publishing Queue processing/stuck recovery MUST follow `docs/modules/PUBLISHING.md` and `docs/contracts/QUEUE_SCHEDULER_AND_IDEMPOTENCY.md`.
-- Prompt hooks MUST resolve via settings binding or task node `prompt_id`; do not select prompts by legacy `is_active` alone.
-- Article Editor changes MUST preserve session lock, document version, TipTap JSON document model, command layer, media snapshot ownership, and public/internal SDK boundaries.
-- Extension SDK v1 public contracts are frozen; breaking changes REQUIRE a new ADR and SDK major bump.
+- Prompt hooks live under `addons/ai-prompt/resources/prompt-hooks` and resolve via settings binding or task node `prompt_id`.
+- Article Editor shell is `addons/content/resources/js/components/SeoArticleEditor.jsx`; domain SoT is Content/Media/SEO/Publishing stores — not mega host useState.
+- Extension SDK v1 public contracts are frozen; builtin manifests discover from `addons/agent/src/Extension/Builtin`.
+- Architecture refactor wave is **CLOSED**. Manual UI + real WP E2E are verification debt only (`docs/architecture/POST_REFACTOR_MANUAL_CHECKLIST.md`).
 
 ## Verification
 
@@ -95,12 +101,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".secure\deploy-diff.ps1
 
 ```text
 $PHP_BIN vendor/bin/phpunit --filter=ClassOrMethodName
-$PHP_BIN vendor/bin/phpunit app/Addons/SeoContentAi/tests/Unit
+$PHP_BIN vendor/bin/phpunit --testsuite ContentAddon
+$PHP_BIN vendor/bin/phpunit addons/content/tests/Unit
 ```
 
 - Do not use `php artisan test --filter=...` as the project standard.
-- For JS/CSS changes, run or report the relevant build/check, normally `npm run build`.
+- For JS/CSS changes, run or report the relevant frontend check, normally `npm run build`.
 - For migration changes, inspect both `up()` and `down()` and verify intended DB connection; do not run migrations unless explicitly asked.
+- Protected DBs `omi_channel` / `omi_seo_ai`: only `php artisan refactor:migrate --verify --via-mysql`. Never fresh protected DB.
 - If verification is skipped because the task is documentation-only or user forbids execution, report that plainly.
 
 ## Skills

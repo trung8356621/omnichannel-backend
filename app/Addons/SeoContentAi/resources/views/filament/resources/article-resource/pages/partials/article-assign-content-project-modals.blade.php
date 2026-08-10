@@ -1,9 +1,9 @@
 @php
-    use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
-    use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
-    use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
-    use App\Addons\SeoContentAi\Models\SeoProjectTask;
-    use App\Addons\SeoContentAi\Support\SeoAccessControl;
+    use Omnichannel\Addons\Content\Filament\Resources\ArticleResource;
+    use Omnichannel\Addons\SearchIntelligence\Filament\Resources\KeywordResource;
+    use Omnichannel\Addons\ContentProjects\Filament\Resources\SeoProjectResource;
+    use Omnichannel\Addons\ContentProjects\Models\SeoProjectTask;
+    use Omnichannel\Addons\Seo\Support\SeoAccessControl;
 
     $articleSiteId = ArticleResource::resolveArticleSiteId($record);
     $articleDirectProjectId = ArticleResource::resolveDirectAssignContentProjectId($articleSiteId);

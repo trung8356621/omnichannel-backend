@@ -2,7 +2,7 @@
 
 namespace App\Models;
 
-use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use Omnichannel\Addons\Seo\Support\SeoAccessControl;
 use App\Models\Concerns\UsesCoreDatabaseConnection;
 use Database\Factories\UserFactory;
 use Filament\Models\Contracts\FilamentUser;
@@ -184,11 +184,11 @@ class User extends Authenticatable implements FilamentUser
     /**
      * Lịch sử duyệt bài SEO (cross-DB query — bảng trên connection omi_seo_ai).
      *
-     * @return \Illuminate\Database\Eloquent\Builder<\App\Addons\SeoContentAi\Models\SeoArticleReview>
+     * @return \Illuminate\Database\Eloquent\Builder<\Omnichannel\Addons\Content\Models\SeoArticleReview>
      */
     public function articleReviews()
     {
-        return \App\Addons\SeoContentAi\Models\SeoArticleReview::query()
+        return \Omnichannel\Addons\Content\Models\SeoArticleReview::query()
             ->where('reviewer_id', (int) $this->id);
     }
 

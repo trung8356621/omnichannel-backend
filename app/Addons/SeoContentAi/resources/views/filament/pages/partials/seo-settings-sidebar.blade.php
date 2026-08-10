@@ -1,6 +1,6 @@
 @php
-    use App\Addons\SeoContentAi\Support\SeoSettingsMenu;
-    $cssPath = base_path('app/Addons/SeoContentAi/resources/css/seo-settings.css');
+    use Omnichannel\Addons\Seo\Support\SeoSettingsMenu;
+    $cssPath = base_path('addons/seo/resources/css/seo-settings.css');
 @endphp
 
 @if(is_readable($cssPath))

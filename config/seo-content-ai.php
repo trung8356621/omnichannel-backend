@@ -19,7 +19,8 @@ return [
      */
     'auto_per_site_database' => (bool) env('SEO_CONTENT_AI_PER_SITE_DB', false),
 
-    'migrations_path' => 'app/Addons/SeoContentAi/database/migrations',
+    'migrations_path' => 'addons', // Phase 2: peer-owned; use AddonMigrationRegistrar for exact dirs
+    'migrations_paths_note' => 'Do not rely on single path — SeoDatabaseConnectionService uses AddonMigrationRegistrar',
 
     /** Loại cấu hình DB mặc định khi tạo connection mới: auto | manual */
     'default_connection_type' => env('SEO_CONTENT_AI_DEFAULT_CONNECTION_TYPE', 'manual'),

@@ -1,0 +1,40 @@
+{
+  "task": "TASK_8_REGRESSION_LEGACY_SHELL",
+  "status": "PARTIAL",
+  "audited_at": "2026-08-10",
+  "code_audit_ui_paths": {
+    "content_title_slug": "PASS — Livewire SoT",
+    "blocks_save": "PASS — getContentBundle + content store",
+    "featured_clear": "PASS — null semantics",
+    "session_heartbeat": "PASS — single EditorSessionClient",
+    "bridge": "PASS — diag-only",
+    "manual_browser_ui": "NOT_RUN"
+  },
+  "wp": {
+    "real_e2e": "BLOCKED — no local WP site",
+    "contract_harness": "PASS"
+  },
+  "npm_build": "PASS",
+  "migrate_idempotent": "PASS",
+  "fresh_test": "PASS",
+  "phpunit_practical": {
+    "ExtensionCutoverAiPipelineTest": "PASS 10",
+    "ArticleExtensionOwnershipContractTest": "PASS 7",
+    "WordPressFeaturedSlugSyncContractHarnessTest": "PASS 4",
+    "WpSyncLeaseContractTest": "PASS 6",
+    "ArticleEditorRuntimeImportGraphTest": "PASS 5",
+    "PublishingStateInvariantsContractTest": "PASS after setTestNow fix",
+    "SaveCoordinator_node": "PASS 6",
+    "full_suite": "NOT_RUN_ENTIRE — BOM strip fixed 157 files; broader path stale tests may remain"
+  },
+  "seocontentai": {
+    "before": 287,
+    "after": 263,
+    "views": 239,
+    "non_view": 24,
+    "moved": ["prompt-hooks → ai-prompt", "extension plugin.json → agent Builtin", "check-editor-cycles → content"],
+    "deleted": ["demo-seo-editor.js", "empty js/css trees", "SeoContentAi Extension tree"],
+    "remaining": "true compat shell: addon.json, providers, routes shim, config, lang, views, Settings, Compat trait"
+  },
+  "verdict": "PARTIAL — shell reduced; build/migrate/fresh/key tests PASS; manual UI + real WP E2E not executed"
+}

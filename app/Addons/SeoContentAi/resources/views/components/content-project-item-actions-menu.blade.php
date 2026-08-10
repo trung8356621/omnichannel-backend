@@ -8,7 +8,7 @@
     $title = (string) ($row['primary_label'] ?? $row['title'] ?? '#'.$tid);
     $lifecycle = strtolower((string) ($row['lifecycle'] ?? ''));
     $lifecycleBucket = $lifecycle === 'waiting_publish' ? 'scheduled' : $lifecycle;
-    $a = \App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemActionsPresenter::forRow($row);
+    $a = \Omnichannel\Addons\ContentProjects\Support\ContentProject\ContentProjectItemActionsPresenter::forRow($row);
     $itemClass = 'cp-ops-menu__item';
     $dangerClass = 'cp-ops-menu__item cp-ops-menu__item--danger';
 @endphp

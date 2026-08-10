@@ -1,0 +1,7 @@
+﻿/resources/js/ => [addons/agent/resources/js | addons/ai-prompt/resources/js | addons/commerce/resources/js | addons/content/resources/js | addons/content-projects/resources/js | addons/media/resources/js | addons/publishing/resources/js | addons/search-foundation/resources/js | addons/search-intelligence/resources/js | addons/seo/resources/js | addons/site-sync/resources/js | addons/social/resources/js | addons/wordpress/resources/js]
+/resources/js/components/ArticleEditorModuleHost.jsx => []
+/resources/js/editor/modules => [addons/ai-prompt/resources/js/editor/modules | addons/content/resources/js/editor/modules | addons/media/resources/js/editor/modules | addons/seo/resources/js/editor/modules]
+/resources/js/modules => [addons/content/resources/js/modules | addons/media/resources/js/modules | addons/seo/resources/js/modules]
+/resources/js/utils => [addons/ai-prompt/resources/js/utils | addons/content/resources/js/utils | addons/media/resources/js/utils | addons/seo/resources/js/utils | addons/wordpress/resources/js/utils]
+/resources/js/utils/ => [addons/ai-prompt/resources/js/utils/ | addons/content/resources/js/utils/ | addons/media/resources/js/utils/ | addons/seo/resources/js/utils/ | addons/wordpress/resources/js/utils/]
+/resources/js/utils/editorInsertionCommands.js => []

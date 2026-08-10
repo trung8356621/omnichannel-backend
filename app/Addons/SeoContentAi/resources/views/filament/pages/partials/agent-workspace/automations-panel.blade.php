@@ -66,7 +66,7 @@
                                     class="underline text-red-600"
                                     x-on:click="window.confirm('Soft-delete automation? History được giữ.') && $wire.deleteAutomation($el.value)"
                                 >Delete</button>
-                                @if (\App\Addons\SeoContentAi\Support\SeoAccessControl::canAccessManagerFeatures())
+                                @if (\Omnichannel\Addons\Seo\Support\SeoAccessControl::canAccessManagerFeatures())
                                     <x-seo-content-ai::agent-workspace.action-button action="loadAutomationDiagnostics" :value="$row['hash_id'] ?? ''" class="underline">Diag</x-seo-content-ai::agent-workspace.action-button>
                                 @endif
                             </div>

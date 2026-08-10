@@ -30,13 +30,36 @@
         "psr-4": {
             "App\\": "app/",
             "App\\Addons\\SeoContentAi\\Tests\\": "app/Addons/SeoContentAi/tests/",
+            "Omnichannel\\Addons\\SearchFoundation\\": "addons/search-foundation/src/",
+            "Omnichannel\\Addons\\Seo\\": "addons/seo/src/",
+            "Omnichannel\\Addons\\SearchIntelligence\\": "addons/search-intelligence/src/",
+            "Omnichannel\\Addons\\AiPrompt\\": "addons/ai-prompt/src/",
+            "Omnichannel\\Addons\\Content\\": "addons/content/src/",
+            "Omnichannel\\Addons\\ContentProjects\\": "addons/content-projects/src/",
+            "Omnichannel\\Addons\\Media\\": "addons/media/src/",
+            "Omnichannel\\Addons\\WordPress\\": "addons/wordpress/src/",
+            "Omnichannel\\Addons\\Publishing\\": "addons/publishing/src/",
+            "Omnichannel\\Addons\\SiteSync\\": "addons/site-sync/src/",
+            "Omnichannel\\Addons\\Agent\\": "addons/agent/src/",
+            "Omnichannel\\Addons\\Social\\": "addons/social/src/",
+            "Omnichannel\\Addons\\Commerce\\": "addons/commerce/src/",
             "Database\\Factories\\": "database/factories/",
             "Database\\Seeders\\": "database/seeders/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "Tests\\": "tests/"
+            "Tests\\": "tests/",
+            "Omnichannel\\Addons\\Content\\Tests\\": "addons/content/tests/",
+            "Omnichannel\\Addons\\Media\\Tests\\": "addons/media/tests/",
+            "Omnichannel\\Addons\\Seo\\Tests\\": "addons/seo/tests/",
+            "Omnichannel\\Addons\\WordPress\\Tests\\": "addons/wordpress/tests/",
+            "Omnichannel\\Addons\\Publishing\\Tests\\": "addons/publishing/tests/",
+            "Omnichannel\\Addons\\ContentProjects\\Tests\\": "addons/content-projects/tests/",
+            "Omnichannel\\Addons\\SearchIntelligence\\Tests\\": "addons/search-intelligence/tests/",
+            "Omnichannel\\Addons\\AiPrompt\\Tests\\": "addons/ai-prompt/tests/",
+            "Omnichannel\\Addons\\SiteSync\\Tests\\": "addons/site-sync/tests/",
+            "Omnichannel\\Addons\\Agent\\Tests\\": "addons/agent/tests/"
         }
     },
     "scripts": {

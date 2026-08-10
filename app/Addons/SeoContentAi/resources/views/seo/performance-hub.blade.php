@@ -1,5 +1,5 @@
 @php
-    $cssPath = base_path('app/Addons/SeoContentAi/resources/css/performance-hub.css');
+    $cssPath = base_path('addons/search-intelligence/resources/css/performance-hub.css');
     $dataSource = $this->dataSource;
     $activeTab = $this->activeTab;
     $isRankProvider = $this->dashboard->hasRankProvider($dataSource);

@@ -1,5 +1,5 @@
-﻿@php
-    use App\Addons\SeoContentAi\Filament\Resources\DomainResource;
+@php
+    use Omnichannel\Addons\SearchFoundation\Filament\Resources\DomainResource;
 
     $site = $this->getSite();
     $synced = $this->isSiteSynced();
@@ -46,7 +46,7 @@
 @endphp
 
 @php
-    $overviewCss = base_path('app/Addons/SeoContentAi/resources/css/domain-overview.css');
+    $overviewCss = base_path('addons/content/resources/css/domain-overview.css');
 @endphp
 
 {{-- Livewire 3 yêu cầu MỘT phần tử gốc - bọc toàn bộ view trong div này. --}}
@@ -148,7 +148,7 @@
                 </x-slot>
                 @include('seo-content-ai::filament.resources.domain-resource.pages.partials.domain-sync-actions', [
                     'showTest' => auth()->user()?->role === 'admin'
-                        && ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isSeoPanelReadOnly(),
+                        && ! \Omnichannel\Addons\Seo\Support\SeoAccessControl::isSeoPanelReadOnly(),
                 ])
             </x-filament::section>
         @else
@@ -225,7 +225,7 @@
 
                     @include('seo-content-ai::filament.resources.domain-resource.pages.partials.domain-sync-actions', [
                         'showTest' => auth()->user()?->role === 'admin'
-                        && ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isSeoPanelReadOnly(),
+                        && ! \Omnichannel\Addons\Seo\Support\SeoAccessControl::isSeoPanelReadOnly(),
                     ])
                 </x-filament::section>
             </div>

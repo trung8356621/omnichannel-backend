@@ -1,6 +1,6 @@
 @php
-    /** @var \App\Addons\SeoContentAi\Models\Keyword $record */
-    use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
+    /** @var \Omnichannel\Addons\SearchFoundation\Models\Keyword $record */
+    use Omnichannel\Addons\SearchIntelligence\Filament\Resources\KeywordResource;
 
     $groups = KeywordResource::resolveLinkDestinationGroups($record);
 

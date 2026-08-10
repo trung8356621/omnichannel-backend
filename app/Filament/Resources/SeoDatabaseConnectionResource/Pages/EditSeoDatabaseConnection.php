@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Filament\Resources\SeoDatabaseConnectionResource\Pages;
 
-use App\Addons\SeoContentAi\Services\SeoDatabaseBackupService;
-use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
+use Omnichannel\Addons\SearchFoundation\Services\SeoDatabaseBackupService;
+use Omnichannel\Addons\SearchFoundation\Services\SeoDatabaseConnectionService;
 use App\Filament\Resources\SeoDatabaseConnectionResource;
 use App\Filament\Support\SeoDatabaseConnectionAccess;
 use App\Filament\Support\SeoDatabaseConnectionBackupActions;

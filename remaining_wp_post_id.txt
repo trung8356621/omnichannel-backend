@@ -1,0 +1,135 @@
+﻿addons/agent/src/Automation/BusinessHook/Actions/SyncArticleToWordPressHookAction.php:183:        $wpPostId = (int) ($result['wp_post_id'] ?? $article->wordpressLink?->wp_post_id ?? 0);
+addons/agent/src/Automation/BusinessHook/Support/BusinessHookEmitter.php:235:            'wp_post_id' => $result['wp_post_id'] ?? $article->wordpressLink?->wp_post_id ?? null,
+addons/agent/src/Automation/BusinessHook/Support/BusinessHookEmitter.php:362:                'wp_post_id' => $result['wp_post_id'] ?? $article->wordpressLink?->wp_post_id ?? null,
+addons/ai-prompt/src/Services/PromptLoaiSanPhamOptionsService.php:53:                $wpId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/commerce/src/Console/ProductReviewsDiagnoseStuckCommand.php:59:            ['wp_post_id_article', (string) ($article?->wordpressLink?->wp_post_id ?? '')],
+addons/commerce/src/Console/ProductReviewsDiagnoseStuckCommand.php:71:                && (int) ($article?->wordpressLink?->wp_post_id ?? 0) <= 0 => 'A/D: waiting article ??? should be pending_article',
+addons/commerce/src/Services/ProductReview/ArticleProductReviewStoreService.php:87:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/commerce/src/Services/ProductReview/LegacyProductReviewStateNormalizer.php:21:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/commerce/src/Services/ProductReview/PendingProductReviewReconciler.php:37:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/commerce/src/Services/ProductReview/ProductReviewCreationPolicy.php:71:        if ((int) ($article->wordpressLink?->wp_post_id ?? 0) > 0 && (! $wpConnected || ! $fetchOk)) {
+addons/commerce/src/Services/ProductReview/ProductReviewEditorLoadService.php:35:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null;
+addons/commerce/src/Services/ProductReview/ProductReviewLocalBatchCreator.php:65:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/commerce/src/Services/ProductReview/ProductReviewReconciliationService.php:50:            $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/commerce/src/Services/ProductReview/ProductReviewReconciliationService.php:113:            'wp_post_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/commerce/src/Services/ProductReview/WordPressProductReviewService.php:47:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/commerce/src/Services/ProductReview/WordPressProductReviewService.php:102:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/commerce/src/Services/ProductReview/WordPressProductReviewStatusService.php:28:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null;
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:290:        $this->manualWpPostId = (int) ($this->record->wordpressLink?->wp_post_id ?? 0) > 0
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:291:            ? (string) ((int) $this->record->wordpressLink?->wp_post_id)
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:295:        if ((int) ($this->record->wordpressLink?->wp_post_id ?? 0) > 0) {
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:383:        $this->manualWpPostId = (int) ($this->record->wordpressLink?->wp_post_id ?? 0) > 0
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:384:            ? (string) ((int) $this->record->wordpressLink?->wp_post_id)
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:388:        if ((int) ($this->record->wordpressLink?->wp_post_id ?? 0) > 0) {
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:411:        $this->manualWpPostId = (int) ($this->record->wordpressLink?->wp_post_id ?? 0) > 0
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:412:            ? (string) ((int) $this->record->wordpressLink?->wp_post_id)
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:416:        if ((int) ($this->record->wordpressLink?->wp_post_id ?? 0) > 0) {
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:531:        if ((int) ($this->record->wordpressLink?->wp_post_id ?? 0) <= 0) {
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:607:        if ((int) ($this->record->wordpressLink?->wp_post_id ?? 0) <= 0) {
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:628:        if ((int) ($this->record->wordpressLink?->wp_post_id ?? 0) <= 0) {
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:660:        if ((int) ($this->record->wordpressLink?->wp_post_id ?? 0) <= 0) {
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:759:        if ((int) ($this->record->wordpressLink?->wp_post_id ?? 0) > 0 && ! $hasLocalFaqs) {
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:1115:            $wpId = (int) ($term->wordpressLink?->wp_post_id ?? 0);
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:1264:        $selfWpId = (int) ($this->record->wordpressLink?->wp_post_id ?? 0);
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:1507:        if ($mode !== 'editor-block' && (int) ($this->record->wordpressLink?->wp_post_id ?? 0) <= 0) {
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:2166:        if ((int) ($this->record->wordpressLink?->wp_post_id ?? 0) <= 0) {
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:2252:        $previousWpPostId = (int) ($this->record->wordpressLink?->wp_post_id ?? 0);
+addons/content/src/Filament/Resources/ArticleResource/Pages/EditArticle.php:3182:        $hasWpPostId = (bool) ($result['has_wp_post_id'] ?? ((int) ($this->record->wordpressLink?->wp_post_id ?? 0) > 0));
+addons/content/src/Filament/Resources/ArticleResource/Pages/ListArticles.php:379:        $wpPostId = (int) ($article?->wordpressLink?->wp_post_id ?? 0);
+addons/content/src/Filament/Resources/ArticleResource.php:149:                        if ($record->wp_post_id) {
+addons/content/src/Filament/Resources/ArticleResource.php:150:                            return 'WP ID: '.$record->wp_post_id;
+addons/content/src/Filament/Resources/ArticleResource.php:184:                        $wpId = (int) ($record->wp_post_id ?? 0);
+addons/content/src/Filament/Resources/ArticleResource.php:923:                        : ($record->wp_post_id ? 'WP ID: '.$record->wp_post_id : null)),
+addons/content/src/Http/Controllers/ArticlePreviewController.php:26:        if ($article->body === null && (int) ($article->wordpressLink?->wp_post_id ?? 0) > 0) {
+addons/content/src/Models/Concerns/RoutesArticleExtensionAttributes.php:179:     * @deprecated Task 6: read `$article->wordpressLink?->wp_post_id` (or use
+addons/content/src/Models/Concerns/RoutesArticleExtensionAttributes.php:189:            ? $this->wordpressLink?->wp_post_id
+addons/content/src/Models/SeoArticle.php:93:            ? $this->wordpressLink?->wp_post_id
+addons/content/src/Services/ArticleEditorSyncOrchestrator.php:202:                'wp_post_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/content/src/Services/ArticleLastSavedTimestampService.php:32:            'wp_post_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/content/src/Services/ArticleQuickPostReviewService.php:137:            'has_wp_post_id' => (bool) ($result['has_wp_post_id'] ?? ((int) ($article->wordpressLink?->wp_post_id ?? 0) > 0)),
+addons/content/src/Services/SeoArticleRevisionService.php:37:        if (! $force && (int) ($article->wordpressLink?->wp_post_id ?? 0) > 0) {
+addons/content-projects/src/Services/ArchiveContentProjectService.php:448:                if ((int) ($article->wordpressLink?->wp_post_id ?? 0) > 0) {
+addons/content-projects/src/Services/ArchiveContentProjectService.php:545:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/content-projects/src/Services/ContentProject/Application/Handlers/ProcessScheduledProjectItemPublishHandler.php:226:            wpPostId: (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/content-projects/src/Services/ContentProject/Application/Handlers/ProcessScheduledProjectItemPublishHandler.php:315:                'wp_post_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/content-projects/src/Services/ContentProject/Application/Handlers/SyncPublishedArticleToWordPressHandler.php:135:            $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/content-projects/src/Services/ContentProject/Application/Handlers/SyncPublishedArticleToWordPressHandler.php:169:                $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/content-projects/src/Services/ContentProject/ContentProjectExistingArticlePickerService.php:273:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/content-projects/src/Services/ContentProject/ContentProjectRunBulkSyncService.php:117:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/content-projects/src/Services/ContentProjectArchiveExportService.php:378:            'wordpress_post_id' => $article->wordpressLink?->wp_post_id ?? null,
+addons/content-projects/src/Services/ContentProjectArchiveExportService.php:403:            'wordpress_post_id' => $item->article?->wordpressLink?->wp_post_id,
+addons/content-projects/src/Support/ContentProject/ArchivePreviewArticlePresenter.php:128:            $article?->wordpressLink?->wp_post_id,
+addons/publishing/src/Application/Publishing/PublishingWordPressReconciler.php:51:                wpPostId: (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/publishing/src/Application/Publishing/PublishingWordPressReconciler.php:68:                wpPostId: (int) $completedJob->wp_post_id,
+addons/publishing/src/Application/Publishing/PublishingWordPressReconciler.php:80:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/publishing/src/Application/Publishing/PublishingWordPressReconciler.php:126:            wpPostId: (int) $row->wp_post_id,
+addons/publishing/src/Console/ProductReviewsQueuePendingCommand.php:65:            if ((int) ($article->wordpressLink?->wp_post_id ?? 0) <= 0) {
+addons/publishing/src/Services/ArticleScheduleReconcileService.php:33:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/publishing/src/Services/Publishing/ContentPublishingStrategyResolver.php:25:        $remotePostId = (int) ($article?->wp_post_id ?? 0);
+addons/publishing/src/Services/Publishing/PostPublishWordPressPostReconciler.php:45:        $existing = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/publishing/src/Services/Publishing/PostPublishWordPressSyncEligibility.php:83:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/publishing/src/Services/Publishing/PublishingQueueRemoteReconcileService.php:91:                    if ((int) ($article->wordpressLink?->wp_post_id ?? 0) <= 0) {
+addons/publishing/src/Services/Publishing/PublishingQueueRemoteReconcileService.php:160:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/publishing/src/Services/Publishing/PublishingStuckRecoveryService.php:363:            if ((int) ($article->wordpressLink?->wp_post_id ?? 0) <= 0) {
+addons/publishing/src/Services/ScheduledArticlePublishRunner.php:250:                    'wp_post_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/search-foundation/src/Services/SiteMcp/SiteMcpDiscovery.php:231:                'term_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0),
+addons/search-foundation/src/Support/DomainSyncManifestComparator.php:30:            $wpId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/search-foundation/src/Support/DomainSyncManifestComparator.php:131:            $wpId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/site-sync/src/Services/Backfill/SiteSyncV2BackfillService.php:217:                    'wordpress_id' => $article->wordpressLink?->wp_post_id,
+addons/site-sync/src/Services/Comparison/SiteSyncComparisonService.php:145:            if ((int) ($article->wordpressLink?->wp_post_id ?? 0) <= 0) {
+addons/wordpress/src/Console/AutomationRepairWordpressExecutionsCommand.php:124:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Console/ProductReviewsAuditWordpressStatusCommand.php:55:            $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Extension/WordPressPublisher.php:41:        if ($existingFromRef !== null && $existingFromRef > 0 && (int) ($article->wordpressLink?->wp_post_id ?? 0) <= 0) {
+addons/wordpress/src/Extension/WordPressPublisher.php:46:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? $payload->wpPostId ?? 0);
+addons/wordpress/src/Extension/WordPressPublisher.php:87:            $resolvedWp = (int) ($article->fresh()?->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Extension/WordPressPublisher.php:142:            $fresh = (int) (SeoArticle::query()->find($payload->articleId)?->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Extension/WordPressPublisher.php:175:        return $row !== null ? (int) $row->wp_post_id : null;
+addons/wordpress/src/Http/Controllers/ArticleWordPressProductReviewsController.php:33:                    'wp_post_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/wordpress/src/Http/Controllers/ArticleWordPressProductReviewsController.php:50:                    'wp_post_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/wordpress/src/Jobs/ManualWordPressSyncJob.php:172:            'wp_post_id' => (int) ($result['wp_post_id'] ?? $article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/wordpress/src/Jobs/ManualWordPressSyncJob.php:178:            'wp_post_id' => (int) ($result['wp_post_id'] ?? $article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/wordpress/src/Jobs/ManualWordPressSyncJob.php:193:            'wp_post_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/wordpress/src/Services/ArticleFaqWordPressImportService.php:43:        if ($bestRows === [] && (int) ($article->wordpressLink?->wp_post_id ?? 0) > 0) {
+addons/wordpress/src/Services/ArticleFaqWordPressRestoreService.php:27:        if ((int) ($article->wordpressLink?->wp_post_id ?? 0) <= 0) {
+addons/wordpress/src/Services/ArticleFaqWordPressRestoreService.php:66:        if ((int) ($article->wordpressLink?->wp_post_id ?? 0) <= 0) {
+addons/wordpress/src/Services/ArticlePolylangSyncService.php:100:                ? (int) ($linkedArticle->wordpressLink?->wp_post_id ?? 0)
+addons/wordpress/src/Services/ArticleWordPressBusinessSequence.php:96:                'wp_post_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/wordpress/src/Services/ArticleWordPressBusinessSequence.php:109:            'wp_post_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/wordpress/src/Services/ArticleWordPressBusinessSequence.php:136:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/ArticleWordPressSyncEligibility.php:57:                'remote_post_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/wordpress/src/Services/ArticleWordPressSyncEligibility.php:64:        $remotePostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/ArticleWordPressSyncFlagService.php:95:            return (int) ($article->wordpressLink?->wp_post_id ?? 0) > 0
+addons/wordpress/src/Services/ArticleWpSyncLeaseService.php:96:                'wp_post_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/wordpress/src/Services/ArticleWpSyncLeaseService.php:1007:            'wp_post_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/wordpress/src/Services/ArticleWpSyncQueueService.php:284:            'wordpress_post_id' => (int) ($result['wp_post_id'] ?? $result['wordpress_post_id'] ?? $article->wordpressLink?->wp_post_id ?? 0) ?: null,
+addons/wordpress/src/Services/SyncArticleToWordPressPipeline.php:49:        $wpPostId = (int) ($result['wp_post_id'] ?? $article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/SyncDomainContentService.php:49:            $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/SyncDomainContentService.php:204:                'wp_post_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0),
+addons/wordpress/src/Services/SyncDomainContentService.php:1332:                'wp_id' => (int) ($article->wordpressLink?->wp_post_id ?? 0),
+addons/wordpress/src/Services/VirtualCommentService.php:109:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/VirtualCommentService.php:229:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/WordPressArticleContentService.php:39:        if ((int) ($article->wordpressLink?->wp_post_id ?? 0) > 0) {
+addons/wordpress/src/Services/WordPressArticleContentService.php:107:            return (int) ($article->wordpressLink?->wp_post_id ?? 0) > 0
+addons/wordpress/src/Services/WordPressArticleContentService.php:115:        return (int) ($article->wordpressLink?->wp_post_id ?? 0) > 0
+addons/wordpress/src/Services/WordPressArticleContentService.php:122:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/WordPressArticleContentService.php:261:        $wpId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/WordPressArticleContentService.php:407:        $wpId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/WordPressArticleContentService.php:784:        $wpId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/WordPressArticleMediaService.php:93:        $wpId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/WordPressArticleSyncService.php:59:        if ((int) ($article->wordpressLink?->wp_post_id ?? 0) > 0) {
+addons/wordpress/src/Services/WordPressArticleSyncService.php:63:                'wp_post_id' => (int) $article->wordpressLink?->wp_post_id,
+addons/wordpress/src/Services/WordPressArticleSyncService.php:418:            if ((int) ($article->wordpressLink?->wp_post_id ?? 0) <= 0) {
+addons/wordpress/src/Services/WordPressArticleSyncService.php:718:        $canonicalWpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/WordPressArticleSyncService.php:742:            if ((int) ($article->wordpressLink?->wp_post_id ?? 0) !== $canonicalWpPostId) {
+addons/wordpress/src/Services/WordPressArticleSyncService.php:796:            $returnedWp = (int) ($completed['wp_post_id'] ?? $article->fresh()?->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/WordPressArticleSyncService.php:1251:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/WordPressArticleSyncService.php:1332:        if ((int) ($article->wordpressLink?->wp_post_id ?? 0) > 0) {
+addons/wordpress/src/Services/WordPressArticleSyncService.php:1335:                'message' => '???? c?? wp_post_id #'.(int) $article->wordpressLink?->wp_post_id,
+addons/wordpress/src/Services/WordPressArticleSyncService.php:1336:                'step_detail' => 'wp_post_id='.(int) $article->wordpressLink?->wp_post_id,
+addons/wordpress/src/Services/WordPressArticleSyncService.php:1625:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/WordPressArticleSyncService.php:1758:        $wpPostId = (int) ($article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/WordPressManualSyncService.php:631:        $remotePostId = (int) ($eligibility['remote_post_id'] ?? $article->wordpressLink?->wp_post_id ?? 0);
+addons/wordpress/src/Services/WordPressManualSyncService.php:632:        if ($remotePostId <= 0 || (int) ($article->wordpressLink?->wp_post_id ?? 0) !== $remotePostId) {
+addons/wordpress/src/Support/WordPressPermalinkBuilder.php:26:        if ((int) ($article->wordpressLink?->wp_post_id ?? 0) > 0 && $cached !== '') {
+addons/wordpress/src/Support/WordPressPermalinkBuilder.php:215:            (int) ($article->wordpressLink?->wp_post_id ?? 0),
+addons/wordpress/src/Support/WordPressPermalinkBuilder.php:381:        $wpId = (int) ($article->wordpressLink?->wp_post_id ?? 0);

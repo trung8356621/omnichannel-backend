@@ -1,0 +1,40 @@
+{
+  "audited_at": "2026-08-10",
+  "rule": "One owner table per business concern. articles = Content only. No dual-write after Task 5.",
+  "owners": {
+    "CONTENT": "articles",
+    "SEO": "seo_article_profiles",
+    "WORDPRESS": "wordpress_article_links",
+    "MEDIA": "article_media_states",
+    "PUBLISHING": "publishing_article_states",
+    "CONTENT_PROJECT_ARCHIVE": "seo_content_archive_items",
+    "METADATA": "article_meta"
+  },
+  "moved_columns": [
+    {"old": "articles.seo_score", "new": "seo_article_profiles.seo_score", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.skip_seo_score", "new": "seo_article_profiles.skip_seo_score", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.internal_link_count", "new": "seo_article_profiles.internal_link_count", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.external_link_count", "new": "seo_article_profiles.external_link_count", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.indexed_at", "new": "seo_article_profiles.indexed_at", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.previous_indexed_at", "new": "seo_article_profiles.previous_indexed_at", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.wp_post_id", "new": "wordpress_article_links.wp_post_id", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.wp_sync_status", "new": "wordpress_article_links.sync_status", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.wp_sync_job_id", "new": "wordpress_article_links.sync_job_id", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.last_synced_at", "new": "wordpress_article_links.last_synced_at", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.published_at", "new": "publishing_article_states.published_at", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.featured_thumb_url", "new": "article_media_states.display_url (role=featured)", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.featured_media_id", "new": "article_media_states.media_id (role=featured)", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.featured_image_status", "new": "article_media_states.status (role=featured)", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.featured_image_source", "new": "article_media_states.source (role=featured)", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.content_archived_at", "new": "seo_content_archive_items.archived_at", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"},
+    {"old": "articles.content_archived_by", "new": "seo_content_archive_items.archived_by", "projection": "accessor_only", "removal": "dropped_2026_08_10_140000"}
+  ],
+  "content_columns_retained": [
+    "id", "user_id", "site_id", "title", "slug", "excerpt", "body",
+    "editor_document", "editor_document_schema_version", "editor_document_hash",
+    "editor_document_status", "editor_document_updated_at", "blocks", "language",
+    "translation_group_id", "status", "reviewed_at", "review_status", "type",
+    "document_version", "last_manual_saved_at", "last_ai_content_at",
+    "created_at", "updated_at", "deleted_at"
+  ]
+}

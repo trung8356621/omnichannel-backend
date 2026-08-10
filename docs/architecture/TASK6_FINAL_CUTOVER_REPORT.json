@@ -1,0 +1,91 @@
+{
+  "task": "TASK_6_FINAL_CUTOVER",
+  "status": "PARTIAL",
+  "audited_at": "2026-08-10",
+  "seo_article_editor_loc": { "before": 11308, "after": 11324 },
+  "shell_use_state_count": { "before": 65, "after": 61 },
+  "states_removed_from_shell": [
+    "focusKeyword",
+    "analysis",
+    "featuredHealthSnapshot",
+    "productGalleryItems",
+    "postImages",
+    "supplementalImages"
+  ],
+  "states_still_in_shell": [
+    "blocks (+ TipTap refs)",
+    "activeBlockId",
+    "panelFaqs/faqCount",
+    "bootstrap/session/UI chrome",
+    "publishing shell mirrors (if any)"
+  ],
+  "domain_store_ownership_map": {
+    "content": "editor/domains/content — store infra ready; blocks not moved (228 refs)",
+    "media": "editor/domains/media — featured health, gallery, post/supplemental images SoT",
+    "seo": "editor/domains/seo — focusKeyword, analysis, seoScore SoT",
+    "publishing": "editor/domains/publishing — flush owner wired",
+    "wordpress": "remote facts via API; no editable duplicate store yet"
+  },
+  "retained_effects": "see EDITOR_EFFECT_INVENTORY.json — 71 effects; REMAINING_VIOLATION hydrate/listener/blocks→autosave chains",
+  "retained_timers": "see EDITOR_TIMER_INVENTORY.json — AI 8s, media 3s/5s, heartbeat ~30s, ImagesTab 60s (now pauses when hidden)",
+  "window_globals_retained": [
+    {
+      "name": "window.__seoEditorDomainBridge",
+      "mode": "diag-only",
+      "mutation": false
+    }
+  ],
+  "article_meta_keys": {
+    "deleted_by_migration_2026_08_10_150000": [
+      "seo_rank_math_score",
+      "seo_extracted_links",
+      "seo_outline_json",
+      "seo_semantic_keywords",
+      "create_article_task_run",
+      "wp_post_title"
+    ],
+    "retained_compat_read_only": [
+      "seo_scoring_details",
+      "seo_title",
+      "wp_post_content",
+      "wp_slug",
+      "wp_post_type"
+    ],
+    "migration_runtime": "BLOCKED — local MySQL plugin mysql_native_password not loaded"
+  },
+  "article_facade_accessors": {
+    "removed": false,
+    "deprecated": true,
+    "count": 17,
+    "write_routing": "still strips+routes on save via RoutesArticleExtensionAttributes",
+    "high_traffic_raw_queries": "migrated to scopes/joins (whereWpPostId, dueScheduledPublish, etc.)"
+  },
+  "raw_legacy_queries": {
+    "runtime_content_archived_at": "cleared (owner tables/scopes)",
+    "remaining": "historical migrations + accessor fallbacks only"
+  },
+  "resources_moved_count": 0,
+  "tests_moved_count": 0,
+  "remaining_seocontentai": "COMPAT shell — ~286 JS, ~555 tests, Blade/Livewire/routes; README + SEOCONTENTAI_CUTOVER_INVENTORY.json",
+  "wp_e2e": {
+    "result": "BLOCKED",
+    "reason": "No local WP site under C:\\laragon\\www (empty); MySQL auth plugin broken for omi_seo_ai; contract-only not labeled E2E"
+  },
+  "archive_indexed": {
+    "archive": "seo_content_archive_items + notContentArchived scopes — runtime fixed earlier",
+    "indexed": "seo_article_profiles SoT; accessors deprecated"
+  },
+  "addon_isolation": "NOT_RUN — MySQL local blocked; inventory documents peer owners",
+  "migrate_idempotency": "NOT_RUN this pass — MySQL plugin error",
+  "fresh_test_db": "NOT_RUN this pass — MySQL plugin error",
+  "npm_build": "PASS",
+  "phpunit": "NOT_RUN this pass — MySQL plugin error; SaveCoordinator node --test 6/6 PASS",
+  "remaining_violations": [
+    "SeoArticleEditor still mega-state (~11.3k LOC, ~61 useState, blocks SoT)",
+    "Eloquent accessors still present (deprecated) as compat facade",
+    "article_meta high-volume mirrors (seo_title/wp_*) not deleted",
+    "SeoContentAi still hosts active React+tests",
+    "Forbidden useEffect business workflows remain (inventory)",
+    "WP E2E / migrate / fresh / addon isolation blocked by local MySQL"
+  ]
+}

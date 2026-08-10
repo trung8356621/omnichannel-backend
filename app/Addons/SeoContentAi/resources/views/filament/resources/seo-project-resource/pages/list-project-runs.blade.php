@@ -37,7 +37,7 @@
                                 <x-filament::button
                                     size="xs"
                                     tag="a"
-                                    href="{{ \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource::getUrl('view-run', ['run' => $run]) }}"
+                                    href="{{ \Omnichannel\Addons\ContentProjects\Filament\Resources\SeoProjectResource::getUrl('view-run', ['run' => $run]) }}"
                                 >
                                     View
                                 </x-filament::button>

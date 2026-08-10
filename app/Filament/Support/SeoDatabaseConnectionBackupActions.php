@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Filament\Support;
 
-use App\Addons\SeoContentAi\Services\SeoDatabaseBackupService;
+use Omnichannel\Addons\SearchFoundation\Services\SeoDatabaseBackupService;
 use App\Models\SeoDatabaseConnection;
 use Filament\Forms;
 use Filament\Notifications\Notification;

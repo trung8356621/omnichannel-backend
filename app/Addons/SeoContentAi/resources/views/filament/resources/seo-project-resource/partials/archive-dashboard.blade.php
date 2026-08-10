@@ -1,5 +1,5 @@
 @php
-    use App\Addons\SeoContentAi\Services\ArticleCompletedArchiveQueryService;
+    use Omnichannel\Addons\Content\Services\ArticleCompletedArchiveQueryService;
 
     /** @var int $siteId */
     $siteId = (int) ($siteId ?? 0);
@@ -35,7 +35,7 @@
         ]);
     }
 
-    $reviewedTabCss = base_path('app/Addons/SeoContentAi/resources/css/articles-reviewed-tab.css');
+    $reviewedTabCss = base_path('addons/seo/resources/css/articles-reviewed-tab.css');
 @endphp
 
 @if (is_readable($reviewedTabCss))

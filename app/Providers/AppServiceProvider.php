@@ -16,9 +16,16 @@ class AppServiceProvider extends ServiceProvider
     /**
      * Register any application services.
      */
+    /** @var array<string, true> */
+    private array $registeredAddonProviders = [];
+
     public function register(): void
     {
         $this->registerInterventionImageManager();
+
+        // Panel providers need early registration (Filament). Discover from filesystem
+        // manifests marked register_early — Core never hard-codes business addon classes.
+        $this->registerEarlyAddonProviders();
 
         // Active addons are stored in the database, so resolve them only after
         // Eloquent has received its connection resolver from the database provider.
@@ -107,7 +114,7 @@ class AppServiceProvider extends ServiceProvider
         }
 
         $this->commands([
-            \App\Addons\SeoContentAi\Console\RepairLegacyContentProjectGenerationCommand::class,
+            \Omnichannel\Addons\ContentProjects\Console\RepairLegacyContentProjectGenerationCommand::class,
         ]);
 
         // Collision owns `php artisan test` when require-dev is installed.
@@ -120,6 +127,37 @@ class AppServiceProvider extends ServiceProvider
         ]);
     }
 
+    private function registerEarlyAddonProviders(): void
+    {
+        try {
+            /** @var \App\Core\Addon\AddonDiscovery $discovery */
+            $discovery = $this->app->make(\App\Core\Addon\AddonDiscovery::class);
+            /** @var \App\Core\Addon\AddonRegistry $registry */
+            $registry = $this->app->make(\App\Core\Addon\AddonRegistry::class);
+
+            $roots = config('addons.discovery_roots', ['app/Addons', 'addons']);
+            $skip = config('addons.skip_slugs', []);
+            $manifests = $discovery->discover($roots, $skip);
+            $registry->replaceAll($manifests);
+
+            foreach ($manifests as $manifest) {
+                if (! $manifest->registerEarly) {
+                    continue;
+                }
+
+                // Early = Filament panels / route providers only. Main business provider stays DB-gated.
+                if ($manifest->panelProvider !== null) {
+                    $this->registerAddonProviderClass($manifest->panelProvider);
+                }
+                foreach ($manifest->extraProviders as $providerClass) {
+                    $this->registerAddonProviderClass($providerClass);
+                }
+            }
+        } catch (\Throwable $e) {
+            \App\Support\RuntimeLogger::report($e);
+        }
+    }
+
     private function registerActiveAddonProviders(): void
     {
         try {
@@ -128,18 +166,47 @@ class AppServiceProvider extends ServiceProvider
             }
 
             $activeServices = \App\Models\Service::where('is_active', true)->get();
+            /** @var \App\Core\Addon\AddonRegistry $registry */
+            $registry = $this->app->make(\App\Core\Addon\AddonRegistry::class);
 
             foreach ($activeServices as $service) {
-                if (in_array((string) $service->slug, config('addons.skip_slugs', []), true)) {
+                $slug = (string) $service->slug;
+                if (in_array($slug, config('addons.skip_slugs', []), true)) {
                     continue;
                 }
 
-                if (class_exists($service->addon_namespace)) {
-                    $this->app->register($service->addon_namespace);
+                $manifest = $registry->get($slug);
+                if ($manifest !== null) {
+                    foreach ($manifest->allProviderClasses() as $providerClass) {
+                        $this->registerAddonProviderClass($providerClass);
+                    }
+                    $registry->markEnabled($slug);
+
+                    continue;
+                }
+
+                // Legacy Service row without filesystem peer manifest.
+                if (is_string($service->addon_namespace) && $service->addon_namespace !== '') {
+                    $this->registerAddonProviderClass($service->addon_namespace);
+                    $registry->markEnabled($slug);
                 }
             }
         } catch (\Throwable $e) {
             \App\Support\RuntimeLogger::report($e);
         }
+    }
+
+    private function registerAddonProviderClass(string $providerClass): void
+    {
+        if (isset($this->registeredAddonProviders[$providerClass])) {
+            return;
+        }
+
+        if (! class_exists($providerClass)) {
+            return;
+        }
+
+        $this->app->register($providerClass);
+        $this->registeredAddonProviders[$providerClass] = true;
     }
 }

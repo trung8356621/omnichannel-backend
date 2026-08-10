@@ -1,0 +1,58 @@
+{
+  "table": "articles",
+  "connection": "omi_seo_ai",
+  "audited_at": "2026-08-10",
+  "rule": "articles must only hold Content-intrinsic document fields; addon business state lives in owner extension tables",
+  "model": "Omnichannel\\Addons\\Content\\Models\\SeoArticle",
+  "columns": [
+    {"column": "id", "owner": "CONTENT", "action": "keep", "notes": "PK"},
+    {"column": "user_id", "owner": "CONTENT", "action": "keep", "notes": "author identity"},
+    {"column": "site_id", "owner": "CONTENT", "action": "keep", "notes": "tenant/content identity"},
+    {"column": "title", "owner": "CONTENT", "action": "keep"},
+    {"column": "slug", "owner": "CONTENT", "action": "keep", "notes": "document slug; meta wp_slug is duplicate"},
+    {"column": "excerpt", "owner": "CONTENT", "action": "keep"},
+    {"column": "body", "owner": "CONTENT", "action": "keep", "notes": "HTML projection of editor_document"},
+    {"column": "editor_document", "owner": "CONTENT", "action": "keep"},
+    {"column": "editor_document_schema_version", "owner": "CONTENT", "action": "keep"},
+    {"column": "editor_document_hash", "owner": "CONTENT", "action": "keep"},
+    {"column": "editor_document_status", "owner": "CONTENT", "action": "keep"},
+    {"column": "editor_document_updated_at", "owner": "CONTENT", "action": "keep"},
+    {"column": "blocks", "owner": "CONTENT", "action": "keep", "notes": "legacy editor payload"},
+    {"column": "language", "owner": "CONTENT", "action": "keep"},
+    {"column": "translation_group_id", "owner": "CONTENT", "action": "keep"},
+    {"column": "status", "owner": "CONTENT", "action": "keep", "notes": "generic draft/scheduled/published document status"},
+    {"column": "reviewed_at", "owner": "CONTENT", "action": "keep", "notes": "generic review timestamp; history in seo_article_reviews"},
+    {"column": "review_status", "owner": "CONTENT", "action": "keep", "notes": "generic content review lifecycle"},
+    {"column": "type", "owner": "CONTENT", "action": "keep", "notes": "post-type discriminator article/product"},
+    {"column": "document_version", "owner": "CONTENT", "action": "keep"},
+    {"column": "last_manual_saved_at", "owner": "CONTENT", "action": "keep"},
+    {"column": "last_ai_content_at", "owner": "CONTENT", "action": "keep", "notes": "content provenance timestamp"},
+    {"column": "created_at", "owner": "CONTENT", "action": "keep"},
+    {"column": "updated_at", "owner": "CONTENT", "action": "keep"},
+    {"column": "deleted_at", "owner": "CONTENT", "action": "keep"},
+
+    {"column": "seo_score", "owner": "SEO", "action": "move", "destination": "seo_article_profiles.seo_score", "compat": "dual-write then drop"},
+    {"column": "skip_seo_score", "owner": "SEO", "action": "move", "destination": "seo_article_profiles.skip_seo_score", "notes": "UI also uses article_meta.skip_seo_audit — align later"},
+    {"column": "internal_link_count", "owner": "SEO", "action": "move", "destination": "seo_article_profiles.internal_link_count"},
+    {"column": "external_link_count", "owner": "SEO", "action": "move", "destination": "seo_article_profiles.external_link_count"},
+    {"column": "indexed_at", "owner": "SEO", "action": "move", "destination": "seo_article_profiles.indexed_at", "notes": "written by ArticleManualIndexMarkerService; SEO semantics not Search Intelligence"},
+    {"column": "previous_indexed_at", "owner": "SEO", "action": "move", "destination": "seo_article_profiles.previous_indexed_at"},
+
+    {"column": "content_archived_at", "owner": "CONTENT PROJECTS", "action": "move", "destination": "seo_content_archive_items.archived_at", "notes": "canonical archive row already exists (parity 42/42); articles columns become compat projection"},
+    {"column": "content_archived_by", "owner": "CONTENT PROJECTS", "action": "move", "destination": "seo_content_archive_items.archived_by"},
+
+    {"column": "wp_post_id", "owner": "WORDPRESS", "action": "move", "destination": "wordpress_article_links.wp_post_id"},
+    {"column": "wp_sync_status", "owner": "WORDPRESS", "action": "move", "destination": "wordpress_article_links.sync_status", "notes": "jobs remain in seo_article_wp_sync_jobs"},
+    {"column": "wp_sync_job_id", "owner": "WORDPRESS", "action": "move", "destination": "wordpress_article_links.sync_job_id"},
+    {"column": "last_synced_at", "owner": "WORDPRESS", "action": "move", "destination": "wordpress_article_links.last_synced_at"},
+
+    {"column": "published_at", "owner": "PUBLISHING", "action": "move", "destination": "publishing_article_states.published_at", "notes": "project publish proof remains seo_project_tasks.publish_*; this is article-level publication state"},
+
+    {"column": "featured_thumb_url", "owner": "MEDIA", "action": "move", "destination": "article_media_states.display_url where role=featured"},
+    {"column": "featured_media_id", "owner": "MEDIA", "action": "move", "destination": "article_media_states.media_id where role=featured"},
+    {"column": "featured_image_status", "owner": "MEDIA", "action": "move", "destination": "article_media_states.status where role=featured"},
+    {"column": "featured_image_source", "owner": "MEDIA", "action": "move", "destination": "article_media_states.source where role=featured"}
+  ],
+  "commerce_columns_found": [],
+  "unknown_columns": []
+}

@@ -1,5 +1,5 @@
 <x-filament-panels::page>
-    @vite('app/Addons/SeoContentAi/resources/css/project-run-step.css')
+    @vite('addons/content-projects/resources/css/project-run-step.css')
 
     @php
         $groups = $this->getRunGroups();

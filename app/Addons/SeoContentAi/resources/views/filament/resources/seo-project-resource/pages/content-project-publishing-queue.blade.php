@@ -189,7 +189,7 @@
             <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
                 @forelse ($rows as $task)
                     @php
-                        /** @var \App\Addons\SeoContentAi\Models\SeoProjectTask $task */
+                        /** @var \Omnichannel\Addons\ContentProjects\Models\SeoProjectTask $task */
                         $article = $task->article;
                         $selected = in_array((int) $task->id, $selectedTaskIds, true);
                     @endphp
@@ -213,7 +213,7 @@
                         <td class="px-3 py-2">{{ $task->publish_queue_status ?: 'none' }}</td>
                         <td class="px-3 py-2">{{ (int) ($task->publish_retry_count ?? 0) }}</td>
                         <td class="px-3 py-2">{{ $task->last_publish_attempt_at?->toDateTimeString() ?: '—' }}</td>
-                        <td class="px-3 py-2">{{ $task->publish_published_at?->toDateTimeString() ?: ($article?->published_at?->toDateTimeString() ?: '—') }}</td>
+                        <td class="px-3 py-2">{{ $task->publish_published_at?->toDateTimeString() ?: ($article?->publishingState?->published_at?->toDateTimeString() ?: '—') }}</td>
                         <td class="px-3 py-2">
                             <div class="flex flex-wrap gap-1">
                                 <button type="button" wire:click="retryOne({{ (int) $task->id }})" class="fi-btn fi-btn-color-warning fi-size-xs" wire:loading.attr="disabled" wire:target="retryOne({{ (int) $task->id }})">

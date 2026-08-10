@@ -1,7 +1,7 @@
 @php
-    use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceDeepLink;
-    use App\Addons\SeoContentAi\Services\TeamChatAttachmentService;
-    use App\Addons\SeoContentAi\Support\SeoAccessControl;
+    use Omnichannel\Addons\Agent\Services\AgentWorkspace\AgentWorkspaceDeepLink;
+    use Omnichannel\Addons\Content\Services\TeamChatAttachmentService;
+    use Omnichannel\Addons\Seo\Support\SeoAccessControl;
 
     // Orphan Global AI Chat API disabled — Agent Workspace owns AI. Keep empty URLs so dead Alpine helpers do not call route().
     $modelsUrl = '';
@@ -28,7 +28,7 @@
     ];
 @endphp
 
-@vite('app/Addons/SeoContentAi/resources/css/global-ai-chat.css')
+@vite('addons/ai-prompt/resources/css/global-ai-chat.css')
 
 <div
     class="seo-global-chat"

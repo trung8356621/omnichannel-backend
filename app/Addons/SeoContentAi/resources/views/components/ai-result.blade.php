@@ -14,7 +14,7 @@
 @endphp
 
 @once
-    @vite('app/Addons/SeoContentAi/resources/css/ai-result.css')
+    @vite('addons/ai-prompt/resources/css/ai-result.css')
 @endonce
 
 <div

@@ -5,9 +5,9 @@
     'timezoneLabel' => null,
 ])
 
-@if ((int) $selectedCount > 0 && \App\Addons\SeoContentAi\Support\SeoAccessControl::canManageContentProjectWorkflow())
+@if ((int) $selectedCount > 0 && \Omnichannel\Addons\Seo\Support\SeoAccessControl::canManageContentProjectWorkflow())
     @php
-        $tzNote = $timezoneLabel ?: \App\Addons\SeoContentAi\Support\SystemDateTime::timezoneChip();
+        $tzNote = $timezoneLabel ?: \Omnichannel\Addons\Content\Support\SystemDateTime::timezoneChip();
     @endphp
     <div
         {{ $attributes->class([

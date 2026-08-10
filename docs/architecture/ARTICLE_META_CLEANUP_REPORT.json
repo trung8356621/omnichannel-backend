@@ -1,0 +1,71 @@
+{
+  "table": "article_meta",
+  "connection": "omi_seo_ai",
+  "audited_at": "2026-08-10",
+  "task": "task-7-frontend-extraction §N",
+  "migration": "2026_08_10_160000_delete_compat_typed_article_meta_keys",
+  "note": "MySQL row counts not available in this environment — delete counts come from migration echo at migrate time.",
+  "before": {
+    "seo_scoring_details": {
+      "disposition": "COMPAT_READ_ONLY",
+      "readers": ["SeoRuleViolationsResolver"],
+      "writers": []
+    },
+    "seo_title": {
+      "disposition": "COMPAT_READ_ONLY",
+      "readers": ["EditArticle", "ArticleEditorSeoMetaService", "SeoArticleRevisionService", "ArchiveContentProjectService", "SiteMcpDiscovery"],
+      "writers": ["SyncDomainContentService", "WordPressArticleContentService"]
+    },
+    "wp_post_content": {
+      "disposition": "COMPAT_READ_ONLY",
+      "readers": ["many body-fallback readers"],
+      "writers": ["WordPressArticleContentService", "SyncDomainContentService", "WordPressArticleSyncService", "others"]
+    },
+    "wp_slug": {
+      "disposition": "COMPAT_READ_ONLY",
+      "readers": ["WordPressArticleContentService", "WordPressArticleSyncService"],
+      "writers": ["WordPressArticleContentService", "WordPressArticleSyncService", "SyncDomainContentService"]
+    },
+    "wp_post_type": {
+      "disposition": "COMPAT_READ_ONLY",
+      "readers": ["ArticlePostTypeResolver", "ArticleResource", "WordPressPermalinkBuilder"],
+      "writers": ["CreateArticlesFromTaskService", "WordPressArticleSyncService", "EditArticle", "others"]
+    }
+  },
+  "after": {
+    "keys_removed": [
+      "seo_scoring_details",
+      "seo_title",
+      "wp_slug",
+      "wp_post_type"
+    ],
+    "keys_retained": [
+      {
+        "meta_key": "wp_post_content",
+        "disposition": "COMPAT_READ_ONLY",
+        "reason": "intentional WP HTML cache when articles.body empty; body-first readers remain",
+        "remaining_writers": [
+          "WordPressArticleContentService (resolveEditorHtml cache + import when body empty)",
+          "SyncDomainContentService::syncWordPressPostMeta",
+          "WordPressArticleSyncService::storeWpPostContentMeta",
+          "ArticleFaqWordPressRestoreService",
+          "ArticlePendingInternalLinkService",
+          "ContentProjectPostImageService",
+          "KeywordPhraseUpdateService",
+          "ArticleProductGalleryDistributeService",
+          "ArticleEditorReadinessService",
+          "ArticleContentFaqService"
+        ]
+      }
+    ],
+    "typed_owners": {
+      "seo_title": "articles.title",
+      "wp_slug": "articles.slug",
+      "wp_post_type": "articles.type (+ wp_taxonomy/wp_entity for terms)",
+      "seo_scoring_details": "seo_rule_violations",
+      "wp_post_content": "articles.body (partial — cache retained)"
+    },
+    "migration_deletes": "DELETE article_meta WHERE meta_key IN (seo_scoring_details, seo_title, wp_slug, wp_post_type) after slug/type backfill",
+    "contract_harness": "addons/wordpress/tests/Contract/WordPressFeaturedSlugSyncContractHarnessTest.php"
+  }
+}

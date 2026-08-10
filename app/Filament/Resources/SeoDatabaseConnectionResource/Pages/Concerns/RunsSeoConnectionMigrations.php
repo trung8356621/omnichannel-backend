@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Filament\Resources\SeoDatabaseConnectionResource\Pages\Concerns;
 
-use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
+use Omnichannel\Addons\SearchFoundation\Services\SeoDatabaseConnectionService;
 use App\Models\SeoDatabaseConnection;
 use Filament\Actions;
 use Filament\Notifications\Notification;

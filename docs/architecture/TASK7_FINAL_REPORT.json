@@ -1,0 +1,57 @@
+{
+  "task": "TASK_7_PHYSICAL_FRONTEND_EXTRACTION",
+  "status": "PARTIAL",
+  "audited_at": "2026-08-10",
+  "seo_article_editor_loc": { "before": 11324, "after": 1942 },
+  "use_state": { "before": 61, "after": 8 },
+  "use_effect_in_shell": { "before": 71, "after": 18 },
+  "blocks_ownership": "content store SoT via useContentSelector + contentActions.replaceBlocks/updateBlock/insertBlock/removeBlock; activeBlockId/tempMerge/globalEditor also in content store",
+  "resources_moved": {
+    "content_js": 153,
+    "media_js": 68,
+    "seo_js": 32,
+    "content_projects_js": 15,
+    "ai_prompt_js": 8,
+    "wordpress_js": 6,
+    "search_intelligence_js": 1,
+    "agent_js": 1,
+    "publishing_js": 2,
+    "css_moved": 26,
+    "seo_content_ai_js_remaining": 0
+  },
+  "tests_moved": {
+    "content": 148,
+    "seo": 130,
+    "agent": 83,
+    "content_projects": 69,
+    "ai_prompt": 36,
+    "search_intelligence": 28,
+    "publishing": 18,
+    "wordpress": 16,
+    "media": 16,
+    "site_sync": 8,
+    "seo_content_ai_remaining": 1,
+    "remaining_file": "Compat/UsesSeoDatabase.php"
+  },
+  "remaining_seocontentai_files": 287,
+  "remaining_note": "mostly Filament views + ServiceProvider/lang/config; GlobalSeoBar moved to seo; routes shimmed",
+  "article_facade_accessors_removed": 17,
+  "article_meta": {
+    "migration": "2026_08_10_160000_delete_compat_typed_article_meta_keys",
+    "deleted_rows_live": 21442,
+    "keys_removed": ["seo_scoring_details", "seo_title", "wp_slug", "wp_post_type"],
+    "retained": ["wp_post_content"]
+  },
+  "timers": "see EDITOR_TIMER_INVENTORY; ImagesTab visibility pause retained",
+  "wp_verification": "CONTRACT INTEGRATION HARNESS (not real E2E)",
+  "migrate": { "first": "PASS", "second_idempotent": "PASS Nothing to migrate" },
+  "fresh_test": "PASS",
+  "npm_build": "PASS",
+  "save_coordinator_node": "PASS 6/6",
+  "phpunit": {
+    "WordPressFeaturedSlugSyncContractHarnessTest": "PASS 4 tests",
+    "ArticleExtensionOwnershipContractTest": "PASS 7 tests",
+    "full_suite": "NOT_RUN_FULL"
+  },
+  "verdict": "PARTIAL — numeric frontend gates PASS (LOC/useState/JS move/facade/meta/build/migrate/fresh); SeoContentAi views/lang remain; real WP E2E absent; UI regression manual not run"
+}

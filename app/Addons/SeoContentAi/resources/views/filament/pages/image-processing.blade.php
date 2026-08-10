@@ -1,6 +1,6 @@
 <x-filament-panels::page>
     @vite([
-        'app/Addons/SeoContentAi/resources/css/media-library.css',
+        'addons/media/resources/css/media-library.css',
     ])
 
     <div

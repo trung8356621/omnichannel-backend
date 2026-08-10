@@ -1,11 +1,11 @@
 @php
-    /** @var \App\Addons\SeoContentAi\Filament\Pages\PublishingQueueHub $this */
+    /** @var \Omnichannel\Addons\Publishing\Filament\Pages\PublishingQueueHub $this */
     $payload = $this->queuePayload;
     $stats = $payload['stats'] ?? [];
     $rows = $payload['rows'] ?? [];
     $active = $this->stateFilter;
     $project = $this->project;
-    $hasProject = $project instanceof \App\Addons\SeoContentAi\Models\SeoProject;
+    $hasProject = $project instanceof \Omnichannel\Addons\ContentProjects\Models\SeoProject;
     $selectedCount = count($this->selectedTaskIds);
     $pageCount = count($rows);
     $filteredTotal = (int) ($stats['total'] ?? $pageCount);
@@ -199,8 +199,8 @@
                     <div class="mb-3 grid grid-cols-2 gap-2 text-xs">
                         <div class="rounded border border-gray-200 p-2 dark:border-gray-700">Eligible: <strong>{{ $autoEligible }}</strong></div>
                         <div class="rounded border border-gray-200 p-2 dark:border-gray-700">Excluded: <strong>{{ $autoExcluded }}</strong></div>
-                        <div class="rounded border border-gray-200 p-2 dark:border-gray-700">First: <strong>{{ $autoPreview['first_publish_at'] ? \App\Addons\SeoContentAi\Support\SystemDateTime::formatDateTime($autoPreview['first_publish_at']) : '—' }}</strong></div>
-                        <div class="rounded border border-gray-200 p-2 dark:border-gray-700">Last: <strong>{{ $autoPreview['last_publish_at'] ? \App\Addons\SeoContentAi\Support\SystemDateTime::formatDateTime($autoPreview['last_publish_at']) : '—' }}</strong></div>
+                        <div class="rounded border border-gray-200 p-2 dark:border-gray-700">First: <strong>{{ $autoPreview['first_publish_at'] ? \Omnichannel\Addons\Content\Support\SystemDateTime::formatDateTime($autoPreview['first_publish_at']) : '—' }}</strong></div>
+                        <div class="rounded border border-gray-200 p-2 dark:border-gray-700">Last: <strong>{{ $autoPreview['last_publish_at'] ? \Omnichannel\Addons\Content\Support\SystemDateTime::formatDateTime($autoPreview['last_publish_at']) : '—' }}</strong></div>
                     </div>
                     <div class="mb-3 grid grid-cols-2 gap-2">
                         <x-select wire:model.live="autoDayStart" class="!w-full">
@@ -285,8 +285,8 @@
                     <div class="mb-3 grid grid-cols-2 gap-2 text-xs">
                         <div class="rounded border border-gray-200 p-2 dark:border-gray-700">Eligible: <strong>{{ $quickEligible }}</strong></div>
                         <div class="rounded border border-gray-200 p-2 dark:border-gray-700">Excluded: <strong>{{ $quickExcluded }}</strong></div>
-                        <div class="rounded border border-gray-200 p-2 dark:border-gray-700">First: <strong>{{ $quickPreview['first_publish_at'] ? \App\Addons\SeoContentAi\Support\SystemDateTime::formatDateTime($quickPreview['first_publish_at']) : '—' }}</strong></div>
-                        <div class="rounded border border-gray-200 p-2 dark:border-gray-700">Last: <strong>{{ $quickPreview['last_publish_at'] ? \App\Addons\SeoContentAi\Support\SystemDateTime::formatDateTime($quickPreview['last_publish_at']) : '—' }}</strong></div>
+                        <div class="rounded border border-gray-200 p-2 dark:border-gray-700">First: <strong>{{ $quickPreview['first_publish_at'] ? \Omnichannel\Addons\Content\Support\SystemDateTime::formatDateTime($quickPreview['first_publish_at']) : '—' }}</strong></div>
+                        <div class="rounded border border-gray-200 p-2 dark:border-gray-700">Last: <strong>{{ $quickPreview['last_publish_at'] ? \Omnichannel\Addons\Content\Support\SystemDateTime::formatDateTime($quickPreview['last_publish_at']) : '—' }}</strong></div>
                     </div>
 
                     @if (! empty($quickPreview['blocked']))

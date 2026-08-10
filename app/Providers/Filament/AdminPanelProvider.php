@@ -2,12 +2,12 @@
 
 namespace App\Providers\Filament;
 
-use App\Addons\SeoContentAi\Filament\Pages\AutomationFlowsPage;
-use App\Addons\SeoContentAi\Filament\Pages\AutomationOperationsDashboard;
-use App\Addons\SeoContentAi\Filament\Pages\AutomationSettings;
-use App\Addons\SeoContentAi\Filament\Pages\AutomationWorkflowBuilder;
-use App\Addons\SeoContentAi\Filament\Resources\AutomationExecutionResource;
-use App\Addons\SeoContentAi\Filament\Resources\AutomationRuleResource;
+use Omnichannel\Addons\Agent\Filament\Pages\AutomationFlowsPage;
+use Omnichannel\Addons\SearchFoundation\Filament\Pages\AutomationOperationsDashboard;
+use Omnichannel\Addons\Agent\Filament\Pages\AutomationSettings;
+use Omnichannel\Addons\Agent\Filament\Pages\AutomationWorkflowBuilder;
+use Omnichannel\Addons\Agent\Filament\Resources\AutomationExecutionResource;
+use Omnichannel\Addons\Agent\Filament\Resources\AutomationRuleResource;
 use App\Filament\Pages\Auth\CustomLogin;
 use App\Filament\Pages\ManageServices;
 use App\Http\Middleware\Filament\RedirectStaffFromAdminPanel;

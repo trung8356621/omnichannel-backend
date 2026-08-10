@@ -1,5 +1,5 @@
 @php
-    $overviewCss = base_path('app/Addons/SeoContentAi/resources/css/domain-overview.css');
+    $overviewCss = base_path('addons/content/resources/css/domain-overview.css');
     $paginator = $this->getListPaginator();
     $isKeywords = $this->activeTab === 'keywords';
 @endphp
@@ -69,7 +69,7 @@
                                         </td>
                                         <td class="px-4 py-3 text-right font-semibold tabular-nums">
                                             @if(($row->main_articles_count ?? 0) > 0)
-                                                <a href="{{ app(\App\Addons\SeoContentAi\Services\DomainOverviewService::class)->buildArticlesFilterUrlForMainKeyword((int) $this->getRecord()->getKey(), (int) $row->id) }}" class="text-primary-600 hover:underline dark:text-primary-400">
+                                                <a href="{{ app(\Omnichannel\Addons\Seo\Services\DomainOverviewService::class)->buildArticlesFilterUrlForMainKeyword((int) $this->getRecord()->getKey(), (int) $row->id) }}" class="text-primary-600 hover:underline dark:text-primary-400">
                                                     {{ $row->main_articles_count }}
                                                 </a>
                                             @else
@@ -78,7 +78,7 @@
                                         </td>
                                         <td class="px-4 py-3 text-right font-semibold tabular-nums">
                                             @if(($row->linked_articles_count ?? 0) > 0)
-                                                <a href="{{ app(\App\Addons\SeoContentAi\Services\DomainOverviewService::class)->buildArticlesFilterUrlForInternalAnchorKeyword((int) $this->getRecord()->getKey(), (int) $row->id) }}" class="text-primary-600 hover:underline dark:text-primary-400">
+                                                <a href="{{ app(\Omnichannel\Addons\Seo\Services\DomainOverviewService::class)->buildArticlesFilterUrlForInternalAnchorKeyword((int) $this->getRecord()->getKey(), (int) $row->id) }}" class="text-primary-600 hover:underline dark:text-primary-400">
                                                     {{ $row->linked_articles_count }}
                                                 </a>
                                             @else

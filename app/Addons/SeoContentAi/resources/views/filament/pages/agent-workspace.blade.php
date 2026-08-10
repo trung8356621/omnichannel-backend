@@ -1,8 +1,8 @@
 <x-filament-panels::page>
     @vite([
-        'app/Addons/SeoContentAi/resources/css/global-ai-chat.css',
-        'app/Addons/SeoContentAi/resources/css/agent-workspace.css',
-        'app/Addons/SeoContentAi/resources/js/agent/command-catalog.js',
+        'addons/ai-prompt/resources/css/global-ai-chat.css',
+        'addons/agent/resources/css/agent-workspace.css',
+        'addons/agent/resources/js/agent/command-catalog.js',
     ])
     {{-- Fallback if Vite asset chưa build: hydrate từ PHP catalog (cùng schema). --}}
     <script>
@@ -10,7 +10,7 @@
             if (window.AgentCommandCatalog && window.AgentCommandCatalogApi) {
                 return;
             }
-            var rows = @json(\App\Addons\SeoContentAi\Services\AgentWorkspace\Cli\AgentCliCommandCatalog::toFrontendCatalog());
+            var rows = @json(\Omnichannel\Addons\Agent\Services\AgentWorkspace\Cli\AgentCliCommandCatalog::toFrontendCatalog());
             window.AgentCommandCatalog = rows;
             window.AgentCommandCatalogApi = {
                 storageKey: 'agent.command-catalog.v1',
@@ -56,7 +56,7 @@
     >
         @unless ($bootOk)
             <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
-                {{ \App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceDeepLink::MISSING_SITE_MESSAGE }}
+                {{ \Omnichannel\Addons\Agent\Services\AgentWorkspace\AgentWorkspaceDeepLink::MISSING_SITE_MESSAGE }}
             </div>
         @else
             @if ($contextNotice !== '')

@@ -1,6 +1,6 @@
 @php
     $seoPreviewUrlTemplate = route('seo.articles.seo-preview', ['article' => '__ID__']);
-    $overviewCss = base_path('app/Addons/SeoContentAi/resources/css/domain-overview.css');
+    $overviewCss = base_path('addons/content/resources/css/domain-overview.css');
 @endphp
 
 <x-filament-panels::page
@@ -15,28 +15,28 @@
 
     <div
         class="seo-internal-tabs mb-4"
-        @if ($this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE)
+        @if ($this->contentTab === \Omnichannel\Addons\Content\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE)
             wire:poll.15s
         @endif
     >
         <a
-            href="{{ $this->getContentTabUrl(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_POSTS) }}"
-            @class(['is-active' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_POSTS])
+            href="{{ $this->getContentTabUrl(\Omnichannel\Addons\Content\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_POSTS) }}"
+            @class(['is-active' => $this->contentTab === \Omnichannel\Addons\Content\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_POSTS])
         >
             {{ __('seo-content-ai::filament.article_list.tab_posts') }}
         </a>
         <a
-            href="{{ $this->getContentTabUrl(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_CATEGORIES) }}"
-            @class(['is-active' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_CATEGORIES])
+            href="{{ $this->getContentTabUrl(\Omnichannel\Addons\Content\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_CATEGORIES) }}"
+            @class(['is-active' => $this->contentTab === \Omnichannel\Addons\Content\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_CATEGORIES])
         >
             {{ __('seo-content-ai::filament.article_list.tab_categories') }}
         </a>
         @php($syncQueueBadge = $this->getSyncQueueBadgeCount())
         <a
-            href="{{ $this->getContentTabUrl(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE) }}"
+            href="{{ $this->getContentTabUrl(\Omnichannel\Addons\Content\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE) }}"
             @class([
                 'seo-internal-tabs__queue',
-                'is-active' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE,
+                'is-active' => $this->contentTab === \Omnichannel\Addons\Content\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE,
                 'has-queue-items' => $syncQueueBadge > 0,
             ])
         >
@@ -46,31 +46,31 @@
             @endif
         </a>
         <a
-            href="{{ $this->getContentTabUrl(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_REVIEWED) }}"
-            @class(['is-active' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_REVIEWED])
+            href="{{ $this->getContentTabUrl(\Omnichannel\Addons\Content\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_REVIEWED) }}"
+            @class(['is-active' => $this->contentTab === \Omnichannel\Addons\Content\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_REVIEWED])
         >
             {{ __('seo-content-ai::filament.article_list.tab_reviewed') }}
         </a>
         <a
-            href="{{ $this->getContentTabUrl(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_SKIPPED) }}"
-            @class(['is-active' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_SKIPPED])
+            href="{{ $this->getContentTabUrl(\Omnichannel\Addons\Content\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_SKIPPED) }}"
+            @class(['is-active' => $this->contentTab === \Omnichannel\Addons\Content\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_SKIPPED])
         >
             {{ __('seo-content-ai::filament.article_list.tab_skipped') }}
         </a>
         <a
-            href="{{ \App\Addons\SeoContentAi\Filament\Pages\ArticlesOptimal::getUrl() }}"
+            href="{{ \Omnichannel\Addons\Content\Filament\Pages\ArticlesOptimal::getUrl() }}"
             class="seo-internal-tabs__audit"
         >
             {{ __('seo-content-ai::filament.articles_optimal.navigation') }}
         </a>
     </div>
 
-    @if ($this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_REVIEWED)
+    @if ($this->contentTab === \Omnichannel\Addons\Content\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_REVIEWED)
         @include('seo-content-ai::filament.resources.article-resource.pages.partials.reviewed-articles-tab')
     @else
     <div @class([
         'article-list-table-shell',
-        'article-list-table-shell--queue' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE,
+        'article-list-table-shell--queue' => $this->contentTab === \Omnichannel\Addons\Content\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE,
     ])>
         <div
             class="article-list-table-shell__overlay"
@@ -141,7 +141,7 @@
     </div>
 
     @viteReactRefresh
-    @vite('app/Addons/SeoContentAi/resources/js/article-seo-preview.jsx')
+    @vite('addons/seo/resources/js/article-seo-preview.jsx')
 
     @once
         <style>

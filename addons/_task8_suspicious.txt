@@ -1,0 +1,100 @@
+﻿D:\work\omnichannel-backend\addons\agent\tests\Unit\AgentWorkspaceUiTest.php:8: use App\Addons\SeoContentAi\Providers\SeoPanelProvider;
+D:\work\omnichannel-backend\addons\agent\tests\Unit\ArchitectureHardeningLockContractTest.php:12: use App\Addons\SeoContentAi\Providers\SeoPanelProvider;
+D:\work\omnichannel-backend\addons\agent\tests\Unit\ArchitectureHardeningLockContractTest.php:85:             'use App\\Addons\\SeoContentAi\\Services\\ContentProject\\Application\\ContentProjectCommandBus',
+D:\work\omnichannel-backend\addons\agent\tests\Unit\AutomationActionBoundaryTest.php:43:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.'Automation'.DIRECTORY_SEPARATOR.'Actions';
+D:\work\omnichannel-backend\addons\agent\tests\Unit\AutomationActionCutoverArchitectureTest.php:39:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.'Http'.DIRECTORY_SEPARATOR.'Controllers'
+D:\work\omnichannel-backend\addons\agent\tests\Unit\AutomationActionCutoverArchitectureTest.php:51:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.'Services'
+D:\work\omnichannel-backend\addons\agent\tests\Unit\AutomationActionCutoverArchitectureTest.php:61:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.'Services'
+D:\work\omnichannel-backend\addons\agent\tests\Unit\AutomationActionCutoverArchitectureTest.php:71:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.'Observers'
+D:\work\omnichannel-backend\addons\agent\tests\Unit\AutomationActionCutoverArchitectureTest.php:81:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.'Services'
+D:\work\omnichannel-backend\addons\agent\tests\Unit\AutomationActionCutoverArchitectureTest.php:94:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.'Filament'.DIRECTORY_SEPARATOR.'Resources'
+D:\work\omnichannel-backend\addons\agent\tests\Unit\AutomationAvailabilityGateTest.php:17:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\agent\tests\Unit\AutomationAvailabilityGateTest.php:38:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\agent\tests\Unit\AutomationAvailabilityGateTest.php:52:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\agent\tests\Unit\AutomationAvailabilityGateTest.php:63:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\agent\tests\Unit\AutomationAvailabilityGateTest.php:73:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\agent\tests\Unit\AutomationAvailabilityGateTest.php:82:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\agent\tests\Unit\ExtensionCutoverCapabilityAndEventsTest.php:60:         self::assertStringNotContainsString('use App\\Addons\\SeoContentAi\\Services\\ContentProject\\Application\\Capabilities\\ContentProjectCapabilityRegistry;', $source);
+D:\work\omnichannel-backend\addons\agent\tests\Unit\QueueRoutingContractTest.php:84:         self::assertStringNotContainsString('->onQueue(\\App\\Addons\\SeoContentAi\\Automation\\BusinessHook\\Enums\\AutomationQueueName::Policy', $provider);
+D:\work\omnichannel-backend\addons\agent\tests\Unit\QueueRoutingContractTest.php:87:             'new \\App\\Addons\\SeoContentAi\\Jobs\\DispatchContentProjectAutomationPoliciesJob,',
+D:\work\omnichannel-backend\addons\agent\tests\Unit\WordpressCutoverCouplingTest.php:42:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\agent\tests\Unit\WordpressCutoverCouplingTest.php:74:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\ai-prompt\tests\Unit\PromptHookDocumentationTest.php:66:         $langRoot = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.'lang';
+D:\work\omnichannel-backend\addons\ai-prompt\tests\Unit\PromptHookSpecPhase5ATest.php:290:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.'PromptHooks';
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleAiHistoryActionsContractTest.php:78:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleAiHistoryUiWiringTest.php:33:             dirname(__DIR__, 4).'/app/Addons/SeoContentAi'
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorAutomationLockWaitTest.php:16:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorConsoleWarningsContractTest.php:16:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorContextPreservationContractTest.php:16:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorCtaMediaQuoteFixContractTest.php:13:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorExclusiveLockRegressionTest.php:16:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorFixSlugAllRegressionTest.php:16:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorHeadingStyleDropdownOverflowTest.php:13:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorImagesHealthAndSlugSessionTest.php:16:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorLocalFeaturedNotWpProtectedTest.php:16:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorLockedReadonlyUxTest.php:16:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorPostPhase4RegressionTest.php:27:             'use App\\Addons\\SeoContentAi\\Services\\ProductReview\\ProductReviewCreationPolicy;',
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorRegressionPickerSessionCtaTest.php:16:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorRewriteWordPressSyncEligibilityTest.php:13:         return dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.'/'.$relative;
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorRichText3eContractTest.php:18:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorRuntimeRegressionLinksCtaPickerTest.php:16:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorSaveLockRegressionTest.php:16:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorSidebarCtaInlineContractTest.php:16:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorStickyHeaderHelpTest.php:16:         return dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.'/'.$relative;
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleEditorUnifiedImagesInventoryHealthTest.php:19:         return dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleKeywordLinkReconcileServiceTest.php:11: use App\Addons\SeoContentAi\Tests\Compat\UsesSeoDatabase;
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticlePendingInternalLinkServiceTest.php:11: use App\Addons\SeoContentAi\Tests\Compat\UsesSeoDatabase;
+D:\work\omnichannel-backend\addons\content\tests\Unit\ArticleScheduleReconcileServiceTest.php:9: use App\Addons\SeoContentAi\Tests\Compat\UsesSeoDatabase;
+D:\work\omnichannel-backend\addons\content\tests\Unit\GlobalAiChatRouteRetiredContractTest.php:7: use App\Addons\SeoContentAi\Providers\SeoPanelProvider;
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\AcknowledgeProjectItemGenerationErrorTest.php:30:             dirname(__DIR__, 4).'/app/Addons/SeoContentAi'
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\AcknowledgeProjectItemGenerationErrorTest.php:40:             dirname(__DIR__, 4).'/app/Addons/SeoContentAi'
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\AcknowledgeProjectItemGenerationErrorTest.php:50:             dirname(__DIR__, 4).'/app/Addons/SeoContentAi'
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\AcknowledgeProjectItemGenerationErrorTest.php:61:             dirname(__DIR__, 4).'/app/Addons/SeoContentAi'
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\AutomationWorkflowProjectionTest.php:90:         self::assertStringNotContainsString('namespace App\\Addons\\SeoContentAi\\Automation\\BusinessHook\\Services', $source);
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\ContentProjectDebugLifecycleAndCmUiContractTest.php:28:         // tests/Unit â†’ SeoContentAi â†’ Addons â†’ app â†’ project root
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\ContentProjectItemIdentityEntryPointsTest.php:18:         $root = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\ContentProjectItemStateContractTest.php:595:         $root = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\ContentProjectRecentlyCompletedTest.php:221:             dirname(__DIR__, 4).'/app/Addons/SeoContentAi'
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\ContentProjectRecentlyCompletedTest.php:252:             dirname(__DIR__, 4).'/app/Addons/SeoContentAi'
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\ContentProjectRecentlyCompletedTest.php:264:             dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.'lang'.DIRECTORY_SEPARATOR.'en'.DIRECTORY_SEPARATOR.'filament.php',
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\ContentProjectRecentlyCompletedTest.php:287:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\ContentProjectRunEnginePhase1Test.php:384:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.'/'.$relativeFromAddonRoot;
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\ContentProjectRunTerminalHelperHotfixTest.php:167:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.'/'.$relativeFromAddonRoot;
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\ExtensionArchitectureFreezeTest.php:74:         self::assertStringNotContainsString('use App\\Addons\\SeoContentAi\\Extension\\Registry\\ExtensionCapabilityRegistry;', $source);
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\ExtensionArchitectureFreezeTest.php:150:             dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.'config'.DIRECTORY_SEPARATOR.'seo_architecture.php',
+D:\work\omnichannel-backend\addons\content-projects\tests\Unit\ExtensionArchitectureFreezeTest.php:151:             getcwd().DIRECTORY_SEPARATOR.'app'.DIRECTORY_SEPARATOR.'Addons'.DIRECTORY_SEPARATOR.'SeoContentAi'.DIRECTORY_SEPARATOR.'config'.DIRECTORY_SEPARATOR.'seo_architecture.php',
+D:\work\omnichannel-backend\addons\media\tests\Unit\ImagenProviderErrorClassifierTest.php:61:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.'Services'.DIRECTORY_SEPARATOR.'GeminiMediaGenerationService.php';
+D:\work\omnichannel-backend\addons\publishing\tests\Unit\PublishingDispatchVsActiveContractTest.php:22:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\publishing\tests\Unit\PublishingDueProcessingContractTest.php:25:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\publishing\tests\Unit\PublishingQueueRewriteImmediateUpdateContractTest.php:18:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\seo\tests\Unit\CtaKeywordBlacklistDebugServiceTest.php:11: use App\Addons\SeoContentAi\Tests\Compat\UsesSeoDatabase;
+D:\work\omnichannel-backend\addons\seo\tests\Unit\KeywordDebugRescrapeServiceTest.php:13: use App\Addons\SeoContentAi\Tests\Compat\UsesSeoDatabase;
+D:\work\omnichannel-backend\addons\seo\tests\Unit\KeywordFocusResyncTest.php:15: use App\Addons\SeoContentAi\Tests\Compat\UsesSeoDatabase;
+D:\work\omnichannel-backend\addons\seo\tests\Unit\KeywordIntelligenceFoundationTest.php:120:         $ns = 'App\\Addons\\SeoContentAi\\Services\\KeywordIntelligence\\Application\\Commands\\';
+D:\work\omnichannel-backend\addons\seo\tests\Unit\KeywordIntelligenceFoundationTest.php:174:             $class = 'App\\Addons\\SeoContentAi\\Services\\KeywordIntelligence\\Application\\Handlers\\'.$basename;
+D:\work\omnichannel-backend\addons\seo\tests\Unit\KeywordLinkDetailPanelPresenterTest.php:12: use App\Addons\SeoContentAi\Tests\Compat\UsesSeoDatabase;
+D:\work\omnichannel-backend\addons\seo\tests\Unit\KeywordPersistenceServiceTest.php:10: use App\Addons\SeoContentAi\Tests\Compat\UsesSeoDatabase;
+D:\work\omnichannel-backend\addons\seo\tests\Unit\KeywordQualityFlagServiceTest.php:12: use App\Addons\SeoContentAi\Tests\Compat\UsesSeoDatabase;
+D:\work\omnichannel-backend\addons\seo\tests\Unit\KeywordReviewServiceTest.php:14: use App\Addons\SeoContentAi\Tests\Compat\UsesSeoDatabase;
+D:\work\omnichannel-backend\addons\seo\tests\Unit\LinkAuditCacheTest.php:10: use App\Addons\SeoContentAi\Tests\Compat\UsesSeoDatabase;
+D:\work\omnichannel-backend\addons\seo\tests\Unit\OperationalNotificationContractTest.php:18:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\seo\tests\Unit\OperationalNotificationContractTest.php:28:         // Unit â†’ tests â†’ SeoContentAi â†’ Addons â†’ app â†’ project root
+D:\work\omnichannel-backend\addons\seo\tests\Unit\QueueManagerRemovalTest.php:24:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\seo\tests\Unit\QueueManagerRemovalTest.php:31:         self::assertFalse(class_exists(\App\Addons\SeoContentAi\Services\SeoQueueControlService::class));
+D:\work\omnichannel-backend\addons\seo\tests\Unit\QueueManagerRemovalTest.php:36:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\seo\tests\Unit\QueueManagerRemovalTest.php:98:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\site-sync\tests\Unit\SiteSyncScoreLifecycleTerminalTest.php:126:         $blade = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'
+D:\work\omnichannel-backend\addons\site-sync\tests\Unit\SiteSyncScoreLifecycleTerminalTest.php:139:         $blade = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'
+D:\work\omnichannel-backend\addons\site-sync\tests\Unit\SiteSyncV2ForceFullFreezeTest.php:149:         $blade = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'
+D:\work\omnichannel-backend\addons\site-sync\tests\Unit\SiteSyncV2ScorePipelineFreezeTest.php:85:         $blade = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'
+D:\work\omnichannel-backend\addons\site-sync\tests\Unit\SiteSyncV2ScorePipelineFreezeTest.php:105:         $blade = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'
+D:\work\omnichannel-backend\addons\wordpress\tests\Unit\ManualAutomationCutoverTest.php:24:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\wordpress\tests\Unit\ManualAutomationCutoverTest.php:35:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\wordpress\tests\Unit\ManualAutomationCutoverTest.php:59:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\wordpress\tests\Unit\ManualAutomationCutoverTest.php:69:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\wordpress\tests\Unit\ManualAutomationCutoverTest.php:80:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\wordpress\tests\Unit\ManualAutomationCutoverTest.php:88:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\wordpress\tests\Unit\ManualAutomationCutoverTest.php:98:         $base = dirname(__DIR__, 4).'/app/Addons/SeoContentAi';
+D:\work\omnichannel-backend\addons\wordpress\tests\Unit\SyncSingleArticleFromWordPressTest.php:10: use App\Addons\SeoContentAi\Tests\Compat\UsesSeoDatabase;
+D:\work\omnichannel-backend\addons\wordpress\tests\Unit\WordPressSlugFixWriteGuardContractTest.php:13:         $path = dirname(__DIR__, 4).'/app/Addons/SeoContentAi'.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+D:\work\omnichannel-backend\addons\wordpress\tests\Unit\WpPushLifecycleImportTest.php:9: use App\Addons\SeoContentAi\Tests\Compat\UsesSeoDatabase;

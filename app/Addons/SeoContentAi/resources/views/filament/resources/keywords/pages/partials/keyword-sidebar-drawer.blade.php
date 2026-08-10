@@ -1,9 +1,9 @@
 @php
-    use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
-    use App\Addons\SeoContentAi\Support\SeoAccessControl;
+    use Omnichannel\Addons\SearchIntelligence\Filament\Resources\KeywordResource;
+    use Omnichannel\Addons\Seo\Support\SeoAccessControl;
 
     $keyword = $this->selectedKeyword;
-    $hasSelection = $this->selectedKeywordId !== null && $keyword instanceof \App\Addons\SeoContentAi\Models\Keyword;
+    $hasSelection = $this->selectedKeywordId !== null && $keyword instanceof \Omnichannel\Addons\SearchFoundation\Models\Keyword;
     $canEdit = $hasSelection && KeywordResource::canEdit($keyword);
     $canDelete = $hasSelection && KeywordResource::canDelete($keyword);
     $canMove = $hasSelection && SeoAccessControl::canAccessPlannerFeatures();

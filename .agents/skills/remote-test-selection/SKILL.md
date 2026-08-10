@@ -24,10 +24,14 @@ Use when the user asks for tests, verification, build, PHPUnit, CI, manual verif
 ```text
 $PHP_BIN vendor/bin/phpunit --filter=ClassOrMethodName
 $PHP_BIN vendor/bin/phpunit --filter=ClassName::test_method_name
-$PHP_BIN vendor/bin/phpunit app/Addons/SeoContentAi/tests/Unit
+$PHP_BIN vendor/bin/phpunit --testsuite ContentAddon
+$PHP_BIN vendor/bin/phpunit addons/content/tests/Unit
+$PHP_BIN vendor/bin/phpunit addons/seo/tests/Unit
 ```
 
 - Do not use `php artisan test --filter=...` as the project default.
+- Route feature → owner addon tests (content/media/seo/wordpress/publishing/content-projects/ai-prompt/search-intelligence/site-sync/agent).
+- `app/Addons/SeoContentAi/tests` is compatibility-only (`Compat/UsesSeoDatabase`); do not put new tests there.
 - For JS/CSS changes, use the relevant frontend check, normally:
 
 ```text
@@ -35,7 +39,7 @@ npm run build
 npm run check:editor-cycles
 ```
 
-- For docs-only tasks, no runtime verification is required; run `git status --short` and a scoped diff review.
+- Architecture handoff: `docs/architecture/NEW_AGENT_HANDOFF.md`.
 
 # Verification
 

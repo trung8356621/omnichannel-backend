@@ -11,19 +11,47 @@
         <testsuite name="Feature">
             <directory suffix="Test.php">tests/Feature</directory>
         </testsuite>
-        <testsuite name="SeoContentAi">
-            <directory suffix="Test.php">./app/Addons/SeoContentAi/tests/Unit</directory>
+        <testsuite name="ContentAddon">
+            <directory suffix="Test.php">./addons/content/tests</directory>
         </testsuite>
-        <testsuite name="SeoContentAiFeature">
-            <directory suffix="Test.php">./app/Addons/SeoContentAi/tests/Feature</directory>
+        <testsuite name="MediaAddon">
+            <directory suffix="Test.php">./addons/media/tests</directory>
+        </testsuite>
+        <testsuite name="SeoAddon">
+            <directory suffix="Test.php">./addons/seo/tests</directory>
+        </testsuite>
+        <testsuite name="WordPressAddon">
+            <directory suffix="Test.php">./addons/wordpress/tests</directory>
+        </testsuite>
+        <testsuite name="PublishingAddon">
+            <directory suffix="Test.php">./addons/publishing/tests</directory>
+        </testsuite>
+        <testsuite name="ContentProjectsAddon">
+            <directory suffix="Test.php">./addons/content-projects/tests</directory>
+        </testsuite>
+        <testsuite name="SearchIntelligenceAddon">
+            <directory suffix="Test.php">./addons/search-intelligence/tests</directory>
+        </testsuite>
+        <testsuite name="AiPromptAddon">
+            <directory suffix="Test.php">./addons/ai-prompt/tests</directory>
+        </testsuite>
+        <testsuite name="SiteSyncAddon">
+            <directory suffix="Test.php">./addons/site-sync/tests</directory>
+        </testsuite>
+        <testsuite name="AgentAddon">
+            <directory suffix="Test.php">./addons/agent/tests</directory>
         </testsuite>
     </testsuites>
     <source>
         <include>
             <directory>app</directory>
+            <directory>addons</directory>
         </include>
         <exclude>
             <directory>app/Addons/SeoContentAi/tests</directory>
+            <directory>addons/*/tests</directory>
+            <directory>addons/*/resources</directory>
+            <directory>addons/*/database</directory>
         </exclude>
     </source>
     <php>

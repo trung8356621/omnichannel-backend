@@ -5,7 +5,7 @@
 
 <x-filament-panels::page>
     @push('styles')
-        @vite('app/Addons/SeoContentAi/resources/css/project-run-queue.css')
+        @vite('addons/content-projects/resources/css/project-run-queue.css')
         <style>
             .seo-run-items-wrap,
             .seo-run-items-wrap table,
@@ -260,9 +260,9 @@
                                 $taskExists = (bool) ($item['task_exists'] ?? true);
                                 $canRetry = $this->canRetryRunItem($item);
                                 $runIsTerminal = in_array((string) ($this->projectRun?->status ?? ''), [
-                                    \App\Addons\SeoContentAi\Models\SeoProjectRun::STATUS_COMPLETED,
-                                    \App\Addons\SeoContentAi\Models\SeoProjectRun::STATUS_CANCELLED,
-                                    \App\Addons\SeoContentAi\Models\SeoProjectRun::STATUS_FAILED,
+                                    \Omnichannel\Addons\ContentProjects\Models\SeoProjectRun::STATUS_COMPLETED,
+                                    \Omnichannel\Addons\ContentProjects\Models\SeoProjectRun::STATUS_CANCELLED,
+                                    \Omnichannel\Addons\ContentProjects\Models\SeoProjectRun::STATUS_FAILED,
                                 ], true);
                             @endphp
                             <tr
@@ -853,6 +853,6 @@
     </div>
 
     @push('scripts')
-        @vite('app/Addons/SeoContentAi/resources/js/project-run-queue.js')
+        @vite('addons/content-projects/resources/js/project-run-queue.js')
     @endpush
 </x-filament-panels::page>

@@ -4,7 +4,7 @@
         'errorLabel' => __('seo-content-ai::filament.keyword.drawer_load_error'),
         'selectedKeywordId' => $this->selectedKeywordId,
     ];
-    $workspaceCss = base_path('app/Addons/SeoContentAi/resources/css/keyword-workspace.css');
+    $workspaceCss = base_path('addons/seo/resources/css/keyword-workspace.css');
     $showDictionaryChrome = ($this->parentId ?? null) === null;
 @endphp
 
@@ -190,7 +190,7 @@
         </div>
     </div>
 
-    @vite('app/Addons/SeoContentAi/resources/js/keyword-detail-panel.jsx')
+    @vite('addons/seo/resources/js/keyword-detail-panel.jsx')
 
     <x-filament-actions::modals />
 </x-filament-panels::page>

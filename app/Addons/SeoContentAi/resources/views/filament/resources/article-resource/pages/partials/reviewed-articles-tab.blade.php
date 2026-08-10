@@ -22,7 +22,7 @@
         ]);
     }
 
-    $reviewedTabCss = base_path('app/Addons/SeoContentAi/resources/css/articles-reviewed-tab.css');
+    $reviewedTabCss = base_path('addons/seo/resources/css/articles-reviewed-tab.css');
 @endphp
 
 @if (is_readable($reviewedTabCss))

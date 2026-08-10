@@ -1,5 +1,5 @@
 @php
-    use App\Addons\SeoContentAi\Services\SeoMainDomainService;
+    use Omnichannel\Addons\Seo\Services\SeoMainDomainService;
 
     /** @var \App\Models\Site $record */
     $record = $getRecord();

@@ -22,15 +22,19 @@ Database: MySQL (Multi-Database Architecture)
 
 2. KIẾN TRÚC & CẤU TRÚC THƯ MỤC (OMNICHANNEL SAAS)
 
-Kiến trúc Addon-Based: Mọi tính năng mở rộng BẮT BUỘC đặt trong app/Addons/{AddonName}/.
+Kiến trúc Addon-Based (peer addons): tính năng domain BẮT BUỘC đặt trong `addons/{slug}/` (content, seo, media, wordpress, publishing, content-projects, ai-prompt, search-intelligence, search-foundation, site-sync, agent, social, commerce).
 
-Thành phần Addon:
+`app/Addons/SeoContentAi` = compatibility shell only (Filament views/lang/panel). KHÔNG thêm Models/Services/JS business mới vào đây.
 
-addon.json: Chứa metadata.
+Canonical: `docs/architecture/ADDON_ARCHITECTURE.md`, handoff `docs/architecture/NEW_AGENT_HANDOFF.md`.
 
-{AddonName}ServiceProvider.php: Nơi đăng ký route, view, và Filament pages cục bộ.
+Thành phần peer addon:
 
-Không sửa trực tiếp bootstrap/app.php hay Core của Laravel nếu tính năng đó thuộc về Addon.
+addon.json: metadata (nếu còn đăng ký discovery).
+
+{Addon}ServiceProvider / panel provider: đăng ký route, view, Filament pages.
+
+Không sửa trực tiếp bootstrap/app.php hay Core của Laravel nếu tính năng đó thuộc Addon.
 
 3. QUY TẮC VIẾT CODE PHP & LARAVEL
 
@@ -102,7 +106,11 @@ PHP (remote / production host): chạy test nhỏ nhất qua PHPUnit, không dù
 
 hoặc
 
-`$PHP_BIN vendor/bin/phpunit app/Addons/SeoContentAi/tests/Unit`
+`$PHP_BIN vendor/bin/phpunit --testsuite ContentAddon`
+
+hoặc
+
+`$PHP_BIN vendor/bin/phpunit addons/content/tests/Unit`
 
 Frontend addon: sau khi đổi JS/CSS, chạy build/check phù hợp (`npm run build` khi cần).
 

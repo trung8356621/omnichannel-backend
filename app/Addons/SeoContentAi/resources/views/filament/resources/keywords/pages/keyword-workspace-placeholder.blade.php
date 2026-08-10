@@ -1,5 +1,5 @@
 @php
-    $cssPath = base_path('app/Addons/SeoContentAi/resources/css/keyword-workspace.css');
+    $cssPath = base_path('addons/seo/resources/css/keyword-workspace.css');
 @endphp
 
 <x-filament-panels::page class="keyword-workspace-page">

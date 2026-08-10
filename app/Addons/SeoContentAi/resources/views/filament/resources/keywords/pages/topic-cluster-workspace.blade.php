@@ -1,10 +1,10 @@
 @php
-    $cssPath = base_path('app/Addons/SeoContentAi/resources/css/topic-cluster.css');
-    $workspaceCssPath = base_path('app/Addons/SeoContentAi/resources/css/keyword-workspace.css');
+    $cssPath = base_path('addons/seo/resources/css/topic-cluster.css');
+    $workspaceCssPath = base_path('addons/seo/resources/css/keyword-workspace.css');
     $pillars = $this->getPillarList();
     $selectedPillar = $this->getSelectedPillarSummary();
     $domainCluster = $this->getDomainCluster();
-    $canMutate = \App\Addons\SeoContentAi\Support\SeoAccessControl::canMutateInSeoPanel();
+    $canMutate = \Omnichannel\Addons\Seo\Support\SeoAccessControl::canMutateInSeoPanel();
 @endphp
 
 <x-filament-panels::page class="topic-cluster-page">
