@@ -139,6 +139,25 @@ final class GoogleSearchConsoleConnectionServiceTest extends TestCase
         $this->assertSame(['sc-domain:example.com' => 'sc-domain:example.com'], $options);
     }
 
+    public function test_read_paths_fall_back_when_gsc_tables_are_missing(): void
+    {
+        Schema::connection('mysql')->dropIfExists('seo_gsc_property_mappings');
+        Schema::connection('mysql')->dropIfExists('seo_gsc_master_connections');
+
+        $service = app(GoogleSearchConsoleConnectionService::class);
+
+        $this->assertNull($service->resolveForUser(1));
+        $this->assertNull($service->resolveForSite(77, 1));
+        $this->assertNull($service->resolveByIdForUser(1, 123));
+        $this->assertSame([], $service->mappingRowsForUser(1));
+
+        $status = $service->statusForSite(77);
+
+        $this->assertSame('not_configured', $status['status']);
+        $this->assertFalse($status['configured']);
+        $this->assertFalse($status['has_snapshot']);
+    }
+
     private function ensureGscTables(): void
     {
         Schema::connection('mysql')->dropIfExists('seo_gsc_property_mappings');

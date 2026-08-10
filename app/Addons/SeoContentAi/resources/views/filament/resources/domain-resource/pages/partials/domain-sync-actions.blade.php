@@ -107,10 +107,21 @@
                         Run đã dừng ở bước lỗi. Nút «Tiếp tục» thử lại bước đó — không phải đang chạy.
                     </div>
                 @endif
-                @if (!empty($siteSyncV2ModeLabel) && ($siteSyncV2Running ?? false))
+                @if (!empty($siteSyncV2ModeLabel) && (($siteSyncV2Running ?? false) || ($siteSyncV2Stuck ?? false)))
                     <div class="text-xs font-medium text-primary-700 dark:text-primary-300">Chế độ: {{ $siteSyncV2ModeLabel }}</div>
                 @endif
-                @if (($siteSyncV2Total ?? 0) > 0 && ($siteSyncV2Running ?? false))
+                @if (!empty($siteSyncV2PhaseLabel) && (($siteSyncV2Running ?? false) || ($siteSyncV2Stuck ?? false) || ($siteSyncV2Status ?? '') === 'failed'))
+                    <div class="text-xs opacity-90">Bước hiện tại: {{ $siteSyncV2PhaseLabel }}</div>
+                @endif
+                @if (!empty($siteSyncV2LastProgressAt) && (($siteSyncV2Running ?? false) || ($siteSyncV2Stuck ?? false)))
+                    <div class="text-xs opacity-70">Tiến trình gần nhất: {{ $siteSyncV2LastProgressAt }}</div>
+                @endif
+                @if (($siteSyncV2Stuck ?? false))
+                    <div class="text-xs font-medium text-amber-700 dark:text-amber-300">
+                        Run kẹt — dùng «Tiếp tục» để reclaim theo policy hiện có (không watchdog mới).
+                    </div>
+                @endif
+                @if (($siteSyncV2Total ?? 0) > 0 && (($siteSyncV2Running ?? false) || ($siteSyncV2Stuck ?? false)))
                     @php
                         $ffCounters = $siteSyncV2Counters ?? [];
                         $isForceProgress = !empty($siteSyncV2ModeLabel);

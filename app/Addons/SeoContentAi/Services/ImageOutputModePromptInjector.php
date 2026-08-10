@@ -87,47 +87,46 @@ final class ImageOutputModePromptInjector
         $enabled = (bool) ($config['split_enabled'] ?? false);
         $grid = PromptPostProcessing::clampGridSize((int) ($config['split_grid_size'] ?? PromptPostProcessing::GRID_SIZE_DEFAULT));
         $panels = $grid * $grid;
+        $prefix = 'seo-content-ai::filament.prompt.post_processing.';
 
         if ($enabled) {
+            $modeLabel = $this->t($prefix.'runtime_mode_square', 'Square sprite sheet');
             $lines = [
-                __('seo-content-ai::filament.prompt.post_processing.runtime_mode_line', [
-                    'mode' => __('seo-content-ai::filament.prompt.post_processing.runtime_mode_square'),
-                ]),
-                __('seo-content-ai::filament.prompt.post_processing.runtime_provider_line', ['count' => 1]),
-                __('seo-content-ai::filament.prompt.post_processing.runtime_grid_line', ['n' => $grid]),
-                __('seo-content-ai::filament.prompt.post_processing.runtime_children_line', ['count' => $panels]),
-                __('seo-content-ai::filament.prompt.post_processing.runtime_split_enabled_line'),
+                $this->t($prefix.'runtime_mode_line', 'Mode: :mode', ['mode' => $modeLabel]),
+                $this->t($prefix.'runtime_provider_line', 'Provider output: :count image', ['count' => 1]),
+                $this->t($prefix.'runtime_grid_line', 'Grid: :n × :n', ['n' => $grid]),
+                $this->t($prefix.'runtime_children_line', 'Expected child images: :count', ['count' => $panels]),
+                $this->t($prefix.'runtime_split_enabled_line', 'Auto split: Enabled'),
             ];
 
             return [
-                'mode_label' => __('seo-content-ai::filament.prompt.post_processing.runtime_mode_square'),
+                'mode_label' => $modeLabel,
                 'mode_key' => 'square_sprite_sheet',
                 'provider_output' => 1,
                 'grid_label' => sprintf('%d × %d', $grid, $grid),
                 'expected_children' => $panels,
-                'auto_split_label' => __('seo-content-ai::filament.prompt.post_processing.runtime_enabled'),
+                'auto_split_label' => $this->t($prefix.'runtime_enabled', 'Enabled'),
                 'child_images_label' => (string) $panels,
                 'lines' => $lines,
             ];
         }
 
+        $modeLabel = $this->t($prefix.'runtime_mode_single', 'Single image');
         $lines = [
-            __('seo-content-ai::filament.prompt.post_processing.runtime_mode_line', [
-                'mode' => __('seo-content-ai::filament.prompt.post_processing.runtime_mode_single'),
-            ]),
-            __('seo-content-ai::filament.prompt.post_processing.runtime_provider_line', ['count' => 1]),
-            __('seo-content-ai::filament.prompt.post_processing.runtime_split_disabled_line'),
-            __('seo-content-ai::filament.prompt.post_processing.runtime_children_none_line'),
+            $this->t($prefix.'runtime_mode_line', 'Mode: :mode', ['mode' => $modeLabel]),
+            $this->t($prefix.'runtime_provider_line', 'Provider output: :count image', ['count' => 1]),
+            $this->t($prefix.'runtime_split_disabled_line', 'Auto split: Disabled'),
+            $this->t($prefix.'runtime_children_none_line', 'Child images: None'),
         ];
 
         return [
-            'mode_label' => __('seo-content-ai::filament.prompt.post_processing.runtime_mode_single'),
+            'mode_label' => $modeLabel,
             'mode_key' => 'single_image',
             'provider_output' => 1,
             'grid_label' => null,
             'expected_children' => 0,
-            'auto_split_label' => __('seo-content-ai::filament.prompt.post_processing.runtime_disabled'),
-            'child_images_label' => __('seo-content-ai::filament.prompt.post_processing.runtime_children_none'),
+            'auto_split_label' => $this->t($prefix.'runtime_disabled', 'Disabled'),
+            'child_images_label' => $this->t($prefix.'runtime_children_none', 'None'),
             'lines' => $lines,
         ];
     }
@@ -260,5 +259,39 @@ final class ImageOutputModePromptInjector
             'Return one image only.',
             self::END_MARKER,
         ]);
+    }
+
+    /**
+     * Pure PHPUnit has no translator binding — use English fallback (same pattern as PromptOwnership presenters).
+     *
+     * @param  array<string, string|int|float>  $replace
+     */
+    private function t(string $key, string $fallback, array $replace = []): string
+    {
+        try {
+            if (! function_exists('app') || ! app()->bound('translator')) {
+                $text = $fallback;
+                foreach ($replace as $search => $value) {
+                    $text = str_replace(':'.$search, (string) $value, $text);
+                }
+
+                return $text;
+            }
+
+            $translated = __($key, $replace);
+            if (is_array($translated)) {
+                return $fallback;
+            }
+            $text = trim((string) $translated);
+
+            return $text !== '' ? $text : $fallback;
+        } catch (\Throwable) {
+            $text = $fallback;
+            foreach ($replace as $search => $value) {
+                $text = str_replace(':'.$search, (string) $value, $text);
+            }
+
+            return $text;
+        }
     }
 }

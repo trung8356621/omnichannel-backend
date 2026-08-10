@@ -38,9 +38,7 @@ class PromptRunnerService
     ];
 
     /**
-     * @param  array<string, string>  $variables
-     */
-    /**
+     * @param  array<string, mixed>  $variables  Prompt scalars + nested side-channels (quick_split, product_gallery, …)
      * @param  bool  $runFullDependentChain  false = chỉ chạy task cha (dùng khi test từng bước)
      * @param  int|null  $onlySubTaskIndex  Chỉ chạy một sub_task (0-based); cần PARENT_RESULT trong $variables
      */

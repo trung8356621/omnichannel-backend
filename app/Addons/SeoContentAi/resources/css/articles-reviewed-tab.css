@@ -2,6 +2,7 @@
     display: flex;
     flex-direction: column;
     gap: 24px;
+    width: 100%;
 }
 .reviewed-stats-grid {
     display: grid;
@@ -136,9 +137,12 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+    width: 100%;
 }
 .reviewed-day-card {
-    overflow: hidden;
+    /* visible: action menus must not clip; radius still from border-radius */
+    overflow: visible;
+    width: 100%;
     background: #fff;
     border: 1px solid #E5E7EB;
     border-radius: 12px;
@@ -255,6 +259,7 @@
 }
 .reviewed-day-card__body {
     border-top: 1px solid #E5E7EB;
+    overflow: visible;
 }
 .dark .reviewed-day-card__body {
     border-top-color: rgb(55 65 81);
@@ -262,6 +267,7 @@
 .reviewed-article-list {
     display: flex;
     flex-direction: column;
+    overflow: visible;
 }
 .reviewed-article-item {
     display: flex;
@@ -270,6 +276,7 @@
     padding: 16px;
     border-bottom: 1px solid #F3F4F6;
     transition: background 0.15s;
+    overflow: visible;
 }
 .reviewed-article-item:last-child {
     border-bottom: none;
@@ -333,6 +340,26 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
+    position: relative;
+    z-index: 20;
+    overflow: visible;
+}
+.reviewed-article-item__actions-menu {
+    position: absolute;
+    right: 0;
+    z-index: 40;
+    margin-top: 0.25rem;
+    width: 14rem;
+    overflow: hidden;
+    border-radius: 0.75rem;
+    background: #fff;
+    padding: 0.25rem 0;
+    border: 1px solid #E5E7EB;
+    box-shadow: 0 10px 15px -3px rgba(15, 23, 42, 0.12), 0 4px 6px -4px rgba(15, 23, 42, 0.08);
+}
+.dark .reviewed-article-item__actions-menu {
+    background: rgb(17 24 39);
+    border-color: rgb(55 65 81);
 }
 @media (max-width: 640px) {
     .reviewed-article-item {

@@ -14,7 +14,10 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Contracts\Conten
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectBusinessLock;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPreviewToken;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectExistingArticleReconciler;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectFailedStepResumeResolver;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectGenerationCapabilityResolver;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectGenerationRecoveryDecision;
 use InvalidArgumentException;
 
 /**
@@ -28,6 +31,8 @@ final class ResumeProjectItemFromFailedStepHandler extends AbstractPublishingHan
         ContentProjectPreviewToken $previewToken,
         private readonly ContentProjectFailedStepResumeResolver $resumeResolver,
         private readonly RerunProjectItemStepHandler $stepHandler,
+        private readonly ContentProjectGenerationCapabilityResolver $capability,
+        private readonly ContentProjectExistingArticleReconciler $articleReconciler,
     ) {
         parent::__construct($tenantGuard, $businessLock, $previewToken);
     }
@@ -64,6 +69,33 @@ final class ResumeProjectItemFromFailedStepHandler extends AbstractPublishingHan
                         $projectId,
                     );
                 }
+
+                $this->articleReconciler->reconcileTask(
+                    $task,
+                    (int) ($project->site_id ?? 0) > 0 ? (int) $project->site_id : null,
+                    persist: true,
+                );
+                $task->refresh();
+
+                $capability = $this->capability->decide($project, $task, [
+                    'recover_stale' => true,
+                    'persist_article_repair' => true,
+                ]);
+                if ($capability->action !== ContentProjectGenerationRecoveryDecision::ACTION_RESUME) {
+                    return ContentProjectActionResult::fail(
+                        ContentProjectActionCodes::VALIDATION_FAILED,
+                        $capability->reason !== ''
+                            ? $capability->reason
+                            : 'Resume not executable for current item state.',
+                        $projectId,
+                        metadata: [
+                            'item_id' => (int) $itemId,
+                            'generation_recovery_action' => $capability->action,
+                            'existing_article_id' => $capability->existingArticleId,
+                        ],
+                    );
+                }
+
                 $plan = $this->resumeResolver->resolve($task);
                 if (! ($plan['ok'] ?? false) || $plan['from_step'] === null) {
                     return ContentProjectActionResult::fail(

@@ -5,6 +5,7 @@ import {
     setDraftPersistenceEnabled,
     writeSyncedLocalSnapshot,
 } from './articleEditorStorage.js';
+import { getMediaSnapshot } from './articleEditorMediaSnapshot.js';
 
 /**
  * Token conflict hiện tại (expected_updated_at / expected_content_hash) — bootstrap từ
@@ -192,6 +193,9 @@ export function resolveFaqsPersistPayload(editorBundle) {
 export function buildArticleEditorApiPayload(editorBundle, wire) {
     const articleId = Number(editorBundle?.articleId ?? 0);
     const faqPersist = resolveFaqsPersistPayload(editorBundle);
+    const mediaSnapshot = articleId > 0 ? getMediaSnapshot(articleId) : null;
+    const featured = normalizeMediaSnapshotFeatured(mediaSnapshot);
+    const productAlbum = normalizeMediaSnapshotProductAlbum(mediaSnapshot);
 
     const conflictTokens = getEditorConflictTokens();
     const sessionClient = window.__seoEditorSessionClient;
@@ -208,8 +212,9 @@ export function buildArticleEditorApiPayload(editorBundle, wire) {
         publish_box: window.__seoPublishBoxSnapshot?.() ?? null,
         category_ids: window.__seoPublishCategoriesSnapshot?.() ?? null,
         // Phase 2A: Featured/Gallery owned by media snapshot APIs — do not re-send LS drafts.
-        featured_image: null,
-        product_album: null,
+        featured_image: featured,
+        product_album: productAlbum,
+        media_snapshot: mediaSnapshot,
         faqs: faqPersist.faqs,
         faqs_source: faqPersist.faqs_source,
         expected_updated_at: conflictTokens.expected_updated_at,
@@ -220,6 +225,46 @@ export function buildArticleEditorApiPayload(editorBundle, wire) {
         editor_session_id: sessionClient?.sessionId || null,
         article_id: articleId || null,
     };
+}
+
+function normalizeMediaSnapshotFeatured(mediaSnapshot) {
+    const featured = mediaSnapshot?.featured;
+    if (!featured || typeof featured !== 'object') {
+        return null;
+    }
+
+    const url = String(featured.url ?? featured.thumbnail_url ?? '').trim();
+    if (url === '') {
+        return null;
+    }
+
+    return {
+        url,
+        wp_attachment_id: Number(featured.wp_attachment_id ?? 0) || 0,
+        seo_media_id: Number(featured.media_id ?? featured.seo_media_id ?? 0) || 0,
+        id: featured.id ?? featured.asset_key ?? null,
+        asset_key: String(featured.asset_key ?? featured.id ?? '').trim(),
+        source: String(featured.source ?? '').trim(),
+        alt: String(featured.alt ?? '').trim(),
+        slug: String(featured.slug ?? featured.filename ?? '').trim(),
+    };
+}
+
+function normalizeMediaSnapshotProductAlbum(mediaSnapshot) {
+    const gallery = mediaSnapshot?.gallery;
+    if (!gallery?.required || !Array.isArray(gallery.items)) {
+        return null;
+    }
+
+    const items = [];
+    if (mediaSnapshot?.featured) {
+        items.push(mediaSnapshot.featured);
+    }
+    items.push(...gallery.items);
+
+    return items
+        .map((item) => normalizeMediaSnapshotFeatured({ featured: item }))
+        .filter(Boolean);
 }
 
 /**
@@ -1307,4 +1352,3 @@ export async function syncProductReviewsForArticle(articleId) {
 export async function reconcileProductReviewsForArticle(articleId) {
     return fetchWordPressProductReviews(articleId);
 }
-

@@ -49,6 +49,42 @@ final class PromptHookTopicSchemaGateTest extends TestCase
         self::assertSame('My Title', $out['topic'] ?? null);
     }
 
+    public function test_seed_empty_post_title_from_keyword(): void
+    {
+        $executor = (new ReflectionClass(PromptHookExplicitBindingExecutor::class))
+            ->newInstanceWithoutConstructor();
+        $method = new ReflectionMethod(PromptHookExplicitBindingExecutor::class, 'seedEmptyPostTitleFromSubject');
+        $method->setAccessible(true);
+
+        $out = $method->invoke($executor, [
+            'keyword' => 'thời trang bền vững',
+            'post_title' => null,
+        ], [
+            'post_title' => ['type' => 'string', 'required' => false, 'nullable' => true],
+            'keyword' => ['type' => 'string', 'required' => false],
+        ]);
+
+        self::assertSame('thời trang bền vững', $out['post_title'] ?? null);
+    }
+
+    public function test_seed_empty_post_title_does_not_override_explicit(): void
+    {
+        $executor = (new ReflectionClass(PromptHookExplicitBindingExecutor::class))
+            ->newInstanceWithoutConstructor();
+        $method = new ReflectionMethod(PromptHookExplicitBindingExecutor::class, 'seedEmptyPostTitleFromSubject');
+        $method->setAccessible(true);
+
+        $out = $method->invoke($executor, [
+            'keyword' => 'kw',
+            'post_title' => 'Explicit Title',
+        ], [
+            'post_title' => ['type' => 'string', 'required' => false],
+            'keyword' => ['type' => 'string', 'required' => false],
+        ]);
+
+        self::assertSame('Explicit Title', $out['post_title'] ?? null);
+    }
+
     public function test_map_input_whitelists_schema_keys_only(): void
     {
         $executor = (new ReflectionClass(PromptHookExplicitBindingExecutor::class))
@@ -76,6 +112,7 @@ final class PromptHookTopicSchemaGateTest extends TestCase
             (string) (new ReflectionClass(PromptHookExplicitBindingExecutor::class))->getFileName(),
         );
         self::assertStringContainsString('Schema-whitelist only', $src);
+        self::assertStringContainsString('expandCompileAliasMirrors', $src);
         self::assertStringNotContainsString('array_merge($variables, $input)', $src);
     }
 

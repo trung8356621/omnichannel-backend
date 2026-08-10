@@ -20,7 +20,7 @@ import {
     mergeArticleImageRow,
     resolveArticleImageRemoveTarget,
 } from '../utils/articleImagesUtils';
-import { isWordPressProtectedMedia } from '../utils/mediaSourceClassification';
+import { isLaravelManagedMedia, isWordPressProtectedMedia } from '../utils/mediaSourceClassification';
 import { t } from '../utils/i18n';
 import {
     AI_PLACEHOLDER_LOADING_URL,
@@ -305,6 +305,7 @@ function ImageRow({
     const showLocalExtra = Boolean(trustedWpUrl) && distinctUrls(trustedWpUrl, localUrl);
     const seoMediaId = Number(row.seoMediaId ?? row.seo_media_id ?? 0);
     const isWpProtected = isWordPressProtectedMedia(row);
+    const isManagedByLaravel = isLaravelManagedMedia(row);
     const canQuickFixSlugOne = isWpProtected
         ? Number(row.wpAttachmentId ?? row.wp_attachment_id ?? 0) > 0
         : (
@@ -648,7 +649,14 @@ function ImageRow({
 
                 {showActions ? (
                     <div className="seo-article-images-actions">
-                        {isWpProtected ? (
+                        {isManagedByLaravel ? (
+                            <span
+                                className="seo-article-images-watermark-btn"
+                                title={t('laravel_managed_media_hint')}
+                            >
+                                {t('laravel_managed_media')}
+                            </span>
+                        ) : isWpProtected ? (
                             <span
                                 className="seo-article-images-watermark-btn is-protected"
                                 title={t('wp_media_bulk_protected_hint')}

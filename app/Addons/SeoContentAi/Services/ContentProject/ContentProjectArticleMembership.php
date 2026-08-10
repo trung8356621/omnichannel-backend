@@ -9,7 +9,9 @@ use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 
 /**
- * Article thuộc Content Project đang hoạt động (project chưa archive).
+ * Active Content Project ownership for Article restrictions (editor / WP sync / workspace).
+ *
+ * Archived project association is historical/reporting only — never active ownership.
  */
 final class ContentProjectArticleMembership
 {
@@ -38,10 +40,19 @@ final class ContentProjectArticleMembership
     }
 
     /**
-     * Article gắn task Content Project (kể cả project đã archive).
-     * Dùng cho Manual Sync visibility / fail-closed — archive ≠ bài độc lập.
+     * Active Content Project task ownership for editor/sync restrictions.
+     * Archived project / item-archived tasks do not count.
      */
     public function assignedTaskForArticle(SeoArticle|int $article): ?SeoProjectTask
+    {
+        return $this->activeTaskForArticle($article);
+    }
+
+    /**
+     * Any task row still pointing at the article (including archived project leftovers).
+     * Historical/reporting only — do not use for editor deny or CP sync gates.
+     */
+    public function historicalAssignedTaskForArticle(SeoArticle|int $article): ?SeoProjectTask
     {
         $articleId = $article instanceof SeoArticle ? (int) $article->getKey() : $article;
         if ($articleId <= 0) {
@@ -56,9 +67,13 @@ final class ContentProjectArticleMembership
         return $task instanceof SeoProjectTask ? $task : null;
     }
 
+    /**
+     * Restriction gate: only ACTIVE Content Project membership.
+     * Archived association ⇒ standalone Article.
+     */
     public function belongsToContentProject(SeoArticle|int $article): bool
     {
-        return $this->assignedTaskForArticle($article) instanceof SeoProjectTask;
+        return $this->belongsToActiveContentProject($article);
     }
 
     public function activeProjectForArticle(SeoArticle|int $article): ?SeoProject

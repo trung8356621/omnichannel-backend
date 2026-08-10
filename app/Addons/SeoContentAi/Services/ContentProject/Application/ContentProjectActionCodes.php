@@ -46,6 +46,9 @@ final class ContentProjectActionCodes
     /** Soft-clear stale generation Failed overlay without re-running AI. */
     public const ITEMS_GENERATION_ERROR_ACKNOWLEDGED = 'items.generation_error_acknowledged';
 
+    /** Manual Existing Article attach for rewrite/improve (no AI start). */
+    public const ITEMS_EXISTING_ARTICLE_SELECTED = 'items.existing_article_selected';
+
     /** Feature-flagged debug/recovery — not WordPress publish. */
     public const ITEMS_DEBUG_LIFECYCLE_OVERRIDDEN = 'items.debug_lifecycle_overridden';
 

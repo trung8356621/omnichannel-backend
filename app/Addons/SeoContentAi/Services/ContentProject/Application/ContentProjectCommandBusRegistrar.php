@@ -29,6 +29,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\RerunPr
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SendToPublishingQueueCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ReturnToContentProjectCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\ScheduleProjectItemsCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SelectExistingArticleForProjectItemCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SkipProjectItemPublishingCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StopProjectExecutionCommand;
@@ -61,6 +62,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\RerunPr
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ResumeProjectItemFromFailedStepHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ScheduleProjectItemsHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\SendToPublishingQueueHandler;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\SelectExistingArticleForProjectItemHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\ReturnToContentProjectHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\SkipProjectItemPublishingHandler;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Handlers\StartReviewHandler;
@@ -153,6 +155,7 @@ final class ContentProjectCommandBusRegistrar
             RerunProjectItemStepCommand::class => RerunProjectItemStepHandler::class,
             ResumeProjectItemFromFailedStepCommand::class => ResumeProjectItemFromFailedStepHandler::class,
             AcknowledgeProjectItemGenerationErrorCommand::class => AcknowledgeProjectItemGenerationErrorHandler::class,
+            SelectExistingArticleForProjectItemCommand::class => SelectExistingArticleForProjectItemHandler::class,
             BlockProjectItemGenerationCommand::class => BlockProjectItemGenerationHandler::class,
             UnblockProjectItemGenerationCommand::class => UnblockProjectItemGenerationHandler::class,
             StartReviewCommand::class => StartReviewHandler::class,

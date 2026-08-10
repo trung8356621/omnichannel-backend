@@ -14,7 +14,6 @@ use App\Addons\SeoContentAi\Support\SeoScoringStatus;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Pagination\LengthAwarePaginator as Paginator;
-use Illuminate\Support\Facades\Schema;
 
 final class SeoAuditScanService
 {
@@ -147,43 +146,25 @@ final class SeoAuditScanService
     }
 
     /**
-     * Canonical focus keyword: seo_focus_keyword meta (trim) HOẶC keyword_meta MainArticleId + phrase.
-     * Warning/danger review status không đồng nghĩa thiếu keyword.
+     * Canonical focus keyword — ONE contract with SeoAnalyzerService::resolveFocusKeywordForArticle():
+     * 1) article_meta seo_focus_keyword (normalized)
+     * 2) Keyword MainArticleId phrase fallback
+     * 3) else missing
+     *
+     * Warning/danger keyword_review ≠ missing_focus_keyword.
      */
     public function hasCanonicalFocusKeyword(SeoArticle $article): bool
     {
-        $article->loadMissing('articleMetas');
-
-        $metaValue = trim((string) (
-            $article->articleMetas->firstWhere('meta_key', 'seo_focus_keyword')?->meta_value ?? ''
-        ));
-        if ($metaValue !== '') {
-            return true;
-        }
-
-        // Unit/SQLite :memory: có thể thiếu bảng — fail-closed = chưa có keyword canonical.
-        if (
-            ! Schema::connection('omi_seo_ai')->hasTable('keywords')
-            || ! Schema::connection('omi_seo_ai')->hasTable('keyword_meta')
-        ) {
-            return false;
-        }
-
         try {
-            return Keyword::query()
-                ->whereHas(
-                    'metas',
-                    static function (Builder $meta) use ($article): void {
-                        $meta->where('meta_key', KeywordMetaKey::MainArticleId->value)
-                            ->where('meta_value', (string) $article->id);
-                    },
-                )
-                ->whereNotNull('phrase')
-                ->where('phrase', '!=', '')
-                ->whereRaw("TRIM(phrase) <> ''")
-                ->exists();
+            return trim((string) (app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article) ?? '')) !== '';
         } catch (\Throwable) {
-            return false;
+            // Unit/SQLite may lack keyword tables — fail closed to meta-only normalize.
+            $article->loadMissing('articleMetas');
+            $metaValue = Keyword::normalizeFocusPhrase((string) (
+                $article->articleMetas->firstWhere('meta_key', 'seo_focus_keyword')?->meta_value ?? ''
+            ));
+
+            return $metaValue !== '';
         }
     }
 
@@ -288,10 +269,56 @@ final class SeoAuditScanService
     private function mapArticleRow(SeoArticle $article): array
     {
         $violations = SeoRuleViolationsResolver::forArticle($article);
+        $hasFocusKeyword = $this->hasCanonicalFocusKeyword($article);
+        if ($hasFocusKeyword) {
+            $violations = array_values(array_filter(
+                $violations,
+                static fn (mixed $key): bool => (string) $key !== SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD
+                    && (string) $key !== 'seo.missing_focus_keyword',
+            ));
+        }
+
         $assessment = $this->assessmentService->assessFromAnalysis([
             'violations' => $violations,
             'seo_score' => $article->seo_score !== null ? (int) round((float) $article->seo_score) : null,
         ]);
+
+        $matchedKeys = array_values(array_map(
+            static fn (mixed $key): string => (string) $key,
+            $assessment['matched_rule_keys'] ?? [],
+        ));
+        if ($hasFocusKeyword) {
+            $matchedKeys = array_values(array_filter(
+                $matchedKeys,
+                static fn (string $key): bool => $key !== SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD,
+            ));
+        }
+
+        $reasonLabels = array_values(array_filter(
+            array_map(
+                static fn (array $item): string => (string) ($item['label'] ?? ''),
+                $assessment['active_violations'] ?? [],
+            ),
+            static function (string $label) use ($hasFocusKeyword): bool {
+                if ($label === '') {
+                    return false;
+                }
+                if ($hasFocusKeyword && $label === (string) __('seo-content-ai::filament.articles_optimal.rule_short.missing_focus_keyword')) {
+                    return false;
+                }
+
+                return true;
+            },
+        ));
+
+        $focusKeyword = '';
+        try {
+            $focusKeyword = trim((string) (app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article) ?? ''));
+        } catch (\Throwable) {
+            $focusKeyword = Keyword::normalizeFocusPhrase((string) (
+                $article->articleMetas->firstWhere('meta_key', 'seo_focus_keyword')?->meta_value ?? ''
+            ));
+        }
 
         return [
             'id' => (int) $article->id,
@@ -302,13 +329,12 @@ final class SeoAuditScanService
             'edit_url' => ArticleResource::getUrl('edit', ['record' => $article]),
             'score' => $assessment['score'],
             'technical_score' => $assessment['technical_score'],
-            'matched_rule_keys' => $assessment['matched_rule_keys'],
-            'violations' => $assessment['matched_rule_keys'],
-            'reason_keys' => $assessment['matched_rule_keys'],
-            'reason_labels' => array_map(
-                static fn (array $item): string => (string) ($item['label'] ?? ''),
-                $assessment['active_violations'],
-            ),
+            'matched_rule_keys' => $matchedKeys,
+            'violations' => $matchedKeys,
+            'reason_keys' => $matchedKeys,
+            'reason_labels' => $reasonLabels,
+            'focus_keyword' => $focusKeyword,
+            'has_focus_keyword' => $hasFocusKeyword,
             'is_low_quality' => $assessment['is_low_quality'],
             'is_analyzed' => SeoScoringStatus::hasBeenAnalyzed($article),
         ];

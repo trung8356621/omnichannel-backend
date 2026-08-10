@@ -2298,8 +2298,13 @@ class ArticleResource extends SeoPanelResource
 
     public static function articleAssignedContentProjectId(SeoArticle $article): ?int
     {
+        // Active Content Project only — archived project association is historical/reporting.
         $directProjectId = SeoProjectTask::query()
+            ->active()
             ->where('article_id', (int) $article->id)
+            ->whereHas('project', static function (Builder $query): void {
+                $query->whereNull('archived_at');
+            })
             ->value('project_id');
         if ($directProjectId !== null) {
             return (int) $directProjectId;
@@ -2309,8 +2314,12 @@ class ArticleResource extends SeoPanelResource
         $articleSiteId = static::resolveArticleSiteId($article) ?? 0;
 
         $query = SeoProjectTask::query()
+            ->active()
             ->whereIn('type', [SeoProjectTask::TYPE_REWRITE, SeoProjectTask::TYPE_IMPROVE])
-            ->whereRaw('LOWER(TRIM(source_content)) = ?', [$needle]);
+            ->whereRaw('LOWER(TRIM(source_content)) = ?', [$needle])
+            ->whereHas('project', static function (Builder $builder): void {
+                $builder->whereNull('archived_at');
+            });
 
         if ($articleSiteId > 0) {
             $query->where(function (Builder $builder) use ($articleSiteId): void {

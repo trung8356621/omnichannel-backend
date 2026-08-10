@@ -120,11 +120,8 @@ import {
     fetchMediaSnapshot,
     galleryFromSnapshot,
     refreshMediaSnapshotIfStale,
-    setFeaturedViaApi,
     subscribeMediaSnapshot,
-    normalizeFeaturedMediaItem,
 } from '../utils/articleEditorMediaSnapshot';
-import { openMediaPicker } from '../editor/runtime/editorMediaPickerStore';
 import { DEFAULT_WIKI_TRUST_DOMAINS } from '../utils/wikiTrustDomains';
 import { setArticleAutosaveLock, isArticleAutosaveLocked } from '../utils/articleAutosaveLock';
 import {
@@ -197,6 +194,8 @@ import {
 import { getDefaultArticleEditorRuntime } from '../editor/runtime/defaultArticleEditorRuntime';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { useArticleEditorHistory } from '../hooks/useArticleEditorHistory';
+import { useArticleEditorNetworkConnectivity } from '../hooks/useArticleEditorNetworkConnectivity';
+import { isArticleEditorNetworkError } from '../utils/articleEditorNetwork';
 import {
     clearDraft,
     draftOffersManualChoice,
@@ -2354,6 +2353,8 @@ export default function SeoArticleEditor({
     sessionReadOnly = false,
     supportsProductGallery: supportsProductGalleryProp = false,
     isCanaryProduct: isCanaryProductProp = false,
+    parentChildAllowed: parentChildAllowedProp = false,
+    parentChildReason: parentChildReasonProp = '',
     productCategoryOptions = [],
     initialProductGallery = [],
     initialFaqs = [],
@@ -2367,6 +2368,8 @@ export default function SeoArticleEditor({
 }) {
     const [supportsProductGallery, setSupportsProductGallery] = useState(() => Boolean(supportsProductGalleryProp));
     const isCanaryProduct = Boolean(isCanaryProductProp);
+    const parentChildAllowed = Boolean(parentChildAllowedProp);
+    const parentChildReason = String(parentChildReasonProp ?? '').trim();
     const historyStep = editorSettings?.history_step ?? 20;
     const connectionHashRef = useRef(connectionHash);
     connectionHashRef.current = connectionHash;
@@ -3839,9 +3842,61 @@ export default function SeoArticleEditor({
     const serverAutosaveSeqRef = useRef(0);
     const serverAutosaveNeedsRetryRef = useRef(false);
     const lastAutosaveHashRef = useRef('');
+    const scheduleServerAutosaveRef = useRef(() => {});
+    const networkUnavailableRef = useRef(false);
+    const saveStatusRef = useRef(saveStatus);
+    saveStatusRef.current = saveStatus;
     /** Canonical body plain text from bootstrap — used to block hydrate-origin space corruption saves. */
     const bootstrapBodyPlainRef = useRef(plainTextFromHtmlLoose(initialHtml));
     const whitespaceCorruptionLockedRef = useRef(false);
+
+    const getNetworkDirtyRevisionKey = useCallback(() => {
+        const html = getExportHtml();
+        const currentBodyHash = hashContent(html);
+        const tokens = getEditorConflictTokens();
+        const ackBodyHash = String(tokens.expected_content_hash || '').trim();
+        const status = saveStatusRef.current;
+        const dirtyUi = status === 'pending' || status === 'saving';
+        const dirtyFlags = serverAutosaveDirtyRef.current || serverAutosaveNeedsRetryRef.current;
+        const contentDirty = currentBodyHash !== '' && ackBodyHash !== '' && currentBodyHash !== ackBodyHash;
+        if (!dirtyUi && !dirtyFlags && !contentDirty) {
+            return null;
+        }
+        return currentBodyHash || `dirty:${serverAutosaveSeqRef.current}`;
+    }, [getExportHtml]);
+
+    const onNetworkRecoveringAutosave = useCallback((revisionKey) => {
+        if (sessionReadOnly || window.__SEO_EDITOR_READ_ONLY__ || window.__SEO_EDITOR_EXITING__) {
+            return;
+        }
+        // Recovering phase — allow one flush even before React re-render clears unavailable.
+        networkUnavailableRef.current = false;
+        serverAutosaveDirtyRef.current = true;
+        serverAutosaveNeedsRetryRef.current = true;
+        cancelPendingServerAutosave();
+        scheduleServerAutosaveRef.current({ immediate: true, reconnectRevision: revisionKey });
+    }, [sessionReadOnly]);
+
+    const {
+        networkUnavailable,
+        networkRecovering,
+        noteLocalRevisionChanged,
+        markRecoveringClear,
+    } = useArticleEditorNetworkConnectivity({
+        articleId,
+        getDirtyRevisionKey: getNetworkDirtyRevisionKey,
+        onRecoveringAutosave: onNetworkRecoveringAutosave,
+    });
+    networkUnavailableRef.current = networkUnavailable;
+
+    useEffect(() => {
+        if (!networkUnavailable) {
+            return;
+        }
+        cancelPendingServerAutosave();
+        serverAutosaveDirtyRef.current = true;
+        setSaveStatus((prev) => (prev === 'saved' ? 'pending' : prev));
+    }, [networkUnavailable]);
 
     const assertWritableDocumentNotWhitespaceCorrupted = useCallback((html) => {
         const base = String(bootstrapBodyPlainRef.current ?? '').trim();
@@ -3867,8 +3922,14 @@ export default function SeoArticleEditor({
         return false;
     }, []);
 
-    const scheduleServerAutosave = useCallback(() => {
+    const scheduleServerAutosave = useCallback((options = {}) => {
+        const immediate = Boolean(options?.immediate);
         if (sessionReadOnly || window.__SEO_EDITOR_READ_ONLY__) {
+            return;
+        }
+        if (networkUnavailableRef.current && !immediate) {
+            // Offline: keep dirty flags, do not spam PUT.
+            serverAutosaveDirtyRef.current = true;
             return;
         }
         if (!assertWritableDocumentNotWhitespaceCorrupted(getExportHtml())) {
@@ -3884,11 +3945,16 @@ export default function SeoArticleEditor({
         }
 
         cancelPendingServerAutosave();
+        const delayMs = immediate ? 0 : serverAutosaveDebounceMs;
         window.__seoServerAutosaveTimer = window.setTimeout(async () => {
             if (!serverAutosaveDirtyRef.current) {
                 return;
             }
             if (sessionReadOnly || window.__SEO_EDITOR_READ_ONLY__ || window.__SEO_EDITOR_EXITING__) {
+                return;
+            }
+            if (networkUnavailableRef.current) {
+                // Still unreachable — wait for reconnect monitor.
                 return;
             }
             if (shouldSuppressServerAutosave()) {
@@ -3921,6 +3987,7 @@ export default function SeoArticleEditor({
                 && lastAutosaveHashRef.current === currentBodyHash
             ) {
                 serverAutosaveDirtyRef.current = false;
+                markRecoveringClear();
                 return;
             }
             // First ACK after load: lastAutosaveHash empty — still skip if body matches ACK
@@ -3935,6 +4002,7 @@ export default function SeoArticleEditor({
             ) {
                 lastAutosaveHashRef.current = currentBodyHash;
                 serverAutosaveDirtyRef.current = false;
+                markRecoveringClear();
                 return;
             }
 
@@ -3977,17 +4045,27 @@ export default function SeoArticleEditor({
                     lastAutosaveHashRef.current = currentBodyHash;
                 }
                 serverAutosaveNeedsRetryRef.current = false;
-            } catch {
+                markRecoveringClear();
+            } catch (error) {
                 serverAutosaveDirtyRef.current = true;
                 serverAutosaveNeedsRetryRef.current = true;
+                if (isArticleEditorNetworkError(error)) {
+                    // Persistent banner via network monitor — no toast spam.
+                    networkUnavailableRef.current = true;
+                } else {
+                    // App/HTTP error: backend reachable; clear recovering banner only.
+                    markRecoveringClear();
+                }
             } finally {
                 serverAutosaveInFlightRef.current = false;
-                if (serverAutosaveDirtyRef.current) {
+                if (serverAutosaveDirtyRef.current && !networkUnavailableRef.current) {
                     scheduleServerAutosave();
                 }
             }
-        }, serverAutosaveDebounceMs);
-    }, [articleId, assertWritableDocumentNotWhitespaceCorrupted, getExportHtml, serverAutosaveDebounceMs, sessionReadOnly]);
+        }, delayMs);
+    }, [articleId, assertWritableDocumentNotWhitespaceCorrupted, getExportHtml, markRecoveringClear, serverAutosaveDebounceMs, sessionReadOnly]);
+
+    scheduleServerAutosaveRef.current = scheduleServerAutosave;
 
     const { debounced: debouncedLocalSave, cancel: cancelLocalDraftSave } = useDebouncedCallback(() => {
         if (!articleId || draftSaveDisabled) return;
@@ -4023,9 +4101,16 @@ export default function SeoArticleEditor({
         if (!assertWritableDocumentNotWhitespaceCorrupted(getExportHtml())) {
             return;
         }
+        noteLocalRevisionChanged();
+        if (networkUnavailableRef.current) {
+            setSaveStatus('pending');
+            serverAutosaveDirtyRef.current = true;
+            // Keep dirty in runtime; skip local→server chain spam while offline.
+            return;
+        }
         setSaveStatus('pending');
         debouncedLocalSave();
-    }, [assertWritableDocumentNotWhitespaceCorrupted, debouncedLocalSave, draftSaveDisabled, getExportHtml]);
+    }, [assertWritableDocumentNotWhitespaceCorrupted, debouncedLocalSave, draftSaveDisabled, getExportHtml, noteLocalRevisionChanged]);
 
     scheduleAutosaveRef.current = scheduleAutosave;
 
@@ -6923,9 +7008,117 @@ export default function SeoArticleEditor({
             const href = String(detail?.href ?? '').trim();
             const type = String(detail?.type ?? '').toLowerCase();
             const plainText = isCtaPlainTextType(type) || detail?.is_placeholder === true;
+            const occurrenceIndex = Math.max(0, Number(detail?.occurrence_index) || 0);
 
             if (!text || (!href && !plainText)) {
                 return;
+            }
+
+            const isCtaSentence = detail?.is_sentence === true
+                || detail?.is_cta_sentence === true
+                || detail?.is_cta_block === true
+                || Boolean(String(detail?.sentence ?? '').trim());
+
+            const notifyCtaSuccess = (bodyText = text) => {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: isCtaSentence
+                                ? t('editor_cta_block_inserted')
+                                : t('editor_contact_value_inserted'),
+                            body: `«${bodyText}»`,
+                            status: 'success',
+                        },
+                    }),
+                );
+            };
+
+            const applyWrappedBlockHtml = (blockId, nextHtml) => {
+                const currentBlocks = blocksRef.current;
+                const nextBlocks = currentBlocks.map((item) =>
+                    item.id === blockId ? { ...item, content: nextHtml } : item,
+                );
+                blocksRef.current = nextBlocks;
+                setBlocks(nextBlocks);
+
+                const editor = blockEditorsRef.current.get(blockId);
+                if (editor && !editor.isDestroyed) {
+                    editor.commands.setContent(nextHtml, {
+                        emitUpdate: false,
+                        parseOptions: TIPTAP_HTML_PARSE_OPTIONS,
+                    });
+                }
+
+                if (articleId) {
+                    saveDraft(articleId, connectionHashRef.current, {
+                        content: exportBlocksToHtml(nextBlocks),
+                    });
+                    setSaveStatus('saved');
+                }
+
+                clearFrozenEditorInsertionContext();
+                requestAnalyze();
+                notifyCtaSuccess();
+            };
+
+            // Contact-value insert mirrors internal-link wrap: find phrase in body, wrap href.
+            // Highlight (scroll) only flashes <mark> — no TipTap selection — so caret insert misses target.
+            if (!isCtaSentence && !plainText && href) {
+                commitActiveBlock();
+
+                const domResult = wrapPlainTextWithLinkInBlocks(
+                    blocksRef.current,
+                    text,
+                    href,
+                    occurrenceIndex,
+                );
+                if (domResult) {
+                    applyWrappedBlockHtml(domResult.blockId, domResult.html);
+                    return;
+                }
+
+                let remainingIndex = occurrenceIndex;
+                let targetBlockId = null;
+                let localIndex = 0;
+
+                for (const block of blocksRef.current) {
+                    if (block.type === 'image' || !block.content) {
+                        continue;
+                    }
+                    const count = countPlainTextInHtml(block.content, text);
+                    if (count <= 0) {
+                        continue;
+                    }
+                    if (remainingIndex < count) {
+                        targetBlockId = block.id;
+                        localIndex = remainingIndex;
+                        break;
+                    }
+                    remainingIndex -= count;
+                }
+
+                if (targetBlockId) {
+                    if (activeBlockIdRef.current !== targetBlockId) {
+                        setActiveBlockId(targetBlockId);
+                    }
+                    selectPlainTextInBlock(targetBlockId, text, localIndex, (editor) => {
+                        const result = executeEditorCommand('insert_link', {
+                            editor,
+                            editorId: targetBlockId,
+                            label: text,
+                            text,
+                            href,
+                        }, { notifyOnFailure: true });
+                        if (!(result?.ok && result.transaction_applied)) {
+                            return;
+                        }
+                        persistEditorContentImmediately(editor, targetBlockId);
+                        clearFrozenEditorInsertionContext();
+                        notifyCtaSuccess();
+                    });
+                    return;
+                }
+                // Phrase absent in body — fall through to caret insert (add new contact).
             }
 
             // Do NOT re-sync from live editors after sidebar stole focus — that overwrites frozen caret.
@@ -6963,11 +7156,6 @@ export default function SeoArticleEditor({
                 ?? insertionCtx.selection
                 ?? frozen?.selection
                 ?? null;
-            // Contact sidebar always inserts CTA sentence via one command.
-            const isCtaSentence = detail?.is_sentence === true
-                || detail?.is_cta_sentence === true
-                || detail?.is_cta_block === true
-                || Boolean(String(detail?.sentence ?? '').trim());
             const tryCtaInsert = () => {
                 const commandName = isCtaSentence ? 'insert_contact_cta' : 'insert_contact_value';
                 const result = executeEditorCommand(commandName, {
@@ -7004,18 +7192,7 @@ export default function SeoArticleEditor({
                     scrollElementIntoViewIfNeeded(slot, { behavior: 'smooth', block: 'nearest' });
                 }
                 // Dirty/analyze/autosave emitted once by command layer document-changed.
-
-                window.dispatchEvent(
-                    new CustomEvent('seo-article-editor-notify', {
-                        detail: {
-                            title: isCtaSentence
-                                ? t('editor_cta_block_inserted')
-                                : t('editor_contact_value_inserted'),
-                            body: `«${text}»`,
-                            status: 'success',
-                        },
-                    }),
-                );
+                notifyCtaSuccess();
             };
 
             const ctaInsertStatus = tryCtaInsert();
@@ -7046,18 +7223,7 @@ export default function SeoArticleEditor({
                         clearFrozenEditorInsertionContext();
                         updateBlockContent(activeBlock.id, replaceResult.html);
                         requestAnalyze();
-                        window.dispatchEvent(
-                            new CustomEvent('seo-article-editor-notify', {
-                                detail: {
-                                    title: isCtaSentence
-                                        ? t('editor_cta_block_inserted')
-                                        : t('editor_contact_value_inserted'),
-                                    body: `«${text}»`,
-                                    status: 'success',
-                                },
-                            }),
-                        );
-
+                        notifyCtaSuccess();
                         return;
                     }
                 }
@@ -7098,20 +7264,17 @@ export default function SeoArticleEditor({
             clearFrozenEditorInsertionContext();
             updateBlockContent(targetBlock.id, nextHtml);
             requestAnalyze();
-
-            window.dispatchEvent(
-                new CustomEvent('seo-article-editor-notify', {
-                    detail: {
-                        title: isCtaSentence
-                            ? t('editor_cta_block_inserted')
-                            : t('editor_contact_value_inserted'),
-                        body: `«${text}»`,
-                        status: 'success',
-                    },
-                }),
-            );
+            notifyCtaSuccess();
         },
-        [commitActiveBlock, updateBlockContent, requestAnalyze, sectionByBlockId],
+        [
+            articleId,
+            commitActiveBlock,
+            persistEditorContentImmediately,
+            requestAnalyze,
+            sectionByBlockId,
+            selectPlainTextInBlock,
+            updateBlockContent,
+        ],
     );
 
     useEffect(() => {
@@ -7227,32 +7390,6 @@ export default function SeoArticleEditor({
 
             if (code === 'featured_missing' || code === 'featured_slug_not_fixed' || panel === 'featured') {
                 openPanel('featured', { source: 'reason_featured' });
-                openMediaPicker({
-                    mode: 'featured',
-                    selection: 'single',
-                    onConfirm: async (items) => {
-                        const item = normalizeFeaturedMediaItem(items?.[0]);
-                        if (!item?.url) return;
-                        try {
-                            await setFeaturedViaApi(articleId, item);
-                            window.dispatchEvent(new CustomEvent('seo-article-editor-notify', {
-                                detail: {
-                                    title: t('make_featured_image_success'),
-                                    body: t('make_featured_image_success_body'),
-                                    status: 'success',
-                                },
-                            }));
-                        } catch (error) {
-                            window.dispatchEvent(new CustomEvent('seo-article-editor-notify', {
-                                detail: {
-                                    title: t('make_featured_image_failed'),
-                                    body: String(error?.message || 'error'),
-                                    status: 'warning',
-                                },
-                            }));
-                        }
-                    },
-                });
                 return;
             }
 
@@ -8414,6 +8551,45 @@ export default function SeoArticleEditor({
                         }),
                     );
                     // Không dùng window.alert — Filament Notification + modal/event đã hiển thị.
+                } else if (target === 'product-gallery') {
+                    const mediaId = Number(result?.seo_media_id ?? result?.seoMediaId ?? 0) || 0;
+                    const executionId = String(
+                        result?.gallery_execution_id ?? result?.galleryExecutionId ?? '',
+                    ).trim();
+                    const status = String(result?.status ?? 'processing').toLowerCase();
+                    const processing =
+                        status === 'processing' || status === 'pending' || status === 'queued';
+
+                    if (processing && mediaId <= 0 && executionId === '') {
+                        window.dispatchEvent(
+                            new CustomEvent('article-ai-media-failed', {
+                                detail: {
+                                    type: 'image',
+                                    message: String(
+                                        result?.message ??
+                                            result?.error_message ??
+                                            t('editor_generate_image_failed'),
+                                    ),
+                                },
+                            }),
+                        );
+                    } else {
+                        window.dispatchEvent(
+                            new CustomEvent('article-ai-image-generated', {
+                                detail: {
+                                    target: 'product-gallery',
+                                    status,
+                                    url: String(result?.url ?? '').trim(),
+                                    seoMediaId: mediaId,
+                                    seo_media_id: mediaId,
+                                    gallery_execution_id: executionId,
+                                    galleryExecutionId: executionId,
+                                    supports_reference_image: Boolean(result?.supports_reference_image),
+                                    resolved_model: String(result?.resolved_model ?? ''),
+                                },
+                            }),
+                        );
+                    }
                 } else if (target !== 'product-gallery') {
                     // Không phụ thuộc Livewire event — gắn seoMediaId + poll từ return value / ai-jobs.
                     let mediaId = Number(result?.seo_media_id ?? result?.seoMediaId ?? 0);
@@ -10296,19 +10472,30 @@ export default function SeoArticleEditor({
     }, [clearAwaitingClientImagePlaceholders, requestGenerateArticleImage]);
 
     const saveLabel =
-        saveStatus === 'saving'
-            ? t('editor_saving_draft')
-            : saveStatus === 'pending'
-              ? t('editor_draft_pending')
-              : t('editor_draft_saved_local');
+        networkUnavailable
+            ? t('editor_network_offline_unsaved')
+            : networkRecovering
+              ? t('editor_network_reconnected_saving')
+              : saveStatus === 'saving'
+                ? t('editor_saving_draft')
+                : saveStatus === 'pending'
+                  ? t('editor_draft_pending')
+                  : t('editor_draft_saved_local');
 
     useEffect(() => {
         window.dispatchEvent(
             new CustomEvent('article-editor:save-status', {
-                detail: { status: saveStatus, label: saveLabel },
+                detail: {
+                    status: networkUnavailable
+                        ? 'offline'
+                        : networkRecovering
+                          ? 'recovering'
+                          : saveStatus,
+                    label: saveLabel,
+                },
             }),
         );
-    }, [saveStatus, saveLabel]);
+    }, [saveStatus, saveLabel, networkUnavailable, networkRecovering]);
 
     const mergedDisplay =
         tempMerge && activeBlockId === tempMerge.anchorId ? tempMerge.mergedHtml : undefined;
@@ -12312,6 +12499,8 @@ export default function SeoArticleEditor({
                 siteId={siteId}
                 productGalleryItems={productGalleryItems}
                 canaryProduct={isCanaryProduct}
+                parentChildAllowed={parentChildAllowed}
+                parentChildReason={parentChildReason}
             />
             <FeaturedSnippetPromptModal
                 open={featuredSnippetPromptOpen}

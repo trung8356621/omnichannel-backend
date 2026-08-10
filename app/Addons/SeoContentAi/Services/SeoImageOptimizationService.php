@@ -16,12 +16,14 @@ class SeoImageOptimizationService
 {
     public const WORDPRESS_UPLOAD_FALLBACK_MAX_BYTES = 102400;
 
+    public const WORDPRESS_UPLOAD_PORTRAIT_MIN_WIDTH = 1000;
+
     /**
      * Max long-edge (px) khi WebP/JPEG upload vẫn > 100KB — thử lần lượt nhỏ dần.
      *
      * @var list<int>
      */
-    public const WORDPRESS_UPLOAD_MAX_EDGE_STEPS = [1920, 1280, 1024, 800, 640, 480];
+    public const WORDPRESS_UPLOAD_MAX_EDGE_STEPS = [1920, 1280, 1024];
 
     public const LOG_WEBP_VALIDATION_FAILED = 'SEO_MEDIA_WEBP_VALIDATION_FAILED';
 
@@ -743,6 +745,28 @@ class SeoImageOptimizationService
                     }
 
                     $bytes = (int) filesize($written);
+                    $protectWidth = $this->shouldProtectPortraitUploadWidth($absolutePath);
+                    if ($protectWidth && $this->candidateWidthAtLeast($written, self::WORDPRESS_UPLOAD_PORTRAIT_MIN_WIDTH)) {
+                        if ($bytes > $maxBytes) {
+                            logger()->warning(self::LOG_FALLBACK_OVER_TARGET_SIZE, [
+                                'path' => $absolutePath,
+                                'optimized_path' => $written,
+                                'bytes' => $bytes,
+                                'max_bytes' => $maxBytes,
+                                'reason' => 'portrait_width_protected',
+                                'target' => $targetExtension,
+                                'max_edge' => $maxEdge,
+                                'quality' => $quality,
+                            ]);
+                        }
+
+                        return $written;
+                    }
+
+                    if ($protectWidth && ! $this->candidateWidthAtLeast($written, self::WORDPRESS_UPLOAD_PORTRAIT_MIN_WIDTH)) {
+                        continue;
+                    }
+
                     if ($bytes <= $maxBytes) {
                         logger()->info(self::LOG_FALLBACK_COMPRESSED, [
                             'path' => $absolutePath,
@@ -809,11 +833,17 @@ class SeoImageOptimizationService
     private function resolveWordPressUploadEdgeSteps(string $absolutePath): array
     {
         $size = @getimagesize($absolutePath);
-        $longEdge = is_array($size)
-            ? max((int) ($size[0] ?? 0), (int) ($size[1] ?? 0))
-            : 0;
+        $width = is_array($size) ? (int) ($size[0] ?? 0) : 0;
+        $height = is_array($size) ? (int) ($size[1] ?? 0) : 0;
+        $longEdge = max($width, $height);
 
         $steps = [];
+        if ($height > $width && $width >= self::WORDPRESS_UPLOAD_PORTRAIT_MIN_WIDTH) {
+            $portraitWidthFloorEdge = (int) ceil($height * self::WORDPRESS_UPLOAD_PORTRAIT_MIN_WIDTH / $width);
+            $portraitWidthFloorEdge = min($longEdge, max(1, $portraitWidthFloorEdge));
+            $steps[] = $portraitWidthFloorEdge;
+        }
+
         foreach (self::WORDPRESS_UPLOAD_MAX_EDGE_STEPS as $step) {
             if ($longEdge <= 0 || $step < $longEdge) {
                 $steps[] = $step;
@@ -824,7 +854,7 @@ class SeoImageOptimizationService
             $steps[] = self::WORDPRESS_UPLOAD_MAX_EDGE_STEPS[array_key_last(self::WORDPRESS_UPLOAD_MAX_EDGE_STEPS)];
         }
 
-        return $steps;
+        return array_values(array_unique($steps));
     }
 
     private function applyMaxLongEdgeToPath(string $absolutePath, int $maxEdge): void
@@ -856,6 +886,31 @@ class SeoImageOptimizationService
         }
 
         $this->imagePipeline->applyMaxDimensions($absolutePath, 0, $maxEdge, false, true);
+    }
+
+    private function shouldProtectPortraitUploadWidth(string $absolutePath): bool
+    {
+        $size = @getimagesize($absolutePath);
+        if (! is_array($size)) {
+            return false;
+        }
+
+        $width = (int) ($size[0] ?? 0);
+        $height = (int) ($size[1] ?? 0);
+
+        return $width > 0
+            && $height > $width
+            && $width >= self::WORDPRESS_UPLOAD_PORTRAIT_MIN_WIDTH;
+    }
+
+    private function candidateWidthAtLeast(string $absolutePath, int $minWidth): bool
+    {
+        $size = @getimagesize($absolutePath);
+        if (! is_array($size)) {
+            return false;
+        }
+
+        return (int) ($size[0] ?? 0) >= $minWidth;
     }
 
     private function persistTempImageToPath(string $tempPath, string $destinationPath): bool
@@ -899,7 +954,10 @@ class SeoImageOptimizationService
                 'source_path' => $absolutePath,
             ]);
 
-            if (! $validation['ok'] || $validation['bytes'] > $maxBytes) {
+            $protectWidth = $this->shouldProtectPortraitUploadWidth($absolutePath)
+                && $this->candidateWidthAtLeast($outputTemp, self::WORDPRESS_UPLOAD_PORTRAIT_MIN_WIDTH);
+
+            if (! $validation['ok'] || ($validation['bytes'] > $maxBytes && ! $protectWidth)) {
                 if (! $validation['ok']) {
                     logger()->warning(self::LOG_WEBP_VALIDATION_FAILED, [
                         'reason' => $validation['reason'],
@@ -912,6 +970,18 @@ class SeoImageOptimizationService
                 }
 
                 return null;
+            }
+
+            if ($validation['bytes'] > $maxBytes) {
+                logger()->warning(self::LOG_FALLBACK_OVER_TARGET_SIZE, [
+                    'path' => $absolutePath,
+                    'webp_path' => $targetPath,
+                    'bytes' => $validation['bytes'],
+                    'max_bytes' => $maxBytes,
+                    'reason' => 'portrait_width_protected',
+                    'max_edge' => $maxEdge,
+                    'quality' => $quality,
+                ]);
             }
 
             if (! $this->persistTempImageToPath($outputTemp, $targetPath)) {

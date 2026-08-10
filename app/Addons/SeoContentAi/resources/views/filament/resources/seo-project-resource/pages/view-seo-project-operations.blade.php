@@ -66,6 +66,33 @@
             debugNeedsAt: false,
             debugAt: '',
             debugCount: 0,
+            selectArticleOpen: false,
+            selectArticleLocalLoading: false,
+            selectArticleSearchTimer: null,
+            openSelectExistingArticleModal(taskId) {
+                const id = Number(taskId || 0);
+                if (id <= 0) return;
+                this.selectArticleOpen = true;
+                this.selectArticleLocalLoading = true;
+                $wire.openSelectExistingArticle(id).finally(() => {
+                    this.selectArticleLocalLoading = false;
+                });
+            },
+            closeSelectExistingArticleModal() {
+                this.selectArticleOpen = false;
+                $wire.closeSelectExistingArticle();
+            },
+            scheduleSelectArticleSearch() {
+                if (this.selectArticleSearchTimer) {
+                    clearTimeout(this.selectArticleSearchTimer);
+                }
+                this.selectArticleSearchTimer = setTimeout(() => {
+                    this.selectArticleLocalLoading = true;
+                    $wire.searchSelectExistingArticles().finally(() => {
+                        this.selectArticleLocalLoading = false;
+                    });
+                }, 280);
+            },
             openDebugLifecycle(detail) {
                 this.debugBulk = false;
                 this.debugTaskId = Number(detail.taskId || 0);
@@ -524,6 +551,8 @@
         x-on:cp-ops-item-transition.window="handleItemTransition($event.detail || {})"
         x-on:cp-ops-debug-lifecycle.window="openDebugLifecycle($event.detail || {})"
         x-on:cp-ops-debug-lifecycle-bulk.window="openDebugBulk($event.detail || {})"
+        x-on:open-select-existing-article.window="openSelectExistingArticleModal($event.detail?.taskId)"
+        x-on:close-select-existing-article.window="selectArticleOpen = false"
     >
         @if ($this->settingsOpen)
             <div class="rounded-xl border border-gray-200 bg-white p-4 text-sm dark:border-gray-700 dark:bg-gray-900">
@@ -629,7 +658,7 @@
             <x-seo-content-ai::content-project-bulk-selection-toolbar variant="content_project" :selected-count="$selectedCount" />
         </div>
 
-        {{-- Debug lifecycle modal â€” Alpine first; no WordPress --}}
+        {{-- Debug lifecycle modal — Alpine first; no WordPress --}}
         <div
             x-show="debugOpen"
             x-cloak
@@ -645,7 +674,7 @@
                 <div class="space-y-2 text-sm">
                     <p x-show="!debugBulk"><span class="text-gray-500">Item:</span> <span x-text="debugTitle"></span></p>
                     <p x-show="debugBulk"><span class="text-gray-500">Items:</span> <span x-text="debugCount"></span></p>
-                    <p><span class="text-gray-500">From:</span> <span x-text="debugFrom"></span> â†’ <span x-text="debugTo"></span></p>
+                    <p><span class="text-gray-500">From:</span> <span x-text="debugFrom"></span> → <span x-text="debugTo"></span></p>
                     <label class="block" x-show="debugNeedsAt">
                         <span class="text-xs text-gray-500">{{ __('seo-content-ai::filament.projects.ops_debug_schedule_at') }}</span>
                         <input type="datetime-local" x-model="debugAt" class="fi-input mt-1 block w-full rounded-lg text-sm" />
@@ -656,6 +685,187 @@
                     <button type="button" @click="confirmDebugLifecycle()" class="fi-btn fi-btn-color-warning fi-size-sm">
                         {{ __('seo-content-ai::filament.projects.ops_debug_lifecycle_confirm') }}
                     </button>
+                </div>
+            </div>
+        </div>
+
+        {{-- Select Existing Article modal — Alpine open first; Livewire search/attach --}}
+        <div
+            x-show="selectArticleOpen"
+            x-cloak
+            x-transition.opacity.duration.150ms
+            class="fixed inset-0 z-[60] flex items-center justify-center bg-gray-950/50 p-4 backdrop-blur-[2px]"
+            @keydown.escape.window="if (selectArticleOpen) { closeSelectExistingArticleModal() }"
+        >
+            <div
+                x-show="selectArticleOpen"
+                x-transition:enter="ease-out duration-150"
+                x-transition:enter-start="opacity-0 translate-y-1 scale-[0.98]"
+                x-transition:enter-end="opacity-100 translate-y-0 scale-100"
+                class="flex max-h-[min(85vh,42rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl ring-1 ring-black/5 dark:border-gray-700 dark:bg-gray-900 dark:ring-white/10"
+                @click.outside="closeSelectExistingArticleModal()"
+            >
+                {{-- Header --}}
+                <div class="shrink-0 bg-gradient-to-b from-gray-50 to-white px-5 pt-5 pb-4 dark:from-gray-800/80 dark:to-gray-900">
+                    <div class="flex items-start gap-3">
+                        <div class="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-warning-50 text-warning-600 ring-1 ring-warning-200 dark:bg-warning-500/10 dark:text-warning-400 dark:ring-warning-500/30">
+                            <x-filament::icon icon="heroicon-o-link" class="h-5 w-5" />
+                        </div>
+                        <div class="min-w-0 flex-1">
+                            <h3 class="text-base font-semibold tracking-tight text-gray-950 dark:text-white">
+                                {{ __('seo-content-ai::filament.projects.select_existing_article_title') }}
+                            </h3>
+                            <p class="mt-1 text-sm leading-snug text-gray-500 dark:text-gray-400">
+                                {{ __('seo-content-ai::filament.projects.select_existing_article_help') }}
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            @click="closeSelectExistingArticleModal()"
+                            class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                            aria-label="Close"
+                        >
+                            <x-filament::icon icon="heroicon-o-x-mark" class="h-5 w-5" />
+                        </button>
+                    </div>
+
+                    {{-- Search --}}
+                    <div class="mt-4 space-y-3">
+                        <label class="block">
+                            <span class="mb-1.5 block text-xs font-medium text-gray-600 dark:text-gray-300">
+                                {{ __('seo-content-ai::filament.projects.select_existing_article_search') }}
+                            </span>
+                            <div class="relative">
+                                <span class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400">
+                                    <x-filament::icon icon="heroicon-m-magnifying-glass" class="h-4 w-4" />
+                                </span>
+                                <input
+                                    type="search"
+                                    wire:model.live.debounce.300ms="selectExistingArticleQuery"
+                                    class="fi-input block w-full rounded-xl border-gray-200 py-2.5 pl-9 pr-3 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600"
+                                    placeholder="{{ __('seo-content-ai::filament.projects.select_existing_article_search_placeholder') }}"
+                                    autocomplete="off"
+                                />
+                            </div>
+                        </label>
+
+                        <label class="block">
+                            <span class="mb-1.5 block text-xs font-medium text-gray-600 dark:text-gray-300">
+                                {{ __('seo-content-ai::filament.projects.select_existing_article_direct') }}
+                            </span>
+                            <div class="flex gap-2">
+                                <input
+                                    type="text"
+                                    wire:model="selectExistingArticleDirect"
+                                    class="fi-input block min-w-0 flex-1 rounded-xl border-gray-200 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600"
+                                    placeholder="{{ __('seo-content-ai::filament.projects.select_existing_article_direct_placeholder') }}"
+                                    autocomplete="off"
+                                    @keydown.enter.prevent="$wire.resolveSelectExistingArticleDirect()"
+                                />
+                                <button
+                                    type="button"
+                                    wire:click="resolveSelectExistingArticleDirect"
+                                    wire:loading.attr="disabled"
+                                    wire:target="resolveSelectExistingArticleDirect,confirmSelectExistingArticle"
+                                    class="fi-btn fi-btn-color-primary fi-size-sm inline-flex shrink-0 items-center gap-1.5 rounded-xl px-3"
+                                >
+                                    <x-filament::icon wire:loading.remove wire:target="resolveSelectExistingArticleDirect" icon="heroicon-m-check" class="h-4 w-4" />
+                                    <svg wire:loading wire:target="resolveSelectExistingArticleDirect" class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                                    </svg>
+                                    <span>{{ __('seo-content-ai::filament.projects.select_existing_article_resolve') }}</span>
+                                </button>
+                            </div>
+                        </label>
+
+                        @if (filled($this->selectExistingArticleError))
+                            <div class="flex items-start gap-2 rounded-xl border border-danger-200 bg-danger-50 px-3 py-2 text-sm text-danger-700 dark:border-danger-500/30 dark:bg-danger-500/10 dark:text-danger-300">
+                                <x-filament::icon icon="heroicon-m-exclamation-triangle" class="mt-0.5 h-4 w-4 shrink-0" />
+                                <span>{{ $this->selectExistingArticleError }}</span>
+                            </div>
+                        @endif
+                    </div>
+                </div>
+
+                {{-- Results (scroll) --}}
+                <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white dark:bg-gray-900" style="max-height: 18rem;">
+                    <div x-show="selectArticleLocalLoading || $wire.selectExistingArticleLoading" class="space-y-2 p-4">
+                        @foreach (range(1, 3) as $_)
+                            <div class="rounded-xl border border-gray-100 p-3 dark:border-gray-800">
+                                <div class="h-4 w-3/4 animate-pulse rounded bg-gray-100 dark:bg-gray-800"></div>
+                                <div class="mt-2 flex gap-2">
+                                    <div class="h-5 w-20 animate-pulse rounded-md bg-gray-100 dark:bg-gray-800"></div>
+                                    <div class="h-5 w-16 animate-pulse rounded-md bg-gray-100 dark:bg-gray-800"></div>
+                                </div>
+                            </div>
+                        @endforeach
+                    </div>
+
+                    <div x-show="!selectArticleLocalLoading && !$wire.selectExistingArticleLoading" class="p-2">
+                        @forelse ($this->selectExistingArticleResults as $hit)
+                            @php
+                                $hitId = (int) ($hit['id'] ?? 0);
+                                $hitTitle = (string) ($hit['title'] ?? ('Article #'.$hitId));
+                                $hitWp = ! empty($hit['wp_post_id']) ? (int) $hit['wp_post_id'] : null;
+                                $hitSlug = trim((string) ($hit['slug'] ?? ''));
+                                $hitDomain = trim((string) ($hit['domain'] ?? ''));
+                            @endphp
+                            <button
+                                type="button"
+                                wire:click="confirmSelectExistingArticle({{ $hitId }})"
+                                wire:loading.attr="disabled"
+                                wire:target="confirmSelectExistingArticle,resolveSelectExistingArticleDirect"
+                                class="group mb-1 flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-primary-50/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:opacity-50 dark:hover:bg-primary-500/10"
+                            >
+                                <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-500 ring-1 ring-gray-200 transition group-hover:bg-white group-hover:text-primary-600 group-hover:ring-primary-200 dark:bg-gray-800 dark:text-gray-400 dark:ring-gray-700 dark:group-hover:bg-gray-900 dark:group-hover:text-primary-400">
+                                    <x-filament::icon icon="heroicon-o-document-text" class="h-4 w-4" />
+                                </span>
+                                <span class="min-w-0 flex-1">
+                                    <span class="block truncate text-sm font-medium text-gray-900 dark:text-gray-100">{{ $hitTitle }}</span>
+                                    <span class="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                        <span class="inline-flex items-center rounded-md bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+                                            #{{ $hitId }}
+                                        </span>
+                                        @if ($hitWp)
+                                            <span class="inline-flex items-center rounded-md bg-sky-50 px-1.5 py-0.5 text-[11px] font-medium text-sky-700 ring-1 ring-inset ring-sky-200 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-500/30">
+                                                WP {{ $hitWp }}
+                                            </span>
+                                        @endif
+                                        @if ($hitSlug !== '')
+                                            <span class="inline-flex max-w-[12rem] truncate items-center rounded-md bg-gray-50 px-1.5 py-0.5 text-[11px] text-gray-500 ring-1 ring-inset ring-gray-200 dark:bg-gray-800/60 dark:text-gray-400 dark:ring-gray-700" title="/{{ ltrim($hitSlug, '/') }}/">
+                                                /{{ ltrim($hitSlug, '/') }}/
+                                            </span>
+                                        @endif
+                                        @if ($hitDomain !== '')
+                                            <span class="inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] text-gray-400 dark:text-gray-500">
+                                                {{ $hitDomain }}
+                                            </span>
+                                        @endif
+                                    </span>
+                                </span>
+                                <span class="mt-1 shrink-0 text-gray-300 opacity-0 transition group-hover:opacity-100 group-hover:text-primary-500 dark:text-gray-600 dark:group-hover:text-primary-400">
+                                    <x-filament::icon icon="heroicon-m-chevron-right" class="h-4 w-4" />
+                                </span>
+                            </button>
+                        @empty
+                            <div class="flex flex-col items-center px-4 py-10 text-center">
+                                <div class="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-50 text-gray-400 ring-1 ring-gray-200 dark:bg-gray-800 dark:ring-gray-700">
+                                    <x-filament::icon icon="heroicon-o-magnifying-glass" class="h-6 w-6" />
+                                </div>
+                                <p class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ __('seo-content-ai::filament.projects.select_existing_article_empty') }}</p>
+                                <p class="mt-1 max-w-xs text-xs text-gray-400">{{ __('seo-content-ai::filament.projects.select_existing_article_direct_placeholder') }}</p>
+                            </div>
+                        @endforelse
+                    </div>
+                </div>
+
+                {{-- Footer --}}
+                <div class="shrink-0 border-t border-gray-100 bg-gray-50/80 px-5 py-3 dark:border-gray-800 dark:bg-gray-800/40">
+                    <p class="flex items-start gap-2 text-xs leading-snug text-gray-500 dark:text-gray-400">
+                        <x-filament::icon icon="heroicon-m-information-circle" class="mt-px h-4 w-4 shrink-0 text-gray-400" />
+                        <span>{{ __('seo-content-ai::filament.projects.select_existing_article_no_generate') }}</span>
+                    </p>
                 </div>
             </div>
         </div>
@@ -704,6 +914,24 @@
                     <button type="button" @click="detailsOpen = false; $wire.closeExecutionDetails()" class="text-sm text-gray-500" aria-label="Close details">âœ•</button>
                 </div>
                 <div class="flex-1 overflow-y-auto p-4">
+                    @php
+                        $detailTaskId = (int) ($this->executionDetailsTaskId ?? 0);
+                        $detailRow = collect($rows)->firstWhere('task_id', $detailTaskId);
+                        $existingLink = is_array($detailRow) ? ($detailRow['existing_article_link'] ?? null) : null;
+                    @endphp
+                    @if ($existingLink === 'unlinked')
+                        <p class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                            {{ __('seo-content-ai::filament.projects.existing_article_unlinked') }}
+                        </p>
+                    @elseif ($existingLink === 'ambiguous')
+                        <p class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                            {{ __('seo-content-ai::filament.projects.existing_article_ambiguous') }}
+                        </p>
+                    @elseif ($existingLink === 'conflict')
+                        <p class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                            {{ __('seo-content-ai::filament.projects.existing_article_conflict') }}
+                        </p>
+                    @endif
                     @forelse ($this->executionDetailsRows as $exec)
                         <div class="mb-3 rounded-lg border border-gray-200 p-3 text-sm dark:border-gray-700">
                             <div class="font-medium">Run #{{ $exec['run_id'] }} Â· #{{ $exec['id'] }} Â· {{ $exec['status'] }}</div>

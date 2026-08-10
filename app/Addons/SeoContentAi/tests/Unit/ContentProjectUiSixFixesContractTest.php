@@ -266,6 +266,7 @@ final class ContentProjectUiSixFixesContractTest extends TestCase
         self::assertTrue($skipped['allow_generation']);
         self::assertFalse($skipped['run_again']);
         self::assertFalse($skipped['generate']);
+        self::assertFalse($skipped['create_or_rerun']);
 
         $view = (string) file_get_contents(
             dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource/Pages/ViewSeoProject.php',

@@ -76,31 +76,52 @@
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
             </svg>
         </button>
-    @elseif ($a['run_again'])
+    @elseif (! empty($a['resume_generation']))
         <button
             type="button"
             wire:click="resumeFromFailedStep({{ $tid }})"
             wire:target="resumeFromFailedStep({{ $tid }})"
             wire:loading.attr="disabled"
-            class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-warning-600 ring-1 ring-gray-200 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-warning-400 dark:ring-gray-700 dark:hover:bg-gray-800"
+            class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-primary-600 ring-1 ring-gray-200 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-primary-400 dark:ring-gray-700 dark:hover:bg-gray-800"
             aria-label="{{ __('seo-content-ai::filament.projects.item_action_resume_failed_step') }}"
             title="{{ __('seo-content-ai::filament.projects.item_action_resume_failed_step') }}"
         >
-            <x-filament::icon wire:loading.remove wire:target="resumeFromFailedStep({{ $tid }})" icon="heroicon-o-arrow-path" class="h-4 w-4" />
+            <x-filament::icon wire:loading.remove wire:target="resumeFromFailedStep({{ $tid }})" icon="heroicon-o-arrow-uturn-left" class="h-4 w-4" />
             <svg wire:loading wire:target="resumeFromFailedStep({{ $tid }})" class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
             </svg>
         </button>
-    @elseif ($a['generate'])
+    @elseif (! empty($a['select_existing_article']))
         <button
             type="button"
-            wire:click="generateOne({{ $tid }})"
-            class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-success-600 ring-1 ring-gray-200 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-success-400 dark:ring-gray-700 dark:hover:bg-gray-800"
-            aria-label="{{ __('seo-content-ai::filament.projects.item_action_generate') }}"
-            title="{{ __('seo-content-ai::filament.projects.item_action_generate') }}"
+            @click="$dispatch('open-select-existing-article', { taskId: {{ $tid }} })"
+            class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-warning-600 ring-1 ring-gray-200 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-warning-400 dark:ring-gray-700 dark:hover:bg-gray-800"
+            aria-label="{{ __('seo-content-ai::filament.projects.item_action_select_existing_article') }}"
+            title="{{ __('seo-content-ai::filament.projects.item_action_select_existing_article') }}"
         >
-            <x-filament::icon icon="heroicon-o-play" class="h-4 w-4" />
+            <x-filament::icon icon="heroicon-o-link" class="h-4 w-4" />
+        </button>
+    @elseif (! empty($a['create_or_rerun']))
+        @php
+            $createOrRerunLabel = (($a['create_or_rerun_label'] ?? 'create') === 'rerun')
+                ? __('seo-content-ai::filament.projects.item_action_smart_rerun')
+                : __('seo-content-ai::filament.projects.item_action_smart_create');
+        @endphp
+        <button
+            type="button"
+            wire:click="createOrRerunOne({{ $tid }})"
+            wire:target="createOrRerunOne({{ $tid }})"
+            wire:loading.attr="disabled"
+            class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-success-600 ring-1 ring-gray-200 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-success-400 dark:ring-gray-700 dark:hover:bg-gray-800"
+            aria-label="{{ $createOrRerunLabel }}"
+            title="{{ $createOrRerunLabel }}"
+        >
+            <x-filament::icon wire:loading.remove wire:target="createOrRerunOne({{ $tid }})" icon="heroicon-o-play" class="h-4 w-4" />
+            <svg wire:loading wire:target="createOrRerunOne({{ $tid }})" class="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+            </svg>
         </button>
     @endif
 
@@ -182,16 +203,33 @@
                         <span class="cp-ops-menu__label">{{ __('seo-content-ai::filament.projects.item_action_acknowledge_error') }}</span>
                     </button>
                 @endif
-                @if ($a['generate'])
-                    <button role="menuitem" type="button" wire:click="generateOne({{ $tid }})" @click="open = false" class="{{ $itemClass }}" title="{{ __('seo-content-ai::filament.projects.item_action_generate') }}">
+                @if (! empty($a['create_or_rerun']))
+                    @php
+                        $menuCreateOrRerunLabel = (($a['create_or_rerun_label'] ?? 'create') === 'rerun')
+                            ? __('seo-content-ai::filament.projects.item_action_smart_rerun')
+                            : __('seo-content-ai::filament.projects.item_action_smart_create');
+                    @endphp
+                    <button role="menuitem" type="button" wire:click="createOrRerunOne({{ $tid }})" @click="open = false" class="{{ $itemClass }}" title="{{ $menuCreateOrRerunLabel }}">
                         <x-filament::icon icon="heroicon-o-play" class="cp-ops-menu__icon" />
-                        <span class="cp-ops-menu__label">{{ __('seo-content-ai::filament.projects.item_action_generate') }}</span>
+                        <span class="cp-ops-menu__label">{{ $menuCreateOrRerunLabel }}</span>
                     </button>
                 @endif
-                @if ($a['run_again'] || $a['retry_failed_step'])
+                @if ($a['resume_generation'])
                     <button role="menuitem" type="button" wire:click="resumeFromFailedStep({{ $tid }})" @click="open = false" class="{{ $itemClass }}" title="{{ __('seo-content-ai::filament.projects.item_action_resume_failed_step') }}">
-                        <x-filament::icon icon="heroicon-o-arrow-path" class="cp-ops-menu__icon" />
+                        <x-filament::icon icon="heroicon-o-arrow-uturn-left" class="cp-ops-menu__icon" />
                         <span class="cp-ops-menu__label">{{ __('seo-content-ai::filament.projects.item_action_resume_failed_step') }}</span>
+                    </button>
+                @endif
+                @if (! empty($a['select_existing_article']))
+                    <button
+                        role="menuitem"
+                        type="button"
+                        @click="open = false; $dispatch('open-select-existing-article', { taskId: {{ $tid }} })"
+                        class="{{ $itemClass }}"
+                        title="{{ __('seo-content-ai::filament.projects.item_action_select_existing_article') }}"
+                    >
+                        <x-filament::icon icon="heroicon-o-link" class="cp-ops-menu__icon" />
+                        <span class="cp-ops-menu__label">{{ __('seo-content-ai::filament.projects.item_action_select_existing_article') }}</span>
                     </button>
                 @endif
                 @if ($a['regen_outline'])
@@ -204,18 +242,6 @@
                     <button role="menuitem" type="button" wire:click="regenArticle({{ $tid }})" wire:confirm="{{ __('seo-content-ai::filament.projects.item_action_regen_article_confirm') }}" @click="open = false" class="{{ $itemClass }}" title="{{ __('seo-content-ai::filament.projects.item_action_regen_article') }}">
                         <x-filament::icon icon="heroicon-o-pencil-square" class="cp-ops-menu__icon" />
                         <span class="cp-ops-menu__label">{{ __('seo-content-ai::filament.projects.item_action_regen_article') }}</span>
-                    </button>
-                @endif
-                @if ($a['debug_rerun_from_start'])
-                    <button role="menuitem" type="button" wire:click="rerunOne({{ $tid }})" wire:confirm="{{ __('seo-content-ai::filament.projects.item_action_rerun_from_start_confirm') }}" @click="open = false" class="{{ $itemClass }}" title="Debug rerun from start">
-                        <x-filament::icon icon="heroicon-o-arrow-path-rounded-square" class="cp-ops-menu__icon" />
-                        <span class="cp-ops-menu__label">Debug rerun from start</span>
-                    </button>
-                @endif
-                @if ($a['run_again'])
-                    <button role="menuitem" type="button" wire:click="rerunOne({{ $tid }})" wire:confirm="{{ __('seo-content-ai::filament.projects.item_action_rerun_from_start_confirm') }}" @click="open = false" class="{{ $itemClass }}" title="{{ __('seo-content-ai::filament.projects.item_action_rerun_from_start') }}">
-                        <x-filament::icon icon="heroicon-o-arrow-path-rounded-square" class="cp-ops-menu__icon" />
-                        <span class="cp-ops-menu__label">{{ __('seo-content-ai::filament.projects.item_action_rerun_from_start') }}</span>
                     </button>
                 @endif
                 @if ($a['regen_image'] && $articleUrl)

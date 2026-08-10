@@ -372,10 +372,13 @@ final class ArticleEditorSyncController extends Controller
         if (
             $provided !== ''
             && $user instanceof User
-            && (string) $active->id === $provided
             && (int) $active->user_id === (int) $user->getKey()
             && $active->isActiveLock()
         ) {
+            return null;
+        }
+
+        if ($user instanceof User && (int) $active->user_id === (int) $user->getKey()) {
             return null;
         }
 

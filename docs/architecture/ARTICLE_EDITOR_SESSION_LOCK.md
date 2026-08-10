@@ -48,7 +48,7 @@ Manager/admin (or `User::ROLE_ADMIN` / `ROLE_OWNER`). Revokes old session as `ta
 
 ### Archive
 
-`ArchiveContentProjectService::archive` revokes active sessions for project article ids. Heartbeat/acquire returns `content_project_archived`. Client → read-only, no reacquire/takeover, draft kept for recovery. Restore does **not** restore sessions (`workspace_reused=false` unchanged).
+`ArchiveContentProjectService::archive` revokes active sessions for project article ids (`content_project_archived`) so in-flight editors close cleanly. After archive completes, Articles are standalone: `assertArticleEditable` does **not** deny on project `archived_at`; a new acquire/save/Sync WP succeeds without restoring the project or recreating workspace. Historical associations stay on archive items for reports. Restore does **not** restore sessions (`workspace_reused=false` unchanged).
 
 ## Session state event schema (Phase 1.1)
 

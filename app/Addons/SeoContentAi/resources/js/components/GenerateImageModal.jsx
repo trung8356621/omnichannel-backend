@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 import SeoSelect from './SeoSelect';
 import ImageSplitterPanel from './ImageSplitterPanel';
 import { fetchSeoMediaStatus } from '../utils/seoMediaApi';
+import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
 import {
     appendProductAlbumItems,
     loadProductAlbum,
@@ -141,6 +142,8 @@ function normalizePostProcessing(raw) {
  *   siteId?: number | string | null,
  *   productGalleryItems?: Array<{ id?: number, url: string, connected?: boolean }>,
  *   canaryProduct?: boolean,
+ *   parentChildAllowed?: boolean,
+ *   parentChildReason?: string,
  * }} props
  */
 export default function GenerateImageModal({
@@ -155,6 +158,8 @@ export default function GenerateImageModal({
     siteId = null,
     productGalleryItems = [],
     canaryProduct = false,
+    parentChildAllowed = false,
+    parentChildReason = '',
 }) {
     const [prompt, setPrompt] = useState(initialPrompt);
     const [productCategoryId, setProductCategoryId] = useState('');
@@ -176,8 +181,10 @@ export default function GenerateImageModal({
     const [mode2Progress, setMode2Progress] = useState('');
     const pollTimerRef = useRef(null);
     const pendingMediaIdRef = useRef(null);
+    const pendingExecutionIdRef = useRef(null);
     const connectedUrlsRef = useRef(new Set());
     const [pendingMediaId, setPendingMediaId] = useState(null);
+    const [pendingExecutionId, setPendingExecutionId] = useState(null);
 
     const isProductGallery = mode === 'product-gallery';
     const twoColumn = isProductGallery;
@@ -187,6 +194,10 @@ export default function GenerateImageModal({
     useEffect(() => {
         pendingMediaIdRef.current = pendingMediaId;
     }, [pendingMediaId]);
+
+    useEffect(() => {
+        pendingExecutionIdRef.current = pendingExecutionId;
+    }, [pendingExecutionId]);
 
     const refreshGalleryItems = useCallback(() => {
         const external = mergeGalleryPreviewItems(
@@ -225,14 +236,37 @@ export default function GenerateImageModal({
             setPostProcessing(normalizePostProcessing({}));
             setPromptPreviewError('');
             setPendingMediaId(null);
+            setPendingExecutionId(null);
             setGenerationError('');
             setSelectedSplitUrl('');
             setMode1Status(null);
             setGalleryGenerationMode('sprite');
             setMode2Progress('');
+            setProviderSupportsReference(null);
             refreshGalleryItems();
+
+            if (mode === 'product-gallery') {
+                callEditArticleLivewire('resolveProductGalleryReferenceCapability')
+                    .then((payload) => {
+                        if (!payload || typeof payload !== 'object') {
+                            return;
+                        }
+                        if (typeof payload.supports_reference_image === 'boolean') {
+                            setProviderSupportsReference(payload.supports_reference_image);
+                        }
+                    })
+                    .catch(() => {
+                        setProviderSupportsReference(null);
+                    });
+            }
         }
-    }, [open, initialPrompt, initialLoaiSanPhamCustom, refreshGalleryItems]);
+    }, [open, initialPrompt, initialLoaiSanPhamCustom, refreshGalleryItems, mode]);
+
+    useEffect(() => {
+        if (!parentChildAllowed && galleryGenerationMode === 'parent_child') {
+            setGalleryGenerationMode('sprite');
+        }
+    }, [parentChildAllowed, galleryGenerationMode]);
 
     const markConnectedItem = useCallback((item) => {
         const normalized = normalizeGalleryPreviewItem(item, { connected: true });
@@ -297,6 +331,8 @@ export default function GenerateImageModal({
             if (status === 'completed' || status === 'failed') {
                 setSubmitting(false);
                 setPendingMediaId(null);
+                setPendingExecutionId(null);
+                setMode2Progress('');
                 setGalleryItems((prev) =>
                     prev.map((item) => ({
                         ...item,
@@ -356,10 +392,28 @@ export default function GenerateImageModal({
             }
 
             const mediaId = Number(detail.seoMediaId ?? detail.seo_media_id ?? 0) || 0;
+            const executionId = String(detail.gallery_execution_id ?? detail.galleryExecutionId ?? '').trim();
             const status = String(detail.status ?? '').toLowerCase();
+            const processing = status === 'processing' || status === 'pending' || status === 'queued';
 
-            if (mediaId > 0 && (status === 'processing' || status === 'pending')) {
+            if (typeof detail.supports_reference_image === 'boolean') {
+                setProviderSupportsReference(detail.supports_reference_image);
+            }
+
+            if (processing && mediaId <= 0 && executionId === '') {
+                setSubmitting(false);
+                setPendingMediaId(null);
+                setPendingExecutionId(null);
+                setGenerationError(String(detail.message ?? detail.error_message ?? t('editor_ai_failed')));
+                return;
+            }
+
+            if (mediaId > 0 && processing) {
                 setPendingMediaId(mediaId);
+            }
+            if (executionId !== '' && processing) {
+                setPendingExecutionId(executionId);
+                setMode2Progress(t('processing'));
             }
 
             setGenerationError('');
@@ -376,6 +430,7 @@ export default function GenerateImageModal({
 
             setSubmitting(false);
             setPendingMediaId(null);
+            setPendingExecutionId(null);
             setGenerationError(String(detail.message ?? t('editor_generate_image_failed')));
             setGenerationErrorTechnical(String(detail.technicalDetails ?? detail.technical_details ?? ''));
             setGenerationErrorRetryable(Boolean(detail.retryable));
@@ -441,6 +496,78 @@ export default function GenerateImageModal({
             }
         };
     }, [open, isProductGallery, pendingMediaId, applyGalleryPreviewFromPayload]);
+
+    useEffect(() => {
+        if (!open || !isProductGallery || !pendingExecutionId || pendingMediaId) {
+            return undefined;
+        }
+
+        let cancelled = false;
+        let attempt = 0;
+        const maxAttempts = 90;
+        let timerId = null;
+
+        const poll = async () => {
+            if (cancelled) {
+                return;
+            }
+
+            attempt += 1;
+
+            try {
+                const payload = await callEditArticleLivewire(
+                    'pollProductGalleryExecutionStatus',
+                    pendingExecutionId,
+                );
+                const status = String(payload?.status ?? '').toLowerCase();
+
+                if (status === 'completed') {
+                    setSubmitting(false);
+                    setPendingExecutionId(null);
+                    setMode2Progress('');
+                    refreshGalleryItems();
+                    window.dispatchEvent(new CustomEvent('seo-product-gallery-updated'));
+                    return;
+                }
+
+                if (status === 'failed') {
+                    setSubmitting(false);
+                    setPendingExecutionId(null);
+                    setMode2Progress('');
+                    setGenerationError(
+                        String(payload?.message ?? payload?.failure_reason ?? t('editor_ai_failed')),
+                    );
+                    return;
+                }
+
+                setMode2Progress(t('processing'));
+            } catch {
+                if (attempt >= maxAttempts) {
+                    setSubmitting(false);
+                    setPendingExecutionId(null);
+                    setGenerationError(t('editor_ai_failed'));
+                    return;
+                }
+            }
+
+            if (attempt >= maxAttempts) {
+                setSubmitting(false);
+                setPendingExecutionId(null);
+                return;
+            }
+
+            timerId = window.setTimeout(poll, 5000);
+        };
+
+        timerId = window.setTimeout(poll, 3000);
+
+        return () => {
+            cancelled = true;
+            if (timerId) {
+                window.clearTimeout(timerId);
+            }
+        };
+    }, [open, isProductGallery, pendingExecutionId, pendingMediaId, refreshGalleryItems]);
 
     const handleSplitSaved = useCallback(
         (data) => {
@@ -548,7 +675,10 @@ export default function GenerateImageModal({
             userBrief: brief,
             loaiSanPhamCategoryArticleId: categoryId,
             loaiSanPhamCustom: customValue || brief,
-            galleryGenerationMode,
+            galleryGenerationMode:
+                galleryGenerationMode === 'parent_child' && !parentChildAllowed
+                    ? 'sprite'
+                    : galleryGenerationMode,
         };
 
         setSubmitting(true);
@@ -578,13 +708,29 @@ export default function GenerateImageModal({
                     <SeoSelect
                         id="seo-generate-gallery-mode"
                         value={galleryGenerationMode}
-                        onChange={(event) => setGalleryGenerationMode(event.target.value)}
+                        onChange={(event) => {
+                            const next = String(event.target.value ?? '');
+                            if (next === 'parent_child' && !parentChildAllowed) {
+                                return;
+                            }
+                            setGalleryGenerationMode(next);
+                        }}
                         options={[
                             { value: 'sprite', label: t('generate_image_mode2_mode_sprite') },
-                            { value: 'parent_child', label: t('generate_image_mode2_mode_parent_child') },
+                            {
+                                value: 'parent_child',
+                                label: t('generate_image_mode2_mode_parent_child'),
+                                disabled: !parentChildAllowed,
+                            },
                             { value: 'auto', label: t('generate_image_mode2_mode_auto') },
                         ]}
                     />
+                    {!parentChildAllowed ? (
+                        <p className="seo-generate-image-modal__helper">
+                            {t('generate_image_mode2_feature_disabled')}
+                            {parentChildReason ? ` (${parentChildReason})` : ''}
+                        </p>
+                    ) : null}
                     <p className="seo-generate-image-modal__helper">
                         {t('generate_image_mode2_capability_label')}
                         {': '}

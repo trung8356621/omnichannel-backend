@@ -104,8 +104,10 @@ final class ContentProjectStaleGenerationRecoveryTest extends TestCase
             'article_edit_url' => null,
         ];
         $actions = ContentProjectItemActionsPresenter::forRow($staleRow);
-        self::assertTrue($actions['run_again']);
+        self::assertTrue($actions['create_or_rerun']);
+        self::assertSame('rerun', $actions['create_or_rerun_label']);
         self::assertFalse($actions['generate']);
+        self::assertFalse($actions['run_again']);
         self::assertFalse($actions['stop_generation']);
         self::assertFalse($actions['resume_generation']);
 
@@ -114,6 +116,7 @@ final class ContentProjectStaleGenerationRecoveryTest extends TestCase
         $activeRow['is_genuinely_running'] = true;
         $activeRow['can_generate'] = false;
         $active = ContentProjectItemActionsPresenter::forRow($activeRow);
+        self::assertFalse($active['create_or_rerun']);
         self::assertFalse($active['run_again']);
         self::assertTrue($active['stop_generation']);
         self::assertFalse($active['resume_generation']);
@@ -136,7 +139,8 @@ final class ContentProjectStaleGenerationRecoveryTest extends TestCase
             'article_edit_url' => null,
         ]);
 
-        self::assertTrue($actions['run_again']);
+        self::assertTrue($actions['create_or_rerun']);
+        self::assertFalse($actions['run_again']);
         self::assertFalse($actions['resume_generation']);
     }
 
@@ -185,14 +189,27 @@ final class ContentProjectStaleGenerationRecoveryTest extends TestCase
         $menu = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/views/components/content-project-item-actions-menu.blade.php',
         );
-        self::assertStringContainsString('rerunOne', $menu);
-        self::assertStringContainsString('ops_run_again', $menu);
+        self::assertStringContainsString('createOrRerunOne', $menu);
+        self::assertStringContainsString('item_action_smart_rerun', $menu);
 
         $page = (string) file_get_contents(
             dirname(__DIR__, 2).'/Filament/Resources/SeoProjectResource/Pages/ViewSeoProject.php',
         );
+        self::assertStringContainsString('function createOrRerunOne', $page);
         self::assertStringContainsString('function rerunOne', $page);
         self::assertStringContainsString('RerunProjectItemsCommand', $page);
+    }
+
+    public function test_pending_with_stale_run_items_counts_as_stale_snapshot(): void
+    {
+        $stale = $this->policy()->isStaleSnapshot([
+            'task_status' => SeoProjectTask::STATUS_PENDING,
+            'has_fresh_active_execution' => false,
+            'has_valid_owned_lock' => false,
+            'stale_active_run_item_count' => 1,
+        ], timeoutMinutes: 30);
+
+        self::assertTrue($stale);
     }
 
     public function test_recovery_does_not_force_release_foreign_lock(): void

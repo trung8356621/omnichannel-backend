@@ -88,19 +88,17 @@ final class PostPublishWordPressSyncContractTest extends TestCase
         self::assertStringContainsString("unset(\$payload['status'], \$payload['post_date']", $source);
     }
 
-    public function test_linked_wordpress_post_payload_preserves_remote_slug(): void
+    public function test_linked_wordpress_post_payload_sends_slug_unless_field_conflict(): void
     {
         $source = $this->methodSource(
             new ReflectionMethod(WordPressArticleSyncService::class, 'buildEditorSyncPayload'),
         );
-        self::assertStringContainsString('shouldPreserveLinkedPostSlug', $source);
+        self::assertStringContainsString("'slug' => (string) (\$article->slug ?? '')", $source);
+        self::assertStringContainsString('WordPressFieldConflictService::class', $source);
+        self::assertStringContainsString("if (\$conflictField === 'slug')", $source);
         self::assertStringContainsString("unset(\$payload['slug']);", $source);
-
-        $guard = $this->methodSource(
-            new ReflectionMethod(WordPressArticleSyncService::class, 'shouldPreserveLinkedPostSlug'),
-        );
-        self::assertStringContainsString('allow_slug_update', $guard);
-        self::assertStringContainsString('wp_post_id', $guard);
+        self::assertStringNotContainsString('shouldPreserveLinkedPostSlug', $source);
+        self::assertStringNotContainsString('allow_slug_update', $source);
 
         $slugSync = $this->methodSource(
             new ReflectionMethod(WordPressArticleSyncService::class, 'syncSlugForArticle'),

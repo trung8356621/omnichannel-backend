@@ -427,6 +427,7 @@ export function CtaQuickTemplateSettingsPopover({ siteId = 0, open, onClose, set
  * @param {'value'|'sentence'} mode
  * @param {string|null} templateOverride
  * @param {Record<string, { defaultIndex: number, templates: string[] }>} templatesByType
+ * @param {number} [occurrenceIndex]
  */
 function notifyCta(detail) {
     const host = getEditorCommandHost();
@@ -440,7 +441,7 @@ function notifyCta(detail) {
 /**
  * CTA insert via command-host action (Phase 6C.2 — no internal CustomEvent bus).
  */
-export function dispatchCtaInsert(item, mode, templateOverride, templatesByType) {
+export function dispatchCtaInsert(item, mode, templateOverride, templatesByType, occurrenceIndex = 0) {
     if (!canMutateEditor()) {
         notifyCta({
             title: t('editor_locked_title'),
@@ -456,6 +457,7 @@ export function dispatchCtaInsert(item, mode, templateOverride, templatesByType)
     }
 
     const effectiveMode = mode === 'value' ? 'value' : 'sentence';
+    const resolvedOccurrence = Math.max(0, Number(occurrenceIndex) || 0);
 
     // Prefer bookmark frozen on pointerdown (before dropdown stole focus).
     const ctx = getInsertionContextForCommand();
@@ -517,7 +519,7 @@ export function dispatchCtaInsert(item, mode, templateOverride, templatesByType)
         return;
     }
 
-    // Non-sidebar / legacy callers only.
+    // Value mode: wrap existing phrase like internal-link insert (occurrence from find cycle).
     const text = ctaDisplayLabel(item);
     const plainText = isCtaPlainTextType(type) || item?.plain_text === true;
     const href = plainText ? '' : String(item?.href ?? formatCtaHref(type, item?.value)).trim();
@@ -535,6 +537,7 @@ export function dispatchCtaInsert(item, mode, templateOverride, templatesByType)
         href,
         type,
         target,
+        occurrence_index: resolvedOccurrence,
         is_cta_block: false,
         is_sentence: false,
         is_contact_value: true,

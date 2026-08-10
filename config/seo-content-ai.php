@@ -503,7 +503,8 @@ return [
             ],
         ],
         'parent_child' => [
-            'enabled' => false,
+            // GA default ON; kill switch via env false. Non-empty canary_article_ids restores allowlist.
+            'enabled' => (bool) env('SEO_PRODUCT_GALLERY_PARENT_CHILD_ENABLED', true),
             'canary_article_ids' => [],
             'minimum_required_images' => 1,
             'max_shots' => 9,

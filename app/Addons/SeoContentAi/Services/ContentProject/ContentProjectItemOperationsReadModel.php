@@ -38,6 +38,8 @@ final class ContentProjectItemOperationsReadModel
         private readonly ContentProjectGenerationRecoveryService $generationRecovery,
         private readonly ContentProjectGenerationReadStateStore $generationReadStates,
         private readonly ContentProjectItemGenerationClassifier $generationClassifier,
+        private readonly ContentProjectExistingArticleReconciler $existingArticleReconciler,
+        private readonly ContentProjectGenerationCapabilityResolver $generationCapability,
     ) {}
 
     /**
@@ -73,6 +75,12 @@ final class ContentProjectItemOperationsReadModel
                 $this->generationRecovery->reconcileProject($project);
                 app()->instance($guardKey, true);
             }
+        }
+
+        $articleRepairKey = 'seo.cp.existing_article_reconciled.'.$projectId;
+        if (! app()->bound($articleRepairKey)) {
+            $this->existingArticleReconciler->reconcileProjectMissingLinks($project);
+            app()->instance($articleRepairKey, true);
         }
 
         $viewerUserId = max(0, (int) ($filters['viewer_user_id'] ?? 0));
@@ -114,6 +122,7 @@ final class ContentProjectItemOperationsReadModel
             $tid = (int) $task->id;
             $viewed = $viewedByTask[$tid] ?? null;
             $rows[] = $this->mapRow(
+                $project,
                 $task,
                 $index,
                 $latestByTask[$tid] ?? null,
@@ -274,6 +283,7 @@ final class ContentProjectItemOperationsReadModel
      * @return array<string, mixed>
      */
     private function mapRow(
+        SeoProject $project,
         SeoProjectTask $task,
         int $index,
         ?array $exec,
@@ -359,11 +369,42 @@ final class ContentProjectItemOperationsReadModel
             $isGenuineRunning = true;
             $genStatus = SeoProjectTask::STATUS_WRITING;
         }
-        $hasResumableCheckpoint = ! $isGenuineRunning
-            && ! $isStaleGeneration
-            && $exec !== null
-            && in_array(strtolower((string) ($exec['status'] ?? '')), ['failed', 'cancelled', 'stopped', 'timeout'], true)
-            && trim((string) ($exec['action'] ?? '')) !== '';
+        $hasResumableCheckpoint = false;
+        $generationRecoveryAction = ContentProjectGenerationRecoveryDecision::ACTION_NONE;
+        $generationRecoveryReason = '';
+        $resumableFromStep = null;
+        try {
+            $capability = $this->generationCapability->decide($project, $task, [
+                'recover_stale' => false,
+                'persist_article_repair' => false,
+            ]);
+            $generationRecoveryAction = $capability->action;
+            $generationRecoveryReason = $capability->reason;
+            $resumableFromStep = $capability->resumableFromStep;
+            $hasResumableCheckpoint = $capability->showResume();
+            if ($capability->existingArticleId !== null && $capability->existingArticleId > 0) {
+                $articleId = (int) $capability->existingArticleId;
+                if (! $article instanceof SeoArticle || (int) $article->id !== $articleId) {
+                    $article = SeoArticle::query()->find($articleId);
+                    if ($article instanceof SeoArticle) {
+                        $task->setRelation('article', $article);
+                    }
+                }
+            }
+            if ($capability->isActive()) {
+                $isGenuineRunning = true;
+            }
+        } catch (\Throwable) {
+            // Fail open to legacy failed-exec heuristic only for resume hint.
+            $hasResumableCheckpoint = ! $isGenuineRunning
+                && ! $isStaleGeneration
+                && $exec !== null
+                && in_array(strtolower((string) ($exec['status'] ?? '')), ['failed', 'cancelled', 'stopped', 'timeout'], true)
+                && trim((string) ($exec['action'] ?? '')) !== '';
+            $generationRecoveryAction = $hasResumableCheckpoint
+                ? ContentProjectGenerationRecoveryDecision::ACTION_RESUME
+                : ContentProjectGenerationRecoveryDecision::ACTION_NONE;
+        }
 
         $displayGenStatus = $isStaleGeneration ? SeoProjectTask::STATUS_FAILED : $genStatus;
         $displayPhase = $phase;
@@ -406,7 +447,7 @@ final class ContentProjectItemOperationsReadModel
             'current_error_source' => $state->currentErrorSource->value,
             // Rows here always come from scopeInContentProjectWorkingSet() — kept explicit
             // for eligibility computation and to stay a stable contract for consumers.
-            'article_id' => $articleId,
+            'article_id' => $articleId > 0 ? $articleId : 0,
             'publishing_queued_at' => $task->publishing_queued_at?->toIso8601String(),
             'in_publishing_queue' => $task->publishing_queued_at !== null,
             'generation_blocked' => $task->isGenerationBlocked(),
@@ -485,14 +526,22 @@ final class ContentProjectItemOperationsReadModel
                 && $type !== SeoProjectTask::TYPE_IMPROVE
                 && ! $task->isGenerationBlocked()
                 && in_array(ContentProjectItemAction::Rerun, $state->availableActions, true),
-            'can_run_again' => ! $task->isGenerationBlocked()
-                && (
-                    $isStaleGeneration
-                    || (string) ($task->status ?? '') === SeoProjectTask::STATUS_FAILED
-                ),
+            'can_run_again' => $generationRecoveryAction === ContentProjectGenerationRecoveryDecision::ACTION_RERUN
+                || $generationRecoveryAction === ContentProjectGenerationRecoveryDecision::ACTION_GENERATE,
             'is_generation_stale' => $isStaleGeneration,
             'is_genuinely_running' => $isGenuineRunning,
             'has_resumable_checkpoint' => $hasResumableCheckpoint,
+            'generation_recovery_action' => $generationRecoveryAction,
+            'generation_recovery_reason' => $generationRecoveryReason,
+            'existing_article_link' => match ($generationRecoveryAction) {
+                ContentProjectGenerationRecoveryDecision::ACTION_SELECT_EXISTING_ARTICLE => match ($generationRecoveryReason) {
+                    'existing_article_ambiguous' => 'ambiguous',
+                    'article_owned_by_active_task' => 'conflict',
+                    default => 'unlinked',
+                },
+                default => ($articleId > 0 ? 'linked' : null),
+            },
+            'resumable_from_step' => $resumableFromStep,
             'is_improve' => $type === SeoProjectTask::TYPE_IMPROVE,
             'generation_blocked' => (bool) ($rowBase['generation_blocked'] ?? false),
             'generation_blocked_at' => $rowBase['generation_blocked_at'] ?? null,

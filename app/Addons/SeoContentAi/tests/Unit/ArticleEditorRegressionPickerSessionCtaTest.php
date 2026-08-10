@@ -25,9 +25,9 @@ final class ArticleEditorRegressionPickerSessionCtaTest extends TestCase
     {
         $picker = $this->readAddon('resources/js/editor/host/SharedMediaPicker.jsx');
 
-        self::assertStringContainsString('CACHE_TTL_MS', $picker);
-        self::assertStringContainsString('cacheRef', $picker);
-        self::assertStringContainsString('inFlightRef', $picker);
+        self::assertStringContainsString('MEDIA_PICKER_CACHE_TTL_MS', $picker);
+        self::assertStringContainsString('mediaPickerResultCache', $picker);
+        self::assertStringContainsString('mediaPickerInFlight', $picker);
         self::assertStringContainsString('const switchTab = useCallback', $picker);
         self::assertStringContainsString('setTab(nextTab)', $picker);
         self::assertStringContainsString('becameOpen', $picker);
@@ -38,6 +38,8 @@ final class ArticleEditorRegressionPickerSessionCtaTest extends TestCase
         // Selection patches must not re-init session / reset tab.
         self::assertStringContainsString('if (!becameOpen)', $picker);
         self::assertStringContainsString('becameOpen = nowOpen && !wasOpenRef.current', $picker);
+        self::assertStringNotContainsString('cacheRef.current', $picker);
+        self::assertStringNotContainsString('inFlightRef.current', $picker);
     }
 
     public function test_session_controller_injects_actions_and_bundle_apply(): void
@@ -70,7 +72,8 @@ final class ArticleEditorRegressionPickerSessionCtaTest extends TestCase
 
         self::assertStringContainsString('mode = \'sentence\'', $links);
         self::assertStringContainsString('mode = \'sentence\'', $domain);
-        self::assertStringContainsString('dispatchCtaInsert(item, mode, templateOverride, templatesByType)', $links);
+        self::assertStringContainsString('dispatchCtaInsert(', $links);
+        self::assertStringContainsString('occurrence_index', $cta);
 
         self::assertStringContainsString('resolveInsertionAfterEnclosingBlock', $selection);
         self::assertStringContainsString("name === 'blockquote'", $selection);

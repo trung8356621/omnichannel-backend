@@ -297,7 +297,7 @@
                         type="submit"
                         wire:loading.attr="disabled"
                         wire:target="runScan"
-                        x-bind:disabled="@js(! $canScan)"
+                        @disabled(! $canScan)
                         @class(['opacity-50 pointer-events-none' => ! $canScan])
                     >
                         @if ($scanState === 'failed')

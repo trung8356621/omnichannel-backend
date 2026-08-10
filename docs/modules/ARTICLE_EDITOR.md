@@ -59,12 +59,12 @@ Route binding: edit/view **does not** 404 when global domain ≠ `article.site_i
 | Quick CTA templates | `Support/CtaQuickTemplates` + `SeoDomainCtaGlobalSettingsService::cta_quick_templates` via `PUT /api/seo/domain-cta/quick-templates` (React form draft only) |
 | Assistant widget health | `resources/js/utils/assistantWidgetHealth.js` — Images from **unified inventory**: `error` (`image_slug_unresolved`) / `warning` (`image_alt_missing`) / `info` (`image_ratio_low`, body content count only); Featured clean of ALT/slug/ratio; WP filename≠keyword is **not** an issue |
 | Unified images inventory | `resources/js/utils/unifiedArticleImagesInventory.js` — content + Featured + Gallery dedupe; Images panel `useUnifiedInventory: true` |
-| Media source classify | `resources/js/utils/mediaSourceClassification.js` — local `/storage/…/seo_media` wins over stale `wp_attachment_id` (featured meta SeoMedia PK); true WP = `/wp-content/uploads/` or real attachment |
+| Media source classify | `resources/js/utils/mediaSourceClassification.js` — local `/storage/…/seo_media`, `seo_media_id`, local media markers, or pending version/revision evidence = **Laravel managed** and wins over stale `wp_attachment_id`; **WP only** = unmanaged `/wp-content/uploads/` / attachment with no Laravel ownership |
 | Shared media picker | `resources/js/editor/host/SharedMediaPicker.jsx` + `ArticleMediaPickerController` / `WorkspaceMediaPickerController` — remote tabs paginate **28**/page (7×4); search/tab change resets to page 1 |
 | Inline whitespace safety | `resources/js/utils/inlineWhitespaceGuard.js` + `InlineMarkBoundaryWhitespace` (PHP) — TipTap `preserveWhitespace: 'full'`; glued mark-boundary repair on bootstrap; save guard `inline_whitespace_corruption_detected` |
 | Paragraph style dropdown | `ParagraphStyleDropdown.jsx` — menu portals to `document.body` (`position: fixed`); format toolbar row `overflow: visible` (no clip “Heading N” tab) |
 | Fix Slug All | Local/safe media only (`mediaSourceClassification.js` — `https` alone ≠ WP); owning session via `editor_session_id` + `assertOwningActiveSessionForMediaMutation`. Response returns `document_version`/`content_hash`; client `syncVersionAfterSlugFix` before `after_fix_slug_all`. WP → explicit `WordPressMediaRenameModal`. |
-| Exclusive lock gate | `ExclusiveLockScreen` in `article-editor.jsx` — mounts **instead of** TipTap when locked / archived / not_editable **or** session fault (`article_editor_session_unavailable` / 5xx heartbeat / `unknown_error`). Reload CTA + toast; no silent read-only. Mid-session version conflict keeps editor writable (sync version; toast only). |
+| Exclusive lock gate | `ExclusiveLockScreen` in `article-editor.jsx` — mounts **instead of** TipTap when locked / not_editable **or** session fault (`article_editor_session_unavailable` / 5xx heartbeat / `unknown_error`). Mid-archive revoke may still surface `content_project_archived` until reload; **archived Content Project must not permanently block** Article Editor — post-archive articles are standalone (`ArticleEditorSessionService::assertArticleEditable` does not deny on project `archived_at`). Mid-session version conflict keeps editor writable (sync version; toast only). |
 | SEO reason metrics | `resources/js/utils/seoReasonMetrics.js` + `Support/SeoReasonPresentation` — `image_ratio_*` / `content_length_low` with current/recommended/missing; locale `lang/{vi,en}/seo_rules.php` |
 | CTA block insert | `insertCtaBlockInEditor` → `<p class="article-cta">` + label/value; `unsetAllMarks` / lift blockquote |
 | CTA freeze bookmark | `freezeEditorInsertionContext` on CTA `pointerdown` + `seo-assistant-freeze-insertion-context`; insert uses frozen caret |
@@ -130,6 +130,7 @@ Policy: max **one** heavy sidebar module mounted; switch unmounts (no CSS-hide t
 See [`ARTICLE_EDITOR_SESSION_LOCK.md`](../architecture/ARTICLE_EDITOR_SESSION_LOCK.md).
 
 - Acquire writable session before edit; other tabs/users → **ExclusiveLockScreen** (no TipTap / no hard-readonly under lock).
+- Archived Content Project is not an editor deny reason after archive completes; article is standalone while archive report keeps historical links.
 - Heartbeat `PUT .../heartbeat`: `expireStaleSessionsForArticleId` is best-effort (retry then skip InnoDB 1205/1213) so deadlock must not 500 the owning session.
 - Heartbeat/server 5xx → FE code `article_editor_session_unavailable` → ExclusiveLockScreen + notify + **Tải lại trang** (`editorSessionClient.js` / `article-editor.jsx`).
 - Preparing gate: `ArticleEditorReadinessService` (processing AI media + body hash). `evaluate()` calls `reconcileStaleAiMediaJobs`; stuck jobs → `forceOpenEditorWhilePreparing` / `abandonPreparingGate` (EditArticle + blade CTA).
@@ -171,6 +172,10 @@ Two contracts:
 | **Lưu bài** (`POST …/save`) | Always | Laravel only — `article.content.update`. Never WordPress. |
 | **Đồng bộ WordPress** (`POST …/sync-wp`) | Non-CP: manual queue. CP **Published** (queue + `publish_published_at`): `SyncPublishedArticleToWordPressCommand` | Save local first, then **UPDATE** existing `wp_post_id`. Never `create_post`. |
 | CP not yet Published | Sync button hidden / blocked | Initial WordPress create owned by Publishing Queue only. |
+
+Existing/imported/rewrite posts are not record-level immutable. Explicit Sync WP is authorization to push Laravel title/body/SEO/slug/media fields unless `WordPressFieldConflictService` detects same-field concurrent changes against `wp_last_synced_field_snapshot` / `wp_latest_field_snapshot`. `wp_post_id` alone is not a conflict. Laravel slug remains editable and is sent as WP `post_name`; if WordPress canonicalizes it (for example duplicate slug suffix), Laravel stores the returned slug/permalink and surfaces a warning in the sync result.
+
+Images panel labels: **Laravel managed** for rows with Laravel media record/local source/pending version markers; **WP only** for unmanaged WordPress attachments; **Conflict** only for verified same-field conflict. Laravel-managed media may sync alt/title/caption/description/attachment slug/featured-gallery assignment and pending binary replacement; WP-only media remains protected from automatic binary replacement.
 
 Post-publish success toast: «Đã đồng bộ bài viết lên WordPress.» + «Mở bài WordPress». Failure keeps `publish_queue_status=published` (separate `post_publish_wp_sync_error` meta).
 
@@ -285,6 +290,7 @@ No second scheduler for editor autosave — client debounce (local draft + serve
 | Editor performance audits | Bootstrap size budgets (docs/audits) |
 | `ArticleEditorContextPreservationContractTest` | Media/image UX không reset expanded sections; CTA insert `--contact`/`--sentence`; WP media site-level |
 | `ArticleEditorExclusiveLockRegressionTest` | ExclusiveLockScreen gate; sessionStorage client id; no takeover; conflict ≠ exclusive screen |
+| `ArticleEditorArchivedContentProjectStandaloneTest` | Archived CP ≠ block editor; membership active-only; archive preview keeps historical article_id |
 | `ArticleEditorPreparingLockContractTest` | Readiness reconcile + `abandonPreparingGate` / force-open CTA |
 | `ArticleEditorSessionHeartbeatUxContractTest` | Expire deadlock skip; 5xx → `SESSION_UNAVAILABLE` + reload CTA |
 | `ArticleEditorImagesHealthAndSlugSessionTest` | Owning Fix Slug session; slug error / ALT warning / `image_ratio_low` |

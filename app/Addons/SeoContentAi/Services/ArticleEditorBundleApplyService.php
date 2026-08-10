@@ -38,12 +38,12 @@ final class ArticleEditorBundleApplyService
             $article->unsetRelation('faqs');
         }
 
-        $featuredImage = $bundle['featured_image'] ?? null;
+        $featuredImage = $bundle['featured_image'] ?? $this->featuredImageFromMediaSnapshot($bundle);
         if (is_array($featuredImage) && trim((string) ($featuredImage['url'] ?? '')) !== '') {
             $this->persistFeaturedImage($article, $context, $featuredImage);
         }
 
-        $productAlbum = $bundle['product_album'] ?? null;
+        $productAlbum = $bundle['product_album'] ?? $this->productAlbumFromMediaSnapshot($bundle);
         if (is_array($productAlbum)) {
             $this->persistProductAlbum($article, $context, $productAlbum);
         }
@@ -232,6 +232,69 @@ final class ArticleEditorBundleApplyService
             ['meta_value' => 'post'],
         );
         $article->articleMetas()->where('meta_key', 'wp_taxonomy')->delete();
+    }
+
+    /**
+     * @param  array<string, mixed>  $bundle
+     * @return array<string, mixed>|null
+     */
+    private function featuredImageFromMediaSnapshot(array $bundle): ?array
+    {
+        $snapshot = is_array($bundle['media_snapshot'] ?? null) ? $bundle['media_snapshot'] : [];
+        $featured = is_array($snapshot['featured'] ?? null) ? $snapshot['featured'] : null;
+        if ($featured === null || trim((string) ($featured['url'] ?? '')) === '') {
+            return null;
+        }
+
+        return $this->normalizeMediaSnapshotItem($featured);
+    }
+
+    /**
+     * @param  array<string, mixed>  $bundle
+     * @return list<array<string, mixed>>|null
+     */
+    private function productAlbumFromMediaSnapshot(array $bundle): ?array
+    {
+        $snapshot = is_array($bundle['media_snapshot'] ?? null) ? $bundle['media_snapshot'] : [];
+        $gallery = is_array($snapshot['gallery'] ?? null) ? $snapshot['gallery'] : [];
+        if (! (bool) ($gallery['required'] ?? false) || ! is_array($gallery['items'] ?? null)) {
+            return null;
+        }
+
+        $items = [];
+        if (is_array($snapshot['featured'] ?? null)) {
+            $items[] = $snapshot['featured'];
+        }
+        foreach ($gallery['items'] as $item) {
+            if (is_array($item)) {
+                $items[] = $item;
+            }
+        }
+
+        return array_values(array_filter(array_map(
+            fn (array $item): ?array => trim((string) ($item['url'] ?? '')) !== ''
+                ? $this->normalizeMediaSnapshotItem($item)
+                : null,
+            $items,
+        )));
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     * @return array<string, mixed>
+     */
+    private function normalizeMediaSnapshotItem(array $item): array
+    {
+        return [
+            'url' => (string) ($item['url'] ?? ''),
+            'wp_attachment_id' => (int) ($item['wp_attachment_id'] ?? 0),
+            'seo_media_id' => (int) ($item['media_id'] ?? $item['seo_media_id'] ?? 0),
+            'id' => $item['id'] ?? $item['asset_key'] ?? null,
+            'asset_key' => (string) ($item['asset_key'] ?? $item['id'] ?? ''),
+            'source' => (string) ($item['source'] ?? ''),
+            'alt' => (string) ($item['alt'] ?? ''),
+            'slug' => (string) ($item['slug'] ?? $item['filename'] ?? ''),
+        ];
     }
 
     /**

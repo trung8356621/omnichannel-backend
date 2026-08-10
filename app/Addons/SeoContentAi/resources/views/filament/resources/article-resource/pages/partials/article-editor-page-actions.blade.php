@@ -67,6 +67,7 @@
                 editorWritable: false,
                 editorSessionStatus: 'acquiring',
                 editorLockReason: null,
+                editorNetworkAvailable: true,
 
                 init() {
                     const applyState = (detail) => {
@@ -83,10 +84,26 @@
                     window.addEventListener('article-editor-session-state-changed', (event) => {
                         applyState(event.detail || {});
                     });
+
+                    const applyNetwork = (detail) => {
+                        const payload = detail && typeof detail === 'object' ? detail : {};
+                        // Sync WP only when fully available (not unavailable / recovering).
+                        this.editorNetworkAvailable = String(payload.status || '') === 'available';
+                    };
+                    if (window.__SEO_EDITOR_NETWORK_STATUS__) {
+                        applyNetwork(window.__SEO_EDITOR_NETWORK_STATUS__);
+                    }
+                    window.addEventListener('article-editor:network-status', (event) => {
+                        applyNetwork(event.detail || {});
+                    });
                 },
 
                 canMutateDocument() {
                     return this.editorWritable === true;
+                },
+
+                canSyncDocument() {
+                    return this.canMutateDocument() && this.editorNetworkAvailable === true;
                 },
 
                 notifyReadOnly() {
@@ -298,8 +315,8 @@
                     aria-label="{{ $syncTitle }}"
                     data-seo-page-action="sync"
                     data-seo-sync-mode="{{ $wpSyncEligibility['mode'] ?? 'post_publish_wordpress_sync' }}"
-                    x-bind:disabled="!canMutateDocument()"
-                    x-on:click="if (!canMutateDocument()) { notifyReadOnly(); return; } window.dispatchEvent(new CustomEvent('article-editor-shortcut', { detail: { action: 'sync' } }))"
+                    x-bind:disabled="!canSyncDocument()"
+                    x-on:click="if (!canSyncDocument()) { if (!canMutateDocument()) { notifyReadOnly(); } return; } window.dispatchEvent(new CustomEvent('article-editor-shortcut', { detail: { action: 'sync' } }))"
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1.1 15.9-3.3-9.7h2l1.5 5.1 1.5-5.1h1.9l1.5 5.1 1.5-5.1h2l-3.3 9.7h-1.9l-1.5-4.9-1.5 4.9h-1.9z"/>
@@ -348,7 +365,8 @@
                     aria-label="{{ $syncTitle }}"
                     data-seo-page-action="sync"
                     data-seo-sync-mode="wordpress_sync"
-                    x-on:click="window.dispatchEvent(new CustomEvent('article-editor-shortcut', { detail: { action: 'sync' } }))"
+                    x-bind:disabled="!editorNetworkAvailable"
+                    x-on:click="if (!editorNetworkAvailable) { return; } window.dispatchEvent(new CustomEvent('article-editor-shortcut', { detail: { action: 'sync' } }))"
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1.1 15.9-3.3-9.7h2l1.5 5.1 1.5-5.1h1.9l1.5 5.1 1.5-5.1h2l-3.3 9.7h-1.9l-1.5-4.9-1.5 4.9h-1.9z"/>

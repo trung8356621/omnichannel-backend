@@ -20,6 +20,8 @@ final class ArticleMediaLocalService
 
     public const META_MEDIA_PENDING_SYNC = 'wp_media_pending_sync';
 
+    public const META_FEATURED_CLEAR_PENDING = 'wp_featured_clear_pending';
+
     public function applyFeaturedLocal(SeoArticle $article, int $attachmentId, string $url): void
     {
         $url = trim($url);
@@ -34,6 +36,7 @@ final class ArticleMediaLocalService
             ->firstWhere('meta_key', self::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0);
 
         if ($existingUrl === $url && $existingId === $attachmentId) {
+            $this->markMediaPendingSync($article);
             app(ArticleFeaturedImageProjection::class)->syncAvailable(
                 $article,
                 $url,
@@ -52,6 +55,7 @@ final class ArticleMediaLocalService
             ['meta_key' => self::META_FEATURED_ATTACHMENT_ID],
             ['meta_value' => (string) $attachmentId],
         );
+        $article->articleMetas()->where('meta_key', self::META_FEATURED_CLEAR_PENDING)->delete();
         $this->markMediaPendingSync($article);
         $article->unsetRelation('articleMetas');
         app(ArticleFeaturedImageProjection::class)->rebuildAndPersist($article);
@@ -63,6 +67,10 @@ final class ArticleMediaLocalService
             self::META_FEATURED_URL,
             self::META_FEATURED_ATTACHMENT_ID,
         ])->delete();
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => self::META_FEATURED_CLEAR_PENDING],
+            ['meta_value' => '1'],
+        );
         $article->unsetRelation('articleMetas');
         $this->markMediaPendingSync($article);
         app(ArticleFeaturedImageProjection::class)->clear($article);
@@ -464,8 +472,10 @@ final class ArticleMediaLocalService
         $ok = true;
 
         $featuredRefId = (int) ($article->articleMetas->firstWhere('meta_key', self::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0);
+        $featuredUrl = trim((string) ($article->articleMetas->firstWhere('meta_key', self::META_FEATURED_URL)?->meta_value ?? ''));
+        $clearFeatured = trim((string) ($article->articleMetas->firstWhere('meta_key', self::META_FEATURED_CLEAR_PENDING)?->meta_value ?? '')) === '1';
         if ($featuredRefId > 0) {
-            $resolved = $this->resolveWordPressAttachmentId($article, $featuredRefId, $localMediaSync);
+            $resolved = $this->resolveWordPressAttachmentId($article, $featuredRefId, $localMediaSync, $featuredUrl);
             if ($resolved['seo_media_id'] !== null) {
                 $syncedLocalMediaIds[] = (int) $resolved['seo_media_id'];
             }
@@ -486,13 +496,24 @@ final class ArticleMediaLocalService
                     $messages[] = (string) $result['message'];
                 }
             }
+        } elseif ($clearFeatured) {
+            $result = $mediaService->clearFeaturedImage($article);
+            $ok = $ok && ($result['success'] ?? false);
+            if (filled($result['message'] ?? null)) {
+                $messages[] = (string) $result['message'];
+            }
         }
 
-        $galleryRefs = $this->resolveGalleryAttachmentIds($article);
+        $galleryRefs = $this->resolveGalleryAttachmentRefs($article);
         if ($galleryRefs !== []) {
             $galleryWpIds = [];
-            foreach ($galleryRefs as $refId) {
-                $resolved = $this->resolveWordPressAttachmentId($article, (int) $refId, $localMediaSync);
+            foreach ($galleryRefs as $ref) {
+                $resolved = $this->resolveWordPressAttachmentId(
+                    $article,
+                    (int) ($ref['id'] ?? 0),
+                    $localMediaSync,
+                    (string) ($ref['url'] ?? ''),
+                );
                 if ($resolved['seo_media_id'] !== null) {
                     $syncedLocalMediaIds[] = (int) $resolved['seo_media_id'];
                 }
@@ -548,6 +569,7 @@ final class ArticleMediaLocalService
         SeoArticle $article,
         int $refId,
         WordPressLocalMediaSyncService $localMediaSync,
+        string $url = '',
     ): array {
         if ($refId <= 0) {
             return [
@@ -559,7 +581,28 @@ final class ArticleMediaLocalService
         }
 
         $media = SeoMedia::query()->whereKey($refId)->first();
-        if (! $media instanceof SeoMedia) {
+        if ($media instanceof SeoMedia) {
+            $existingWpAttachmentId = (int) ($media->wp_attachment_id ?? 0);
+            if ($existingWpAttachmentId > 0) {
+                return [
+                    'success' => true,
+                    'attachment_id' => $existingWpAttachmentId,
+                    'seo_media_id' => (int) $media->id,
+                    'message' => '',
+                ];
+            }
+
+            $result = $localMediaSync->syncAttachmentRef($article, $refId);
+
+            return [
+                'success' => (bool) ($result['success'] ?? false),
+                'attachment_id' => (int) ($result['attachment_id'] ?? 0),
+                'seo_media_id' => isset($result['seo_media_id']) ? (int) $result['seo_media_id'] : null,
+                'message' => (string) ($result['message'] ?? ''),
+            ];
+        }
+
+        if ($this->isWordPressMediaUrl($url)) {
             return [
                 'success' => true,
                 'attachment_id' => $refId,
@@ -568,13 +611,11 @@ final class ArticleMediaLocalService
             ];
         }
 
-        $result = $localMediaSync->syncAttachmentRef($article, $refId);
-
         return [
-            'success' => (bool) ($result['success'] ?? false),
-            'attachment_id' => (int) ($result['attachment_id'] ?? 0),
-            'seo_media_id' => isset($result['seo_media_id']) ? (int) $result['seo_media_id'] : null,
-            'message' => (string) ($result['message'] ?? ''),
+            'success' => true,
+            'attachment_id' => $refId,
+            'seo_media_id' => null,
+            'message' => '',
         ];
     }
 
@@ -586,7 +627,24 @@ final class ArticleMediaLocalService
             return true;
         }
 
+        if ($this->hasStoredFeaturedOrGalleryRefs($article)) {
+            return true;
+        }
+
         return $this->featuredNeedsWordPressWebpPush($article);
+    }
+
+    private function hasStoredFeaturedOrGalleryRefs(SeoArticle $article): bool
+    {
+        $article->loadMissing('articleMetas');
+
+        $featuredRefId = (int) ($article->articleMetas
+            ->firstWhere('meta_key', self::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0);
+        if ($featuredRefId > 0) {
+            return true;
+        }
+
+        return $this->resolveGalleryAttachmentIds($article) !== [];
     }
 
     private function featuredNeedsWordPressWebpPush(SeoArticle $article): bool
@@ -670,6 +728,34 @@ final class ArticleMediaLocalService
             static fn (array $item): int => (int) ($item['id'] ?? 0),
             $this->resolveGallery($article),
         ), static fn (int $id): bool => $id > 0));
+    }
+
+    /**
+     * @return list<array{id: int, url: string}>
+     */
+    public function resolveGalleryAttachmentRefs(SeoArticle $article): array
+    {
+        $refs = [];
+        foreach ($this->resolveGallery($article) as $item) {
+            $id = (int) ($item['id'] ?? 0);
+            if ($id <= 0) {
+                continue;
+            }
+
+            $refs[] = [
+                'id' => $id,
+                'url' => trim((string) ($item['url'] ?? '')),
+            ];
+        }
+
+        if ($refs !== []) {
+            return $refs;
+        }
+
+        return array_map(
+            static fn (int $id): array => ['id' => $id, 'url' => ''],
+            $this->resolveGalleryAttachmentIds($article),
+        );
     }
 
     /**
@@ -760,6 +846,11 @@ final class ArticleMediaLocalService
         return 'uploaded';
     }
 
+    private function isWordPressMediaUrl(string $url): bool
+    {
+        return str_contains(strtolower($url), '/wp-content/uploads/');
+    }
+
     private function assetKeyFromParts(int $id, string $url, string $source): string
     {
         $source = $this->normalizeMediaSource($source);
@@ -776,7 +867,10 @@ final class ArticleMediaLocalService
 
     private function clearMediaPendingSync(SeoArticle $article): void
     {
-        $article->articleMetas()->where('meta_key', self::META_MEDIA_PENDING_SYNC)->delete();
+        $article->articleMetas()->whereIn('meta_key', [
+            self::META_MEDIA_PENDING_SYNC,
+            self::META_FEATURED_CLEAR_PENDING,
+        ])->delete();
     }
 
     public function linkSeoMediaToArticle(SeoMedia $media, SeoArticle $article): void

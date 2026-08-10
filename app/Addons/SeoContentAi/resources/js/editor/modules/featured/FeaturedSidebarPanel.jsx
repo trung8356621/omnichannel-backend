@@ -89,7 +89,7 @@ function FeaturedImagePanel({ articleId = null, active = false }) {
                 </header>
                 <div className="seo-assistant-widget__body text-center">
                     <div
-                        className="wp-featured-image-picker"
+                        className={featured?.url ? 'wp-featured-image-picker' : 'hidden'}
                         title="Chọn ảnh từ thư viện"
                     >
                         {featured?.url ? (
@@ -101,7 +101,7 @@ function FeaturedImagePanel({ articleId = null, active = false }) {
                             </span>
                         )}
                     </div>
-                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                    <p className={featured?.url ? 'mt-2 text-xs text-gray-500 dark:text-gray-400' : 'hidden'}>
                         {featured?.url
                             ? `${featured.filename || featured.alt || 'Featured'} · snapshot v${media.snapshotVersion}`
                             : 'Bấm để chọn từ Shared Media Picker'}

@@ -12,7 +12,8 @@ use App\Addons\SeoContentAi\Services\ContentProject\Workspace\Contracts\ContentP
 use Illuminate\Support\Facades\Schema;
 
 /**
- * Dọn AI/local media chưa publish lên WordPress. Giữ media đã có wp_attachment_id.
+ * Dọn toàn bộ local media Laravel của article trong archived Content Project.
+ * WordPress attachment/post đã là nguồn giữ nội dung sau publish/sync.
  */
 final class LocalMediaWorkspaceCleaner implements ContentProjectWorkspaceCleaner
 {
@@ -31,10 +32,6 @@ final class LocalMediaWorkspaceCleaner implements ContentProjectWorkspaceCleaner
 
         $localMedia = SeoMedia::query()
             ->whereIn('article_id', $articleIds)
-            ->where(function ($query): void {
-                $query->whereNull('wp_attachment_id')
-                    ->orWhere('wp_attachment_id', '<=', 0);
-            })
             ->get(['id', 'path']);
 
         $mediaIds = [];
@@ -46,7 +43,6 @@ final class LocalMediaWorkspaceCleaner implements ContentProjectWorkspaceCleaner
         if ($mediaIds !== []) {
             $deletedHistory = SeoMediaProcessingHistory::query()
                 ->whereIn('media_ref_id', $mediaIds)
-                ->where('source', SeoMediaProcessingHistory::SOURCE_LOCAL)
                 ->delete();
             $context->bumpStat('media_processing_histories_deleted', (int) $deletedHistory);
 
@@ -57,10 +53,6 @@ final class LocalMediaWorkspaceCleaner implements ContentProjectWorkspaceCleaner
         if (Schema::connection('omi_seo_ai')->hasTable('seo_generated_images')) {
             $deletedLegacy = SeoGeneratedImage::query()
                 ->whereIn('article_id', $articleIds)
-                ->where(function ($query): void {
-                    $query->whereNull('wp_attachment_id')
-                        ->orWhere('wp_attachment_id', '<=', 0);
-                })
                 ->delete();
             $context->bumpStat('generated_images_deleted', (int) $deletedLegacy);
         }

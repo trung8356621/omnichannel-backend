@@ -53,6 +53,8 @@ final class SeoAuditScanServiceTest extends TestCase
 
         $this->assertStringContainsString('wire:model.live="filterSiteId"', $source);
         $this->assertStringContainsString('$canScan = $selectedSiteId > 0;', $source);
+        $this->assertStringContainsString('@disabled(! $canScan)', $source);
+        $this->assertStringNotContainsString('x-bind:disabled="@js(! $canScan)"', $source);
         $this->assertStringContainsString("__('seo-content-ai::filament.articles_optimal.domain_placeholder')", $source);
         $this->assertStringContainsString("__('seo-content-ai::filament.articles_optimal.domain_required')", $source);
         $this->assertStringNotContainsString("__('seo-content-ai::filament.articles_optimal.domain_all')", $source);

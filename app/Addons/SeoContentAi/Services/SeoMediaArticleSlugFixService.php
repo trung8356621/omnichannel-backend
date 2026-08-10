@@ -99,6 +99,7 @@ final class SeoMediaArticleSlugFixService
                         continue;
                     }
 
+                    // WordPress-linked media never bulk-renamed.
                     // Fail-closed only for true WordPress media. Local /storage evidence wins over
                     // stale wp_attachment_id, matching editor media classification.
                     if ((int) ($media->wp_attachment_id ?? 0) > 0 && ! $this->isLocalMediaRequest($media, $item)) {

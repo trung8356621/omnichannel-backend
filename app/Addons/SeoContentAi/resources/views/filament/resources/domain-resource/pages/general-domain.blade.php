@@ -50,7 +50,7 @@
 @endphp
 
 {{-- Livewire 3 yêu cầu MỘT phần tử gốc - bọc toàn bộ view trong div này. --}}
-<div @if($incrementalSyncRunning || $metadataSyncRunning || $keywordResyncRunning || ($siteSyncV2Running ?? false)) wire:poll.5s="refreshSyncProgress" @endif>
+<div @if($incrementalSyncRunning || $metadataSyncRunning || $keywordResyncRunning || ($siteSyncV2Running ?? false) || ($siteSyncV2Stuck ?? false)) wire:poll.5s="refreshSyncProgress" @endif>
     @if(is_readable($overviewCss))
         <style>{!! file_get_contents($overviewCss) !!}</style>
     @endif
@@ -207,6 +207,12 @@
                                 'total' => number_format((int) ($seoScoring['total'] ?? 0)),
                             ]) }}
                         </p>
+                        @if (((int) ($seoScoring['pending'] ?? 0)) > 0 || ((int) ($seoScoring['processing'] ?? 0)) > 0)
+                            <p class="text-xs text-gray-500 dark:text-gray-400">
+                                Chờ: {{ number_format((int) ($seoScoring['pending'] ?? 0)) }}
+                                · Đang xử lý: {{ number_format((int) ($seoScoring['processing'] ?? 0)) }}
+                            </p>
+                        @endif
                         <p class="text-gray-600 dark:text-gray-300">
                             {{ $siteSyncScoringContext ?: 'Chấm SEO gắn vào nút Đồng bộ & kiểm tra website.' }}
                         </p>

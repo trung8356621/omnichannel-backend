@@ -38,14 +38,6 @@ final class SyncContentProjectItemsHandler extends AbstractPublishingHandler
             $projectId = (int) $project->getKey();
             $this->tenantGuard->assertCanAccessProject($project, $actor);
 
-            if ($command->tasksData === []) {
-                return ContentProjectActionResult::fail(
-                    ContentProjectActionCodes::VALIDATION_FAILED,
-                    'tasksData is empty.',
-                    $projectId,
-                );
-            }
-
             if ($project->archived_at !== null) {
                 return ContentProjectActionResult::fail(
                     ContentProjectActionCodes::PROJECT_ARCHIVED_BLOCK,

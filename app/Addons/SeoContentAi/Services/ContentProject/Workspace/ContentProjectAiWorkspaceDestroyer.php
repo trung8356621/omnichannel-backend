@@ -25,7 +25,7 @@ final class ContentProjectAiWorkspaceDestroyer
     /**
      * @return ContentProjectWorkspaceCleanupContext context sau khi clean (chứa disk/cache deferred)
      */
-    public function destroyInTransaction(SeoProject $project): ContentProjectWorkspaceCleanupContext
+    public function destroyInTransaction(SeoProject $project, array $additionalArticleIds = []): ContentProjectWorkspaceCleanupContext
     {
         $tasks = SeoProjectTask::withTrashed()
             ->where('project_id', (int) $project->getKey())
@@ -41,6 +41,8 @@ final class ContentProjectAiWorkspaceDestroyer
         $articleIds = $tasks
             ->pluck('article_id')
             ->map(static fn ($id): int => (int) $id)
+            ->filter(static fn (int $id): bool => $id > 0)
+            ->merge(collect($additionalArticleIds)->map(static fn ($id): int => (int) $id))
             ->filter(static fn (int $id): bool => $id > 0)
             ->unique()
             ->values()

@@ -33,8 +33,62 @@ final class ImageRoutingStrategy
             return [];
         }
 
-        $candidates = GoogleAiModelRegistry::resolveImageModelPriorityList($configuredPriorityList);
-        $candidates = GeminiModelVersionPolicy::filterEligibleForAutoRouting($candidates, $capabilitiesBySlug);
+        $configuredResolved = GoogleAiModelRegistry::resolveImageModelPriorityList($configuredPriorityList);
+        $eligible = $this->eligibleModelsFromPriority(
+            priorityList: $configuredResolved,
+            toolType: $toolType,
+            preference: $preference,
+            compiledPromptLength: $compiledPromptLength,
+            productContext: $productContext,
+            typographyComplexity: $typographyComplexity,
+            adminEnabledUnknownSlugs: $adminEnabledUnknownSlugs,
+            capabilitiesBySlug: $capabilitiesBySlug,
+        );
+        if ($eligible !== []) {
+            return $eligible;
+        }
+
+        // Typography keeps empty here — general-image fallback is gated by executionPolicy.
+        if ($toolType->isTypography()) {
+            return [];
+        }
+
+        // Contextual fallback: stored priority may be globally non-empty yet unusable under
+        // current filters (e.g. Imagen-only + productContext). Do NOT mutate user settings.
+        $canonical = GoogleAiModelRegistry::defaultImageModelPriority();
+        if ($configuredResolved === $canonical) {
+            return [];
+        }
+
+        return $this->eligibleModelsFromPriority(
+            priorityList: $canonical,
+            toolType: $toolType,
+            preference: $preference,
+            compiledPromptLength: $compiledPromptLength,
+            productContext: $productContext,
+            typographyComplexity: $typographyComplexity,
+            adminEnabledUnknownSlugs: $adminEnabledUnknownSlugs,
+            capabilitiesBySlug: $capabilitiesBySlug,
+        );
+    }
+
+    /**
+     * @param  list<string>  $priorityList
+     * @param  list<string>  $adminEnabledUnknownSlugs
+     * @param  array<string, array<string, mixed>|null>  $capabilitiesBySlug
+     * @return list<string>
+     */
+    private function eligibleModelsFromPriority(
+        array $priorityList,
+        ImageToolType $toolType,
+        RenderingPreference $preference,
+        ?int $compiledPromptLength,
+        bool $productContext,
+        ?TypographyComplexity $typographyComplexity,
+        array $adminEnabledUnknownSlugs,
+        array $capabilitiesBySlug,
+    ): array {
+        $candidates = GeminiModelVersionPolicy::filterEligibleForAutoRouting($priorityList, $capabilitiesBySlug);
         $enabledUnknown = array_fill_keys(
             array_map(
                 static fn (string $slug): string => GoogleAiModelRegistry::normalizeSlug($slug),

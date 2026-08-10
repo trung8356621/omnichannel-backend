@@ -203,6 +203,61 @@ final class SeoImageOptimizationServiceTest extends TestCase
         }
     }
 
+    public function test_wordpress_upload_edge_ladder_never_shrinks_below_1024(): void
+    {
+        Storage::fake('public');
+
+        $file = UploadedFile::fake()->image('wide.jpg', 2400, 1600);
+        $relativePath = 'uploads/seo_media/test-gallery-min-edge.jpg';
+        Storage::disk('public')->put($relativePath, (string) file_get_contents($file->getRealPath()));
+
+        $method = new \ReflectionMethod(SeoImageOptimizationService::class, 'resolveWordPressUploadEdgeSteps');
+        $method->setAccessible(true);
+
+        $steps = $method->invoke($this->service(), Storage::disk('public')->path($relativePath));
+
+        $this->assertSame([1920, 1280, 1024], $steps);
+        $this->assertGreaterThanOrEqual(1024, min($steps));
+        $this->assertNotContains(800, $steps);
+        $this->assertNotContains(640, $steps);
+        $this->assertNotContains(480, $steps);
+    }
+
+    public function test_portrait_wordpress_webp_prefers_width_over_byte_target(): void
+    {
+        Storage::fake('public');
+
+        $file = UploadedFile::fake()->image('portrait.jpg', 1200, 1800);
+        $relativePath = 'uploads/seo_media/test-gallery-portrait.jpg';
+        Storage::disk('public')->put($relativePath, (string) file_get_contents($file->getRealPath()));
+
+        $absolutePath = Storage::disk('public')->path($relativePath);
+        $service = $this->service();
+
+        if (! $service->canEncodeWebp()) {
+            $this->markTestSkipped('WebP encoder is not available in this PHP environment.');
+        }
+
+        $compactPath = $service->ensureLocalWebpUnderMaxBytes(
+            $absolutePath,
+            $this->webpEnabledConfig(),
+            1,
+        );
+
+        if ($compactPath === null) {
+            $this->markTestSkipped('WebP encoder could not produce a protected portrait candidate.');
+        }
+
+        $size = @getimagesize($compactPath);
+        $this->assertIsArray($size);
+        $this->assertGreaterThanOrEqual(SeoImageOptimizationService::WORDPRESS_UPLOAD_PORTRAIT_MIN_WIDTH, (int) $size[0]);
+        $this->assertGreaterThan(1, (int) filesize($compactPath));
+
+        if (is_file($compactPath)) {
+            @unlink($compactPath);
+        }
+    }
+
     public function test_prepare_wordpress_upload_falls_back_to_optimized_when_webp_unavailable(): void
     {
         Storage::fake('public');
@@ -594,5 +649,3 @@ final class SeoImageOptimizationServiceTest extends TestCase
         $this->assertStringEndsWith('-wp-upload.png', $target);
     }
 }
-
-

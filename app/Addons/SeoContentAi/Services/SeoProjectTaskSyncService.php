@@ -640,16 +640,12 @@ final class SeoProjectTaskSyncService
                 continue;
             }
 
-            if ($hasArticle || $status === SeoProjectTask::STATUS_COMPLETED) {
-                $warnings[] = 'SYNC_REMOVAL_BLOCKED_COMPLETED_OR_ARTICLE:'.$id;
-                continue;
-            }
-
             if (in_array($status, [
                 SeoProjectTask::STATUS_PENDING,
                 SeoProjectTask::STATUS_FAILED,
+                SeoProjectTask::STATUS_COMPLETED,
                 'draft',
-            ], true) && ! $hasArticle) {
+            ], true)) {
                 $from = $status;
                 $task->forceFill(['status' => SeoProjectTask::STATUS_CANCELLED])->save();
                 $this->eventRecorder->record(
@@ -660,6 +656,7 @@ final class SeoProjectTaskSyncService
                     [
                         'task_id' => $id,
                         'sync_source' => 'project_editor',
+                        'article_id' => $hasArticle ? (int) $task->article_id : null,
                     ],
                 );
                 $cancelled[] = $id;

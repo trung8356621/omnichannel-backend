@@ -19,8 +19,11 @@ use App\Addons\SeoContentAi\Support\PublishingQueue\PublishingQueueHandoffEligib
  *     open_article: bool,
  *     generate: bool,
  *     run_again: bool,
+ *     create_or_rerun: bool,
+ *     create_or_rerun_label: string,
  *     stop_generation: bool,
  *     resume_generation: bool,
+ *     select_existing_article: bool,
  *     regen_outline: bool,
  *     regen_article: bool,
  *     regen_image: bool,
@@ -73,6 +76,7 @@ final class ContentProjectItemActionsPresenter
         $hasResumableCheckpoint = (bool) ($row['has_resumable_checkpoint'] ?? false);
         $generationStatus = strtolower((string) ($row['generation_status'] ?? ''));
         $generationBlocked = ! empty($row['generation_blocked']);
+        $recoveryAction = strtolower(trim((string) ($row['generation_recovery_action'] ?? '')));
 
         $hasGenerated = in_array($genKey, ['success', 'generated'], true)
             || in_array($lifecycle, ['review', 'approved', 'waiting_publish', 'published'], true);
@@ -97,14 +101,90 @@ final class ContentProjectItemActionsPresenter
             $generate = false;
         }
 
+        // ONE smart generation action — covers ready / failed / stale / rewrite+article pending.
+        // Do NOT require can_generate alone: rewrite with article often has can_regen but not Generate.
+        $availableActions = $row['available_actions'] ?? [];
+        if (! is_array($availableActions)) {
+            $availableActions = [];
+        }
+        $canRerunAction = $canRegen
+            || in_array('rerun', $availableActions, true)
+            || in_array(\App\Addons\SeoContentAi\Enums\ContentProjectItemAction::Rerun->value, $availableActions, true);
+
+        $createOrRerun = (! $isGenuineRunning)
+            && ! $generationBlocked
+            && $lifecycle !== 'archived'
+            && (
+                $generate
+                || $runAgain
+                || $canGenerate
+                || $canRerunAction
+                || $isStaleGeneration
+                || $genKey === 'failed'
+                || $genKey === 'pending'
+                || $lifecycle === 'failed'
+                || $generationStatus === 'failed'
+                || $generationStatus === 'pending'
+            );
+        $createOrRerunLabel = (
+            $runAgain
+            || $isStaleGeneration
+            || $canRerunAction
+            || $hasArticle
+            || $genKey === 'failed'
+            || $lifecycle === 'failed'
+            || $generationStatus === 'failed'
+            || ($canGenerate && ! $isGeneratePendingRunnable)
+            || ($genKey === 'pending' && $hasArticle)
+        ) ? 'rerun' : 'create';
+        // Collapse legacy flags into the smart action (menu renders create_or_rerun only).
+        $generate = false;
+        $runAgain = false;
+
         $stopGeneration = $isGenuineRunning && ! $isStaleGeneration;
         $resumeGeneration = $hasResumableCheckpoint && ! $isGenuineRunning && ! $isStaleGeneration && ! $generationBlocked;
+
+        // Capability SoT — when present, overrides status-only heuristics (one recovery CTA).
+        $selectExistingArticle = false;
+        if ($recoveryAction !== '') {
+            if ($recoveryAction === 'active') {
+                $createOrRerun = false;
+                $resumeGeneration = false;
+                $selectExistingArticle = false;
+                $stopGeneration = true;
+            } elseif ($recoveryAction === 'resume') {
+                $resumeGeneration = true;
+                $createOrRerun = false;
+                $selectExistingArticle = false;
+            } elseif ($recoveryAction === 'rerun') {
+                $resumeGeneration = false;
+                $selectExistingArticle = false;
+                $createOrRerun = ! $generationBlocked && $lifecycle !== 'archived';
+                $createOrRerunLabel = 'rerun';
+            } elseif ($recoveryAction === 'generate') {
+                $resumeGeneration = false;
+                $selectExistingArticle = false;
+                $createOrRerun = ! $generationBlocked && $lifecycle !== 'archived';
+                $createOrRerunLabel = 'create';
+            } elseif ($recoveryAction === 'select_existing_article') {
+                $resumeGeneration = false;
+                $createOrRerun = false;
+                $selectExistingArticle = ! $generationBlocked && $lifecycle !== 'archived' && ! $isGenuineRunning;
+            } elseif ($recoveryAction === 'none') {
+                $resumeGeneration = false;
+                $createOrRerun = false;
+                $selectExistingArticle = false;
+            }
+        } elseif ($resumeGeneration) {
+            // Legacy: failed+resumable prefers Resume over smart rerun.
+            $createOrRerun = false;
+        }
 
         $regenOutline = $canRegen && ! $generationBlocked;
         $regenArticle = $canRegen && ! $generationBlocked;
         $regenImage = $canRegen && $hasArticle && ! $generationBlocked;
-        $retryFailed = $genKey === 'failed' && $canRegen && ! $generationBlocked;
-        $debugRerunFromStart = $canRegen && ! $runAgain && ! $isImprove && ! $isGenuineRunning && ! $generationBlocked;
+        $retryFailed = false;
+        $debugRerunFromStart = false;
         $improveNote = $isImprove;
         $message = trim((string) ($row['message'] ?? ''));
         $acknowledgeError = $hasArticle
@@ -166,8 +246,9 @@ final class ContentProjectItemActionsPresenter
         $debugToScheduled = $debugEnabled && in_array($lifecycleBucket, ['approved', 'published'], true);
         $debugToPublished = $debugEnabled && in_array($lifecycleBucket, ['approved', 'scheduled'], true);
 
-        $hasContent = $openArticle || $generate || $runAgain || $stopGeneration || $resumeGeneration
-            || $regenOutline || $regenArticle || $regenImage || $retryFailed || $debugRerunFromStart || $improveNote
+        $hasContent = $openArticle || $createOrRerun || $stopGeneration || $resumeGeneration
+            || $selectExistingArticle
+            || $regenOutline || $regenArticle || $regenImage || $improveNote
             || $acknowledgeError || $skipGeneration || $allowGeneration;
         $hasReview = $startReview || $approve;
         $hasPublishing = $sendToPublishingQueue;
@@ -176,15 +257,18 @@ final class ContentProjectItemActionsPresenter
 
         $flags = [
             'open_article' => $openArticle,
-            'generate' => $generate,
-            'run_again' => $runAgain,
+            'generate' => false,
+            'run_again' => false,
+            'create_or_rerun' => $createOrRerun,
+            'create_or_rerun_label' => $createOrRerunLabel,
             'stop_generation' => $stopGeneration,
             'resume_generation' => $resumeGeneration,
+            'select_existing_article' => $selectExistingArticle,
             'regen_outline' => $regenOutline,
             'regen_article' => $regenArticle,
             'regen_image' => $regenImage,
-            'retry_failed_step' => $retryFailed,
-            'debug_rerun_from_start' => $debugRerunFromStart,
+            'retry_failed_step' => false,
+            'debug_rerun_from_start' => false,
             'acknowledge_error' => $acknowledgeError,
             'prefer_acknowledge_error' => $preferAcknowledgeError,
             'skip_generation' => $skipGeneration,
@@ -235,8 +319,10 @@ final class ContentProjectItemActionsPresenter
 
         $flags['generate'] = false;
         $flags['run_again'] = false;
+        $flags['create_or_rerun'] = false;
         $flags['stop_generation'] = false;
         $flags['resume_generation'] = false;
+        $flags['select_existing_article'] = false;
         $flags['regen_outline'] = false;
         $flags['regen_article'] = false;
         $flags['regen_image'] = false;

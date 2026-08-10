@@ -9,7 +9,7 @@ final class ProductGalleryParentChildFeature
     public static function enabled(): bool
     {
         try {
-            return (bool) config('seo-content-ai.product_gallery.parent_child.enabled', false);
+            return (bool) config('seo-content-ai.product_gallery.parent_child.enabled', true);
         } catch (\Throwable) {
             return false;
         }

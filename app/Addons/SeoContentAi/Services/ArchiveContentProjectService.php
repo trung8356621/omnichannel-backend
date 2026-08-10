@@ -259,6 +259,8 @@ final class ArchiveContentProjectService
 
             // Snapshot xong mới destroy AI Workspace — lỗi = rollback cả archive.
             $cleanupContext = $this->workspaceDestroyer->destroyInTransaction($lockedProject);
+            $resetTasks = $this->resetProjectTasksForFreshFlow($lockedProject);
+            $cleanupContext->bumpStat('project_tasks_reset_for_fresh_flow', $resetTasks);
 
             $lockedProject->forceFill([
                 'archived_at' => $archivedAt,
@@ -274,6 +276,7 @@ final class ArchiveContentProjectService
                 'archived_at' => $this->toIso8601($archivedAt),
                 'workspace_destroyed' => true,
                 'workspace_stats' => $cleanupContext->stats(),
+                'tasks_reset_for_fresh_flow' => $resetTasks,
             ]);
 
             return $archive->fresh(['items']) ?? $archive;
@@ -331,6 +334,60 @@ final class ArchiveContentProjectService
 
             return $archive->fresh() ?? $archive;
         });
+    }
+
+    /**
+     * Re-run archive cleanup for projects that were archived before workspace-reset cleanup existed.
+     *
+     * @return array<string, int>
+     */
+    public function cleanupArchivedWorkspace(SeoProjectArchive $archive, int $userId): array
+    {
+        $this->assertValidUserId($userId);
+
+        $project = $archive->project instanceof SeoProject
+            ? $archive->project
+            : SeoProject::query()->find((int) ($archive->project_id ?? 0));
+
+        if (! $project instanceof SeoProject) {
+            throw new RuntimeException('Project not found.');
+        }
+
+        if ($project->archived_at === null && $archive->archived_at === null) {
+            throw new RuntimeException('Project is not archived.');
+        }
+
+        $cleanupContext = null;
+        $stats = DB::connection('omi_seo_ai')->transaction(function () use ($project, $archive, $userId, &$cleanupContext): array {
+            $lockedProject = $this->lockProject($project);
+            $articleIds = $this->archiveArticleIds($archive);
+
+            if ($articleIds !== []) {
+                $this->editorSessions->revokeActiveSessionsForArticles($articleIds, 'content_project_archive_cleanup');
+            }
+
+            $cleanupContext = $this->workspaceDestroyer->destroyInTransaction($lockedProject, $articleIds);
+            $resetTasks = $this->resetProjectTasksForFreshFlow($lockedProject);
+            $cleanupContext->bumpStat('project_tasks_reset_for_fresh_flow', $resetTasks);
+
+            $stats = $cleanupContext->stats();
+
+            RuntimeLogger::info('content_project_archive_workspace_cleaned', [
+                'project_id' => (int) $lockedProject->getKey(),
+                'archive_id' => (int) $archive->getKey(),
+                'user_id' => $userId,
+                'article_count' => count($articleIds),
+                'stats' => $stats,
+            ]);
+
+            return $stats;
+        });
+
+        if ($cleanupContext instanceof ContentProjectWorkspaceCleanupContext) {
+            $this->workspaceDestroyer->releaseDeferredSideEffects($cleanupContext);
+        }
+
+        return $stats;
     }
 
     /**
@@ -462,6 +519,22 @@ final class ArchiveContentProjectService
     }
 
     /**
+     * @return list<int>
+     */
+    private function archiveArticleIds(SeoProjectArchive $archive): array
+    {
+        $ids = [];
+        foreach ($archive->items()->get(['article_id']) as $item) {
+            $articleId = (int) ($item->article_id ?? 0);
+            if ($articleId > 0) {
+                $ids[] = $articleId;
+            }
+        }
+
+        return array_values(array_unique($ids));
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function buildArticleSnapshot(SeoProjectTask $task, SeoArticle $article): array
@@ -518,6 +591,8 @@ final class ArchiveContentProjectService
             'seo_rule_violations' => $seoRuleViolations,
             'last_synced_at' => $this->toIso8601($article->last_synced_at),
             'wp_sync_error' => $wpSyncError !== '' ? $wpSyncError : null,
+            'indexed_at' => $this->toIso8601($article->indexed_at ?? null),
+            'previous_indexed_at' => $this->toIso8601($article->previous_indexed_at ?? null),
         ];
     }
 
@@ -607,6 +682,51 @@ final class ArchiveContentProjectService
         }
 
         return $locked;
+    }
+
+    private function resetProjectTasksForFreshFlow(SeoProject $project): int
+    {
+        $projectId = (int) $project->getKey();
+        if ($projectId <= 0) {
+            return 0;
+        }
+
+        $payload = [
+            'status' => SeoProjectTask::STATUS_PENDING,
+            'article_id' => null,
+            'completed_at' => null,
+        ];
+
+        foreach ([
+            'content_manager_reviewed_at' => null,
+            'content_manager_reviewed_by' => null,
+            'publishing_queued_at' => null,
+            'publishing_queued_by' => null,
+            'scheduled_publish_at' => null,
+            'publish_queue_status' => ContentProjectPublishQueueStatus::None->value,
+            'publish_published_at' => null,
+            'publish_started_at' => null,
+            'publish_retry_count' => 0,
+            'publish_attempt_count' => 0,
+            'last_publish_error' => null,
+            'last_publish_failed_at' => null,
+            'last_publish_http_status' => null,
+            'last_publish_attempt_at' => null,
+            'next_publish_retry_at' => null,
+            'publishing_started_at' => null,
+            'delivery_dispatched_at' => null,
+            'publisher_started_at' => null,
+            'publish_lease_expires_at' => null,
+        ] as $column => $value) {
+            if (Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', $column)) {
+                $payload[$column] = $value;
+            }
+        }
+
+        return (int) SeoProjectTask::query()
+            ->where('project_id', $projectId)
+            ->whereNull('archived_at')
+            ->update($payload);
     }
 
     private function assertValidUserId(int $userId): void

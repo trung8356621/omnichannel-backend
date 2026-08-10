@@ -188,6 +188,15 @@ final class SeoProjectPhase3C2SyncTest extends TestCase
         $this->assertTrue(method_exists(SeoProjectTaskSyncService::class, 'sanitizeTasksData'));
     }
 
+    public function test_completed_article_linked_items_are_cancelled_when_removed_from_sync_input(): void
+    {
+        $source = file_get_contents((new ReflectionClass(SeoProjectTaskSyncService::class))->getFileName() ?: '');
+        $this->assertIsString($source);
+        $this->assertStringContainsString('SeoProjectTask::STATUS_COMPLETED', $source);
+        $this->assertStringContainsString("'article_id' => \$hasArticle ? (int) \$task->article_id : null", $source);
+        $this->assertStringNotContainsString('SYNC_REMOVAL_BLOCKED_COMPLETED_OR_ARTICLE', $source);
+    }
+
     public function test_diagnose_sync_command_signature(): void
     {
         $command = new DiagnoseContentProjectSyncCommand;

@@ -133,37 +133,52 @@ final class SiteSyncStatusPresenter
         $errorMessage = trim((string) ($run->error_message ?? ''));
         $meta = is_array($run->meta) ? $run->meta : [];
         $scoringProgress = $this->safeScoringProgress((int) $site->id);
+        $runStatus = (string) $run->status;
+        $currentStep = (string) ($run->current_step ?? '');
+        $lastProgressAt = (string) ($meta['last_progress_at'] ?? optional($run->updated_at)?->toIso8601String() ?? '');
+        $stuck = $this->isRunStuck($runStatus, $lastProgressAt, $meta);
+        if ($stuck) {
+            $warnings[] = 'Run đồng bộ không còn heartbeat tiến trình — bấm «Tiếp tục» để reclaim/resume theo policy hiện có.';
+        }
         $scoringContext = $this->scoringContextMessage(
-            (string) $run->status,
-            (string) ($run->current_step ?? ''),
+            $runStatus,
+            $currentStep,
             $scoringProgress,
             is_array($run->counters) ? $run->counters : [],
+            $stuck,
         );
 
+        $isTerminal = in_array($runStatus, ['completed', 'completed_with_warnings', 'canceled', 'cancelled'], true);
+        $isActive = in_array($runStatus, ['pending', 'running'], true);
+
         return [
-            'running' => in_array($run->status, ['pending', 'running'], true),
-            'resumable' => $run->status === 'failed' && (bool) $run->resumable,
-            'cancellable' => in_array($run->status, ['pending', 'running', 'failed'], true),
-            'status' => (string) $run->status,
+            'running' => $isActive && ! $stuck,
+            'stuck' => $stuck,
+            'resumable' => ($runStatus === 'failed' && (bool) $run->resumable) || $stuck,
+            'cancellable' => ! $isTerminal && in_array($runStatus, ['pending', 'running', 'failed'], true),
+            'status' => $stuck ? 'stuck' : $runStatus,
             'mode' => (string) $run->mode,
             'mode_label' => $forceFull ? 'Đồng bộ lại toàn bộ website' : null,
             'error_message' => $errorMessage !== '' ? $errorMessage : null,
-            'message' => $this->buildMessage(
-                (string) $run->status,
-                $counters,
-                $warnings,
-                $sources,
-                $forceFull,
-                $errorMessage,
-            ),
+            'message' => $stuck
+                ? 'Đồng bộ bị kẹt (không còn tiến trình). Bấm «Tiếp tục đồng bộ & kiểm tra» để resume.'
+                : $this->buildMessage(
+                    $runStatus,
+                    $counters,
+                    $warnings,
+                    $sources,
+                    $forceFull,
+                    $errorMessage,
+                ),
             'scoring_context' => $scoringContext,
             'scoring_progress' => $scoringProgress,
             'progress' => $progress,
             'total' => $progressTotal,
-            'phase' => (string) ($run->current_step ?? ''),
+            'phase' => $currentStep,
+            'phase_label' => $this->phaseLabel($currentStep),
             'public_ref' => (string) $run->public_ref,
             'run_id' => (int) $run->id,
-            'last_progress_at' => (string) ($meta['last_progress_at'] ?? optional($run->updated_at)?->toIso8601String()),
+            'last_progress_at' => $lastProgressAt,
             'counters' => $counters,
             'warnings' => array_values(array_unique($warnings)),
             'capability_sources' => $sources,
@@ -329,12 +344,25 @@ final class SiteSyncStatusPresenter
         string $currentStep,
         array $scoring,
         array $counters,
+        bool $stuck = false,
     ): string {
         $pending = (int) ($scoring['pending'] ?? 0);
         $processing = (int) ($scoring['processing'] ?? 0);
         $completed = (int) ($scoring['completed'] ?? $counters['workspace_scores_generated'] ?? 0);
         $failed = (int) ($scoring['failed'] ?? $counters['scoring_failed'] ?? 0);
+        $total = (int) ($scoring['total'] ?? 0);
         $remaining = $pending + (int) ($scoring['remaining'] ?? 0);
+
+        if ($stuck) {
+            return sprintf(
+                'SEO scoring: %s / %s · pending %s · processing %s · failed %s (run kẹt — resume để tiếp tục lifecycle)',
+                number_format($completed),
+                number_format($total),
+                number_format($pending),
+                number_format($processing),
+                number_format($failed),
+            );
+        }
 
         if (in_array($runStatus, ['pending', 'running'], true) && $currentStep !== 'score_missing_articles' && $currentStep !== 'finalize') {
             return 'Chờ hoàn tất đồng bộ dữ liệu';
@@ -343,9 +371,10 @@ final class SiteSyncStatusPresenter
         if ($currentStep === 'score_missing_articles' || ($pending + $processing) > 0) {
             if ($processing > 0) {
                 return sprintf(
-                    'Đang chấm SEO: %s bài · Còn lại: %s bài',
+                    'Đang chấm SEO: %s bài · Còn lại: %s bài · Thất bại: %s',
                     number_format($processing),
                     number_format(max(0, $pending + $remaining)),
+                    number_format($failed),
                 );
             }
             if ($pending > 0) {
@@ -353,12 +382,27 @@ final class SiteSyncStatusPresenter
                     return 'Chấm SEO đang chờ worker xử lý';
                 }
 
-                return sprintf('Đang chuẩn bị chấm SEO: %s bài', number_format($pending));
+                return sprintf(
+                    'Đang chuẩn bị chấm SEO: %s bài · Hoàn tất: %s / %s · Thất bại: %s',
+                    number_format($pending),
+                    number_format($completed),
+                    number_format($total),
+                    number_format($failed),
+                );
+            }
+
+            // Step còn mở nhưng queue đã drain — chờ finalize/terminal của orchestrator.
+            if ($currentStep === 'score_missing_articles') {
+                return sprintf(
+                    'SEO scoring: %s / %s · đang hoàn tất bước score_missing_articles',
+                    number_format($completed),
+                    number_format($total),
+                );
             }
         }
 
         if (in_array($runStatus, ['completed', 'completed_with_warnings'], true) || $currentStep === 'finalize') {
-            $msg = sprintf('Đã chấm SEO: %s bài', number_format($completed));
+            $msg = sprintf('Đã chấm SEO: %s / %s bài', number_format($completed), number_format($total));
             if ($failed > 0) {
                 $msg .= sprintf(' · Thất bại: %s', number_format($failed));
             }
@@ -367,6 +411,51 @@ final class SiteSyncStatusPresenter
         }
 
         return '';
+    }
+
+    /**
+     * Align with SiteSyncStepRunner stale reclaim window (10 minutes).
+     *
+     * @param  array<string, mixed>  $meta
+     */
+    private function isRunStuck(string $runStatus, string $lastProgressAt, array $meta): bool
+    {
+        if (! in_array($runStatus, ['pending', 'running'], true)) {
+            return false;
+        }
+
+        // Deferred scoring polls update last_progress_at — not stuck while actively waiting.
+        if (! empty($meta['scoring_deferred'])) {
+            return false;
+        }
+
+        if ($lastProgressAt === '') {
+            return false;
+        }
+
+        try {
+            $last = \Illuminate\Support\Carbon::parse($lastProgressAt);
+        } catch (Throwable) {
+            return false;
+        }
+
+        return $last->lessThanOrEqualTo(now()->subMinutes(10));
+    }
+
+    private function phaseLabel(string $stepKey): string
+    {
+        return match ($stepKey) {
+            'detect_capability' => 'Phát hiện capability',
+            'request_snapshot_delta' => 'Snapshot / delta',
+            'sync_site_profile' => 'Đồng bộ site profile',
+            'sync_url_catalog' => 'Đồng bộ URL catalog',
+            'sync_provider_keywords' => 'Đồng bộ provider keywords',
+            'missing_capability_fallback' => 'Fallback thiếu capability',
+            'validate_changed_links' => 'Kiểm tra link thay đổi',
+            'score_missing_articles' => 'Chấm SEO thiếu / stale',
+            'finalize' => 'Hoàn tất',
+            default => $stepKey !== '' ? $stepKey : '—',
+        };
     }
 
     private function buildMessage(

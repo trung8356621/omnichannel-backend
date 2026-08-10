@@ -283,4 +283,52 @@ final class ImageRoutingStrategyTest extends TestCase
         self::assertContains('gemini-3.5-flash-preview', $models);
         self::assertSame('gemini-3.5-flash-preview', $router->resolvePrimary());
     }
+
+    public function test_product_context_imagen_only_falls_back_to_canonical_gemini(): void
+    {
+        $strategy = new ImageRoutingStrategy();
+        $configured = ['imagen-4.0-generate-001'];
+
+        $eligibleConfigured = $strategy->modelsToTry(
+            toolType: ImageToolType::Image,
+            preference: RenderingPreference::Balanced,
+            productContext: true,
+            configuredPriorityList: $configured,
+        );
+
+        self::assertNotContains('imagen-4.0-generate-001', $eligibleConfigured);
+        self::assertContains('gemini-3.1-flash-image-preview', $eligibleConfigured);
+        self::assertContains('gemini-3-pro-image-preview', $eligibleConfigured);
+        self::assertSame(['imagen-4.0-generate-001'], $configured);
+    }
+
+    public function test_product_context_keeps_configured_gemini_without_fallback(): void
+    {
+        $strategy = new ImageRoutingStrategy();
+        $models = $strategy->modelsToTry(
+            toolType: ImageToolType::Image,
+            preference: RenderingPreference::Balanced,
+            productContext: true,
+            configuredPriorityList: [
+                'gemini-3.1-flash-image-preview',
+                'imagen-4.0-generate-001',
+            ],
+        );
+
+        self::assertSame(['gemini-3.1-flash-image-preview'], $models);
+        self::assertNotContains('imagen-4.0-generate-001', $models);
+    }
+
+    public function test_non_product_context_keeps_imagen_without_fallback(): void
+    {
+        $strategy = new ImageRoutingStrategy();
+        $models = $strategy->modelsToTry(
+            toolType: ImageToolType::Image,
+            preference: RenderingPreference::Balanced,
+            productContext: false,
+            configuredPriorityList: ['imagen-4.0-generate-001'],
+        );
+
+        self::assertSame(['imagen-4.0-generate-001'], $models);
+    }
 }

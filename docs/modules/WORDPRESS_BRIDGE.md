@@ -53,6 +53,7 @@ Min Site Sync contract bridge: **`1.0.64`** (`SiteSyncSchema::MIN_BRIDGE_VERSION
 | Laravel | `SeoWpBridgeController` | Inbound ping/push/delta |
 | Laravel | `SiteSyncInboundGateway` / delta ingest | Site Sync callbacks |
 | Laravel | `WordPressArticleSyncService` | Outbound hub (`syncForArticle`, `publishForArticle`) |
+| Laravel | `WordPressFieldConflictService` | Field-level WP/Laravel sync baseline + same-field conflict detection |
 | Laravel | `WordPressArticleContentService` | `editor-sync` HTTP |
 | Laravel | `WordPressLocalMediaSyncService` / `ArticleMediaLocalService` | Local media → WP |
 | Laravel | `WordPressArticleMediaService` / `WordPressArticleAttachmentService` | Featured/gallery/rename/meta |
@@ -75,7 +76,7 @@ Min Site Sync contract bridge: **`1.0.64`** (`SiteSyncSchema::MIN_BRIDGE_VERSION
 | Live post content/SEO on WP after publish | WordPress | Outbound may update via editor-sync |
 | Laravel draft/scheduled working copy | Laravel | Until publish cron/manual sync |
 | `wp_post_id` / sync keys | Laravel article + WP meta `_teamvia_article_id` / `_teamvia_sync_key` | Idempotent create |
-| Media binary after upload | WordPress attachment | Laravel `seo_media` keeps ids/URLs |
+| Media binary after upload | WordPress attachment + Laravel managed source when present | Laravel `seo_media` / local media markers / pending versions allow explicit Sync WP to update managed attachment meta, slug, assignment, and pending binary |
 | FAQs meta | WP `_omi_seo_faqs` | Empty `faqs:[]` must not wipe existing unless `clear_faqs` |
 | Product virtual reviews | WP meta + optional local pending | Reviewed article: WP SoT; local pending cleared |
 | Catalog links/keywords/scores (V2) | Site Sync / WP provider | Not dual-written by push-content |
@@ -120,6 +121,9 @@ Invariants:
 - Content Project completion / `PromptTestPublishService.publishArticle` = **Laravel only** (no direct WP job).
 - `createForArticle` includes `post_content` (+ FAQ/SEO/categories) to avoid empty stub posts; `publishForArticle` lock per `article_id`.
 - Outbound status payload: publish only; future `post_date` clamped.
+- Existing/imported/rewrite posts are mutable by explicit Sync WP. `wp_post_id`, imported origin, or rewrite mode must not protect the whole record.
+- Conflict protection is per field: block only when Laravel and WordPress both changed the same field since `wp_last_synced_field_snapshot`; different-field changes can merge. Without reliable snapshot, `wp_post_id` alone is not a conflict.
+- Linked article slug is sent as `slug` / WP `post_name`; returned canonical `slug`/`permalink` from WordPress are stored back on Laravel.
 - Product reviews share `SyncArticleToWordPressPipeline` (no separate orphan publish rule).
 - Editor canonical document: TipTap JSON on Laravel (`articles.editor_document`); WP still receives derived HTML. Import/body rewrites should invalidate or re-ingest JSON — [`ARTICLE_EDITOR_JSON_PERSISTENCE.md`](../architecture/ARTICLE_EDITOR_JSON_PERSISTENCE.md).
 
@@ -138,6 +142,7 @@ WordPress media rename (plugin ≥ **1.0.69**):
 - `GET|POST /attachments/usage` — usage scan (post_content + featured) before rename.
 - `POST /attachments/rename` with `mode=explicit_single` — requires `acknowledge_url_change` + `confirmation_phrase=RENAME`, `strict_collision` (no silent `-2`).
 - Bulk rename from Laravel editor Fix Slug All is **blocked**; Laravel uses `WordPressMediaRenameService` only for explicit single rename.
+- Laravel-managed media (`seo_media_id`, local source, local media marker, pending binary/version/revision) is not "WP protected"; Sync WP may update alt/title/caption/description, attachment slug, featured/gallery assignment, and pending binary replacement. WP-only unmanaged media remains protected from automatic binary replacement and deleted/missing attachments remain blocked.
 - No redirect mapping promised unless plugin reports `supports_redirect`.
 
 ### Inbound (plugin → Laravel)

@@ -294,6 +294,17 @@ final class ContentProjectItemGenerationClassifier
     }
 
     /**
+     * Single-item classify with DB evidence (row smart-action / launch planner).
+     */
+    public function decisionForTask(SeoProjectTask $task): ContentProjectItemGenerationDecision
+    {
+        $task->loadMissing('article');
+        $index = $this->loadEvidenceIndex((int) ($task->project_id ?? 0), [$task]);
+
+        return $this->classifyTask($task, $index[(int) $task->id] ?? []);
+    }
+
+    /**
      * @param  list<SeoProjectTask>  $tasks
      * @return array<int, array<string, mixed>>
      */

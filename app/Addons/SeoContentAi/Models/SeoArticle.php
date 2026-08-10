@@ -43,6 +43,8 @@ class SeoArticle extends Model
         'published_at' => 'datetime',
         'last_manual_saved_at' => 'datetime',
         'last_synced_at' => 'datetime',
+        'indexed_at' => 'datetime',
+        'previous_indexed_at' => 'datetime',
         'last_ai_content_at' => 'datetime',
         'document_version' => 'integer',
         'editor_document_schema_version' => 'integer',

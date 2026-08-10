@@ -70,7 +70,11 @@ final class ContentProjectItemActionGuard
             }
 
             $canRerunFailedDraft = $lifecycle === ContentProjectLifecyclePhase::Draft
-                && $generation === ContentProjectItemGenerationState::Failed;
+                && (
+                    $generation === ContentProjectItemGenerationState::Failed
+                    // Stuck Pending (dead queue / empty article shell) — smart CTA may Rerun.
+                    || $generation === ContentProjectItemGenerationState::Pending
+                );
 
             if ($canRerunFailedDraft || in_array($lifecycle, [
                 ContentProjectLifecyclePhase::Review,

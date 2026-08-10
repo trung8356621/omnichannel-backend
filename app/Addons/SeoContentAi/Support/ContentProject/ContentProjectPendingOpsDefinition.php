@@ -21,6 +21,10 @@ final class ContentProjectPendingOpsDefinition
         if (! empty($row['generation_blocked'])) {
             return false;
         }
+        // Dead/stale runtime must not look like live Pending (blocks Generate CTA).
+        if (! empty($row['is_generation_stale'])) {
+            return false;
+        }
         if (ContentProjectPublishedDefinition::matches($row)) {
             return false;
         }

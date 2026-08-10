@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services\ProductGallery;
 use App\Addons\SeoContentAi\Jobs\RunProductGalleryParentChildJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProductGalleryExecution;
+use App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryGenerationMode;
 use App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryParentChildFeature;
 
 /**
@@ -72,7 +73,7 @@ final class ProductGalleryParentChildDispatchService
                 'ok' => false,
                 'route' => 'sprite',
                 'error_code' => 'reference_transport_unsupported',
-                'message' => 'Provider/model does not support reference images.',
+                'message' => 'Không có model ảnh hỗ trợ Parent/Child trong cấu hình hiện tại.',
                 'mode_resolution' => $resolution->toArray(),
             ];
         }
@@ -131,6 +132,18 @@ final class ProductGalleryParentChildDispatchService
                 ];
             }
 
+            $executionId = 'pgpc_'.bin2hex(random_bytes(8));
+            SeoProductGalleryExecution::query()->create([
+                'execution_id' => $executionId,
+                'article_id' => $articleId,
+                'site_id' => (int) ($article->site_id ?? 0) ?: null,
+                'generation_mode' => ProductGalleryGenerationMode::ParentChild->value,
+                'status' => 'pending',
+                'provider_snapshot' => $caps->toArray(),
+                'original_media_snapshot_ids' => $originalSnapshotIds,
+                'started_at' => now(),
+            ]);
+
             RunProductGalleryParentChildJob::dispatch(
                 articleId: $articleId,
                 configuredMode: $requestedMode,
@@ -139,11 +152,13 @@ final class ProductGalleryParentChildDispatchService
                 originalSnapshotIds: $originalSnapshotIds,
                 variables: $variables,
                 requestedImageCount: $requestedImageCount,
+                executionId: $executionId,
             );
 
             return [
                 'ok' => true,
                 'route' => 'parent_child',
+                'execution_id' => $executionId,
                 'job_dispatched' => true,
                 'existing' => false,
                 'mode_resolution' => $resolution->toArray(),

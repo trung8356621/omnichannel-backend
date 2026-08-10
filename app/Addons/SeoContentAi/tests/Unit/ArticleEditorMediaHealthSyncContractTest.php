@@ -121,10 +121,97 @@ final class ArticleEditorMediaHealthSyncContractTest extends TestCase
         self::assertStringContainsString('data-seo-page-action="sync"', $actions);
         self::assertStringContainsString('data-seo-sync-mode="wordpress_sync"', $actions);
         self::assertStringContainsString('data-seo-page-action="save-close"', $actions);
-        self::assertStringContainsString('@if ($inContentProject)', $actions);
+        self::assertStringContainsString('$contentProjectWpSyncEligible', $actions);
     }
 
-    public function test_archived_content_project_membership_still_blocks_manual_sync_visibility(): void
+    public function test_sync_wp_payload_carries_current_media_snapshot(): void
+    {
+        $api = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/utils/articleEditorApi.js',
+        );
+
+        self::assertStringContainsString("import { getMediaSnapshot } from './articleEditorMediaSnapshot.js';", $api);
+        self::assertStringContainsString('const mediaSnapshot = articleId > 0 ? getMediaSnapshot(articleId) : null;', $api);
+        self::assertStringContainsString('featured_image: featured', $api);
+        self::assertStringContainsString('product_album: productAlbum', $api);
+        self::assertStringContainsString('media_snapshot: mediaSnapshot', $api);
+        self::assertStringNotContainsString('featured_image: null', $api);
+        self::assertStringNotContainsString('product_album: null', $api);
+    }
+
+    public function test_sync_wp_flushes_pending_featured_mutation_before_payload_build(): void
+    {
+        $entry = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/article-editor.jsx',
+        );
+        $snapshot = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/utils/articleEditorMediaSnapshot.js',
+        );
+
+        self::assertStringContainsString('flushMediaSnapshotMutations', $entry);
+        $syncPath = $this->extractBetween(
+            $entry,
+            "if (normalizedAction === 'sync' && typeof window.__seoCollectEditorHeavyBundle === 'function') {",
+            'const apiPayload = buildArticleEditorApiPayload(editorBundle, wire);',
+        );
+        self::assertStringContainsString('await flushMediaSnapshotMutations(articleId);', $syncPath);
+        self::assertStringContainsString('export async function flushMediaSnapshotMutations', $snapshot);
+        self::assertStringContainsString("mediaSnapshotMutationKey(id, 'featured')", $snapshot);
+        self::assertStringContainsString("mediaSnapshotMutationKey(id, 'gallery')", $snapshot);
+        self::assertStringContainsString('await Promise.all(pending);', $snapshot);
+    }
+
+    public function test_bundle_apply_persists_featured_from_media_snapshot_for_sync_wp(): void
+    {
+        $source = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/ArticleEditorBundleApplyService.php',
+        );
+        $apply = $this->extractBetween(
+            $source,
+            'public function apply(SeoArticle $article, array $bundle, ArticleEditorSaveContext $context): void',
+            'public function applySeoMetaOnly',
+        );
+
+        self::assertStringContainsString('$bundle[\'featured_image\'] ?? $this->featuredImageFromMediaSnapshot($bundle)', $apply);
+        self::assertStringContainsString('$bundle[\'product_album\'] ?? $this->productAlbumFromMediaSnapshot($bundle)', $apply);
+        self::assertStringContainsString('$this->persistFeaturedImage($article, $context, $featuredImage);', $apply);
+        self::assertStringContainsString('$this->persistProductAlbum($article, $context, $productAlbum);', $apply);
+        self::assertStringContainsString('private function featuredImageFromMediaSnapshot', $source);
+        self::assertStringContainsString('private function normalizeMediaSnapshotItem', $source);
+    }
+
+    public function test_manual_sync_persists_bundle_then_refreshes_article_before_enqueue(): void
+    {
+        $source = $this->methodSource(
+            new ReflectionMethod(WordPressManualSyncService::class, 'enqueueFromEditorBundle'),
+        );
+
+        self::assertStringContainsString('$this->bundleApply->apply($article, $bundle, $context);', $source);
+        self::assertStringContainsString('$persist = $this->actions->dispatch(', $source);
+        self::assertStringContainsString('$article = $fresh->fresh() ?? $fresh;', $source);
+        self::assertStringContainsString('return $this->enqueueManual(', $source);
+    }
+
+    public function test_wordpress_sync_finalize_pushes_pending_featured_media_and_surfaces_failure(): void
+    {
+        $source = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/WordPressArticleSyncService.php',
+        );
+        $complete = $this->extractBetween(
+            $source,
+            'public function completeEditorSyncResponse(SeoArticle $article, array $prepared, array $decoded, array $syncOptions = []): array',
+            'private function storeEditorSyncFingerprint',
+        );
+
+        self::assertStringContainsString('pushPendingMediaToWordPress($article->fresh())', $complete);
+        self::assertStringContainsString('featured/album=ok', $complete);
+        self::assertStringContainsString('Ảnh chưa đẩy được:', $complete);
+        self::assertStringContainsString("'success' => false", $complete);
+        self::assertStringContainsString("'error_code' => 'featured_media_sync_failed'", $complete);
+        self::assertStringContainsString("'failed_stage' => 'featured_media_push'", $complete);
+    }
+
+    public function test_archived_content_project_membership_is_not_active_ownership(): void
     {
         $membership = (string) file_get_contents(
             (new ReflectionClass(
@@ -134,13 +221,22 @@ final class ArticleEditorMediaHealthSyncContractTest extends TestCase
 
         self::assertStringContainsString('function belongsToContentProject', $membership);
         self::assertStringContainsString('assignedTaskForArticle', $membership);
-        // Assigned task query must NOT require whereNull(archived_at).
+        self::assertStringContainsString('historicalAssignedTaskForArticle', $membership);
+        self::assertStringContainsString('belongsToActiveContentProject', $membership);
+
         $assigned = $this->extractBetween(
             $membership,
             'public function assignedTaskForArticle',
-            'public function belongsToContentProject',
+            'public function historicalAssignedTaskForArticle',
         );
-        self::assertStringNotContainsString("whereNull('archived_at')", $assigned);
+        self::assertStringContainsString('activeTaskForArticle', $assigned);
+
+        $belongs = $this->extractBetween(
+            $membership,
+            'public function belongsToContentProject',
+            'public function activeProjectForArticle',
+        );
+        self::assertStringContainsString('belongsToActiveContentProject', $belongs);
     }
 
     private function methodSource(ReflectionMethod $method): string

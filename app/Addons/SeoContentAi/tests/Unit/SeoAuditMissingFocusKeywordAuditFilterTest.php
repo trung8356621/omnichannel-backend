@@ -146,6 +146,81 @@ final class SeoAuditMissingFocusKeywordAuditFilterTest extends TestCase
         ));
     }
 
+    public function test_stale_cached_missing_focus_stripped_when_canonical_present(): void
+    {
+        $src = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/SeoAuditKeywordFlagService.php',
+        );
+
+        self::assertStringContainsString('hasCanonicalFocusKeyword', $src);
+        self::assertStringContainsString('resolveFocusKeywordForArticle', $src);
+        // Must strip stale cache keys before assessment / labels.
+        self::assertStringContainsString('seo.missing_focus_keyword', $src);
+        self::assertStringContainsString('KEY_MISSING_FOCUS_KEYWORD', $src);
+        self::assertMatchesRegularExpression(
+            '/if \(\$hasFocusKeyword\) \{\s*\$violations = array_values\(array_filter/',
+            $src,
+        );
+        self::assertMatchesRegularExpression(
+            '/if \(\$hasFocusKeyword\) \{\s*\$matchedKeys = array_values\(array_filter/',
+            $src,
+        );
+    }
+
+    public function test_scan_service_map_row_also_strips_stale_missing_focus(): void
+    {
+        $src = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/SeoAuditScanService.php',
+        );
+
+        self::assertStringContainsString('resolveFocusKeywordForArticle', $src);
+        self::assertStringContainsString('has_focus_keyword', $src);
+        self::assertMatchesRegularExpression(
+            '/function mapArticleRow[\s\S]*hasCanonicalFocusKeyword[\s\S]*KEY_MISSING_FOCUS_KEYWORD/',
+            $src,
+        );
+    }
+
+    public function test_has_canonical_delegates_to_analyzer_resolver_contract(): void
+    {
+        $src = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/SeoAuditScanService.php',
+        );
+
+        self::assertStringContainsString('SeoAnalyzerService::class', $src);
+        self::assertStringContainsString('resolveFocusKeywordForArticle', $src);
+        self::assertStringContainsString('normalizeFocusPhrase', $src);
+    }
+
+    public function test_analyzer_resolver_contract_order_meta_then_main_article(): void
+    {
+        $src = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/SeoAnalyzerService.php',
+        );
+
+        $metaPos = strpos($src, "firstWhere('meta_key', 'seo_focus_keyword')");
+        $mainPos = strpos($src, 'KeywordMetaKey::MainArticleId');
+        self::assertNotFalse($metaPos);
+        self::assertNotFalse($mainPos);
+        self::assertLessThan($mainPos, $metaPos);
+    }
+
+    public function test_analyze_job_persists_violations_via_analyzer_not_audit_resync(): void
+    {
+        $jobSrc = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Jobs/AnalyzeArticleSeoJob.php',
+        );
+        $analyzerSrc = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/SeoAnalyzerService.php',
+        );
+
+        self::assertStringContainsString('analyze($article)', $jobSrc);
+        self::assertStringContainsString('resolveFocusKeyword', $analyzerSrc);
+        self::assertStringContainsString('META_KEY_VIOLATIONS', $analyzerSrc);
+        // Re-score rewrite clears stale missing_focus when keyword now resolves.
+        self::assertStringContainsString('KEY_MISSING_FOCUS_KEYWORD', $analyzerSrc);
+    }
+
     public function test_keyword_review_flags_do_not_imply_missing_focus_match(): void
     {
         $scan = app(SeoAuditScanService::class);

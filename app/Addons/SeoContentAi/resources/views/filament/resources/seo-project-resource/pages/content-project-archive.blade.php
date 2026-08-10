@@ -7,10 +7,12 @@
     $monthFilterOptions = $this->getMonthFilterOptions();
     $yearFilterOptions = $this->getYearFilterOptions();
     $showSiteFilter = count($siteFilterOptions) > 1;
+    $activeFilterCount = $this->getActiveFilterCount($showSiteFilter);
+    $vaultPresenter = \App\Addons\SeoContentAi\Support\ContentProject\ContentProjectArchiveVaultListPresenter::class;
 @endphp
 
 <x-filament-panels::page>
-    <div class="space-y-6">
+    <div class="w-full space-y-6">
         <div>
             <h2 class="text-lg font-semibold text-gray-950 dark:text-white">
                 {{ __('seo-content-ai::filament.projects.archive_dashboard_heading') }}
@@ -46,9 +48,9 @@
         </div>
 
         @if ($activeTab === 'projects')
-            <div class="space-y-4">
-                <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                    <div class="md:col-span-2 xl:col-span-3">
+            <div class="w-full space-y-4" x-data="{ filtersOpen: false }">
+                <div class="flex w-full flex-col gap-3 sm:flex-row sm:items-center">
+                    <div class="min-w-0 flex-1">
                         <label class="sr-only" for="archive-project-search">{{ __('seo-content-ai::filament.projects.archive_search_placeholder') }}</label>
                         <input
                             id="archive-project-search"
@@ -60,6 +62,31 @@
                         >
                     </div>
 
+                    <button
+                        type="button"
+                        class="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-gray-700 ring-1 ring-gray-300 hover:bg-gray-50 dark:text-gray-200 dark:ring-gray-600 dark:hover:bg-gray-800"
+                        @click="filtersOpen = !filtersOpen"
+                        :aria-expanded="filtersOpen.toString()"
+                    >
+                        <x-filament::icon icon="heroicon-o-funnel" class="h-4 w-4" />
+                        @if ($activeFilterCount > 0)
+                            {{ __('seo-content-ai::filament.projects.archive_filters_with_count', ['count' => $activeFilterCount]) }}
+                        @else
+                            {{ __('seo-content-ai::filament.projects.archive_filters') }}
+                        @endif
+                        <x-filament::icon
+                            icon="heroicon-m-chevron-down"
+                            class="h-4 w-4 transition-transform"
+                            x-bind:class="filtersOpen ? 'rotate-180' : ''"
+                        />
+                    </button>
+                </div>
+
+                <div
+                    x-show="filtersOpen"
+                    x-cloak
+                    class="grid gap-3 rounded-xl border border-gray-200 bg-gray-50/80 p-3 dark:border-gray-700 dark:bg-gray-800/40 md:grid-cols-2 xl:grid-cols-3"
+                >
                     @if ($showSiteFilter)
                         <div>
                             <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300" for="archive-project-site-filter">
@@ -125,24 +152,36 @@
                             </x-select>
                         </div>
                     @endif
+
+                    @if ($activeFilterCount > 0)
+                        <div class="flex items-end md:col-span-2 xl:col-span-3">
+                            <button
+                                type="button"
+                                wire:click="clearFilters"
+                                wire:loading.attr="disabled"
+                                wire:target="clearFilters"
+                                class="inline-flex items-center gap-1 text-sm font-medium text-primary-600 hover:underline disabled:opacity-50 dark:text-primary-400"
+                            >
+                                <x-filament::loading-indicator class="h-3.5 w-3.5" wire:loading wire:target="clearFilters" />
+                                {{ __('seo-content-ai::filament.projects.archive_clear_filters') }}
+                            </button>
+                        </div>
+                    @endif
                 </div>
 
-                <div class="overflow-x-auto rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
-                    <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-700">
+                <div class="w-full overflow-x-auto rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
+                    <table class="w-full min-w-full table-fixed divide-y divide-gray-200 text-sm dark:divide-gray-700">
                         <thead class="bg-gray-50 dark:bg-gray-800/60">
                             <tr>
-                                <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.name') }}</th>
-                                <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.owner') }}</th>
-                                <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.article_list.domain') }}</th>
-                                <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.month') }}</th>
-                                <th class="px-3 py-2 text-right font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_col_total') }}</th>
-                                <th class="px-3 py-2 text-right font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_col_completed') }}</th>
-                                <th class="px-3 py-2 text-right font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_col_approved') }}</th>
-                                <th class="px-3 py-2 text-right font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_col_synced') }}</th>
-                                <th class="px-3 py-2 text-right font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_col_avg_seo') }}</th>
-                                <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_col_archived_at') }}</th>
-                                <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_col_archived_by') }}</th>
-                                <th class="px-3 py-2 text-right font-medium text-gray-600 dark:text-gray-300"></th>
+                                <th class="w-[22%] px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.name') }}</th>
+                                <th class="w-[12%] px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.owner') }}</th>
+                                <th class="w-[14%] px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.article_list.domain') }}</th>
+                                <th class="w-[8%] px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.month') }}</th>
+                                <th class="w-[6%] px-3 py-2 text-right font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_col_total') }}</th>
+                                <th class="w-[12%] px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_col_index') }}</th>
+                                <th class="w-[10%] px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_col_archived_at') }}</th>
+                                <th class="w-[10%] px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{{ __('seo-content-ai::filament.projects.archive_col_archived_by') }}</th>
+                                <th class="w-[16%] px-3 py-2 text-right font-medium text-gray-600 dark:text-gray-300"></th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
@@ -154,21 +193,39 @@
                                     $month = (int) ($archive->project_month ?? 0);
                                     $year = (int) ($archive->project_year ?? 0);
                                     $period = ($month > 0 && $year > 0) ? sprintf('%02d/%d', $month, $year) : '—';
-                                    $avgSeo = $archive->average_seo_score;
+                                    $listTotal = $vaultPresenter::listTotal($archive);
+                                    $indexSummary = $vaultPresenter::indexSummary($archive);
                                 @endphp
                                 <tr wire:key="archive-row-{{ $archive->id }}">
-                                    <td class="px-3 py-2 font-medium text-gray-950 dark:text-white">{{ $archive->project_name ?: '—' }}</td>
-                                    <td class="px-3 py-2 text-gray-700 dark:text-gray-200">{{ $ownerName !== '' ? $ownerName : '—' }}</td>
-                                    <td class="px-3 py-2 text-gray-700 dark:text-gray-200">{{ $domain !== '' ? $domain : '—' }}</td>
+                                    <td class="truncate px-3 py-2 font-semibold text-gray-950 dark:text-white" title="{{ $archive->project_name ?: '' }}">{{ $archive->project_name ?: '—' }}</td>
+                                    <td class="truncate px-3 py-2 text-gray-700 dark:text-gray-200" title="{{ $ownerName }}">{{ $ownerName !== '' ? $ownerName : '—' }}</td>
+                                    <td class="truncate px-3 py-2 text-gray-700 dark:text-gray-200" title="{{ $domain }}">{{ $domain !== '' ? $domain : '—' }}</td>
                                     <td class="px-3 py-2 text-gray-700 dark:text-gray-200">{{ $period }}</td>
-                                    <td class="px-3 py-2 text-right text-gray-700 dark:text-gray-200">{{ (int) ($archive->total_articles ?? $archive->articles_count ?? 0) }}</td>
-                                    <td class="px-3 py-2 text-right text-gray-700 dark:text-gray-200">{{ (int) ($archive->completed_articles ?? 0) }}</td>
-                                    <td class="px-3 py-2 text-right text-gray-700 dark:text-gray-200">{{ (int) ($archive->approved_articles ?? 0) }}</td>
-                                    <td class="px-3 py-2 text-right text-gray-700 dark:text-gray-200">{{ (int) ($archive->synced_articles ?? 0) }}</td>
-                                    <td class="px-3 py-2 text-right text-gray-700 dark:text-gray-200">{{ $avgSeo !== null ? number_format((float) $avgSeo, 2) : '—' }}</td>
-                                    <td class="px-3 py-2 text-gray-700 dark:text-gray-200">{{ \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource::formatTaskTimestamp($archive->archived_at) }}</td>
-                                    <td class="px-3 py-2 text-gray-700 dark:text-gray-200">{{ $archivedByName !== '' ? $archivedByName : '—' }}</td>
-                                    <td class="px-3 py-2">
+                                    <td class="px-3 py-2 text-right tabular-nums text-gray-700 dark:text-gray-200">{{ $listTotal }}</td>
+                                    <td class="px-3 py-2 text-gray-700 dark:text-gray-200">
+                                        <div class="tabular-nums font-medium text-gray-950 dark:text-white">
+                                            {{ $indexSummary['indexed_count'] }} / {{ $indexSummary['total'] }}
+                                        </div>
+                                        @if ($indexSummary['has_indexed'])
+                                            @if ($indexSummary['latest_indexed_at_label'] !== null)
+                                                <div class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                                                    {{ __('seo-content-ai::filament.projects.archive_index_latest', ['date' => $indexSummary['latest_indexed_at_label']]) }}
+                                                </div>
+                                            @endif
+                                            @if ($indexSummary['reindexed_count'] > 0)
+                                                <div class="text-xs text-gray-500 dark:text-gray-400">
+                                                    {{ __('seo-content-ai::filament.projects.archive_index_reindex', ['count' => $indexSummary['reindexed_count']]) }}
+                                                </div>
+                                            @endif
+                                        @else
+                                            <div class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                                                {{ __('seo-content-ai::filament.projects.archive_preview_index_none') }}
+                                            </div>
+                                        @endif
+                                    </td>
+                                    <td class="px-3 py-2 whitespace-nowrap text-gray-700 dark:text-gray-200">{{ \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource::formatTaskTimestamp($archive->archived_at) }}</td>
+                                    <td class="truncate px-3 py-2 text-gray-700 dark:text-gray-200" title="{{ $archivedByName }}">{{ $archivedByName !== '' ? $archivedByName : '—' }}</td>
+                                    <td class="px-3 py-2 whitespace-nowrap">
                                         <div class="flex flex-wrap justify-end gap-2">
                                             <a
                                                 href="{{ \App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource::getUrl('archive-preview', ['archive' => $archive->id]) }}"
@@ -206,7 +263,7 @@
                                 </tr>
                             @empty
                                 <tr>
-                                    <td colspan="12" class="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
+                                    <td colspan="9" class="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
                                         {{ __('seo-content-ai::filament.projects.archive_projects_empty') }}
                                     </td>
                                 </tr>
@@ -222,15 +279,17 @@
                 @endif
             </div>
         @else
-            <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
-                {{ __('seo-content-ai::filament.projects.archive_legacy_banner') }}
-            </div>
+            <div class="w-full overflow-visible">
+                <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                    {{ __('seo-content-ai::filament.projects.archive_legacy_banner') }}
+                </div>
 
-            @include('seo-content-ai::filament.resources.seo-project-resource.partials.archive-dashboard', [
-                'siteId' => (int) ($this->siteId ?? 0),
-                'siteIds' => $this->scopedSiteIds,
-                'canReopen' => $this->canReopenArchivedArticles(),
-            ])
+                @include('seo-content-ai::filament.resources.seo-project-resource.partials.archive-dashboard', [
+                    'siteId' => (int) ($this->siteId ?? 0),
+                    'siteIds' => $this->scopedSiteIds,
+                    'canReopen' => $this->canReopenArchivedArticles(),
+                ])
+            </div>
         @endif
     </div>
 </x-filament-panels::page>

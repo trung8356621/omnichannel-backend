@@ -55,12 +55,16 @@ final class ContentProjectArchiveRestoreTest extends TestCase
         self::assertStringContainsString('exportArchive', $source);
         self::assertStringContainsString('reopenArticle', $source);
         self::assertStringContainsString("activeTab = 'projects'", $source);
+        self::assertStringContainsString('ContentProjectArchiveVaultListPresenter', $source);
+        self::assertStringContainsString('clearFilters', $source);
 
         $viewPath = dirname(__DIR__, 2).'/resources/views/filament/resources/seo-project-resource/pages/content-project-archive.blade.php';
         $view = (string) file_get_contents($viewPath);
         self::assertStringContainsString('archive-dashboard', $view);
         self::assertStringContainsString('setActiveTab', $view);
         self::assertStringContainsString('archive_tab_legacy', $view);
+        self::assertStringContainsString('filtersOpen: false', $view);
+        self::assertStringContainsString('archive_col_index', $view);
     }
 
     public function test_archive_preview_page_is_read_only(): void
@@ -69,9 +73,12 @@ final class ContentProjectArchiveRestoreTest extends TestCase
 
         self::assertStringContainsString('getHeaderSummary', $source);
         self::assertStringContainsString('viewArchiveItemAction', $source);
+        self::assertStringContainsString('cleanupArchiveWorkspace', $source);
+        self::assertStringContainsString('cleanupArchivedWorkspace', $source);
         self::assertStringContainsString('slideOver', $source);
         self::assertStringContainsString('ArchivePreviewArticlePresenter', $source);
         self::assertStringNotContainsString('ArchiveContentProjectService::archive', $source);
+        self::assertStringNotContainsString('RestoreContentProjectCommand', $source);
     }
 
     public function test_legacy_query_uses_content_archived_flag_not_review_status_alone(): void

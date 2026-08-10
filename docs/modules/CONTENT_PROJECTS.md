@@ -70,6 +70,9 @@ REST: `/api/v1/content-projects*` → same commands via Application controllers.
 | Capabilities | `ContentProjectCapabilityRegistry` + `CanonicalCapabilityRegistry` |
 | Agent build | `Agent/ContentProjectAgentCommandFactory` |
 | Project archive | `ArchiveContentProjectService` |
+| Archive preview UI | `ContentProjectArchivePreview` + `ArchivePreviewArticlePresenter` |
+| Manual Index marker (checklist) | `ArticleManualIndexMarkerService` — `articles.indexed_at` / `previous_indexed_at` (+ patch archive `article_snapshot`); not GSC/Indexing API |
+| Archive Excel export | `ContentProjectArchiveExportService` (includes Index gần nhất / Index lần trước) |
 | Item archive | `SeoProjectArchiveService` (via `ArchiveProjectItemsHandler`) |
 | `seo_projects.status` policy | `Support/ContentProject/ContentProjectStatusDecision` |
 
@@ -83,6 +86,7 @@ REST: `/api/v1/content-projects*` → same commands via Application controllers.
 | Task generation status | `seo_project_tasks.status` via `ContentProjectTaskStatusNormalizer` | Literal string compares outside normalizer |
 | Review | `articles.review_status` | Dropped `articles.is_reviewed` |
 | Content archive (item/project) | `seo_project_tasks.archived_at` / normalized `archived`, `seo_projects.archived_at` | `review_status = archived` |
+| Manual Index checklist | `articles.indexed_at` + `articles.previous_indexed_at` (2 latest only; preview may patch `article_snapshot`) | Google index status / GSC |
 | Publish queue | `publish_queue_status` + `publish_published_at` + `scheduled_publish_at` | Task `status` alone |
 | Run | `seo_project_runs.status` via Run Engine mappers | Client Alpine “isRunning” |
 | Project workflow flag | `seo_projects.status` — **non-authoritative for items** (Class A/B/C in `ContentProjectStatusDecision`) | Item phase/counters |
@@ -237,7 +241,9 @@ Do not call it AI Inbox / Inbox / Mailbox / Notification Queue. Do not use “st
 | Item content archive | `ArchiveProjectItemsHandler` | `ArchiveProjectItemsCommand` |
 | Project Destroy AI Workspace | `ArchiveContentProjectHandler` | `ArchiveContentProjectCommand` |
 
-No item-level restore (`ContentProjectItemAction::Restore` removed). Project restore: `RestoreContentProjectCommand` (`workspace_reused = false`). Archive revokes active Article Editor sessions for project articles; restore does not restore those sessions.
+No item-level restore (`ContentProjectItemAction::Restore` removed). Project restore: `RestoreContentProjectCommand` (`workspace_reused = false`). Archive revokes active Article Editor sessions for project articles, snapshots old articles for reports/history, then resets active project tasks to a fresh pending flow (`article_id = null`, publish/review handoff cleared). Restore does not restore old sessions or reuse the old workspace; the next Generate creates new articles/workspace.
+
+**Archive Content Project ≠ archive Article.** Archiving ends project execution/workspace lifecycle only. Articles return to normal standalone Article behavior (editor open/save/Sync WP). Historical associations (`seo_project_archive_items.article_id`, snapshots, preview stats) remain for reports. Active-project ownership gates (`ContentProjectArticleMembership::belongsToContentProject` / `assignedTaskForArticle`, `ArticleResource::articleIsInContentProject`) apply only while the project is not archived (`archived_at` null). Leftover `seo_project_tasks.article_id` on an archived project must not block the editor.
 
 ### Publish writes
 
@@ -300,7 +306,9 @@ Summary for CP:
 - Generate/rerun seed under project generate lock; engine start **outside** lock (safe retry if `engine_started: false`).
 - Domain event `ContentProjectGenerationRequested` after commit of seed.
 - Business audit + operation log on every `dispatch()` (no AI prompt/output in business audit).
-- Project archive deletes AI workspace / prompt history / execution / local media / SaaS revisions — keeps business article + planning metadata.
+- Project archive snapshots old business articles for reports/history, deletes AI workspace / prompt history / execution / local media / SaaS revisions, and resets active tasks so the restored project behaves like a fresh flow. Old articles are no longer the active project workspace.
+- Articles associated with archived Content Projects return to normal standalone Article behavior while historical project associations remain available for reporting/archive preview. Edit/save/Sync WP must not restore the project, recreate workspace, or resume workflow.
+- Archived project preview stays read-only for workflow/content, except manual Index marker (`ContentProjectArchivePreview::markArticleIndexed` → `ArticleManualIndexMarkerService`) and title/copy using stored public WP permalink (`wp_permalink` / snapshot `wordpress_url`). Marker does not restore/unarchive or recreate workspace.
 - Item archive keeps WP post; cleans workspace artifacts; blocked while generating or publish-queue active.
 
 ## 12. Retry and recovery
@@ -359,6 +367,7 @@ Primary contracts (remote `$PHP_BIN vendor/bin/phpunit --filter=...`):
 | `ContentProjectPublicCapabilityContractTest` | Caps + Factory + archive_items wiring |
 | `ContentProjectCommandBusCutoverTest` | Bus entry cutover |
 | `ContentProjectStaleGenerationRecoveryTest` | Recovery |
+| `ArticleEditorArchivedContentProjectStandaloneTest` | Archived CP → standalone Article editor/sync; historical archive items kept |
 | `ArchitectureHardeningLockContractTest` | Related uniqueness contracts |
 | `PublishScheduledArticlesCanonicalRunnerContractTest` | Single publish scheduler shell |
 

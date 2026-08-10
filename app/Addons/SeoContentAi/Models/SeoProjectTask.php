@@ -360,6 +360,16 @@ class SeoProjectTask extends Model
     }
 
     /**
+     * Rewrite / improve require a linked Existing Article before generation.
+     *
+     * @return list<string>
+     */
+    public static function typesRequiringExistingArticle(): array
+    {
+        return self::articlePickerTypes();
+    }
+
+    /**
      * @return list<string>
      */
     public static function postTypeKeys(): array

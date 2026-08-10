@@ -218,7 +218,7 @@ class EditArticle extends SeoEditRecord
 
     public string $manualWpPostId = '';
 
-    /** @var array{wp_post_id?: int, duplicates?: list<array{id: int, title: string, edit_url: string, current: bool}>, remote_found?: bool|null, message?: string}|null */
+    /** @var array{wp_post_id?: int, duplicates?: list<array{id: int, title: string, edit_url: string, current: bool}>, remote_found?: bool|null, self_match?: bool, message?: string}|null */
     public ?array $manualWpPostLookup = null;
 
     public ?int $reviewsCountForEditor = null;
@@ -1342,6 +1342,43 @@ class EditArticle extends SeoEditRecord
         return $this->isProduct() && ! $this->isTaxonomyArticle();
     }
 
+    /**
+     * Backend SoT for Mode 2 UI — feature flag/allowlist only (not model reference capability).
+     */
+    private function resolveParentChildAllowedForEditor(): bool
+    {
+        if (! $this->supportsProductGallery()) {
+            return false;
+        }
+
+        $articleId = (int) ($this->record->id ?? 0);
+
+        return $articleId > 0
+            && \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryParentChildFeature::allowsArticle($articleId);
+    }
+
+    private function resolveParentChildReasonForEditor(): string
+    {
+        if (! $this->supportsProductGallery()) {
+            return 'not_product_gallery';
+        }
+
+        $articleId = (int) ($this->record->id ?? 0);
+        if ($articleId <= 0) {
+            return 'invalid_article';
+        }
+
+        if (\App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryParentChildFeature::allowsArticle($articleId)) {
+            return '';
+        }
+
+        if (! \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryParentChildFeature::enabled()) {
+            return 'feature_disabled';
+        }
+
+        return 'article_not_allowlisted';
+    }
+
     public function armEditorBlockMediaPicker(string $blockId): void
     {
         $blockId = trim($blockId);
@@ -2147,13 +2184,20 @@ class EditArticle extends SeoEditRecord
 
         $this->manualWpPostId = (string) $wpPostId;
 
+        $blockingDuplicate = collect($duplicates)
+            ->first(static fn (array $row): bool => ! (bool) ($row['current'] ?? false));
+        $selfMatch = $duplicates !== [] && $blockingDuplicate === null;
+
         $this->manualWpPostLookup = [
             'wp_post_id' => $wpPostId,
             'duplicates' => $duplicates,
             'remote_found' => null,
-            'message' => $duplicates !== []
-                ? 'Tìm thấy bài local đang dùng WP ID này. Mở bài trùng để kiểm tra/xóa trước khi nối.'
-                : 'Chưa thấy bài local nào đang dùng WP ID này. Bấm Nối WP ID để kiểm tra WordPress và liên kết.',
+            'self_match' => $selfMatch,
+            'message' => match (true) {
+                $selfMatch => 'WP ID này đã thuộc chính bài hiện tại. Không phải bài trùng và không cần nối lại.',
+                $blockingDuplicate !== null => 'Tìm thấy bài local khác đang dùng WP ID này. Mở bài trùng để kiểm tra/xóa trước khi nối.',
+                default => 'Chưa thấy bài local nào đang dùng WP ID này. Bấm Nối WP ID để kiểm tra WordPress và liên kết.',
+            },
         ];
     }
 
@@ -2188,6 +2232,7 @@ class EditArticle extends SeoEditRecord
                 'wp_post_id' => $wpPostId,
                 'duplicates' => $duplicates,
                 'remote_found' => null,
+                'self_match' => false,
                 'message' => 'WP ID này đang được nối với bài local khác. Mở bài trùng để xóa/sửa trước khi nối.',
             ];
 
@@ -2201,6 +2246,25 @@ class EditArticle extends SeoEditRecord
         }
 
         $previousWpPostId = (int) ($this->record->wp_post_id ?? 0);
+        if ($previousWpPostId === $wpPostId) {
+            $this->manualWpPostId = (string) $wpPostId;
+            $this->manualWpPostLookup = [
+                'wp_post_id' => $wpPostId,
+                'duplicates' => $duplicates,
+                'remote_found' => null,
+                'self_match' => true,
+                'message' => 'WP ID này đã thuộc chính bài hiện tại. Không phải bài trùng và không cần nối lại.',
+            ];
+
+            Notification::make()
+                ->title('WP ID đã thuộc bài hiện tại')
+                ->body('Article hiện tại đang liên kết với WordPress #'.$wpPostId.'.')
+                ->success()
+                ->send();
+
+            return;
+        }
+
         $this->record->forceFill(['wp_post_id' => $wpPostId])->save();
         $this->record->refresh();
         $this->record->loadMissing('articleMetas', 'site');
@@ -4060,6 +4124,8 @@ class EditArticle extends SeoEditRecord
             'supportsProductGallery' => $this->supportsProductGallery(),
             'isCanaryProduct' => in_array(strtolower(trim((string) $metaMap->get('is_canary', ''))), ['1', 'true', 'yes'], true)
                 || strtolower(trim((string) $metaMap->get('canary_type', ''))) === 'product_gallery',
+            'parentChildAllowed' => $this->resolveParentChildAllowedForEditor(),
+            'parentChildReason' => $this->resolveParentChildReasonForEditor(),
             'productGalleryReady' => $this->supportsProductGallery()
                 ? \App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState::isReadyOnArticle($this->record)
                 : false,
@@ -4401,6 +4467,8 @@ class EditArticle extends SeoEditRecord
             'supports_product_gallery' => $this->supportsProductGallery(),
             'is_canary_product' => in_array(strtolower(trim((string) $metaMap->get('is_canary', ''))), ['1', 'true', 'yes'], true)
                 || strtolower(trim((string) $metaMap->get('canary_type', ''))) === 'product_gallery',
+            'parent_child_allowed' => $this->resolveParentChildAllowedForEditor(),
+            'parent_child_reason' => $this->resolveParentChildReasonForEditor(),
             'product_category_options' => collect($productCategoryOptions)
                 ->map(static fn (string $label, int $id): array => [
                     'id' => $id,
@@ -4982,14 +5050,38 @@ class EditArticle extends SeoEditRecord
             ];
         }
 
+        $result = app(ArticleEditorMediaAiService::class)->enforceGenerateImageSettlement($result);
         $seoMediaId = (int) ($result['seo_media_id'] ?? 0);
+        $galleryExecutionId = trim((string) ($result['gallery_execution_id'] ?? ''));
+        if ((string) ($result['status'] ?? '') === 'failed' && $seoMediaId <= 0 && $galleryExecutionId === '') {
+            $message = (string) ($result['message'] ?? $result['error_message'] ?? __('seo-content-ai::common.generate_image_failed'));
+            $this->dispatch(
+                'article-ai-media-failed',
+                type: 'image',
+                message: $message,
+            );
+
+            Notification::make()
+                ->title(__('seo-content-ai::common.generate_image_failed'))
+                ->body($message)
+                ->danger()
+                ->send();
+
+            return [
+                'ok' => false,
+                'message' => $message,
+                'status' => 'failed',
+                'seo_media_id' => 0,
+            ];
+        }
+
         $galleryUrls = $seoMediaId > 0
             ? $this->resolvePostProcessingGalleryUrlsByMediaId($seoMediaId)
             : [];
 
         $this->dispatch(
             'article-ai-image-generated',
-            url: $result['url'],
+            url: $result['url'] ?? '',
             activeBlockId: $activeBlockId,
             seoMediaId: $seoMediaId,
             status: (string) ($result['status'] ?? 'processing'),
@@ -4997,6 +5089,10 @@ class EditArticle extends SeoEditRecord
             target: $target,
             gallery_urls: $galleryUrls,
             galleryUrls: $galleryUrls,
+            gallery_execution_id: $galleryExecutionId,
+            galleryExecutionId: $galleryExecutionId,
+            supports_reference_image: (bool) ($result['supports_reference_image'] ?? false),
+            resolved_model: (string) ($result['resolved_model'] ?? ''),
         );
 
         if ((string) ($result['status'] ?? 'processing') === 'processing') {
@@ -5012,6 +5108,79 @@ class EditArticle extends SeoEditRecord
             'url' => (string) ($result['url'] ?? ''),
             'seo_media_id' => $seoMediaId,
             'status' => (string) ($result['status'] ?? 'processing'),
+            'gallery_execution_id' => $galleryExecutionId,
+            'supports_reference_image' => (bool) ($result['supports_reference_image'] ?? false),
+            'resolved_model' => (string) ($result['resolved_model'] ?? ''),
+        ];
+    }
+
+    /**
+     * @return array{
+     *     ok: bool,
+     *     supports_reference_image: bool,
+     *     model: string|null,
+     *     eligible: list<string>
+     * }
+     */
+    public function resolveProductGalleryReferenceCapability(): array
+    {
+        $capability = app(ArticleEditorMediaAiService::class)->resolveProductGalleryReferenceCapability();
+
+        return [
+            'ok' => true,
+            'supports_reference_image' => (bool) ($capability['supports_reference_image'] ?? false),
+            'model' => $capability['model'] ?? null,
+            'eligible' => is_array($capability['eligible'] ?? null) ? $capability['eligible'] : [],
+        ];
+    }
+
+    /**
+     * @return array{ok: bool, status: string, gallery_execution_id: string, message?: string, failure_reason?: string}
+     */
+    public function pollProductGalleryExecutionStatus(string $executionId): array
+    {
+        $executionId = trim($executionId);
+        if ($executionId === '') {
+            return [
+                'ok' => false,
+                'status' => 'failed',
+                'gallery_execution_id' => '',
+                'message' => 'Thiếu gallery_execution_id.',
+            ];
+        }
+
+        $row = \App\Addons\SeoContentAi\Models\SeoProductGalleryExecution::query()
+            ->where('execution_id', $executionId)
+            ->where('article_id', (int) $this->record->id)
+            ->first();
+
+        if (! $row instanceof \App\Addons\SeoContentAi\Models\SeoProductGalleryExecution) {
+            return [
+                'ok' => false,
+                'status' => 'failed',
+                'gallery_execution_id' => $executionId,
+                'message' => 'Không tìm thấy gallery execution.',
+            ];
+        }
+
+        $raw = strtolower(trim((string) ($row->status ?? '')));
+        $status = match (true) {
+            in_array($raw, ['completed', 'completed_fallback'], true) => 'completed',
+            in_array($raw, ['failed', 'cancelled'], true) => 'failed',
+            default => 'processing',
+        };
+
+        return [
+            'ok' => true,
+            'status' => $status,
+            'gallery_execution_id' => $executionId,
+            'raw_status' => $raw,
+            'failure_reason' => (string) ($row->failure_reason ?? ''),
+            'message' => $status === 'failed'
+                ? ((string) ($row->failure_reason ?? '') !== ''
+                    ? (string) $row->failure_reason
+                    : 'Parent/Child gallery thất bại.')
+                : '',
         ];
     }
 

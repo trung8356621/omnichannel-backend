@@ -63,6 +63,8 @@ final class ContentProjectArchiveExportService
         'sync_status' => 'Sync status',
         'wordpress_post_id' => 'WordPress post ID',
         'wordpress_url' => 'WordPress URL',
+        'indexed_at' => 'Index gần nhất',
+        'previous_indexed_at' => 'Index lần trước',
         'created_at' => 'Ngày tạo',
         'completed_at' => 'Ngày hoàn thành',
         'last_saved_at' => 'Lần cuối lưu',
@@ -166,7 +168,10 @@ final class ContentProjectArchiveExportService
                 continue;
             }
 
-            $data = $this->resolveArticleData($item);
+            $data = $this->overlayManualIndexFields(
+                $this->resolveArticleData($item),
+                $item,
+            );
             $row = [];
 
             foreach (array_keys(self::ARTICLE_LIST_COLUMNS) as $column) {
@@ -397,10 +402,38 @@ final class ContentProjectArchiveExportService
             'sync_status' => $item->article?->wp_sync_status ?? null,
             'wordpress_post_id' => $item->article?->wp_post_id,
             'wordpress_url' => null,
+            'indexed_at' => $this->formatDateTime($item->article?->indexed_at),
+            'previous_indexed_at' => $this->formatDateTime($item->article?->previous_indexed_at),
             'last_synced_at' => $this->formatDateTime($item->article?->last_synced_at),
             'wp_sync_error' => null,
             default => null,
         };
+    }
+
+    /**
+     * Prefer live article timestamps when snapshot thiếu (marker sau archive).
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    private function overlayManualIndexFields(array $data, SeoProjectArchiveItem $item): array
+    {
+        $article = $item->article;
+
+        $indexed = $data['indexed_at'] ?? null;
+        if (($indexed === null || $indexed === '') && $article?->indexed_at) {
+            $indexed = $article->indexed_at;
+        }
+
+        $previous = $data['previous_indexed_at'] ?? null;
+        if (($previous === null || $previous === '') && $article?->previous_indexed_at) {
+            $previous = $article->previous_indexed_at;
+        }
+
+        $data['indexed_at'] = $this->formatDateTime($indexed);
+        $data['previous_indexed_at'] = $this->formatDateTime($previous);
+
+        return $data;
     }
 
     private function resolveDomain(SeoProjectArchive $archive): string

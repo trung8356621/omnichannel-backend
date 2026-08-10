@@ -15,6 +15,7 @@ use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ArticleGenerationInputResolver;
 use App\Addons\SeoContentAi\Services\ArticleOutlineResolver;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectExecutionStalenessPolicy;
 use App\Addons\SeoContentAi\Services\WorkflowRoles\WorkflowExecutionRoleResolver;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectExecutionStatus;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemActionGuard;
@@ -31,6 +32,7 @@ final class ContentProjectRerunEligibilityGuard
         private readonly ArticleOutlineResolver $outlineResolver,
         private readonly WorkflowExecutionRoleResolver $roleResolver,
         private readonly ArticleGenerationInputResolver $generationInput,
+        private readonly ContentProjectExecutionStalenessPolicy $staleness,
         private readonly ContentProjectItemActionGuard $actionGuard = new ContentProjectItemActionGuard,
     ) {}
 
@@ -145,6 +147,15 @@ final class ContentProjectRerunEligibilityGuard
             return $e->getMessage();
         }
 
+        $type = SeoProjectTask::normalizeType($task->type);
+        if (in_array($type, SeoProjectTask::typesRequiringExistingArticle(), true)) {
+            $articleId = (int) ($task->article_id ?? 0);
+            $article = $articleId > 0 ? SeoArticle::query()->find($articleId) : null;
+            if ($articleId <= 0 || ! $article instanceof SeoArticle) {
+                return 'Rewrite/improve requires an Existing Article before rerun.';
+            }
+        }
+
         if ($fromStep === null) {
             return null;
         }
@@ -225,12 +236,25 @@ final class ContentProjectRerunEligibilityGuard
             return false;
         }
 
-        return SeoProjectRunItem::query()
+        $items = SeoProjectRunItem::query()
             ->whereIn('run_id', $activeRunIds)
             ->where('task_id', $taskId)
             ->whereIn('status', ContentProjectExecutionStatus::activeStatuses())
             ->whereNull('finished_at')
-            ->exists();
+            ->get();
+
+        if ($items->isEmpty()) {
+            return false;
+        }
+
+        $staleness = $this->staleness;
+        foreach ($items as $item) {
+            if ($item instanceof SeoProjectRunItem && $staleness->isFreshActiveRunItem($item)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function isPublishedLifecycle(SeoProjectTask $task): bool

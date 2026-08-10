@@ -68,6 +68,8 @@ final class ArticleEditorSidebarCtaInlineContractTest extends TestCase
 
         // Host routes via command layer (not direct util import in SeoArticleEditor).
         self::assertStringContainsString("isCtaSentence ? 'insert_contact_cta' : 'insert_contact_value'", $editor);
+        self::assertStringContainsString('wrapPlainTextWithLinkInBlocks', $editor);
+        self::assertStringContainsString('Contact-value insert mirrors internal-link wrap', $editor);
         self::assertStringContainsString("mut('insert_contact_cta'", $registry);
         self::assertStringContainsString("mut('insert_contact_value'", $registry);
     }

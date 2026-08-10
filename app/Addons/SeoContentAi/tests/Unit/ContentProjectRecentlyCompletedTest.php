@@ -211,6 +211,7 @@ final class ContentProjectRecentlyCompletedTest extends TestCase
         self::assertStringContainsString('operationId', $viewSrc);
         self::assertMethodBodyExcludesResetPage($viewSrc, 'resumeFromFailedStep');
         self::assertMethodBodyExcludesResetPage($viewSrc, 'rerunOne');
+        self::assertMethodBodyExcludesResetPage($viewSrc, 'createOrRerunOne');
         self::assertStringContainsString('ContentProjectOpsCounterTransitionMap', $viewSrc);
         self::assertStringContainsString('cp-ops-item-transition', $viewSrc);
         self::assertStringNotContainsString("->title(\$result->success ? 'OK' : 'Failed')", $viewSrc);

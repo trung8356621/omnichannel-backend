@@ -54,6 +54,20 @@ final class ArticleEditorMediaOwnershipPhase2aTest extends TestCase
         self::assertTrue(method_exists(ArticleMediaLocalService::class, 'clearFeaturedLocal'));
     }
 
+    public function test_featured_wp_sync_keeps_remote_attachment_identity(): void
+    {
+        $source = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Services/ArticleMediaLocalService.php',
+        );
+
+        self::assertStringContainsString('$this->markMediaPendingSync($article);', $source);
+        self::assertStringContainsString('isWordPressMediaUrl', $source);
+        self::assertStringContainsString("'/wp-content/uploads/'", $source);
+        self::assertStringContainsString("'attachment_id' => \$refId", $source);
+        self::assertStringContainsString('resolveGalleryAttachmentRefs', $source);
+        self::assertStringContainsString('hasStoredFeaturedOrGalleryRefs', $source);
+    }
+
     public function test_controller_routes_and_response_shape(): void
     {
         $class = new ReflectionClass(ArticleEditorMediaSnapshotController::class);
@@ -107,8 +121,10 @@ final class ArticleEditorMediaOwnershipPhase2aTest extends TestCase
         $api = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/js/utils/articleEditorApi.js',
         );
-        self::assertStringContainsString('featured_image: null', $api);
-        self::assertStringContainsString('product_album: null', $api);
+        self::assertStringContainsString('getMediaSnapshot(articleId)', $api);
+        self::assertStringContainsString('featured_image: featured', $api);
+        self::assertStringContainsString('product_album: productAlbum', $api);
+        self::assertStringContainsString('media_snapshot: mediaSnapshot', $api);
 
         $entry = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/js/article-editor.jsx',

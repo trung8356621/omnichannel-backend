@@ -14,7 +14,8 @@ use App\Support\RuntimeLogger;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Recover orphaned Writing/Generating items into Failed (eligible for Run again / Generate pending).
+ * Recover orphaned Writing items + dead pending/processing run-items.
+ * Writing orphans → Failed. Pending + dead runtime → finalize run-items only (keep Pending).
  * Never force-releases locks owned by a fresh execution.
  */
 final class ContentProjectGenerationRecoveryService
@@ -31,13 +32,39 @@ final class ContentProjectGenerationRecoveryService
      */
     public function reconcileProject(SeoProject $project): array
     {
-        $tasks = SeoProjectTask::query()
-            ->where('project_id', (int) $project->getKey())
+        $projectId = (int) $project->getKey();
+        $writingIds = SeoProjectTask::query()
+            ->where('project_id', $projectId)
             ->where('status', SeoProjectTask::STATUS_WRITING)
             ->whereNull('archived_at')
-            ->with(['article'])
-            ->orderBy('id')
-            ->get();
+            ->pluck('id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->all();
+
+        $activeRuntimeTaskIds = SeoProjectRunItem::query()
+            ->whereIn(
+                'task_id',
+                SeoProjectTask::query()
+                    ->where('project_id', $projectId)
+                    ->whereNull('archived_at')
+                    ->select('id'),
+            )
+            ->whereIn('status', ContentProjectExecutionStatus::activeStatuses())
+            ->whereNull('finished_at')
+            ->pluck('task_id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+
+        $taskIds = array_values(array_unique(array_merge($writingIds, $activeRuntimeTaskIds)));
+        $tasks = $taskIds === []
+            ? collect()
+            : SeoProjectTask::query()
+                ->whereIn('id', $taskIds)
+                ->with(['article'])
+                ->orderBy('id')
+                ->get();
 
         $recovered = [];
         $skipped = [];
@@ -58,7 +85,7 @@ final class ContentProjectGenerationRecoveryService
 
         if ($recovered !== []) {
             try {
-                $batchId = 'recovery-'.now()->format('YmdHi').'-'.(int) $project->getKey();
+                $batchId = 'recovery-'.now()->format('YmdHi').'-'.$projectId;
                 app(\App\Addons\SeoContentAi\Services\Notifications\Publishers\GenerationStuckNotificationPublisher::class)
                     ->notifyRecoveryBatch(
                         $project,
@@ -69,7 +96,7 @@ final class ContentProjectGenerationRecoveryService
                     );
             } catch (\Throwable $notificationError) {
                 RuntimeLogger::warning('seo.operational_notification.generation_stuck_hook_failed', [
-                    'project_id' => (int) $project->getKey(),
+                    'project_id' => $projectId,
                     'error' => $notificationError->getMessage(),
                 ]);
             }
@@ -127,9 +154,6 @@ final class ContentProjectGenerationRecoveryService
             if (! $locked instanceof SeoProjectTask) {
                 return ['recovered' => false, 'reason' => 'task_missing'];
             }
-            if ((string) $locked->status !== SeoProjectTask::STATUS_WRITING) {
-                return ['recovered' => false, 'reason' => 'status_changed'];
-            }
 
             // Re-check under lock — do not interrupt a freshly claimed worker.
             $freshEval = $this->staleness->evaluateTask($locked->loadMissing('article'));
@@ -163,20 +187,22 @@ final class ContentProjectGenerationRecoveryService
                 $this->releaseStaleDispatchIfOwnedBy($item);
             }
 
-            // Orphan writing with no run items — still mark failed (generation, not publish).
-            $payload = [
-                'status' => SeoProjectTask::STATUS_FAILED,
-            ];
-            // Do not write last_publish_error — generation failures belong on run_item.error_message.
-
-            SeoProjectTask::query()->whereKey($taskId)->update($payload);
-            $locked->refresh();
+            $wasWriting = (string) $locked->status === SeoProjectTask::STATUS_WRITING;
+            // Only mutate lifecycle generation status when Writing was orphaned.
+            // Pending + dead run-item: clear runtime artifacts only — keep Pending for Generate.
+            if ($wasWriting) {
+                SeoProjectTask::query()->whereKey($taskId)->update([
+                    'status' => SeoProjectTask::STATUS_FAILED,
+                ]);
+                $locked->refresh();
+            }
 
             return [
                 'recovered' => true,
                 'reason' => ContentProjectExecutionStalenessPolicy::REASON_STALE_RUNTIME,
                 'finalized_run_item_ids' => $finalizedIds,
                 'task_status' => (string) $locked->status,
+                'preserved_task_status' => ! $wasWriting,
                 'evaluation' => $freshEval,
             ];
         });
@@ -186,6 +212,7 @@ final class ContentProjectGenerationRecoveryService
                 'task_id' => $taskId,
                 'project_id' => (int) ($task->project_id ?? 0),
                 'finalized_run_item_ids' => $outcome['finalized_run_item_ids'] ?? [],
+                'preserved_task_status' => (bool) ($outcome['preserved_task_status'] ?? false),
                 'timeout_minutes' => $evaluation['timeout_minutes'] ?? $this->staleness->staleTimeoutMinutes(),
             ]);
         }

@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Enums\ArticleWritingSourceType;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectExistingArticleReconciler;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectItemIdentity;
 use App\Addons\SeoContentAi\Support\ProjectTaskOriginVariables;
@@ -27,6 +28,7 @@ final class TaskTestInputResolver
         private readonly WorkflowParserService $workflowParser,
         private readonly WordPressArticleContentService $wordPressContent,
         private readonly ArticleWritingAssembler $articleWritingAssembler,
+        private readonly ContentProjectExistingArticleReconciler $existingArticleReconciler = new ContentProjectExistingArticleReconciler,
     ) {}
 
     /**
@@ -91,7 +93,7 @@ final class TaskTestInputResolver
             $keyword = $legacy;
         }
 
-        if (in_array($type, [SeoProjectTask::TYPE_CREATE, SeoProjectTask::TYPE_REWRITE], true)) {
+        if ($type === SeoProjectTask::TYPE_CREATE) {
             ContentProjectItemIdentity::assertValid($keyword, $title);
         }
 
@@ -159,30 +161,45 @@ final class TaskTestInputResolver
         string $secondaryDescription,
     ): TaskTestContext {
         $variables = $context->variables;
+        $keywordNorm = ContentProjectItemIdentity::normalize($keyword);
+        $explicitTitle = ContentProjectItemIdentity::normalize($title);
 
-        if ($keyword !== '') {
-            $variables['focus_keyword'] = $keyword;
-            $variables['keyword'] = $keyword;
+        if ($keywordNorm !== '') {
+            $variables['focus_keyword'] = $keywordNorm;
+            $variables['keyword'] = $keywordNorm;
         } else {
             unset($variables['focus_keyword'], $variables['keyword']);
         }
 
-        if ($title !== '') {
-            $variables['post_title'] = $title;
-            $variables['title'] = $title;
-        } else {
-            // Giữ post_title từ bài gốc (rewrite/improve); chỉ bỏ khi create không có title.
-            // Không copy keyword → post_title (AI được quyền đề xuất title).
-            if ($context->isNewArticle || ! isset($variables['post_title']) || trim((string) $variables['post_title']) === '') {
+        if ($explicitTitle !== '') {
+            $variables['post_title'] = $explicitTitle;
+            $variables['title'] = $explicitTitle;
+        } elseif ($context->isNewArticle) {
+            // Create + empty title: generation seed only (effectiveSubject).
+            // Does not mutate SeoProjectTask.title. Final Article.title still prefers AI H1
+            // via PromptTestPublishService (h1_title before post_title fallback).
+            $seed = ContentProjectItemIdentity::effectiveSubject(null, $keywordNorm);
+            if ($seed !== '') {
+                $variables['post_title'] = $seed;
+                $variables['title'] = $seed;
+            } else {
                 unset($variables['post_title'], $variables['title']);
+            }
+        } else {
+            // Rewrite/improve: keep existing article title — never replace with keyword fallback.
+            $existingTitle = ContentProjectItemIdentity::normalize(
+                isset($variables['post_title']) ? (string) $variables['post_title'] : null,
+            );
+            if ($existingTitle !== '') {
+                $variables['post_title'] = $existingTitle;
+                $variables['title'] = $existingTitle;
             }
         }
 
-        $resolvedTitle = isset($variables['post_title']) ? trim((string) $variables['post_title']) : '';
-        $topic = ContentProjectItemIdentity::topic(
-            $resolvedTitle !== '' ? $resolvedTitle : $title,
-            $keyword,
+        $resolvedTitle = ContentProjectItemIdentity::normalize(
+            isset($variables['post_title']) ? (string) $variables['post_title'] : null,
         );
+        $topic = ContentProjectItemIdentity::effectiveSubject($resolvedTitle, $keywordNorm);
         if ($topic !== '') {
             $variables['topic'] = $topic;
         } else {
@@ -208,16 +225,7 @@ final class TaskTestInputResolver
         $this->articleScope = $scopeArticles;
 
         try {
-            $article = null;
-            $articleId = (int) ($task->article_id ?? 0);
-            if ($articleId > 0) {
-                $article = $this->articlesQuery()->find($articleId);
-            }
-
-            $pickerTitle = trim((string) $task->source_content);
-            if (! $article instanceof SeoArticle && $pickerTitle !== '') {
-                $article = $this->findArticleByTitle($pickerTitle);
-            }
+            $article = $this->resolveExistingArticleForTask($task);
 
             if (! $article instanceof SeoArticle) {
                 $label = $type === SeoProjectTask::TYPE_IMPROVE ? 'cải thiện' : 'viết lại';
@@ -284,16 +292,7 @@ final class TaskTestInputResolver
         $this->articleScope = $scopeArticles;
 
         try {
-            $article = null;
-            $articleId = (int) ($task->article_id ?? 0);
-            if ($articleId > 0) {
-                $article = $this->articlesQuery()->find($articleId);
-            }
-
-            $pickerTitle = trim((string) $task->source_content);
-            if (! $article instanceof SeoArticle && $pickerTitle !== '') {
-                $article = $this->findArticleByTitle($pickerTitle);
-            }
+            $article = $this->resolveExistingArticleForTask($task);
 
             if (! $article instanceof SeoArticle) {
                 throw new \InvalidArgumentException(
@@ -337,6 +336,35 @@ final class TaskTestInputResolver
         } finally {
             $this->articleScope = null;
         }
+    }
+
+    /**
+     * Prefer canonical reconciler (persist) then exact article_id — never fuzzy title LIKE.
+     */
+    private function resolveExistingArticleForTask(SeoProjectTask $task): ?SeoArticle
+    {
+        try {
+            $repaired = $this->existingArticleReconciler->reconcileTask($task, persist: true);
+            if ($repaired->isUsable() && $repaired->articleId !== null) {
+                $task->refresh();
+                $article = $this->articlesQuery()->find((int) $repaired->articleId);
+                if ($article instanceof SeoArticle) {
+                    return $article;
+                }
+            }
+        } catch (\Throwable) {
+            // Fall through to direct article_id.
+        }
+
+        $articleId = (int) ($task->article_id ?? 0);
+        if ($articleId > 0) {
+            $article = $this->articlesQuery()->find($articleId);
+            if ($article instanceof SeoArticle) {
+                return $article;
+            }
+        }
+
+        return null;
     }
 
     private function stampProjectTaskOrigin(TaskTestContext $context, SeoProjectTask $task): TaskTestContext
@@ -411,16 +439,7 @@ final class TaskTestInputResolver
         $this->articleScope = $scopeArticles;
 
         try {
-            $article = null;
-            $articleId = (int) ($task->article_id ?? 0);
-            if ($articleId > 0) {
-                $article = $this->articlesQuery()->find($articleId);
-            }
-
-            $title = trim((string) $task->source_content);
-            if (! $article instanceof SeoArticle && $title !== '') {
-                $article = $this->findArticleByTitle($title);
-            }
+            $article = $this->resolveExistingArticleForTask($task);
 
             if (! $article instanceof SeoArticle) {
                 throw new \InvalidArgumentException('Không tìm thấy bài viết để viết lại theo nội dung.');

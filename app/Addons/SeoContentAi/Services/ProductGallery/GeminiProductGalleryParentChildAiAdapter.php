@@ -11,6 +11,8 @@ use App\Addons\SeoContentAi\PromptHooks\Exceptions\InvalidInput;
 use App\Addons\SeoContentAi\Services\GeminiMediaGenerationService;
 use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
 use App\Addons\SeoContentAi\Support\GoogleAiModelRegistry;
+use App\Addons\SeoContentAi\Support\ImageRoutingStrategy;
+use App\Addons\SeoContentAi\Support\ImageToolType;
 use App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryArtifactRole;
 use App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryGenerationMode;
 use App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryGlobalContext;
@@ -40,6 +42,7 @@ final class GeminiProductGalleryParentChildAiAdapter implements ProductGalleryPa
         private readonly ProductGalleryReferenceImageResolver $references,
         private readonly SeoCreateArticleSettingsService $settings,
         private readonly ImageProviderCapabilityResolver $capabilities,
+        private readonly ImageRoutingStrategy $imageRouting,
     ) {}
 
     public function runPlanner(SeoArticle $article, array $variables): string
@@ -344,21 +347,25 @@ final class GeminiProductGalleryParentChildAiAdapter implements ProductGalleryPa
         $requested = trim((string) ($variables['model'] ?? $variables['image_model'] ?? ''));
         if ($requested !== '') {
             $slug = GoogleAiModelRegistry::normalizeSlug($requested);
-            if (GoogleAiModelRegistry::isGeminiNativeImageModel($slug)
-                || GoogleAiModelRegistry::categoryOf($slug) === GoogleAiModelRegistry::CATEGORY_IMAGE_GEMINI) {
+            if ($this->capabilities->resolve('gemini', $slug)->allowsParentChild()) {
                 return $slug;
             }
         }
 
-        $priority = $this->settings->getImageModelPriority();
-        foreach ($priority as $slug) {
-            $slug = GoogleAiModelRegistry::normalizeSlug((string) $slug);
-            if (GoogleAiModelRegistry::isGeminiNativeImageModel($slug)
-                || GoogleAiModelRegistry::categoryOf($slug) === GoogleAiModelRegistry::CATEGORY_IMAGE_GEMINI) {
+        $eligible = $this->imageRouting->modelsToTry(
+            toolType: ImageToolType::Image,
+            preference: $this->settings->getRenderingPreference(),
+            productContext: true,
+            configuredPriorityList: $this->settings->getImageModelPriority(),
+            adminEnabledUnknownSlugs: $this->settings->getAdminEnabledUnknownImageModels(),
+        );
+
+        foreach ($eligible as $slug) {
+            if ($this->capabilities->resolve('gemini', $slug)->allowsParentChild()) {
                 return $slug;
             }
         }
 
-        return 'gemini-2.5-flash-image';
+        throw new \RuntimeException('Không có model ảnh hỗ trợ Parent/Child trong cấu hình hiện tại.');
     }
 }

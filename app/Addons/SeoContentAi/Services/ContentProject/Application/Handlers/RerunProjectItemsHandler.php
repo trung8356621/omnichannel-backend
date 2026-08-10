@@ -18,6 +18,9 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentP
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectPreviewToken;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectRerunEligibilityGuard;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Support\ContentProjectTenantGuard;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectExistingArticleReconciler;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectGenerationCapabilityResolver;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectGenerationRecoveryDecision;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectGenerationRecoveryService;
 use App\Addons\SeoContentAi\Services\RunEngine\ContentProjectRunEngine;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
@@ -35,6 +38,8 @@ final class RerunProjectItemsHandler extends AbstractPublishingHandler
         private readonly ContentProjectGenerationRecoveryService $generationRecovery,
         private readonly ContentProjectRunEngine $runEngine,
         private readonly ContentProjectRerunEligibilityGuard $eligibility,
+        private readonly ContentProjectExistingArticleReconciler $articleReconciler,
+        private readonly ContentProjectGenerationCapabilityResolver $capability,
     ) {
         parent::__construct($tenantGuard, $businessLock, $previewToken);
     }
@@ -75,6 +80,35 @@ final class RerunProjectItemsHandler extends AbstractPublishingHandler
                 $task = SeoProjectTask::query()->find((int) $itemId);
                 if ($task instanceof SeoProjectTask) {
                     $this->generationRecovery->recoverTaskIfStale($task);
+                    $this->articleReconciler->reconcileTask(
+                        $task,
+                        (int) ($project->site_id ?? 0) > 0 ? (int) $project->site_id : null,
+                        persist: true,
+                    );
+                    $task->refresh();
+                    $capability = $this->capability->decide($project, $task, [
+                        'recover_stale' => false,
+                        'persist_article_repair' => true,
+                    ]);
+                    if (
+                        ! in_array($capability->action, [
+                            ContentProjectGenerationRecoveryDecision::ACTION_RERUN,
+                            ContentProjectGenerationRecoveryDecision::ACTION_GENERATE,
+                        ], true)
+                    ) {
+                        return ContentProjectActionResult::fail(
+                            ContentProjectActionCodes::VALIDATION_FAILED,
+                            $capability->reason !== ''
+                                ? $capability->reason
+                                : 'Rerun not executable for current item state.',
+                            $projectId,
+                            metadata: [
+                                'item_id' => (int) $itemId,
+                                'generation_recovery_action' => $capability->action,
+                                'existing_article_id' => $capability->existingArticleId,
+                            ],
+                        );
+                    }
                 }
             }
 

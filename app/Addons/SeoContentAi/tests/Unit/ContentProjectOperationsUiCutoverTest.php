@@ -115,6 +115,7 @@ final class ContentProjectOperationsUiCutoverTest extends TestCase
         self::assertTrue($reviewOnly['approve']);
         self::assertFalse($reviewOnly['start_review']);
         self::assertFalse($reviewOnly['generate']);
+        self::assertFalse($reviewOnly['create_or_rerun']);
         self::assertTrue($reviewOnly['has_review']);
 
         $pending = ContentProjectItemActionsPresenter::forRow([
@@ -128,7 +129,9 @@ final class ContentProjectOperationsUiCutoverTest extends TestCase
             'article_edit_url' => null,
             'is_scheduled' => false,
         ]);
-        self::assertTrue($pending['generate']);
+        self::assertTrue($pending['create_or_rerun']);
+        self::assertSame('create', $pending['create_or_rerun_label']);
+        self::assertFalse($pending['generate']);
         self::assertFalse($pending['approve']);
         self::assertFalse($pending['publish_now']);
         self::assertFalse($pending['schedule']);
@@ -145,6 +148,8 @@ final class ContentProjectOperationsUiCutoverTest extends TestCase
             'is_scheduled' => false,
         ]);
         self::assertFalse($notRunnable['generate']);
+        self::assertTrue($notRunnable['create_or_rerun']);
+        self::assertSame('rerun', $notRunnable['create_or_rerun_label']);
     }
 
     public function test_status_badge_semantic_colors(): void

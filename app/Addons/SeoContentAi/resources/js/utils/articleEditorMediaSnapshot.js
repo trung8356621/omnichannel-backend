@@ -184,12 +184,21 @@ export function applyMediaSnapshot(articleId, snapshot, { force = false, emitLeg
 
 export function featuredFromSnapshot(articleId) {
     const featured = getMediaSnapshot(articleId).featured;
-    if (!featured?.url) {
+    const url = String(
+        featured?.url
+        ?? featured?.src
+        ?? featured?.thumb_url
+        ?? featured?.thumbnail_url
+        ?? featured?.featured_thumb_url
+        ?? '',
+    ).trim();
+
+    if (url === '') {
         return null;
     }
 
     return {
-        url: String(featured.url),
+        url,
         wp_attachment_id: Number(featured.wp_attachment_id) || 0,
         seo_media_id: Number(featured.media_id) || 0,
         asset_key: String(featured.asset_key || featured.id || ''),
@@ -337,6 +346,27 @@ async function runMediaMutation(articleId, kind, request) {
     } finally {
         inFlightRequests.delete(key);
     }
+}
+
+export async function flushMediaSnapshotMutations(articleId) {
+    const id = Number(articleId);
+    if (!Number.isFinite(id) || id <= 0) {
+        return getMediaSnapshot(0);
+    }
+
+    const keys = [
+        mediaSnapshotMutationKey(id, 'featured'),
+        mediaSnapshotMutationKey(id, 'gallery'),
+    ];
+    const pending = keys
+        .map((key) => inFlightRequests.get(key))
+        .filter(Boolean);
+
+    if (pending.length > 0) {
+        await Promise.all(pending);
+    }
+
+    return getMediaSnapshot(id);
 }
 
 /**

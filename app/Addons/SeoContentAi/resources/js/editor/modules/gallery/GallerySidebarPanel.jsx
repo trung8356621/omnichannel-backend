@@ -24,6 +24,16 @@ export function GallerySidebarPanel({ articleId = null, active = false }) {
     );
     const mutable = media.canMutate();
 
+    const openGenerate = useCallback(() => {
+        if (!mutable) {
+            notify({ title: 'Gallery', body: 'Read-only', status: 'warning' });
+            return;
+        }
+        window.dispatchEvent(new CustomEvent('seo-open-generate-image-modal', {
+            detail: { target: 'product-gallery' },
+        }));
+    }, [mutable, notify]);
+
     const openPicker = useCallback(() => {
         if (!mutable) {
             notify({ title: 'Gallery', body: 'Read-only', status: 'warning' });
@@ -146,6 +156,15 @@ export function GallerySidebarPanel({ articleId = null, active = false }) {
                     ) : (
                         <p className="text-xs text-gray-500 dark:text-gray-400">Chưa có ảnh trong album</p>
                     )}
+                    <button
+                        type="button"
+                        className="wp-product-gallery-generate mt-2"
+                        onClick={openGenerate}
+                        disabled={!mutable}
+                        title={t('generate_product_gallery_image')}
+                    >
+                        {t('generate_product_gallery_image')}
+                    </button>
                     <button
                         type="button"
                         className="wp-product-gallery-add mt-2"

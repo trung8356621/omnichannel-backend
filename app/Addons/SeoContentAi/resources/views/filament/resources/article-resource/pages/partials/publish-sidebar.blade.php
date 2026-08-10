@@ -465,7 +465,11 @@
                                                 <span class="text-emerald-600 dark:text-emerald-300">(bài hiện tại)</span>
                                             @endif
                                         </span>
-                                        <a href="{{ $duplicate['edit_url'] }}" target="_blank" rel="noopener" class="shrink-0 text-sky-600 hover:underline">Mở</a>
+                                        @if (! empty($duplicate['current']))
+                                            <span class="shrink-0 text-emerald-600 dark:text-emerald-300">Đang mở</span>
+                                        @else
+                                            <a href="{{ $duplicate['edit_url'] }}" target="_blank" rel="noopener" class="shrink-0 text-sky-600 hover:underline">Mở</a>
+                                        @endif
                                     </div>
                                 @endforeach
                             </div>

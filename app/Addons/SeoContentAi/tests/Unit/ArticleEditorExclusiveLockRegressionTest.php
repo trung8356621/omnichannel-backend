@@ -7,7 +7,7 @@ namespace App\Addons\SeoContentAi\Tests\Unit;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Exclusive entry-gate lock: no takeover, no hard-readonly editor mount.
+ * Exclusive entry-gate lock: different users blocked, same user can reopen.
  */
 final class ArticleEditorExclusiveLockRegressionTest extends TestCase
 {
@@ -68,6 +68,7 @@ final class ArticleEditorExclusiveLockRegressionTest extends TestCase
 
         self::assertStringContainsString("addEventListener('beforeunload'", $shell);
         self::assertStringContainsString('intentionalEditorCloseRef', $shell);
+        self::assertStringContainsString('intentionalEditorCloseRef.current || window.__SEO_EDITOR_EXITING__', $shell);
         self::assertStringContainsString('__seoMarkIntentionalEditorClose', $shell);
         self::assertStringContainsString("addEventListener('pagehide'", $shell);
         self::assertStringContainsString('sendBeacon', $shell);
@@ -83,13 +84,14 @@ final class ArticleEditorExclusiveLockRegressionTest extends TestCase
         self::assertStringNotContainsString('Bạn đang xem ở chế độ chỉ đọc', $i18n);
     }
 
-    public function test_same_user_stale_client_can_reclaim_server_side(): void
+    public function test_same_user_new_client_can_take_over_server_side(): void
     {
         $service = $this->readAddon('Services/ArticleEditor/ArticleEditorSessionService.php');
 
         self::assertStringContainsString('client_instance_id === $clientInstanceId', $service);
-        self::assertStringContainsString('isOwnSessionHeartbeatStale', $service);
-        self::assertStringContainsString('session_reclaimed_stale_own', $service);
+        self::assertStringContainsString('session_same_user_takeover', $service);
+        self::assertStringContainsString('ArticleEditorSessionStatus::TakenOver', $service);
+        self::assertStringContainsString('takeover_by_user_id', $service);
         self::assertStringContainsString('ArticleEditorSessionException::locked', $service);
     }
 

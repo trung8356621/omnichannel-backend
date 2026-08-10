@@ -72,8 +72,9 @@ final class ProductGalleryParentChildRuntimeIntegrationTest extends TestCase
         $this->assertStringNotContainsString('AAAA', $encoded);
     }
 
-    public function test_feature_flag_default_disabled(): void
+    public function test_feature_flag_without_container_is_safe_kill_switch(): void
     {
+        // Pure PHPUnit has no Laravel config() — Feature catches and returns false.
         $this->assertFalse(ProductGalleryParentChildFeature::enabled());
     }
 

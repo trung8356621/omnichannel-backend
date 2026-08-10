@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectArchiveItem;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Throwable;
@@ -36,7 +37,12 @@ use Throwable;
  *     sync_status: string,
  *     wordpress_post_id: int|null,
  *     wordpress_url: string,
+ *     has_public_wordpress_url: bool,
  *     wp_sync_error: string,
+ *     indexed_at: string|null,
+ *     previous_indexed_at: string|null,
+ *     indexed_at_label: string|null,
+ *     previous_indexed_at_label: string|null,
  *     created_at: string|null,
  *     updated_at: string|null,
  *     completed_at: string|null,
@@ -121,10 +127,19 @@ final class ArchivePreviewArticlePresenter
             $snapshot['wordpress_post_id'] ?? null,
             $article?->wp_post_id,
         ]);
-        $wpUrl = $this->firstNonEmpty([
-            $snapshot['wordpress_url'] ?? null,
+        $wpUrlString = $this->firstPublicHttpUrl([
             $this->articleMeta($article, 'wp_permalink'),
+            $snapshot['wordpress_url'] ?? null,
         ]);
+        $hasPublicWordpressUrl = $wpUrlString !== '';
+
+        if ($article instanceof SeoArticle) {
+            $indexedAtRaw = $article->indexed_at;
+            $previousIndexedAtRaw = $article->previous_indexed_at;
+        } else {
+            $indexedAtRaw = $snapshot['indexed_at'] ?? null;
+            $previousIndexedAtRaw = $snapshot['previous_indexed_at'] ?? null;
+        }
 
         $articleExists = $article instanceof SeoArticle;
         $canEdit = false;
@@ -191,8 +206,13 @@ final class ArchivePreviewArticlePresenter
             'review_status' => (string) ($snapshot['approved_status'] ?? $article?->review_status ?? ''),
             'sync_status' => is_string($syncStatus) ? $syncStatus : '',
             'wordpress_post_id' => $wpPostId !== null ? (int) $wpPostId : null,
-            'wordpress_url' => is_string($wpUrl) ? $wpUrl : '',
+            'wordpress_url' => $hasPublicWordpressUrl ? $wpUrlString : '',
+            'has_public_wordpress_url' => $hasPublicWordpressUrl,
             'wp_sync_error' => trim((string) ($snapshot['wp_sync_error'] ?? '')),
+            'indexed_at' => $this->toIsoOrNull($indexedAtRaw),
+            'previous_indexed_at' => $this->toIsoOrNull($previousIndexedAtRaw),
+            'indexed_at_label' => self::formatIndexDate($indexedAtRaw),
+            'previous_indexed_at_label' => self::formatIndexDate($previousIndexedAtRaw),
             'created_at' => SeoProjectResource::formatTaskTimestamp($snapshot['created_at'] ?? $article?->created_at),
             'updated_at' => SeoProjectResource::formatTaskTimestamp($snapshot['updated_at'] ?? $article?->updated_at),
             'completed_at' => SeoProjectResource::formatTaskTimestamp($completedAt),
@@ -231,6 +251,66 @@ final class ArchivePreviewArticlePresenter
             ->with(['articleMetas', 'site'])
             ->get()
             ->keyBy(static fn (SeoArticle $article): int => (int) $article->getKey());
+    }
+
+    /**
+     * @param  list<mixed>  $values
+     */
+    private function firstPublicHttpUrl(array $values): string
+    {
+        foreach ($values as $value) {
+            if (! is_string($value)) {
+                continue;
+            }
+
+            $url = trim($value);
+            if ($this->isPublicHttpUrl($url)) {
+                return $url;
+            }
+        }
+
+        return '';
+    }
+
+    private function isPublicHttpUrl(string $url): bool
+    {
+        if ($url === '' || filter_var($url, FILTER_VALIDATE_URL) === false) {
+            return false;
+        }
+
+        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+
+        return in_array($scheme, ['http', 'https'], true);
+    }
+
+    public static function formatIndexDate(mixed $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse((string) $value)->format('d/m/Y');
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function toIsoOrNull(mixed $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        try {
+            if ($value instanceof Carbon) {
+                return $value->toIso8601String();
+            }
+
+            return Carbon::parse((string) $value)->toIso8601String();
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     private function resolveLinkCount(mixed $snapshotValue, mixed $articleValue): int

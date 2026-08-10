@@ -90,14 +90,30 @@ final class SiteSyncStepRunner
                 ->first();
 
             if ($runningStep !== null) {
+                $checkpoint = is_array($runningStep->checkpoint) ? $runningStep->checkpoint : [];
+                // Deferred poll (score_missing_articles) intentionally leaves status=running and
+                // re-dispatches ProcessSiteSyncStepJob. That continuation MUST reclaim immediately —
+                // treating a fresh updated_at as OwnedByOtherWorker drops the queue and sticks the run.
+                $isDeferredContinuation = ! empty($checkpoint['deferred']);
                 $lastTouchedAt = $runningStep->updated_at ?? $runningStep->started_at;
-                if ($lastTouchedAt !== null && $lastTouchedAt->greaterThan(now()->subMinutes(10))) {
+                if (
+                    ! $isDeferredContinuation
+                    && $lastTouchedAt !== null
+                    && $lastTouchedAt->greaterThan(now()->subMinutes(10))
+                ) {
                     $this->persistClaimResult($run, $runningStep, SiteSyncStepClaimResult::OwnedByOtherWorker);
 
                     return;
                 }
 
-                $this->persistClaimResult($run, $runningStep, SiteSyncStepClaimResult::StaleLock, 'Reclaiming stale running step');
+                $this->persistClaimResult(
+                    $run,
+                    $runningStep,
+                    $isDeferredContinuation ? SiteSyncStepClaimResult::Claimed : SiteSyncStepClaimResult::StaleLock,
+                    $isDeferredContinuation
+                        ? 'Reclaiming deferred step continuation'
+                        : 'Reclaiming stale running step',
+                );
                 $step = $runningStep;
             }
         }
@@ -121,10 +137,16 @@ final class SiteSyncStepRunner
             'current_step' => $step->step_key,
         ])->save();
 
+        $checkpoint = is_array($step->checkpoint) ? $step->checkpoint : [];
+        // Clear defer marker while actively executing so a concurrent job cannot
+        // treat this as a free deferred continuation mid-flight.
+        unset($checkpoint['deferred'], $checkpoint['deferred_at'], $checkpoint['deferred_until']);
+
         $step->forceFill([
             'status' => 'running',
             'started_at' => $step->started_at ?? now(),
             'attempt_count' => (int) ($step->attempt_count ?? 0) + 1,
+            'checkpoint' => $checkpoint,
             'error_message' => null,
         ])->save();
 
@@ -144,9 +166,16 @@ final class SiteSyncStepRunner
 
             if (! empty($metrics['__defer_step'])) {
                 unset($metrics['__defer_step']);
+                $checkpoint = is_array($step->checkpoint) ? $step->checkpoint : [];
+                $checkpoint['deferred'] = true;
+                $checkpoint['deferred_at'] = now()->toIso8601String();
+                $checkpoint['deferred_until'] = now()
+                    ->addSeconds(max(5, (int) ($metrics['defer_seconds'] ?? 20)))
+                    ->toIso8601String();
                 $step->forceFill([
                     'status' => 'running',
                     'metrics' => $metrics,
+                    'checkpoint' => $checkpoint,
                     'error_message' => null,
                 ])->save();
 
@@ -156,7 +185,11 @@ final class SiteSyncStepRunner
                         $counters[$key] = (int) $value;
                     }
                 }
+                $meta = is_array($run->meta) ? $run->meta : [];
+                $meta['last_progress_at'] = now()->toIso8601String();
+                $meta['scoring_deferred'] = true;
                 $run->counters = $counters;
+                $run->meta = $meta;
                 $run->forceFill([
                     'status' => 'running',
                     'current_step' => $step->step_key,
@@ -170,9 +203,12 @@ final class SiteSyncStepRunner
                 return;
             }
 
+            $checkpoint = is_array($step->checkpoint) ? $step->checkpoint : [];
+            unset($checkpoint['deferred'], $checkpoint['deferred_at'], $checkpoint['deferred_until']);
             $step->forceFill([
                 'status' => 'completed',
                 'metrics' => $metrics,
+                'checkpoint' => $checkpoint,
                 'finished_at' => now(),
             ])->save();
 
@@ -191,6 +227,10 @@ final class SiteSyncStepRunner
                 $warnings = is_array($run->warnings) ? $run->warnings : [];
                 $run->warnings = array_values(array_unique([...$warnings, ...$metrics['warnings']]));
             }
+            $meta = is_array($run->meta) ? $run->meta : [];
+            $meta['last_progress_at'] = now()->toIso8601String();
+            unset($meta['scoring_deferred']);
+            $run->meta = $meta;
             $run->counters = $counters;
             $run->cursor = isset($metrics['cursor']) ? (string) $metrics['cursor'] : $run->cursor;
             $run->save();

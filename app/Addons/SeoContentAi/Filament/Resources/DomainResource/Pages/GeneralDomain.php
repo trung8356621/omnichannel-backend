@@ -137,6 +137,14 @@ class GeneralDomain extends Page
 
     public ?string $siteSyncScoringContext = null;
 
+    public ?string $siteSyncV2Phase = null;
+
+    public ?string $siteSyncV2PhaseLabel = null;
+
+    public ?string $siteSyncV2LastProgressAt = null;
+
+    public bool $siteSyncV2Stuck = false;
+
     /** @var array<string, mixed>|null */
     public ?array $siteSyncBootstrapPreview = null;
 
@@ -243,6 +251,12 @@ class GeneralDomain extends Page
             $this->siteSyncV2Warnings = is_array($status['warnings'] ?? null)
                 ? array_values(array_map('strval', $status['warnings']))
                 : [];
+            $this->siteSyncV2Phase = isset($status['phase']) ? (string) $status['phase'] : null;
+            $this->siteSyncV2PhaseLabel = isset($status['phase_label']) ? (string) $status['phase_label'] : null;
+            $this->siteSyncV2LastProgressAt = isset($status['last_progress_at'])
+                ? (string) $status['last_progress_at']
+                : null;
+            $this->siteSyncV2Stuck = (bool) ($status['stuck'] ?? false);
 
             if ($wasRunning && ! $this->siteSyncV2Running && $this->siteSyncV2Status === 'completed') {
                 $this->dispatch('domain-sync-completed');

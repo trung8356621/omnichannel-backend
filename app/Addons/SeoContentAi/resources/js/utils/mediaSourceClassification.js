@@ -158,7 +158,10 @@ function hasLocalLaravelEvidence(row) {
 
     return isLocalSeoMediaSrc(src)
         || isLocalSeoMediaSrc(localSrc)
-        || seoMediaId > 0;
+        || seoMediaId > 0
+        || Boolean(row.local_media || row.localMedia)
+        || Boolean(row.pendingBinaryVersion || row.pending_binary_version)
+        || Boolean(row.mediaVersion || row.media_version || row.revision_id || row.version_id);
 }
 
 /**
@@ -179,7 +182,15 @@ function classifyLocalKind(row) {
  * @returns {boolean}
  */
 export function isWordPressProtectedMedia(row) {
-    return classifyMediaSource(row) === 'wordpress';
+    return classifyMediaSource(row) === 'wordpress' && !isLaravelManagedMedia(row);
+}
+
+/**
+ * @param {Record<string, unknown>|null|undefined} row
+ * @returns {boolean}
+ */
+export function isLaravelManagedMedia(row) {
+    return Boolean(row && typeof row === 'object' && hasLocalLaravelEvidence(row));
 }
 
 /**

@@ -1821,6 +1821,16 @@ export default function ArticleLinksSidebar({
             setDomainLinkActiveKey(itemKey);
         }
         const text = variant === 'cta' ? ctaDisplayLabel(item) : String(item?.text ?? '').trim();
+        let listIndex = 0;
+        if (variant === 'cta') {
+            // Same cycle pattern as internal-link find → wrap insert uses matching occurrence.
+            const currentCycle = Number(cycleByKey[itemKey] ?? 0);
+            listIndex = currentCycle;
+            setCycleByKey((prev) => ({
+                ...prev,
+                [itemKey]: currentCycle + 1,
+            }));
+        }
 
         const detail = {
             href:
@@ -1829,7 +1839,7 @@ export default function ArticleLinksSidebar({
                     : String(item?.href ?? item?.target_url ?? '').trim(),
             text,
             type: 'internal',
-            index: 0,
+            index: listIndex,
             searchPlainText: true,
         };
         const actions = getEditorCommandHost()?.actions;
@@ -2073,9 +2083,17 @@ export default function ArticleLinksSidebar({
                         templatesByType={templatesByType}
                         emptyText={t('cta_widget_empty')}
                         onKeywordClick={(item, _index, itemKey) => scrollToDomainItem(item, itemKey, 'cta')}
-                        onInsertQuickCta={(item, _itemKey, templateOverride, mode = 'sentence') =>
-                            dispatchCtaInsert(item, mode, templateOverride, templatesByType)
-                        }
+                        onInsertQuickCta={(item, itemKey, templateOverride, mode = 'sentence') => {
+                            const cycle = Number(cycleByKey[itemKey] ?? 0);
+                            const occurrenceIndex = cycle > 0 ? (cycle - 1) : 0;
+                            dispatchCtaInsert(
+                                item,
+                                mode,
+                                templateOverride,
+                                templatesByType,
+                                mode === 'value' ? occurrenceIndex : 0,
+                            );
+                        }}
                     />
                 </LinkAssistantSection>
                 ) : null}

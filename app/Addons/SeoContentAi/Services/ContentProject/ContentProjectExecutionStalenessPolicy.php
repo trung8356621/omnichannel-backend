@@ -45,6 +45,9 @@ final class ContentProjectExecutionStalenessPolicy
     /**
      * Pure snapshot evaluator (unit-test friendly).
      *
+     * Writing: orphan runtime with no fresh worker/lock.
+     * Non-writing: only stale when abandoned active run-items exist (pending/processing dead).
+     *
      * @param  array{
      *     task_status: string,
      *     article_id?: int|null,
@@ -54,15 +57,11 @@ final class ContentProjectExecutionStalenessPolicy
      *     has_fresh_active_execution?: bool,
      *     has_valid_owned_lock?: bool,
      *     last_progress_at?: CarbonInterface|string|null,
+     *     stale_active_run_item_count?: int,
      * }  $snapshot
      */
     public function isStaleSnapshot(array $snapshot, ?CarbonInterface $now = null, ?int $timeoutMinutes = null): bool
     {
-        $status = strtolower(trim((string) ($snapshot['task_status'] ?? '')));
-        if ($status !== SeoProjectTask::STATUS_WRITING) {
-            return false;
-        }
-
         if (! empty($snapshot['has_fresh_active_execution'])) {
             return false;
         }
@@ -71,11 +70,23 @@ final class ContentProjectExecutionStalenessPolicy
             return false;
         }
 
+        $status = strtolower(trim((string) ($snapshot['task_status'] ?? '')));
+        $staleRunCount = (int) ($snapshot['stale_active_run_item_count'] ?? 0);
+
+        // Dead pending/processing run-item while task still Pending/Failed — recoverable.
+        if ($status !== SeoProjectTask::STATUS_WRITING) {
+            return $staleRunCount > 0;
+        }
+
         $articleId = (int) ($snapshot['article_id'] ?? 0);
         $hasBody = (bool) ($snapshot['article_has_body'] ?? false);
         if ($articleId > 0 && $hasBody) {
             // Output exists — not an orphaned empty generation; leave to other flows.
             return false;
+        }
+
+        if ($staleRunCount > 0) {
+            return true;
         }
 
         $now = $now ?? Carbon::now();
@@ -112,23 +123,14 @@ final class ContentProjectExecutionStalenessPolicy
     public function evaluateTask(SeoProjectTask $task): array
     {
         $timeout = $this->staleTimeoutMinutes();
-        if ((string) ($task->status ?? '') !== SeoProjectTask::STATUS_WRITING) {
-            return [
-                'stale' => false,
-                'reason' => null,
-                'timeout_minutes' => $timeout,
-                'has_fresh_active_execution' => false,
-                'has_valid_owned_lock' => false,
-                'last_progress_at' => null,
-                'active_run_item_ids' => [],
-                'stale_run_item_ids' => [],
-            ];
-        }
-
         $taskId = (int) $task->getKey();
         $activeItems = SeoProjectRunItem::query()
             ->where('task_id', $taskId)
-            ->where('action', 'like', 'step:%')
+            ->where(function ($q): void {
+                $q->where('action', 'like', 'step:%')
+                    ->orWhereNull('action')
+                    ->orWhere('action', '');
+            })
             ->whereIn('status', ContentProjectExecutionStatus::activeStatuses())
             ->whereNull('finished_at')
             ->orderByDesc('id')
@@ -165,7 +167,7 @@ final class ContentProjectExecutionStalenessPolicy
         }
 
         $stale = $this->isStaleSnapshot([
-            'task_status' => (string) $task->status,
+            'task_status' => (string) ($task->status ?? ''),
             'article_id' => $articleId,
             'article_has_body' => $hasBody,
             'task_updated_at' => $task->updated_at,
@@ -173,6 +175,7 @@ final class ContentProjectExecutionStalenessPolicy
             'has_fresh_active_execution' => $hasFresh,
             'has_valid_owned_lock' => $hasValidLock,
             'last_progress_at' => $lastProgress,
+            'stale_active_run_item_count' => count($staleIds),
         ]);
 
         return [

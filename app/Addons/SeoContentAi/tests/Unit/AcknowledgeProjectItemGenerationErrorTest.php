@@ -86,7 +86,8 @@ final class AcknowledgeProjectItemGenerationErrorTest extends TestCase
 
         self::assertTrue($flags['acknowledge_error']);
         self::assertTrue($flags['prefer_acknowledge_error']);
-        self::assertTrue($flags['run_again']);
+        self::assertTrue($flags['create_or_rerun']);
+        self::assertFalse($flags['run_again']);
     }
 
     public function test_presenter_hides_acknowledge_for_failed_item_without_article(): void
@@ -106,7 +107,8 @@ final class AcknowledgeProjectItemGenerationErrorTest extends TestCase
 
         self::assertFalse($flags['acknowledge_error']);
         self::assertFalse($flags['prefer_acknowledge_error']);
-        self::assertTrue($flags['run_again']);
+        self::assertTrue($flags['create_or_rerun']);
+        self::assertFalse($flags['run_again']);
     }
 
     public function test_badge_labels_fallback_english_without_translator(): void

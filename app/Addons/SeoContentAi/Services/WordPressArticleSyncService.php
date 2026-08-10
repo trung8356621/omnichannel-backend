@@ -868,6 +868,15 @@ final class WordPressArticleSyncService
         $url = (string) ($context['url'] ?? '');
         $wpPostId = (int) ($context['wp_post_id'] ?? 0);
         $payload = $prepared['request_payload'];
+        $fieldConflicts = is_array($prepared['field_conflicts'] ?? null) ? $prepared['field_conflicts'] : [];
+        if ($fieldConflicts !== []) {
+            return [
+                'success' => false,
+                'message' => 'Phát hiện xung đột WordPress ở field: '.implode(', ', array_keys($fieldConflicts)).'. Tải lại bài hoặc kiểm tra thay đổi trên WordPress trước khi sync.',
+                'step_detail' => 'field_conflict='.implode(',', array_keys($fieldConflicts)),
+                'error_code' => 'wp_field_conflict',
+            ];
+        }
 
         try {
             $response = $this->gateway->postJson(
@@ -966,6 +975,7 @@ final class WordPressArticleSyncService
             ? array_values(array_filter(array_map(static fn ($id): int => (int) $id, $prepared['synced_local_media_ids'])))
             : [];
 
+        $requestedSlug = trim((string) (($prepared['request_payload']['slug'] ?? '') ?: ($article->slug ?? '')));
         $remoteSlug = trim((string) ($decoded['slug'] ?? ''));
         $remotePermalink = trim((string) ($decoded['permalink'] ?? ''));
         $remotePostType = null;
@@ -1018,6 +1028,9 @@ final class WordPressArticleSyncService
         }
 
         $message = (string) ($decoded['message'] ?? 'Đã đồng bộ lên WordPress.');
+        if ($requestedSlug !== '' && $remoteSlug !== '' && \Illuminate\Support\Str::slug($requestedSlug) !== \Illuminate\Support\Str::slug($remoteSlug)) {
+            $message .= ' WordPress đã đổi slug thành "'.$remoteSlug.'" do trùng hoặc canonical permalink; Laravel đã cập nhật theo slug này.';
+        }
         $virtualCount = (int) ($decoded['virtual_count'] ?? 0);
         if ($virtualCount > 0) {
             $message .= ' Đã đồng bộ '.$virtualCount.' review ảo.';
@@ -1106,6 +1119,22 @@ final class WordPressArticleSyncService
             $message .= ' Một số ảnh trong nội dung chưa sync được: '.mb_substr(implode(' | ', $localMediaSyncErrors), 0, 300);
         }
 
+        if ($mediaPush['attempted'] && ! $mediaPush['success']) {
+            return [
+                'success' => false,
+                'message' => $message,
+                'error_code' => 'featured_media_sync_failed',
+                'failed_stage' => 'featured_media_push',
+                'faq_count' => count($faqs),
+                'faq_extract_debug' => $faqExtractDebug,
+                'post_type' => $wpTaxonomy === null ? $remotePostType : null,
+                'post_type_changed' => $wpTaxonomy === null
+                    ? (bool) ($decoded['post_type_changed'] ?? false)
+                    : false,
+                'step_detail' => implode(', ', $stepDetails),
+            ];
+        }
+
         if ($syncedLocalMediaIds !== []) {
             $updatedPromptMediaLinks = $this->syncPromptMediaLinksToWordPressUrls($article, $syncedLocalMediaIds);
             if ($updatedPromptMediaLinks > 0) {
@@ -1133,6 +1162,12 @@ final class WordPressArticleSyncService
         app(ArticleWordPressSyncFlagService::class)->rememberPublishedContentHash(
             $article->fresh() ?? $article,
             hash('sha256', trim((string) (($article->fresh() ?? $article)->body ?? $postContent ?? ''))),
+        );
+        app(WordPressFieldConflictService::class)->rememberSuccessfulSync(
+            $article->fresh() ?? $article,
+            $decoded,
+            is_array($prepared['request_payload'] ?? null) ? $prepared['request_payload'] : [],
+            $postContent,
         );
         $fresh = $article->fresh() ?? $article;
         $fresh->loadMissing('articleMetas');
@@ -1444,8 +1479,23 @@ final class WordPressArticleSyncService
             unset($payload['status'], $payload['post_date'], $payload['post_date_gmt']);
         }
 
-        if ($wpTaxonomy === null && $this->shouldPreserveLinkedPostSlug($article, $syncOptions)) {
-            unset($payload['slug']);
+        $fieldConflicts = app(WordPressFieldConflictService::class)->detectConflicts(
+            $article,
+            app(WordPressFieldConflictService::class)->localSnapshotFromPayload([
+                ...$payload,
+                'post_content' => $postContent,
+            ]),
+        );
+        foreach (array_keys($fieldConflicts) as $conflictField) {
+            if ($conflictField === 'slug') {
+                unset($payload['slug']);
+            } elseif ($conflictField === 'post_content') {
+                unset($payload['post_content']);
+            } elseif (array_key_exists($conflictField, $payload)) {
+                unset($payload[$conflictField]);
+            } elseif (isset($payload['seo']) && is_array($payload['seo']) && array_key_exists($conflictField, $payload['seo'])) {
+                unset($payload['seo'][$conflictField]);
+            }
         }
 
         // FAQ rỗng thật trên Laravel → cho phép WP xóa meta; tránh giữ FAQ cũ lệch.
@@ -1462,6 +1512,7 @@ final class WordPressArticleSyncService
             'local_media_sync_errors' => $localMediaSyncErrors,
             'synced_local_media_ids' => $syncedLocalMediaIds,
             'defer_inline_media_sync' => $deferInlineMedia,
+            'field_conflicts' => $fieldConflicts,
         ];
 
         $skipCheck = (bool) ($syncOptions['force_editor_sync'] ?? false)
@@ -1473,21 +1524,6 @@ final class WordPressArticleSyncService
             'skip_editor_sync' => $skipCheck['skip'],
             'skip_editor_sync_reason' => $skipCheck['reason'],
         ];
-    }
-
-    /**
-     * Existing WordPress posts keep their public URL identity during content/SEO rewrites.
-     * Intentional permalink edits must use syncSlugForArticle(), not the full editor-sync payload.
-     *
-     * @param  array<string, mixed>  $syncOptions
-     */
-    private function shouldPreserveLinkedPostSlug(SeoArticle $article, array $syncOptions): bool
-    {
-        if (($syncOptions['allow_slug_update'] ?? false) === true) {
-            return false;
-        }
-
-        return (int) ($article->wp_post_id ?? 0) > 0;
     }
 
     /**

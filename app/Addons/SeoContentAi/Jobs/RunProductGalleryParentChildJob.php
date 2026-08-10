@@ -40,6 +40,7 @@ final class RunProductGalleryParentChildJob implements ShouldQueue
         public readonly array $originalSnapshotIds = [],
         public readonly array $variables = [],
         public readonly int $requestedImageCount = 6,
+        public readonly ?string $executionId = null,
     ) {}
 
     public function handle(ProductGalleryParentChildCoordinator $coordinator): void
@@ -64,6 +65,7 @@ final class RunProductGalleryParentChildJob implements ShouldQueue
                 originalSnapshotIds: $this->originalSnapshotIds,
                 plannerVariables: $this->variables,
                 requestedImageCount: $this->requestedImageCount,
+                precreatedExecutionId: $this->executionId,
             );
 
             RuntimeLogger::info('seo.product_gallery.mode2_job_finished', [

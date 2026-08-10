@@ -9,10 +9,15 @@ use App\Addons\SeoContentAi\Models\SeoGscMasterConnection;
 use App\Addons\SeoContentAi\Models\SeoGscPropertyMapping;
 use App\Addons\SeoContentAi\Services\GoogleSearchConsoleOAuthService;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 final class GoogleSearchConsoleConnectionService
 {
+    private ?bool $masterTableExists = null;
+
+    private ?bool $mappingTableExists = null;
+
     public function resolveForUser(int $userId): ?SeoGscMasterConnection
     {
         return $this->allForUser($userId)->first();
@@ -20,9 +25,13 @@ final class GoogleSearchConsoleConnectionService
 
     public function resolveForSite(?int $siteId, ?int $userId = null): ?SeoGscMasterConnection
     {
+        if (! $this->hasMasterTable()) {
+            return null;
+        }
+
         $userId ??= (int) auth()->id();
 
-        if ($siteId !== null && $siteId > 0) {
+        if ($siteId !== null && $siteId > 0 && $this->hasMappingTable()) {
             $mapping = SeoGscPropertyMapping::query()
                 ->where('site_id', $siteId)
                 ->orderByDesc('id')
@@ -44,6 +53,10 @@ final class GoogleSearchConsoleConnectionService
      */
     public function allForUser(int $userId): Collection
     {
+        if (! $this->hasMasterTable()) {
+            return new Collection();
+        }
+
         return SeoGscMasterConnection::query()
             ->where(function ($query) use ($userId): void {
                 $query->where('user_id', $userId)
@@ -58,6 +71,10 @@ final class GoogleSearchConsoleConnectionService
     public function resolveByIdForUser(int $userId, int $connectionId): ?SeoGscMasterConnection
     {
         if ($connectionId <= 0) {
+            return null;
+        }
+
+        if (! $this->hasMasterTable()) {
             return null;
         }
 
@@ -80,8 +97,12 @@ final class GoogleSearchConsoleConnectionService
      */
     public function statusForSite(?int $siteId, ?SeoGscMasterConnection $connection = null): array
     {
+        if (! $this->hasMasterTable()) {
+            return $this->notConfiguredStatus();
+        }
+
         $mapping = null;
-        if ($siteId !== null && $siteId > 0) {
+        if ($siteId !== null && $siteId > 0 && $this->hasMappingTable()) {
             $mapping = SeoGscPropertyMapping::query()
                 ->where('site_id', $siteId)
                 ->orderByDesc('id')
@@ -95,18 +116,10 @@ final class GoogleSearchConsoleConnectionService
         $connection ??= $this->resolveForSite($siteId);
 
         if ($connection === null) {
-            return [
-                'status' => 'not_configured',
-                'label' => __('seo-content-ai::filament.api_connections.not_configured'),
-                'property_url' => null,
-                'last_checked_at' => null,
-                'last_synced_at' => null,
-                'has_snapshot' => false,
-                'configured' => false,
-            ];
+            return $this->notConfiguredStatus();
         }
 
-        if ($mapping === null && $siteId !== null && $siteId > 0) {
+        if ($mapping === null && $siteId !== null && $siteId > 0 && $this->hasMappingTable()) {
             $mapping = SeoGscPropertyMapping::query()
                 ->where('gsc_connection_id', $connection->id)
                 ->where('site_id', $siteId)
@@ -463,6 +476,10 @@ final class GoogleSearchConsoleConnectionService
      */
     public function mappingRowsForUser(int $userId): array
     {
+        if (! $this->hasMasterTable() || ! $this->hasMappingTable()) {
+            return [];
+        }
+
         $connection = $this->resolveForUser($userId);
         if ($connection === null) {
             return [];
@@ -498,5 +515,40 @@ final class GoogleSearchConsoleConnectionService
         $message = Str::limit(trim($message), 240, '');
 
         return Str::replaceMatches('/(password|api[_ -]?key|secret|token|refresh_token|access_token)\s*[:=]\s*\S+/i', '$1=[redacted]', $message);
+    }
+
+    /**
+     * @return array{status: string, label: string, property_url: string|null, last_checked_at: string|null, last_synced_at: string|null, has_snapshot: bool, configured: bool}
+     */
+    private function notConfiguredStatus(): array
+    {
+        return [
+            'status' => 'not_configured',
+            'label' => __('seo-content-ai::filament.api_connections.not_configured'),
+            'property_url' => null,
+            'last_checked_at' => null,
+            'last_synced_at' => null,
+            'has_snapshot' => false,
+            'configured' => false,
+        ];
+    }
+
+    private function hasMasterTable(): bool
+    {
+        return $this->masterTableExists ??= $this->hasMysqlTable('seo_gsc_master_connections');
+    }
+
+    private function hasMappingTable(): bool
+    {
+        return $this->mappingTableExists ??= $this->hasMysqlTable('seo_gsc_property_mappings');
+    }
+
+    private function hasMysqlTable(string $table): bool
+    {
+        try {
+            return Schema::connection('mysql')->hasTable($table);
+        } catch (\Throwable) {
+            return false;
+        }
     }
 }

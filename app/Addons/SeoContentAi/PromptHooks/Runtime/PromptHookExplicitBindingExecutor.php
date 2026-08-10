@@ -92,6 +92,8 @@ final class PromptHookExplicitBindingExecutor
 
         $correlationId = (string) ($contextExtras['correlation_id'] ?? Str::uuid()->toString());
         $input = $this->mapInput($definition->inputSchema->fields, $variables, $previousOutputs);
+        // Schema-safe generation title seed when post_title empty but subject known.
+        $input = $this->seedEmptyPostTitleFromSubject($input, $definition->inputSchema->fields);
         // Only inject topic when the hook schema declares it (e.g. outline) —
         // never leak into comment/content hooks → Unknown input key [topic].
         $input = $this->enrichTopicInput($input, $definition->inputSchema->fields);
@@ -113,7 +115,8 @@ final class PromptHookExplicitBindingExecutor
 
         if (($definition->template['source'] ?? '') === 'legacy_prompt_content') {
             // Schema-whitelist only — never merge full shared workflow payload (topic leak).
-            $compileVars = $input;
+            // Alias mirrors (focus_keyword/title/…) are derived from mapped input for compile only.
+            $compileVars = $this->expandCompileAliasMirrors($input);
             $context['legacy_compiled_prompt'] = $this->promptRunner->compilePrompt($prompt, $compileVars);
         }
 
@@ -263,7 +266,44 @@ final class PromptHookExplicitBindingExecutor
     }
 
     /**
-     * Runtime topic for prompts that declare it — never invents post_title/keyword from each other.
+     * When schema declares post_title and it is empty, seed from effectiveSubject
+     * (topic/keyword already mapped). Does not invent keyword from title.
+     *
+     * @param  array<string, mixed>  $input
+     * @param  array<string, array<string, mixed>>  $fields
+     * @return array<string, mixed>
+     */
+    private function seedEmptyPostTitleFromSubject(array $input, array $fields): array
+    {
+        if (! array_key_exists('post_title', $fields)) {
+            return $input;
+        }
+
+        $existing = isset($input['post_title']) ? ContentProjectItemIdentity::normalize((string) $input['post_title']) : '';
+        if ($existing !== '') {
+            return $input;
+        }
+
+        $fromTopic = isset($input['topic'])
+            ? ContentProjectItemIdentity::normalize((string) $input['topic'])
+            : '';
+        $seed = $fromTopic !== ''
+            ? $fromTopic
+            : ContentProjectItemIdentity::effectiveSubject(
+                null,
+                isset($input['keyword']) ? (string) $input['keyword'] : (
+                    isset($input['focus_keyword']) ? (string) $input['focus_keyword'] : null
+                ),
+            );
+        if ($seed !== '') {
+            $input['post_title'] = $seed;
+        }
+
+        return $input;
+    }
+
+    /**
+     * Runtime topic for prompts that declare it — never invents keyword from title.
      *
      * @param  array<string, mixed>  $input
      * @param  array<string, array<string, mixed>>  $fields
@@ -282,7 +322,7 @@ final class PromptHookExplicitBindingExecutor
             return $input;
         }
 
-        $topic = ContentProjectItemIdentity::topic(
+        $topic = ContentProjectItemIdentity::effectiveSubject(
             isset($input['post_title']) ? (string) $input['post_title'] : null,
             isset($input['keyword']) ? (string) $input['keyword'] : (
                 isset($input['focus_keyword']) ? (string) $input['focus_keyword'] : null
@@ -293,6 +333,74 @@ final class PromptHookExplicitBindingExecutor
         }
 
         return $input;
+    }
+
+    /**
+     * Derive legacy template synonym mirrors from mapped schema input only.
+     * Used for compilePrompt — must not be merged into envelope input (unknown-key guard).
+     *
+     * Pairs: keyword↔focus_keyword, post_title↔title, site_description↔site_short_description.
+     * Fill counterpart only when missing/empty; never override explicit non-empty.
+     *
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    private function expandCompileAliasMirrors(array $input): array
+    {
+        $out = $input;
+
+        $keyword = ContentProjectItemIdentity::normalize(
+            isset($out['keyword']) ? (string) $out['keyword'] : null,
+        );
+        if ($keyword === '') {
+            $keyword = ContentProjectItemIdentity::normalize(
+                isset($out['focus_keyword']) ? (string) $out['focus_keyword'] : null,
+            );
+        }
+        if ($keyword !== '') {
+            if (ContentProjectItemIdentity::normalize(isset($out['keyword']) ? (string) $out['keyword'] : null) === '') {
+                $out['keyword'] = $keyword;
+            }
+            if (ContentProjectItemIdentity::normalize(isset($out['focus_keyword']) ? (string) $out['focus_keyword'] : null) === '') {
+                $out['focus_keyword'] = $keyword;
+            }
+        }
+
+        $title = ContentProjectItemIdentity::normalize(
+            isset($out['post_title']) ? (string) $out['post_title'] : null,
+        );
+        if ($title === '') {
+            $title = ContentProjectItemIdentity::normalize(
+                isset($out['title']) ? (string) $out['title'] : null,
+            );
+        }
+        if ($title !== '') {
+            if (ContentProjectItemIdentity::normalize(isset($out['post_title']) ? (string) $out['post_title'] : null) === '') {
+                $out['post_title'] = $title;
+            }
+            if (ContentProjectItemIdentity::normalize(isset($out['title']) ? (string) $out['title'] : null) === '') {
+                $out['title'] = $title;
+            }
+        }
+
+        $site = ContentProjectItemIdentity::normalize(
+            isset($out['site_description']) ? (string) $out['site_description'] : null,
+        );
+        if ($site === '') {
+            $site = ContentProjectItemIdentity::normalize(
+                isset($out['site_short_description']) ? (string) $out['site_short_description'] : null,
+            );
+        }
+        if ($site !== '') {
+            if (ContentProjectItemIdentity::normalize(isset($out['site_description']) ? (string) $out['site_description'] : null) === '') {
+                $out['site_description'] = $site;
+            }
+            if (ContentProjectItemIdentity::normalize(isset($out['site_short_description']) ? (string) $out['site_short_description'] : null) === '') {
+                $out['site_short_description'] = $site;
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -308,8 +416,10 @@ final class PromptHookExplicitBindingExecutor
             'keyword' => ['keyword', 'focus_keyword', 'focusKeyword'],
             'focus_keyword' => ['focus_keyword', 'keyword', 'focusKeyword'],
             'post_title' => ['post_title', 'title', 'article_title'],
+            'title' => ['title', 'post_title', 'article_title'],
             'topic' => ['topic', 'subject'],
             'site_short_description' => ['site_short_description', 'site_description', 'short_description'],
+            'site_description' => ['site_description', 'site_short_description', 'short_description'],
             'site_cta' => ['site_cta', 'cta'],
             'rewrite_instruction' => ['rewrite_instruction', 'rewrite_notes', 'instruction'],
             'heading_context' => ['heading_context', 'input', 'context', 'outline_context'],

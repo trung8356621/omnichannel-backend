@@ -85,6 +85,7 @@
                         <th class="w-16 px-3 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400" title="{{ __('seo-content-ai::filament.projects.archive_preview_col_external_links') }}">{{ __('seo-content-ai::filament.projects.archive_preview_col_ext') }}</th>
                         <th class="w-20 px-3 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_col_avg_seo') }}</th>
                         <th class="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_sync') }}</th>
+                        <th class="min-w-[9rem] px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.archive_preview_col_index') }}</th>
                         <th class="w-24 px-3 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400"></th>
                     </tr>
                 </thead>
@@ -96,13 +97,17 @@
                             $status = trim((string) ($row['task_status'] ?? ''));
                             $syncStatus = trim((string) ($row['sync_status'] ?? ''));
                             $seoScore = $row['seo_score'] ?? null;
-                            $editUrl = is_string($row['edit_url'] ?? null) ? $row['edit_url'] : null;
-                            $canEdit = (bool) ($row['can_edit'] ?? false);
                             $articleExists = (bool) ($row['article_exists'] ?? false);
                             $itemId = (int) ($row['item_id'] ?? 0);
                             $position = (int) ($row['position'] ?? 0);
                             $internalLinks = (int) ($row['internal_link_count'] ?? 0);
                             $externalLinks = (int) ($row['external_link_count'] ?? 0);
+                            $wpUrl = trim((string) ($row['wordpress_url'] ?? ''));
+                            $hasWpUrl = (bool) ($row['has_public_wordpress_url'] ?? false) && $wpUrl !== '';
+                            $indexedLabel = is_string($row['indexed_at_label'] ?? null) ? trim((string) $row['indexed_at_label']) : '';
+                            $previousIndexedLabel = is_string($row['previous_indexed_at_label'] ?? null) ? trim((string) $row['previous_indexed_at_label']) : '';
+                            $indexBusy = (bool) ($this->markingIndexBusy ?? false)
+                                && (int) ($this->markingIndexItemId ?? 0) === $itemId;
                         @endphp
                         <tr
                             wire:key="archive-preview-item-{{ $itemId }}"
@@ -110,27 +115,50 @@
                         >
                             <td class="whitespace-nowrap px-3 py-2.5 text-gray-600 dark:text-gray-300">{{ $position > 0 ? $position : $loop->iteration }}</td>
                             <td class="px-3 py-2.5">
-                                <div class="min-w-0">
-                                    @if ($canEdit && filled($editUrl))
-                                        <a
-                                            href="{{ $editUrl }}"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            class="text-primary-600 hover:underline dark:text-primary-400"
-                                            title="{{ $title !== '' ? $title : '' }}"
-                                        >
-                                            <span class="line-clamp-2">{{ $title !== '' ? e($title) : '—' }}</span>
-                                        </a>
-                                    @else
-                                        <span class="line-clamp-2 font-medium text-gray-950 dark:text-white" title="{{ $title !== '' ? $title : '' }}">
-                                            {{ $title !== '' ? e($title) : '—' }}
-                                        </span>
+                                <div
+                                    class="flex min-w-0 items-start gap-1.5"
+                                    @if ($hasWpUrl)
+                                        x-data="{ copied: false }"
                                     @endif
+                                >
+                                    <div class="min-w-0 flex-1">
+                                        @if ($hasWpUrl)
+                                            <a
+                                                href="{{ $wpUrl }}"
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                class="text-primary-600 hover:underline dark:text-primary-400"
+                                                title="{{ $title !== '' ? $title : '' }}"
+                                            >
+                                                <span class="line-clamp-2">{{ $title !== '' ? e($title) : '—' }}</span>
+                                            </a>
+                                        @else
+                                            <span class="line-clamp-2 font-medium text-gray-950 dark:text-white" title="{{ $title !== '' ? $title : '' }}">
+                                                {{ $title !== '' ? e($title) : '—' }}
+                                            </span>
+                                        @endif
 
-                                    @if (! $articleExists)
-                                        <span class="mt-1 inline-flex items-center rounded-md bg-warning-50 px-1.5 py-0.5 text-[11px] font-medium text-warning-800 ring-1 ring-warning-200 dark:bg-warning-500/10 dark:text-warning-200 dark:ring-warning-500/30">
-                                            {{ __('seo-content-ai::filament.projects.archive_preview_article_missing') }}
-                                        </span>
+                                        @if (! $articleExists)
+                                            <span class="mt-1 inline-flex items-center rounded-md bg-warning-50 px-1.5 py-0.5 text-[11px] font-medium text-warning-800 ring-1 ring-warning-200 dark:bg-warning-500/10 dark:text-warning-200 dark:ring-warning-500/30">
+                                                {{ __('seo-content-ai::filament.projects.archive_preview_article_missing') }}
+                                            </span>
+                                        @endif
+                                    </div>
+
+                                    @if ($hasWpUrl)
+                                        <button
+                                            type="button"
+                                            class="mt-0.5 inline-flex shrink-0 items-center rounded-md px-1.5 py-1 text-[11px] font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                                            title="{{ __('seo-content-ai::filament.projects.archive_preview_copy_link') }}"
+                                            x-on:click.stop="
+                                                navigator.clipboard.writeText(@js($wpUrl)).then(() => {
+                                                    copied = true;
+                                                    setTimeout(() => copied = false, 1500);
+                                                }).catch(() => {})
+                                            "
+                                        >
+                                            <span x-text="copied ? @js(__('seo-content-ai::filament.projects.archive_preview_copied')) : @js(__('seo-content-ai::filament.projects.archive_preview_copy_link'))"></span>
+                                        </button>
                                     @endif
                                 </div>
                             </td>
@@ -152,6 +180,35 @@
                                     —
                                 @endif
                             </td>
+                            <td class="px-3 py-2.5">
+                                <div class="flex flex-col items-start gap-0.5">
+                                    <button
+                                        type="button"
+                                        class="inline-flex max-w-full items-center rounded-md px-2 py-1 text-left text-xs font-medium ring-1 ring-inset transition disabled:cursor-not-allowed disabled:opacity-50 {{ $indexedLabel !== '' ? 'bg-success-50 text-success-800 ring-success-200 hover:bg-success-100 dark:bg-success-500/10 dark:text-success-200 dark:ring-success-500/30' : 'bg-gray-50 text-gray-700 ring-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-200 dark:ring-gray-700' }}"
+                                        wire:click="markArticleIndexed({{ $itemId }})"
+                                        wire:loading.attr="disabled"
+                                        wire:target="markArticleIndexed({{ $itemId }})"
+                                        @disabled($indexBusy || (bool) ($this->markingIndexBusy ?? false))
+                                    >
+                                        <span wire:loading.remove wire:target="markArticleIndexed({{ $itemId }})">
+                                            @if ($indexedLabel !== '')
+                                                {{ __('seo-content-ai::filament.projects.archive_preview_index_done', ['date' => $indexedLabel]) }}
+                                            @else
+                                                {{ __('seo-content-ai::filament.projects.archive_preview_index_none') }}
+                                            @endif
+                                        </span>
+                                        <span wire:loading wire:target="markArticleIndexed({{ $itemId }})" class="inline-flex items-center gap-1">
+                                            <x-filament::loading-indicator class="h-3.5 w-3.5" />
+                                            {{ __('seo-content-ai::filament.projects.archive_preview_index_saving') }}
+                                        </span>
+                                    </button>
+                                    @if ($previousIndexedLabel !== '')
+                                        <span class="text-[11px] text-gray-500 dark:text-gray-400">
+                                            {{ __('seo-content-ai::filament.projects.archive_preview_index_previous', ['date' => $previousIndexedLabel]) }}
+                                        </span>
+                                    @endif
+                                </div>
+                            </td>
                             <td class="whitespace-nowrap px-3 py-2.5 text-right">
                                 <x-filament::button
                                     color="gray"
@@ -166,7 +223,7 @@
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="9" class="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
+                            <td colspan="10" class="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
                                 {{ __('seo-content-ai::filament.projects.archive_preview_empty') }}
                             </td>
                         </tr>

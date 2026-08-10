@@ -37,13 +37,14 @@ final class ContentProjectFailedOpsDefinition
             return false;
         }
 
+        // Stale pending/processing runtime is failed-recoverable, not live Pending.
+        if (! empty($row['is_generation_stale'])) {
+            return true;
+        }
+
         $exec = strtolower(trim((string) ($row['execution_status'] ?? '')));
         if (in_array($exec, ['pending', 'processing'], true)) {
             return false;
-        }
-
-        if (! empty($row['is_generation_stale'])) {
-            return true;
         }
 
         return strtolower(trim((string) ($row['generation_status'] ?? ''))) === 'failed';

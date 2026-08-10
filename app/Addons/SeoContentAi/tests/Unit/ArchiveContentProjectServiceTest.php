@@ -43,9 +43,24 @@ final class ArchiveContentProjectServiceTest extends TestCase
         self::assertStringContainsString('content_project_archived', $source);
         self::assertStringContainsString('workspaceDestroyer', $source);
         self::assertStringContainsString('destroyInTransaction', $source);
+        self::assertStringContainsString('resetProjectTasksForFreshFlow', $source);
         self::assertStringNotContainsString('taskLifecycle', $source);
         self::assertStringNotContainsString('content_archived_at', $source);
         self::assertStringNotContainsString('SeoProjectTaskLifecycleService', $source);
+    }
+
+    public function test_project_archive_resets_tasks_for_a_new_generation_flow(): void
+    {
+        $method = (new ReflectionClass(ArchiveContentProjectService::class))->getMethod('resetProjectTasksForFreshFlow');
+        $source = $this->readMethodSource($method);
+
+        self::assertStringContainsString("'status' => SeoProjectTask::STATUS_PENDING", $source);
+        self::assertStringContainsString("'article_id' => null", $source);
+        self::assertStringContainsString("'completed_at' => null", $source);
+        self::assertStringContainsString("'publishing_queued_at' => null", $source);
+        self::assertStringContainsString("'publish_queue_status' => ContentProjectPublishQueueStatus::None->value", $source);
+        self::assertStringContainsString("whereNull('archived_at')", $source);
+        self::assertStringContainsString('->update($payload)', $source);
     }
 
     public function test_restore_clears_project_flag_keeps_snapshot(): void
@@ -68,6 +83,8 @@ final class ArchiveContentProjectServiceTest extends TestCase
 
         self::assertStringContainsString("'title'", $source);
         self::assertStringContainsString('seo_score', $source);
+        self::assertStringContainsString('indexed_at', $source);
+        self::assertStringContainsString('previous_indexed_at', $source);
         self::assertStringNotContainsString("'body'", $source);
         self::assertStringNotContainsString("'content'", $source);
     }

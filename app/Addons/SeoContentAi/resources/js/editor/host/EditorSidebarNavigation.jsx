@@ -45,7 +45,11 @@ function chipIssueCount(chipId, health) {
 }
 
 function chipBadge(chipId, health, badges) {
-    if (health && Number(health.item_count) >= 0 && ['images', 'links', 'featured', 'gallery', 'cta'].includes(chipId)) {
+    if (chipId === 'featured') {
+        return null;
+    }
+
+    if (health && Number(health.item_count) >= 0 && ['images', 'links', 'gallery', 'cta'].includes(chipId)) {
         const count = Number(health.item_count);
         if (count > 0) {
             return count;

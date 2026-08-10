@@ -187,6 +187,14 @@ final class SeoAuditKeywordFlagService
         bool $filterTechnicalSeoScore,
     ): array {
         $violations = SeoRuleViolationsResolver::forArticle($article);
+        $hasFocusKeyword = $this->auditScanService->hasCanonicalFocusKeyword($article);
+        if ($hasFocusKeyword) {
+            $violations = array_values(array_filter(
+                $violations,
+                static fn (mixed $key): bool => (string) $key !== SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD
+                    && (string) $key !== 'seo.missing_focus_keyword',
+            ));
+        }
         $assessment = $this->assessmentService->assessFromAnalysis([
             'violations' => $violations,
             'seo_score' => $article->seo_score !== null ? (int) round((float) $article->seo_score) : null,
@@ -194,12 +202,16 @@ final class SeoAuditKeywordFlagService
 
         $keywordFlags = $this->collectKeywordFlagsForArticle($article);
         $hasKeywordFlags = $keywordFlags['warning_count'] > 0 || $keywordFlags['danger_count'] > 0;
-        $hasFocusKeyword = $this->auditScanService->hasCanonicalFocusKeyword($article);
-        $focusKeyword = trim((string) (
-            $article->articleMetas
-                ->firstWhere('meta_key', 'seo_focus_keyword')
-                ?->meta_value ?? ''
-        ));
+        $focusKeyword = '';
+        try {
+            $focusKeyword = trim((string) (app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article) ?? ''));
+        } catch (\Throwable) {
+            $focusKeyword = trim((string) (
+                $article->articleMetas
+                    ->firstWhere('meta_key', 'seo_focus_keyword')
+                    ?->meta_value ?? ''
+            ));
+        }
 
         $selectedRuleKeys = $this->excludeNonAuditFilterRules($selectedRuleKeys);
 
@@ -232,6 +244,12 @@ final class SeoAuditKeywordFlagService
             static fn (mixed $key): string => (string) $key,
             $assessment['matched_rule_keys'] ?? [],
         ));
+        if ($hasFocusKeyword) {
+            $matchedKeys = array_values(array_filter(
+                $matchedKeys,
+                static fn (string $key): bool => $key !== SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD,
+            ));
+        }
         if (
             in_array(SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD, $selectedRuleKeys, true)
             && ! $hasFocusKeyword
@@ -240,22 +258,28 @@ final class SeoAuditKeywordFlagService
             $matchedKeys[] = SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD;
         }
 
+        $missingLabel = (string) __('seo-content-ai::filament.articles_optimal.rule_short.missing_focus_keyword');
         $reasonLabels = array_values(array_filter(
             array_map(
                 static fn (array $item): string => (string) ($item['label'] ?? ''),
                 $assessment['active_violations'] ?? [],
             ),
-            static fn (string $label): bool => $label !== '',
+            static function (string $label) use ($hasFocusKeyword, $missingLabel): bool {
+                if ($label === '') {
+                    return false;
+                }
+                if ($hasFocusKeyword && $label === $missingLabel) {
+                    return false;
+                }
+
+                return true;
+            },
         ));
         if (
             in_array(SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD, $matchedKeys, true)
-            && ! in_array(
-                (string) __('seo-content-ai::filament.articles_optimal.rule_short.missing_focus_keyword'),
-                $reasonLabels,
-                true,
-            )
+            && ! in_array($missingLabel, $reasonLabels, true)
         ) {
-            $reasonLabels[] = (string) __('seo-content-ai::filament.articles_optimal.rule_short.missing_focus_keyword');
+            $reasonLabels[] = $missingLabel;
         }
 
         return [

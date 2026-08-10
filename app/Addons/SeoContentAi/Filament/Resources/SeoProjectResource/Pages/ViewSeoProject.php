@@ -24,6 +24,7 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\BlockPr
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\DebugOverrideProjectItemLifecycleCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\StartReviewCommand;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\UnblockProjectItemGenerationCommand;
+use App\Addons\SeoContentAi\Services\ContentProject\Application\Commands\SelectExistingArticleForProjectItemCommand;
 use App\Addons\SeoContentAi\Services\ArchiveContentProjectService;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectActionResultNotifier;
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
@@ -32,7 +33,9 @@ use App\Addons\SeoContentAi\Services\AgentWorkspace\AgentWorkspaceDeepLink;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectDebugLifecycleOverrideService;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectGenerationReadStateStore;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationClassifier;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemGenerationLaunchPlanner;
 use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectItemOperationsReadModel;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectExistingArticlePickerService;
 use App\Addons\SeoContentAi\Enums\ContentProjectRerunFromStep;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectInReviewReportingDefinition;
 use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectRecentlyCompletedDefinition;
@@ -75,6 +78,21 @@ final class ViewSeoProject extends Page
     public bool $executionDetailsOpen = false;
 
     public ?int $executionDetailsTaskId = null;
+
+    public bool $selectExistingArticleOpen = false;
+
+    public ?int $selectExistingArticleTaskId = null;
+
+    public string $selectExistingArticleQuery = '';
+
+    public string $selectExistingArticleDirect = '';
+
+    public bool $selectExistingArticleLoading = false;
+
+    public string $selectExistingArticleError = '';
+
+    /** @var list<array<string, mixed>> */
+    public array $selectExistingArticleResults = [];
 
     public string $search = '';
 
@@ -1151,10 +1169,13 @@ final class ViewSeoProject extends Page
 
     public function generateOne(int $taskId): void
     {
-        $this->dispatchGenerate([$taskId]);
+        $this->createOrRerunOne($taskId);
     }
 
-    public function rerunOne(int $taskId): void
+    /**
+     * ONE smart generation action: heal stale runtime then Generate or Rerun via CommandBus.
+     */
+    public function createOrRerunOne(int $taskId): void
     {
         $project = $this->requireProject();
         if (! SeoAccessControl::canAccessContentProjectRun($project)) {
@@ -1163,12 +1184,57 @@ final class ViewSeoProject extends Page
             return;
         }
 
-        // Explicit full rerun from start — not the default Failed-row Retry.
-        $this->dispatchBus(new RerunProjectItemsCommand(
-            (int) $project->id,
-            [(int) $taskId],
-            SeoProjectRun::MODE_FULL,
-        ));
+        $task = SeoProjectTask::query()
+            ->where('project_id', (int) $project->id)
+            ->whereKey((int) $taskId)
+            ->first();
+        if (! $task instanceof SeoProjectTask) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.run_failed'))
+                ->body('Item not found.')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $plan = app(ContentProjectItemGenerationLaunchPlanner::class)->plan($project, $task);
+        if ($plan['action'] === ContentProjectItemGenerationLaunchPlanner::ACTION_BLOCKED_ACTIVE) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.item_action_generation_active'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        if ($plan['action'] === ContentProjectItemGenerationLaunchPlanner::ACTION_BLOCKED_NONE) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.run_failed'))
+                ->body((string) ($plan['message'] ?? 'Generation action not executable.'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        if ($plan['action'] === ContentProjectItemGenerationLaunchPlanner::ACTION_RERUN) {
+            $this->dispatchBus(new RerunProjectItemsCommand(
+                (int) $project->id,
+                [(int) $taskId],
+                SeoProjectRun::MODE_FULL,
+            ));
+
+            return;
+        }
+
+        $this->dispatchGenerate([(int) $taskId]);
+    }
+
+    public function rerunOne(int $taskId): void
+    {
+        // Compat: same smart path as row CTA (heal + generate/rerun).
+        $this->createOrRerunOne($taskId);
     }
 
     /**
@@ -1206,6 +1272,143 @@ final class ViewSeoProject extends Page
             (int) $project->id,
             [(int) $taskId],
         ));
+        $this->resetPage();
+    }
+
+    public function openSelectExistingArticle(int $taskId): void
+    {
+        $project = $this->requireProject();
+        if (! SeoAccessControl::canAccessContentProjectRun($project)) {
+            Notification::make()->title('Forbidden')->danger()->send();
+
+            return;
+        }
+
+        $this->selectExistingArticleOpen = true;
+        $this->selectExistingArticleTaskId = (int) $taskId;
+        $this->selectExistingArticleQuery = '';
+        $this->selectExistingArticleDirect = '';
+        $this->selectExistingArticleError = '';
+        $this->selectExistingArticleLoading = true;
+        $this->selectExistingArticleResults = [];
+        $this->searchSelectExistingArticles();
+    }
+
+    public function closeSelectExistingArticle(): void
+    {
+        $this->selectExistingArticleOpen = false;
+        $this->selectExistingArticleTaskId = null;
+        $this->selectExistingArticleQuery = '';
+        $this->selectExistingArticleDirect = '';
+        $this->selectExistingArticleError = '';
+        $this->selectExistingArticleLoading = false;
+        $this->selectExistingArticleResults = [];
+        $this->dispatch('close-select-existing-article');
+    }
+
+    public function searchSelectExistingArticles(): void
+    {
+        $project = $this->requireProject();
+        $siteId = (int) ($project->site_id ?? 0);
+        $this->selectExistingArticleLoading = true;
+        $this->selectExistingArticleError = '';
+        try {
+            $this->selectExistingArticleResults = app(ContentProjectExistingArticlePickerService::class)
+                ->search($siteId, $this->selectExistingArticleQuery, 12);
+        } catch (Throwable $e) {
+            RuntimeLogger::report($e, ['endpoint' => 'content_project.select_existing_article_search']);
+            $this->selectExistingArticleResults = [];
+            $this->selectExistingArticleError = 'Search failed.';
+        }
+        $this->selectExistingArticleLoading = false;
+    }
+
+    public function updatedSelectExistingArticleQuery(): void
+    {
+        if (! $this->selectExistingArticleOpen || $this->selectExistingArticleTaskId === null) {
+            return;
+        }
+        $this->searchSelectExistingArticles();
+    }
+
+    public function resolveSelectExistingArticleDirect(): void
+    {
+        $project = $this->requireProject();
+        $siteId = (int) ($project->site_id ?? 0);
+        $this->selectExistingArticleLoading = true;
+        $this->selectExistingArticleError = '';
+        try {
+            $resolved = app(ContentProjectExistingArticlePickerService::class)
+                ->resolveDirect($siteId, $this->selectExistingArticleDirect);
+            if (! ($resolved['ok'] ?? false) || (int) ($resolved['article_id'] ?? 0) <= 0) {
+                $this->selectExistingArticleError = match ((string) ($resolved['reason'] ?? '')) {
+                    'ambiguous' => __('seo-content-ai::filament.projects.select_existing_article_ambiguous'),
+                    'empty_input' => __('seo-content-ai::filament.projects.select_existing_article_direct_required'),
+                    default => __('seo-content-ai::filament.projects.select_existing_article_not_found'),
+                };
+                $this->selectExistingArticleLoading = false;
+
+                return;
+            }
+            $this->confirmSelectExistingArticle((int) $resolved['article_id']);
+        } catch (Throwable $e) {
+            RuntimeLogger::report($e, ['endpoint' => 'content_project.select_existing_article_resolve']);
+            $this->selectExistingArticleError = 'Resolve failed.';
+            $this->selectExistingArticleLoading = false;
+        }
+    }
+
+    public function confirmSelectExistingArticle(int $articleId): void
+    {
+        $project = $this->requireProject();
+        if (! SeoAccessControl::canAccessContentProjectRun($project)) {
+            Notification::make()->title('Forbidden')->danger()->send();
+
+            return;
+        }
+
+        $taskId = (int) ($this->selectExistingArticleTaskId ?? 0);
+        if ($taskId <= 0 || $articleId <= 0) {
+            $this->selectExistingArticleError = __('seo-content-ai::filament.projects.select_existing_article_direct_required');
+
+            return;
+        }
+
+        $this->selectExistingArticleLoading = true;
+        $this->selectExistingArticleError = '';
+
+        $result = app(ContentProjectCommandBus::class)->dispatch(
+            new SelectExistingArticleForProjectItemCommand(
+                (int) $project->id,
+                $taskId,
+                $articleId,
+            ),
+            ActorContext::user(
+                auth()->id() !== null ? (int) auth()->id() : null,
+                (int) ($project->site_id ?? 0) ?: null,
+            ),
+        );
+
+        if (! $result->success) {
+            $this->selectExistingArticleError = (string) $result->message;
+            $this->selectExistingArticleLoading = false;
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.select_existing_article_failed'))
+                ->body((string) $result->message)
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.projects.select_existing_article_success'))
+            ->body((string) $result->message)
+            ->success()
+            ->send();
+
+        $this->closeSelectExistingArticle();
+        $this->invalidateOpsCache();
         $this->resetPage();
     }
 

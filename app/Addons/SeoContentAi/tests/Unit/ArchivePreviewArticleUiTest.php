@@ -38,14 +38,20 @@ final class ArchivePreviewArticleUiTest extends TestCase
         self::assertStringContainsString('target="_blank"', $view);
         self::assertStringContainsString('rel="noopener noreferrer"', $view);
         self::assertStringContainsString('archive_preview_article_missing', $view);
-        self::assertStringContainsString('edit_url', $view);
+        self::assertStringContainsString('has_public_wordpress_url', $view);
+        self::assertStringContainsString('wordpress_url', $view);
+        self::assertStringContainsString('markArticleIndexed', $view);
+        self::assertStringContainsString('archive_preview_copy_link', $view);
+        self::assertStringContainsString('navigator.clipboard.writeText', $view);
         self::assertStringContainsString('text-primary-600', $view);
         self::assertStringContainsString('archive_preview_col_int', $view);
         self::assertStringContainsString('archive_preview_col_ext', $view);
+        self::assertStringContainsString('archive_preview_col_index', $view);
         self::assertStringContainsString('internal_link_count', $view);
         self::assertStringContainsString('w-full', $view);
         self::assertStringNotContainsString('x-teleport="body"', $view);
         self::assertStringNotContainsString('fixed inset-0 z-[80]', $view);
+        self::assertStringNotContainsString("ArticleResource::getUrl('edit'", $view);
     }
 
     public function test_slideover_partial_has_sections(): void

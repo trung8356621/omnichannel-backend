@@ -37,6 +37,16 @@ final class WordPressArticleMediaService
     }
 
     /**
+     * @return array{success: bool, message: string, featured_image_url?: string, product_gallery?: list<array{id: int, url: string}>}
+     */
+    public function clearFeaturedImage(SeoArticle $article): array
+    {
+        return $this->pushMedia($article, [
+            'featured_attachment_id' => 0,
+        ]);
+    }
+
+    /**
      * @param  list<int>  $attachmentIds
      * @return array{success: bool, message: string, featured_image_url?: string, product_gallery?: list<array{id: int, url: string}>}
      */

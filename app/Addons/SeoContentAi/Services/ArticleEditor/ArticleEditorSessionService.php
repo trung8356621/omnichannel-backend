@@ -9,8 +9,6 @@ use App\Addons\SeoContentAi\Automation\Support\ArticleContentConflictGuard;
 use App\Addons\SeoContentAi\Enums\ArticleEditorSessionStatus;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoArticleEditorSession;
-use App\Addons\SeoContentAi\Models\SeoProject;
-use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectArticleMembership;
 use App\Addons\SeoContentAi\Services\ArticleEditor\Document\ArticleEditorDocumentWriter;
 use App\Addons\SeoContentAi\Support\ArticleEditorSessionErrorCode;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -30,7 +28,6 @@ final class ArticleEditorSessionService
     public function __construct(
         private readonly ArticleDocumentVersionService $documentVersions,
         private readonly ArticleContentConflictGuard $conflictGuard,
-        private readonly ContentProjectArticleMembership $membership,
         private readonly ArticleEditorDocumentWriter $documentWriter,
     ) {}
 
@@ -88,17 +85,15 @@ final class ArticleEditorSessionService
                         return $this->ownedAcquirePayload($fresh, $active->fresh() ?? $active, $knownDocumentVersion);
                     }
 
-                    // Same user, different tab/client: reclaim only when own heartbeat is stale
-                    // (crash / tab killed without release). Fresh heartbeat from another tab stays exclusive.
-                    if (
-                        (int) $active->user_id === (int) $user->getKey()
-                        && $this->isOwnSessionHeartbeatStale($active)
-                    ) {
-                        $active->status = ArticleEditorSessionStatus::Released;
-                        $active->released_at = now();
+                    // Same authenticated user may reopen/reload/take over the editor atomically.
+                    // Revoke the old editor instance so its later heartbeat cannot steal ownership back.
+                    if ((int) $active->user_id === (int) $user->getKey()) {
+                        $active->status = ArticleEditorSessionStatus::TakenOver;
+                        $active->revoked_at = now();
+                        $active->takeover_by_user_id = (int) $user->getKey();
                         $active->save();
 
-                        RuntimeLogger::info('seo.editor.session_reclaimed_stale_own', [
+                        RuntimeLogger::info('seo.editor.session_same_user_takeover', [
                             'article_id' => (int) $fresh->getKey(),
                             'old_session_id' => (string) $active->id,
                             'user_id' => (int) $user->getKey(),
@@ -550,8 +545,7 @@ final class ArticleEditorSessionService
         }
 
         if ($user instanceof User && (int) $active->user_id === (int) $user->getKey()) {
-            // Same user without session token still cannot bypass via legacy endpoint.
-            return $active;
+            return null;
         }
 
         return $active;
@@ -623,6 +617,10 @@ final class ArticleEditorSessionService
         }
 
         $sessionId = trim((string) $sessionId);
+        if ((int) $active->user_id === (int) $user->getKey()) {
+            return $active;
+        }
+
         if (
             $sessionId !== ''
             && (string) $active->id === $sessionId
@@ -666,6 +664,10 @@ final class ArticleEditorSessionService
             ? $user
             : (auth()->user() instanceof User ? auth()->user() : null);
 
+        if ($actor instanceof User && (int) $active->user_id === (int) $actor->getKey()) {
+            return;
+        }
+
         if (
             $sessionId !== ''
             && $actor instanceof User
@@ -698,6 +700,11 @@ final class ArticleEditorSessionService
             return;
         }
 
+        $actor = auth()->user();
+        if ($actor instanceof User && (int) $active->user_id === (int) $actor->getKey()) {
+            return;
+        }
+
         RuntimeLogger::warning('seo.editor.external_write_blocked_by_session', [
             'article_id' => (int) $article->getKey(),
             'session_id' => (string) $active->id,
@@ -706,7 +713,7 @@ final class ArticleEditorSessionService
 
         throw ArticleEditorSessionException::locked($this->publicLockPayload(
             $active,
-            auth()->user() instanceof User ? auth()->user() : null,
+            $actor instanceof User ? $actor : null,
         ));
     }
 
@@ -724,25 +731,9 @@ final class ArticleEditorSessionService
             );
         }
 
-        $assigned = $this->membership->assignedTaskForArticle($article);
-        if ($assigned === null) {
-            return;
-        }
-
-        $project = $assigned->relationLoaded('project')
-            ? $assigned->project
-            : SeoProject::query()->find((int) ($assigned->project_id ?? 0));
-
-        if ($project instanceof SeoProject && ($project->archived_at !== null || $project->isArchive())) {
-            throw ArticleEditorSessionException::make(
-                ArticleEditorSessionErrorCode::CONTENT_PROJECT_ARCHIVED,
-                'Content project is archived; writable editor session denied.',
-                [
-                    'content_project_id' => (int) $project->getKey(),
-                ],
-                422,
-            );
-        }
+        // Archived Content Project association is historical/reporting only.
+        // It must NOT deny writable Article Editor sessions — article returns to standalone behavior.
+        // CONTENT_PROJECT_ARCHIVED remains a revoke reason during archive; post-archive acquire succeeds.
     }
 
     private function expireStaleSessionsForArticle(SeoArticle $article): void
@@ -835,22 +826,6 @@ final class ArticleEditorSessionService
         $session->heartbeat_at = $now;
         $session->expires_at = $now->copy()->addSeconds($this->lockTtlSeconds());
         $session->save();
-    }
-
-    /**
-     * Own session from another client_instance_id is reclaimable when heartbeat stopped
-     * (browser crash / tab killed). Active tabs keep sending heartbeat → stay exclusive.
-     */
-    private function isOwnSessionHeartbeatStale(SeoArticleEditorSession $session): bool
-    {
-        $lastBeat = $session->heartbeat_at ?? $session->acquired_at;
-        if ($lastBeat === null) {
-            return true;
-        }
-
-        $staleAfterSeconds = max(30, $this->heartbeatIntervalSeconds() * 2);
-
-        return $lastBeat->lte(now()->subSeconds($staleAfterSeconds));
     }
 
     /**

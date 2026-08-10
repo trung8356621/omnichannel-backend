@@ -61,7 +61,11 @@ final class ArticleEditorRuntimeMediaPhase6c3Test extends TestCase
         self::assertStringContainsString('stableId', $panel);
         self::assertStringContainsString("mode: 'gallery'", $panel);
         self::assertStringNotContainsString('localStorage', $panel);
-        self::assertStringNotContainsString('window.dispatchEvent', $panel);
+        self::assertStringContainsString("className=\"wp-product-gallery-generate", $panel);
+        self::assertStringContainsString("seo-open-generate-image-modal", $panel);
+        self::assertStringContainsString("target: 'product-gallery'", $panel);
+        self::assertStringContainsString("t('generate_product_gallery_image')", $panel);
+        self::assertStringNotContainsString('seo-editor-distribute-product-gallery', $panel);
     }
 
     public function test_featured_navigation_does_not_open_picker_and_product_gallery_is_multi_select(): void
@@ -72,12 +76,28 @@ final class ArticleEditorRuntimeMediaPhase6c3Test extends TestCase
         self::assertStringContainsString('onClick={openPicker}', $featured);
         self::assertStringContainsString("mode: 'featured'", $featured);
         self::assertStringContainsString("selection: 'single'", $featured);
+        self::assertStringNotContainsString('seo-open-generate-image-modal', $featured);
+        self::assertStringNotContainsString("target: 'product-gallery'", $featured);
+        self::assertStringNotContainsString("mode: 'gallery'", $featured);
 
         $gallery = (string) file_get_contents($this->js('editor/modules/gallery/GallerySidebarPanel.jsx'));
         self::assertStringContainsString("mode: 'gallery'", $gallery);
         self::assertStringContainsString("selection: 'multiple'", $gallery);
         self::assertStringContainsString('await media.replaceGallery(merged)', $gallery);
         self::assertStringNotContainsString('setFeatured', $gallery);
+        self::assertStringContainsString("seo-open-generate-image-modal", $gallery);
+        self::assertStringContainsString("target: 'product-gallery'", $gallery);
+
+        $host = (string) file_get_contents($this->js('components/SeoArticleEditor.jsx'));
+        $featuredReasonStart = strpos($host, "code === 'featured_missing'");
+        self::assertNotFalse($featuredReasonStart);
+        $featuredReasonBranch = substr($host, $featuredReasonStart, 500);
+        self::assertStringContainsString("openPanel('featured'", $featuredReasonBranch);
+        self::assertStringNotContainsString('openMediaPicker', $featuredReasonBranch);
+
+        $nav = (string) file_get_contents($this->js('editor/host/EditorSidebarNavigation.jsx'));
+        self::assertStringContainsString("if (chipId === 'featured')", $nav);
+        self::assertStringContainsString('return null;', $nav);
     }
 
     public function test_shared_media_picker_single_portal_and_modes(): void

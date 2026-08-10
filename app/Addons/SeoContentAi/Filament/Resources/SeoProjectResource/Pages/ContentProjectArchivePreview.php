@@ -7,17 +7,22 @@ namespace App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoProjectArchive;
 use App\Addons\SeoContentAi\Models\SeoProjectArchiveItem;
+use App\Addons\SeoContentAi\Services\ArchiveContentProjectService;
+use App\Addons\SeoContentAi\Services\ArticleManualIndexMarkerService;
 use App\Addons\SeoContentAi\Support\ContentProject\ArchivePreviewArticlePresenter;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Models\User;
 use App\Support\RuntimeLogger;
 use Filament\Actions;
 use Filament\Actions\Action;
+use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Page;
 use Filament\Support\Enums\MaxWidth;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\HtmlString;
+use RuntimeException;
 use Throwable;
 
 final class ContentProjectArchivePreview extends Page
@@ -40,6 +45,12 @@ final class ContentProjectArchivePreview extends Page
 
     /** @var list<array<string, mixed>> */
     public array $articleRows = [];
+
+    public bool $cleanupWorkspaceBusy = false;
+
+    public bool $markingIndexBusy = false;
+
+    public ?int $markingIndexItemId = null;
 
     public function mount(int|string $archive): void
     {
@@ -109,12 +120,141 @@ final class ContentProjectArchivePreview extends Page
     protected function getHeaderActions(): array
     {
         return [
+            Actions\Action::make('cleanup_workspace')
+                ->label(__('seo-content-ai::filament.projects.archive_cleanup_workspace'))
+                ->icon('heroicon-o-trash')
+                ->color('danger')
+                ->requiresConfirmation()
+                ->modalHeading(__('seo-content-ai::filament.projects.archive_cleanup_workspace_heading'))
+                ->modalDescription(__('seo-content-ai::filament.projects.archive_cleanup_workspace_confirm'))
+                ->visible(fn (): bool => $this->canCleanupArchiveWorkspace())
+                ->action(fn (): null => $this->cleanupArchiveWorkspace()),
             Actions\Action::make('back_to_archive')
                 ->label(__('seo-content-ai::filament.projects.open_site_archive'))
                 ->icon('heroicon-o-arrow-left')
                 ->color('gray')
                 ->url(SeoProjectResource::getUrl('archive')),
         ];
+    }
+
+    public function canCleanupArchiveWorkspace(): bool
+    {
+        return $this->archiveRecord instanceof SeoProjectArchive
+            && SeoAccessControl::canArchiveContentProjects();
+    }
+
+    public function cleanupArchiveWorkspace(): null
+    {
+        abort_unless($this->canCleanupArchiveWorkspace(), 403);
+
+        if (! $this->archiveRecord instanceof SeoProjectArchive) {
+            return null;
+        }
+
+        $user = auth()->user();
+        if (! $user instanceof User) {
+            abort(403);
+        }
+
+        $this->cleanupWorkspaceBusy = true;
+
+        try {
+            $stats = app(ArchiveContentProjectService::class)->cleanupArchivedWorkspace(
+                $this->archiveRecord->loadMissing(['project', 'items']),
+                (int) $user->id,
+            );
+
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.archive_cleanup_workspace_completed'))
+                ->body($this->formatCleanupStats($stats))
+                ->success()
+                ->send();
+
+            $this->archiveRecord->refresh();
+            $this->archiveRecord->load([
+                'items' => static fn ($query) => $query->orderBy('position')->orderBy('id'),
+                'archivedByUser',
+                'owner',
+                'site',
+                'project',
+            ]);
+            $this->rebuildArticleRows();
+        } catch (Throwable $exception) {
+            RuntimeLogger::report($exception, [
+                'endpoint' => 'content_project_archive_preview.cleanup_workspace',
+                'archive_id' => (int) $this->archive,
+            ]);
+
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.archive_cleanup_workspace_failed'))
+                ->body($exception instanceof RuntimeException ? $exception->getMessage() : 'Workspace cleanup failed.')
+                ->danger()
+                ->send();
+        } finally {
+            $this->cleanupWorkspaceBusy = false;
+        }
+
+        return null;
+    }
+
+    public function markArticleIndexed(int $itemId): void
+    {
+        abort_unless(SeoAccessControl::canViewProjectArchives(), 403);
+
+        if (! $this->archiveRecord instanceof SeoProjectArchive) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.archive_preview_index_failed'))
+                ->body(__('seo-content-ai::filament.projects.archive_preview_no_data'))
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $siteId = (int) ($this->archiveRecord->site_id ?? 0);
+        abort_unless($siteId > 0 && SeoAccessControl::canAccessSite($siteId), 403);
+
+        if ($itemId <= 0 || $this->markingIndexBusy) {
+            return;
+        }
+
+        $this->markingIndexBusy = true;
+        $this->markingIndexItemId = $itemId;
+
+        try {
+            $result = app(ArticleManualIndexMarkerService::class)
+                ->markFromArchiveItem($this->archiveRecord, $itemId);
+
+            $this->archiveRecord->unsetRelation('items');
+            $this->archiveRecord->load([
+                'items' => static fn ($query) => $query->orderBy('position')->orderBy('id'),
+            ]);
+            $this->rebuildArticleRows();
+
+            $indexedLabel = ArchivePreviewArticlePresenter::formatIndexDate($result['indexed_at'] ?? null)
+                ?? __('seo-content-ai::filament.projects.archive_preview_index_saved');
+
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.archive_preview_index_saved'))
+                ->body($indexedLabel)
+                ->success()
+                ->send();
+        } catch (Throwable $exception) {
+            RuntimeLogger::report($exception, [
+                'archive_id' => (int) ($this->archiveRecord->getKey() ?? 0),
+                'item_id' => $itemId,
+                'endpoint' => 'content-project-archive-preview-mark-index',
+            ]);
+
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.archive_preview_index_failed'))
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+        } finally {
+            $this->markingIndexBusy = false;
+            $this->markingIndexItemId = null;
+        }
     }
 
     public function viewArchiveItemAction(): Action
@@ -215,6 +355,25 @@ final class ContentProjectArchivePreview extends Page
         }
 
         return [];
+    }
+
+    /**
+     * @param  array<string, int>  $stats
+     */
+    private function formatCleanupStats(array $stats): string
+    {
+        $parts = [];
+        foreach ($stats as $key => $value) {
+            if ($value <= 0) {
+                continue;
+            }
+
+            $parts[] = str_replace('_', ' ', $key).': '.$value;
+        }
+
+        return $parts !== []
+            ? implode(' | ', array_slice($parts, 0, 6))
+            : __('seo-content-ai::filament.projects.archive_cleanup_workspace_noop');
     }
 
     private function rebuildArticleRows(): void

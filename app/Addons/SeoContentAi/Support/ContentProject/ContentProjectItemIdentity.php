@@ -25,9 +25,12 @@ final class ContentProjectItemIdentity
     }
 
     /**
-     * Internal topic for prompt assembly only — never persist as if user entered post_title.
+     * Canonical generation subject / title seed:
+     * explicit title wins; otherwise keyword.
+     *
+     * Generation input only — never persist as if user entered project item title.
      */
-    public static function topic(?string $postTitle, ?string $keyword): string
+    public static function effectiveSubject(?string $postTitle, ?string $keyword): string
     {
         $title = self::normalize($postTitle);
         if ($title !== '') {
@@ -35,6 +38,46 @@ final class ContentProjectItemIdentity
         }
 
         return self::normalize($keyword);
+    }
+
+    /**
+     * Alias of effectiveSubject (prompt topic assembly).
+     */
+    public static function topic(?string $postTitle, ?string $keyword): string
+    {
+        return self::effectiveSubject($postTitle, $keyword);
+    }
+
+    /**
+     * Runtime generation variables from item identity.
+     * Does not mutate SeoProjectTask; callers must not persist post_title seed as task.title.
+     *
+     * @return array{
+     *     keyword?: string,
+     *     focus_keyword?: string,
+     *     topic?: string,
+     *     post_title?: string,
+     *     title?: string
+     * }
+     */
+    public static function generationSubjectVariables(?string $explicitTitle, ?string $keyword): array
+    {
+        $keywordNorm = self::normalize($keyword);
+        $explicit = self::normalize($explicitTitle);
+        $effective = self::effectiveSubject($explicit, $keywordNorm);
+
+        $variables = [];
+        if ($keywordNorm !== '') {
+            $variables['keyword'] = $keywordNorm;
+            $variables['focus_keyword'] = $keywordNorm;
+        }
+        if ($effective !== '') {
+            $variables['topic'] = $effective;
+            $variables['post_title'] = $effective;
+            $variables['title'] = $effective;
+        }
+
+        return $variables;
     }
 
     public static function failureMessage(): string

@@ -17,12 +17,14 @@ use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectAc
 use App\Addons\SeoContentAi\Services\ContentProject\Application\ContentProjectCommandBus;
 use App\Addons\SeoContentAi\Services\ContentProjectArchiveExportService;
 use App\Addons\SeoContentAi\Services\Exceptions\ArticleReviewException;
+use App\Addons\SeoContentAi\Support\ContentProject\ContentProjectArchiveVaultListPresenter;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\User;
 use App\Support\RuntimeLogger;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Page;
+use Filament\Support\Enums\MaxWidth;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Database\Eloquent\Builder;
@@ -105,6 +107,11 @@ final class ContentProjectArchive extends Page
         return __('seo-content-ai::filament.projects.archive_dashboard_heading');
     }
 
+    public function getMaxContentWidth(): MaxWidth|string|null
+    {
+        return MaxWidth::Full;
+    }
+
     protected function getHeaderActions(): array
     {
         return [
@@ -155,6 +162,28 @@ final class ContentProjectArchive extends Page
         $this->resetPage();
     }
 
+    public function clearFilters(): void
+    {
+        $this->siteFilter = '';
+        $this->monthFilter = '';
+        $this->yearFilter = '';
+        $this->ownerFilter = '';
+        $this->archivedByFilter = '';
+        $this->resetPage();
+    }
+
+    public function getActiveFilterCount(bool $siteFilterAvailable = true): int
+    {
+        return ContentProjectArchiveVaultListPresenter::activeFilterCount(
+            $this->siteFilter,
+            $this->monthFilter,
+            $this->yearFilter,
+            $this->ownerFilter,
+            $this->archivedByFilter,
+            $siteFilterAvailable,
+        );
+    }
+
     /**
      * @return Builder<SeoProjectArchive>
      */
@@ -172,6 +201,8 @@ final class ContentProjectArchive extends Page
             })
             ->orderByDesc('archived_at')
             ->orderByDesc('id');
+
+        ContentProjectArchiveVaultListPresenter::applyIndexSummaryAggregates($query);
 
         if ($this->scopedSiteIds !== []) {
             $query->whereIn('site_id', $this->scopedSiteIds);

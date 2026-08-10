@@ -1,3 +1,8 @@
+import {
+    emitArticleEditorNetworkFailure,
+    emitArticleEditorNetworkHttpOk,
+} from './articleEditorNetwork';
+
 export function csrfToken() {
     return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '';
 }
@@ -92,19 +97,29 @@ export async function seoArticleApiFetch(url, options = {}) {
     // Only auto-tag string JSON bodies. Never set Content-Type on FormData/Blob.
     const isJsonStringBody = typeof options.body === 'string' && options.body !== '';
 
-    const response = await fetch(url, {
-        credentials: 'same-origin',
-        ...options,
-        headers: {
-            Accept: 'application/json',
-            // Laravel only parses JSON bodies when Content-Type is application/json.
-            // Missing header → empty input → editor-sessions 422 invalid_client_instance_id.
-            ...(isJsonStringBody && !hasContentType ? { 'Content-Type': 'application/json' } : {}),
-            ...seoArticleApiHeaders(),
-            ...(needsCsrf && token !== '' ? { 'X-CSRF-TOKEN': token } : {}),
-            ...incomingHeaders,
-        },
-    });
+    let response;
+    try {
+        response = await fetch(url, {
+            credentials: 'same-origin',
+            ...options,
+            headers: {
+                Accept: 'application/json',
+                // Laravel only parses JSON bodies when Content-Type is application/json.
+                // Missing header → empty input → editor-sessions 422 invalid_client_instance_id.
+                ...(isJsonStringBody && !hasContentType ? { 'Content-Type': 'application/json' } : {}),
+                ...seoArticleApiHeaders(),
+                ...(needsCsrf && token !== '' ? { 'X-CSRF-TOKEN': token } : {}),
+                ...incomingHeaders,
+            },
+        });
+    } catch (error) {
+        // Network-level only (no HTTP response). HTTP 4xx/5xx never land here.
+        emitArticleEditorNetworkFailure(error);
+        throw error;
+    }
+
+    // Any HTTP response proves backend reachable (4xx/5xx stay app-error flows).
+    emitArticleEditorNetworkHttpOk();
 
     const data = await response.json().catch(() => ({}));
 

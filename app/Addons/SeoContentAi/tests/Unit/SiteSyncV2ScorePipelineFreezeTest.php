@@ -38,6 +38,7 @@ final class SiteSyncV2ScorePipelineFreezeTest extends TestCase
         self::assertStringContainsString("'score_missing_articles'", $src);
         self::assertStringContainsString('queueMissingOrStaleForSite', $src);
         self::assertStringContainsString('__defer_step', $src);
+        self::assertStringContainsString("\$checkpoint['deferred'] = true", $src);
         self::assertStringContainsString('$polls >= 6', $src);
         self::assertStringContainsString('completed_with_warnings', $src);
     }
@@ -116,6 +117,8 @@ final class SiteSyncV2ScorePipelineFreezeTest extends TestCase
         self::assertStringContainsString('Chờ hoàn tất đồng bộ dữ liệu', $src);
         self::assertStringContainsString('Đang chuẩn bị chấm SEO', $src);
         self::assertStringContainsString('Chấm SEO đang chờ worker xử lý', $src);
+        self::assertStringContainsString('isRunStuck', $src);
+        self::assertStringContainsString('score_missing_articles', $src);
     }
 
     public function test_domain_save_does_not_trigger_scoring(): void

@@ -530,6 +530,16 @@
                 return;
             }
             if (action === 'save' || action === 'save-close') {
+                if (window.__SEO_EDITOR_NETWORK_STATUS__?.unavailable) {
+                    if (typeof FilamentNotification !== 'undefined') {
+                        new FilamentNotification()
+                            .title('Không thể lưu khi đang mất kết nối.')
+                            .body('Giữ thay đổi trên editor — sẽ lưu lại khi kết nối trở lại.')
+                            .warning()
+                            .send();
+                    }
+                    return;
+                }
                 const runSave = async () => {
                     if (typeof window.__seoExecuteHeavyArticleAction !== 'function') {
                         throw new Error('Editor chưa sẵn sàng — tải lại trang rồi thử lại.');
@@ -550,6 +560,9 @@
                     }
                 });
             } else if (action === 'sync') {
+                if (window.__SEO_EDITOR_NETWORK_STATUS__?.unavailable) {
+                    return;
+                }
                 @php
                     $syncIsContentManager = \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager();
                     $syncInContentProject = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsInContentProject($record);
@@ -665,6 +678,17 @@
             <div class="seo-article-editor-sticky-header__right">
                 @include('seo-content-ai::filament.resources.article-resource.pages.partials.article-editor-shortcuts-slot')
             </div>
+        </div>
+
+        <div
+            class="seo-article-editor-network-banner"
+            data-seo-network-banner
+            data-status="available"
+            role="status"
+            aria-live="polite"
+            hidden
+        >
+            <span data-seo-network-banner-text>Mất kết nối mạng — các thay đổi hiện chưa được lưu.</span>
         </div>
 
         <div class="wp-article-edit-layout">

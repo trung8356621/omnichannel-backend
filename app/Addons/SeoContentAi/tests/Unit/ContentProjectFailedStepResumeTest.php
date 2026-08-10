@@ -24,18 +24,21 @@ final class ContentProjectFailedStepResumeTest extends TestCase
         self::assertStringContainsString('ResumeProjectItemFromFailedStepHandler::class', $src);
     }
 
-    public function test_ui_primary_retry_dispatches_resume_not_full_rerun(): void
+    public function test_ui_primary_retry_dispatches_smart_create_or_rerun(): void
     {
         $view = $this->source(ViewSeoProject::class);
+        self::assertStringContainsString('function createOrRerunOne', $view);
+        self::assertStringContainsString('ContentProjectItemGenerationLaunchPlanner', $view);
         self::assertStringContainsString('function resumeFromFailedStep', $view);
         self::assertStringContainsString('ResumeProjectItemFromFailedStepCommand', $view);
 
         $bladePath = dirname(__DIR__, 2).'/resources/views/components/content-project-item-actions-menu.blade.php';
         self::assertFileExists($bladePath);
         $blade = (string) file_get_contents($bladePath);
+        self::assertStringContainsString('createOrRerunOne({{ $tid }})', $blade);
+        self::assertStringContainsString('item_action_smart_create', $blade);
         self::assertStringContainsString('resumeFromFailedStep({{ $tid }})', $blade);
-        self::assertStringContainsString('Tiếp tục từ bước lỗi', $blade);
-        self::assertStringContainsString('Chạy lại từ đầu', $blade);
+        self::assertStringNotContainsString('Chạy lại từ đầu', $blade);
     }
 
     public function test_agent_factory_exposes_resume_and_step_rerun(): void

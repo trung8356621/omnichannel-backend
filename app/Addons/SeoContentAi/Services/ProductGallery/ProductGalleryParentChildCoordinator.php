@@ -55,6 +55,7 @@ final class ProductGalleryParentChildCoordinator
         array $plannerVariables = [],
         int $requestedImageCount = 6,
         ?ProductGalleryParentChildAiPort $aiOverride = null,
+        ?string $precreatedExecutionId = null,
     ): array {
         $ai = $aiOverride ?? $this->ai;
         $caps = $this->capabilities->resolve($provider, $model);
@@ -77,10 +78,38 @@ final class ProductGalleryParentChildCoordinator
             ];
         }
 
-        $executionId = 'pgpc_'.bin2hex(random_bytes(8));
-        $progress[] = 'planning';
+        $precreated = trim((string) $precreatedExecutionId);
+        $execution = null;
+        if ($precreated !== '') {
+            $execution = SeoProductGalleryExecution::query()
+                ->where('execution_id', $precreated)
+                ->where('article_id', (int) $article->id)
+                ->first();
+        }
 
-        $execution = $this->createExecution($article, $executionId, $caps, $originalSnapshotIds);
+        if ($execution instanceof SeoProductGalleryExecution) {
+            $executionId = (string) $execution->execution_id;
+            $execution->update([
+                'status' => 'running',
+                'provider_snapshot' => $caps->toArray(),
+                'original_media_snapshot_ids' => $originalSnapshotIds,
+                'started_at' => $execution->started_at ?? now(),
+            ]);
+        } else {
+            $executionId = $precreated !== '' ? $precreated : 'pgpc_'.bin2hex(random_bytes(8));
+            $execution = $this->createExecution($article, $executionId, $caps, $originalSnapshotIds);
+        }
+
+        $resolvedModel = trim((string) $model);
+        if ($resolvedModel !== '') {
+            $plannerVariables['model'] = $resolvedModel;
+            $plannerVariables['image_model'] = $resolvedModel;
+        }
+        if (trim((string) $provider) !== '') {
+            $plannerVariables['provider'] = trim((string) $provider);
+        }
+
+        $progress[] = 'planning';
 
         try {
             $planRaw = $ai->runPlanner($article, array_merge($plannerVariables, [

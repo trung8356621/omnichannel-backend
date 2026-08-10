@@ -38,6 +38,7 @@ import {
     isArticleSaveInFlight,
     saveArticleViaApiSingleFlight,
 } from './utils/articleEditorSaveQueue';
+import { flushMediaSnapshotMutations } from './utils/articleEditorMediaSnapshot';
 import { EditorSessionClient } from './utils/editorSessionClient';
 import {
     ARTICLE_EDITOR_SESSION_STATE_EVENT,
@@ -190,6 +191,15 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
         ? 'sync'
         : (action === 'save-close' ? 'save-close' : 'save');
     const overlayAction = normalizedAction === 'sync' ? 'sync' : 'save';
+
+    if (window.__SEO_EDITOR_NETWORK_STATUS__?.unavailable) {
+        const message = normalizedAction === 'sync'
+            ? 'Không thể Sync WP khi đang mất kết nối.'
+            : 'Không thể lưu khi đang mất kết nối.';
+        const error = new Error(message);
+        error.notificationShown = false;
+        throw error;
+    }
 
     if (!window.__seoArticleHeavyActionOverlay?.locked) {
         window.__seoBeginArticleHeavyActionClient?.(overlayAction);
@@ -378,6 +388,10 @@ async function runArticleEditorApiAction(action, wire, editorDetail = {}) {
             validateLocalImageSlugsBeforeWpSync: true,
             renameImagesBeforeWpSync: false,
         });
+    }
+
+    if (normalizedAction === 'sync') {
+        await flushMediaSnapshotMutations(articleId);
     }
 
     const apiPayload = buildArticleEditorApiPayload(editorBundle, wire);
@@ -876,7 +890,7 @@ function ArticleEditorWithSession(props) {
 
     React.useEffect(() => {
         const onBeforeUnload = (event) => {
-            if (intentionalEditorCloseRef.current) {
+            if (intentionalEditorCloseRef.current || window.__SEO_EDITOR_EXITING__) {
                 return undefined;
             }
             if (sessionReadOnly || window.__SEO_EDITOR_READ_ONLY__) {
@@ -902,7 +916,7 @@ function ArticleEditorWithSession(props) {
 
     React.useEffect(() => {
         const onPageHide = () => {
-            if (intentionalEditorCloseRef.current) {
+            if (intentionalEditorCloseRef.current || window.__SEO_EDITOR_EXITING__) {
                 return;
             }
             const client = clientRef.current;
@@ -1024,6 +1038,8 @@ function readArticleEditorBootstrap() {
     let editorSessionConfig = null;
     let supportsProductGallery = false;
     let isCanaryProduct = false;
+    let parentChildAllowed = false;
+    let parentChildReason = '';
     let productCategoryOptions = [];
     let initialProductGallery = [];
     let aiDebug = { enabled: false };
@@ -1056,6 +1072,8 @@ function readArticleEditorBootstrap() {
                 : null;
             supportsProductGallery = Boolean(core?.supportsProductGallery ?? core?.supports_product_gallery);
             isCanaryProduct = Boolean(core?.isCanaryProduct ?? core?.is_canary_product);
+            parentChildAllowed = Boolean(core?.parentChildAllowed ?? core?.parent_child_allowed);
+            parentChildReason = String(core?.parentChildReason ?? core?.parent_child_reason ?? '').trim();
             initialHtml = typeof core?.content === 'string' ? core.content : '';
             if (core?.editorDocument && typeof core.editorDocument === 'object') {
                 initialEditorDocument = core.editorDocument;
@@ -1196,6 +1214,12 @@ function readArticleEditorBootstrap() {
             if (!expectedContentHash) expectedContentHash = String(meta?.expected_content_hash ?? '').trim();
             supportsProductGallery = supportsProductGallery || Boolean(meta?.supports_product_gallery);
             isCanaryProduct = isCanaryProduct || Boolean(meta?.is_canary_product);
+            if (meta?.parent_child_allowed !== undefined || meta?.parentChildAllowed !== undefined) {
+                parentChildAllowed = Boolean(meta?.parent_child_allowed ?? meta?.parentChildAllowed);
+            }
+            if (meta?.parent_child_reason !== undefined || meta?.parentChildReason !== undefined) {
+                parentChildReason = String(meta?.parent_child_reason ?? meta?.parentChildReason ?? '').trim();
+            }
             productCategoryOptions = Array.isArray(meta?.product_category_options)
                 ? meta.product_category_options
                 : [];
@@ -1241,6 +1265,8 @@ function readArticleEditorBootstrap() {
         editorSessionConfig,
         supportsProductGallery,
         isCanaryProduct,
+        parentChildAllowed,
+        parentChildReason,
         productCategoryOptions,
         initialProductGallery,
         aiDebug,
@@ -1308,6 +1334,8 @@ function mountArticleEditorPage() {
         editorSessionConfig,
         supportsProductGallery,
         isCanaryProduct,
+        parentChildAllowed,
+        parentChildReason,
         productCategoryOptions,
         initialProductGallery,
         aiDebug,
@@ -1407,6 +1435,8 @@ function mountArticleEditorPage() {
                 expectedContentHash={expectedContentHash}
                 supportsProductGallery={supportsProductGallery}
                 isCanaryProduct={isCanaryProduct}
+                parentChildAllowed={parentChildAllowed}
+                parentChildReason={parentChildReason}
                 productCategoryOptions={productCategoryOptions}
                 initialProductGallery={initialProductGallery}
                 initialFaqs={[]}

@@ -45,11 +45,13 @@ final class ProductGalleryCanaryUiTest extends TestCase
         $this->assertStringContainsString('canaryProduct', $modal);
         $this->assertStringContainsString('Canary Product', $modal);
         $this->assertStringContainsString('parent_child', $modal);
+        $this->assertStringContainsString('parentChildAllowed', $modal);
 
         $editor = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/js/components/SeoArticleEditor.jsx',
         );
         $this->assertStringContainsString('canaryProduct={isCanaryProduct}', $editor);
+        $this->assertStringContainsString('parentChildAllowed={parentChildAllowed}', $editor);
 
         $bootstrap = (string) file_get_contents(
             dirname(__DIR__, 2).'/resources/js/article-editor.jsx',

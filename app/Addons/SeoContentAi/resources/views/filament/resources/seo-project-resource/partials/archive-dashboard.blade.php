@@ -345,7 +345,6 @@
 
                         <div
                             x-show="isDateExpanded(group.date)"
-                            x-collapse
                             class="reviewed-day-card__body"
                         >
                             <div class="reviewed-article-list">
@@ -382,7 +381,7 @@
                                                 </template>
                                             </div>
                                         </div>
-                                        <div class="reviewed-article-item__actions relative" x-on:click.outside="if (openMenuArticleId === article.id) closeMenu()">
+                                        <div class="reviewed-article-item__actions" x-on:click.outside="if (openMenuArticleId === article.id) closeMenu()">
                                             <button
                                                 type="button"
                                                 class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-gray-600 ring-1 ring-gray-300 bg-white shadow-sm transition hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:ring-gray-600 dark:hover:bg-gray-700"
@@ -397,7 +396,7 @@
                                                 x-show="openMenuArticleId === article.id"
                                                 x-cloak
                                                 x-transition
-                                                class="absolute right-0 z-30 mt-1 w-56 overflow-hidden rounded-xl bg-white py-1 shadow-lg ring-1 ring-gray-200 dark:bg-gray-900 dark:ring-gray-700"
+                                                class="reviewed-article-item__actions-menu"
                                             >
                                                 <a
                                                     x-bind:href="article.edit_url"

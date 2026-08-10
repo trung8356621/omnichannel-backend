@@ -39,7 +39,7 @@ Integrity reasons: missing/broken/upload incomplete/alt warning. **Not** WP file
 | PUT | `/api/seo/articles/{article}/editor/media/gallery` |
 | POST | `/api/seo/articles/{article}/editor/media/gallery/reorder` |
 
-Mutations require owning editor session when an active session exists; archive → `content_project_archived` / not editable. Optional `expected_snapshot_version` rejects stale ACK.
+Mutations require owning editor session when an active session exists; soft-deleted Article → not editable. Archived Content Project does **not** permanently mark media not editable (standalone Article after archive). Mid-archive revoke may briefly surface `content_project_archived`. Optional `expected_snapshot_version` rejects stale ACK.
 
 Response: `{ success, media_snapshot }`. React applies only if `snapshot_version >= current`.
 

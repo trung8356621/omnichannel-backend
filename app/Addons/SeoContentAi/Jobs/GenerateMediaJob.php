@@ -46,7 +46,7 @@ class GenerateMediaJob implements ShouldQueue
     public bool $failOnTimeout = true;
 
     /**
-     * @param  array<string, string>  $variables
+     * @param  array<string, mixed>  $variables
      */
     public function __construct(
         protected int $seoMediaId,

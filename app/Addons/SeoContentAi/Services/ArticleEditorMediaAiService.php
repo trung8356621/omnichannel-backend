@@ -11,7 +11,10 @@ use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\Services\ProductGallery\ImageProviderCapabilityResolver;
+use App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryParentChildDispatchService;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
+use App\Addons\SeoContentAi\Support\ImageRoutingStrategy;
 use App\Addons\SeoContentAi\Support\ImageToolType;
 use App\Addons\SeoContentAi\Support\ProductGallery\ProductGalleryReadyState;
 use App\Addons\SeoContentAi\Support\ProductGallery\ProductGallerySource;
@@ -473,13 +476,13 @@ final class ArticleEditorMediaAiService
             ENT_QUOTES | ENT_HTML5,
             'UTF-8',
         );
-        $galleryDescription = $this->resolveGalleryDescription($article);
+        $fromArticleGalleryDescription = $this->resolveGalleryDescription($article);
         $loaiSanPham = $this->resolveLoaiSanPham($article);
 
         $selectionText = trim($selectionText);
         $selectionHtml = trim($selectionHtml);
-        if ($galleryDescription !== '') {
-            $userBrief = str_replace('{{gallery_description}}', $galleryDescription, $userBrief);
+        if ($fromArticleGalleryDescription !== '') {
+            $userBrief = str_replace('{{gallery_description}}', $fromArticleGalleryDescription, $userBrief);
         }
         $userBrief = $this->compactVariableValue($userBrief);
 
@@ -487,9 +490,15 @@ final class ArticleEditorMediaAiService
         $promptSelectionText = $includeSelectionInPrompt ? $selectionText : '';
         $promptSelectionHtml = $includeSelectionInPrompt ? $selectionHtml : '';
 
-        $input = trim($target) === 'product-gallery'
-            ? $userBrief
-            : $this->resolveEditorImageInput($userBrief);
+        if ($includeSelectionInPrompt) {
+            $galleryBrief = $this->buildProductGalleryBriefVariables($article, $userBrief, $fromArticleGalleryDescription);
+            $galleryDescription = $galleryBrief['gallery_description'];
+            $userBrief = $galleryBrief['user_brief'];
+            $input = $galleryBrief['input'];
+        } else {
+            $galleryDescription = $fromArticleGalleryDescription;
+            $input = $this->resolveEditorImageInput($userBrief);
+        }
 
         $postType = ArticlePostTypeResolver::resolve($article);
         $promptVars = $this->promptSettings->promptVariables($postType);
@@ -605,6 +614,42 @@ final class ArticleEditorMediaAiService
         }
 
         return $filtered;
+    }
+
+    /**
+     * Product-gallery brief bag — modal userBrief wins over article meta/task.
+     *
+     * Precedence:
+     * - non-empty compacted userBrief → gallery_description = userBrief
+     * - empty userBrief → gallery_description = resolveGalleryDescription(article)
+     *
+     * Keeps aliases: input + user_brief remain the compacted modal brief.
+     *
+     * @return array{gallery_description: string, user_brief: string, input: string}
+     */
+    private function buildProductGalleryBriefVariables(
+        SeoArticle $article,
+        string $userBrief,
+        ?string $fromArticleGalleryDescription = null,
+    ): array {
+        $fromArticle = $fromArticleGalleryDescription;
+        if ($fromArticle === null) {
+            $fromArticle = $this->resolveGalleryDescription($article);
+            if ($fromArticle !== '') {
+                $userBrief = str_replace('{{gallery_description}}', $fromArticle, $userBrief);
+            }
+        }
+
+        $userBrief = $this->compactVariableValue($userBrief);
+        $galleryDescription = $userBrief !== ''
+            ? $userBrief
+            : trim((string) $fromArticle);
+
+        return [
+            'gallery_description' => $galleryDescription,
+            'user_brief' => $userBrief,
+            'input' => $userBrief,
+        ];
     }
 
     private function resolveGalleryDescription(SeoArticle $article): string
@@ -1311,6 +1356,75 @@ final class ArticleEditorMediaAiService
     }
 
     /**
+     * Resolve eligible product-gallery image models + first Parent/Child-capable slug.
+     * Uses shared ImageRoutingStrategy (contextual canonical fallback). Does not mutate settings.
+     *
+     * @return array{
+     *     eligible: list<string>,
+     *     model: string|null,
+     *     supports_reference: bool,
+     *     supports_reference_image: bool
+     * }
+     */
+    public function resolveProductGalleryReferenceCapability(): array
+    {
+        $eligible = app(ImageRoutingStrategy::class)->modelsToTry(
+            toolType: ImageToolType::Image,
+            preference: $this->workflowSettings->getRenderingPreference(),
+            productContext: true,
+            configuredPriorityList: $this->workflowSettings->getImageModelPriority(),
+            adminEnabledUnknownSlugs: $this->workflowSettings->getAdminEnabledUnknownImageModels(),
+        );
+
+        $capsResolver = app(ImageProviderCapabilityResolver::class);
+        $model = null;
+        foreach ($eligible as $slug) {
+            if ($capsResolver->resolve('gemini', $slug)->allowsParentChild()) {
+                $model = $slug;
+                break;
+            }
+        }
+
+        $supports = $model !== null;
+
+        return [
+            'eligible' => $eligible,
+            'model' => $model,
+            'supports_reference' => $supports,
+            'supports_reference_image' => $supports,
+        ];
+    }
+
+    /**
+     * PROCESSING/QUEUED must carry a pollable persisted identifier.
+     *
+     * @param  array<string, mixed>  $result
+     * @return array<string, mixed>
+     */
+    public function enforceGenerateImageSettlement(array $result): array
+    {
+        $status = strtolower(trim((string) ($result['status'] ?? '')));
+        if (! in_array($status, ['processing', 'queued', 'pending'], true)) {
+            return $result;
+        }
+
+        $mediaId = (int) ($result['seo_media_id'] ?? 0);
+        $executionId = trim((string) ($result['gallery_execution_id'] ?? ''));
+        if ($mediaId > 0 || $executionId !== '') {
+            return $result;
+        }
+
+        return array_merge($result, [
+            'url' => (string) ($result['url'] ?? ''),
+            'media_type' => 'image',
+            'seo_media_id' => 0,
+            'status' => 'failed',
+            'error_message' => 'Không có identifier để theo dõi tiến trình tạo ảnh (thiếu seo_media_id và gallery_execution_id).',
+            'message' => 'Không có identifier để theo dõi tiến trình tạo ảnh (thiếu seo_media_id và gallery_execution_id).',
+        ]);
+    }
+
+    /**
      * Mode 2 entry — returns placeholder-like status when parent_child/auto resolves to Mode 2.
      * Null = fall through to Mode 1 sprite path.
      *
@@ -1328,9 +1442,26 @@ final class ArticleEditorMediaAiService
             return null;
         }
 
+        $capability = $this->resolveProductGalleryReferenceCapability();
+        $resolvedModel = $capability['model'];
+        $supportsReference = (bool) $capability['supports_reference'];
+
+        if ($mode === 'parent_child' || $mode === 'parent_children') {
+            if (! $supportsReference || $resolvedModel === null || $resolvedModel === '') {
+                throw new \RuntimeException('Không có model ảnh hỗ trợ Parent/Child trong cấu hình hiện tại.');
+            }
+        }
+
+        if ($mode === 'auto' && (! $supportsReference || $resolvedModel === null || $resolvedModel === '')) {
+            return null;
+        }
+
+        $galleryBrief = $this->buildProductGalleryBriefVariables($article, $userBrief);
         $variables = $this->attachProductGalleryMode1Snapshot($article, 'product-gallery', [
             'title' => (string) ($article->title ?? ''),
-            'input' => $userBrief,
+            'input' => $galleryBrief['input'],
+            'user_brief' => $galleryBrief['user_brief'],
+            'gallery_description' => $galleryBrief['gallery_description'],
             'loai_san_pham_category_article_id' => $loaiSanPhamCategoryArticleId,
             'loai_san_pham_custom' => $loaiSanPhamCustom,
         ]);
@@ -1340,29 +1471,45 @@ final class ArticleEditorMediaAiService
             is_array($snapshot['media_ids'] ?? null) ? $snapshot['media_ids'] : [],
         )));
 
-        $started = app(\App\Addons\SeoContentAi\Services\ProductGallery\ProductGalleryParentChildDispatchService::class)->start(
+        $started = app(ProductGalleryParentChildDispatchService::class)->start(
             article: $article,
             requestedMode: $mode,
             originalSnapshotIds: $originalIds,
             variables: $variables,
             provider: 'gemini',
-            model: null,
+            model: $resolvedModel,
             requestedImageCount: max(1, (int) config('seo-content-ai.product_gallery.parent_child.max_shots', 6)),
         );
 
         if (! ($started['ok'] ?? false) || ($started['route'] ?? '') !== 'parent_child') {
+            if ($mode === 'parent_child' || $mode === 'parent_children') {
+                $message = trim((string) ($started['message'] ?? ''));
+                throw new \RuntimeException(
+                    $message !== ''
+                        ? $message
+                        : 'Không có model ảnh hỗ trợ Parent/Child trong cấu hình hiện tại.',
+                );
+            }
+
             return null;
         }
 
-        return [
+        $executionId = trim((string) ($started['execution_id'] ?? ''));
+        if ($executionId === '') {
+            throw new \RuntimeException('Mode 2 Parent/Child không có gallery_execution_id để theo dõi.');
+        }
+
+        return $this->enforceGenerateImageSettlement([
             'url' => '',
             'media_type' => 'image',
             'seo_media_id' => 0,
             'status' => 'processing',
-            'gallery_execution_id' => (string) ($started['execution_id'] ?? ''),
+            'gallery_execution_id' => $executionId,
             'gallery_generation_mode' => 'parent_child',
             'mode2_existing' => (bool) ($started['existing'] ?? false),
-        ];
+            'supports_reference_image' => true,
+            'resolved_model' => $resolvedModel,
+        ]);
     }
 
     /**

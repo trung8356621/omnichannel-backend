@@ -6,6 +6,10 @@ namespace App\Addons\SeoContentAi\Support;
 
 /**
  * Loại bỏ byte UTF-8 lỗi — tránh json_encode / Http::post báo "Malformed UTF-8".
+ *
+ * Variable bags may be array<string, mixed> (scalars + nested side-channels like
+ * product_gallery / quick_split). Nested AI strings use the same compact semantics
+ * as top-level variablesForAi values. arrayDeep() is UTF-8-only (no AI compaction).
  */
 final class Utf8Sanitizer
 {
@@ -40,15 +44,15 @@ final class Utf8Sanitizer
     }
 
     /**
-     * @param  array<string, string>  $variables
-     * @return array<string, string>
+     * @param  array<string, mixed>  $variables
+     * @return array<string, mixed>
      */
     public static function variables(array $variables): array
     {
         $normalized = [];
 
         foreach ($variables as $key => $value) {
-            $normalized[(string) $key] = self::string(is_string($value) ? $value : (string) $value);
+            $normalized[(string) $key] = self::sanitizeVariableValue($value);
         }
 
         return $normalized;
@@ -56,18 +60,18 @@ final class Utf8Sanitizer
 
     /**
      * Chuẩn hóa biến trước khi gửi AI: trim + gộp khoảng trắng dư nhưng vẫn giữ ý theo đoạn.
+     * Nested array (product_gallery, quick_split, …) giữ structure — không cast (string).
+     * Nested strings dùng cùng compactForAiVariable như top-level.
      *
-     * @param  array<string, string>  $variables
-     * @return array<string, string>
+     * @param  array<string, mixed>  $variables
+     * @return array<string, mixed>
      */
     public static function variablesForAi(array $variables): array
     {
         $normalized = [];
 
         foreach ($variables as $key => $value) {
-            $normalized[(string) $key] = self::compactForAiVariable(
-                is_string($value) ? $value : (string) $value
-            );
+            $normalized[(string) $key] = self::sanitizeAiVariableValue($value);
         }
 
         return $normalized;
@@ -103,23 +107,80 @@ final class Utf8Sanitizer
     }
 
     /**
-     * @param  array<string, mixed>  $payload
-     * @return array<string, mixed>
+     * UTF-8 deep sanitize only (no AI whitespace compaction).
+     *
+     * @param  array<array-key, mixed>  $payload
+     * @return array<array-key, mixed>
      */
     public static function arrayDeep(array $payload): array
     {
         $normalized = [];
 
         foreach ($payload as $key => $value) {
-            if (is_string($value)) {
-                $normalized[$key] = self::string($value);
-            } elseif (is_array($value)) {
-                $normalized[$key] = self::arrayDeep($value);
-            } else {
-                $normalized[$key] = $value;
-            }
+            $normalized[$key] = self::sanitizeVariableValue($value);
         }
 
         return $normalized;
+    }
+
+    /**
+     * Value-level sanitize for non-AI bags: UTF-8 string cleanup, preserve structure/types.
+     */
+    private static function sanitizeVariableValue(mixed $value): mixed
+    {
+        if (is_string($value)) {
+            return self::string($value);
+        }
+
+        if (is_array($value)) {
+            $nested = [];
+            foreach ($value as $nestedKey => $nestedValue) {
+                $nested[$nestedKey] = self::sanitizeVariableValue($nestedValue);
+            }
+
+            return $nested;
+        }
+
+        if (is_int($value) || is_float($value) || is_bool($value) || $value === null) {
+            return $value;
+        }
+
+        if ($value instanceof \Stringable) {
+            return self::string((string) $value);
+        }
+
+        // object/resource outside contract: never silent (string) cast.
+        return $value;
+    }
+
+    /**
+     * Value-level sanitize for AI bags: same structure rules as sanitizeVariableValue,
+     * but every string (top-level or nested) goes through compactForAiVariable().
+     */
+    private static function sanitizeAiVariableValue(mixed $value): mixed
+    {
+        if (is_string($value)) {
+            return self::compactForAiVariable($value);
+        }
+
+        if (is_array($value)) {
+            $nested = [];
+            foreach ($value as $nestedKey => $nestedValue) {
+                $nested[$nestedKey] = self::sanitizeAiVariableValue($nestedValue);
+            }
+
+            return $nested;
+        }
+
+        if (is_int($value) || is_float($value) || is_bool($value) || $value === null) {
+            return $value;
+        }
+
+        if ($value instanceof \Stringable) {
+            return self::compactForAiVariable((string) $value);
+        }
+
+        // object/resource outside contract: never silent (string) cast.
+        return $value;
     }
 }
